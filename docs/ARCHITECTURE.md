@@ -20,7 +20,11 @@ myvideopril/
 ├── src/
 │   ├── Core.cs                 # Настройки, batch-обработка видео, JSON
 │   ├── UI.cs                   # Главное окно (создание видео)
-│   ├── Uploader.cs             # YouTube + Dolphin + загрузка
+│   ├── Uploader.cs             # YouTube UI + запуск загрузки
+│   ├── QueueManager.cs         # Подготовка задач → UploadJob
+│   ├── TitleCleaner.cs         # Очистка «1. » только перед upload
+│   ├── ScheduleGenerator.cs    # Shorts: 2–5 мин / 10–15 мин между акк.
+│   ├── ChannelStatus.cs        # Готов / Подготовка / Загрузка / …
 │   ├── TikTok.cs               # TikTok workspace
 │   ├── Audio.cs                # Озвучка (Windows / ElevenLabs)
 │   └── Windows.cs              # DPAPI, системные утилиты
@@ -34,9 +38,11 @@ myvideopril/
 
 ## Поток загрузки YouTube
 
-1. **Uploader.cs** → `UploadAll()` — staging файлов, расписание, `draftOnly=false`
-2. Запуск **worker.js** через Node с JSON-job (токен Dolphin в env, не в файле)
-3. **worker.js**:
+1. UI: выбор канала → «Добавить видео» (видео сразу привязано к каналу)
+2. **QueueManager.Prepare()** — профиль, staging, `TitleCleaner`, `ScheduleGenerator` → `UploadJob`
+3. **Uploader.cs** → `UploadAll()` → `RunUploadWithRetry()` (2 попытки) → **worker.js**
+4. Запуск **worker.js** через Node с JSON-job (токен Dolphin в env, не в файле)
+5. **worker.js**:
    - `startOrConnectProfile()` — Dolphin API
    - `verifyYouTubeStudioReady()` — вход в Studio
    - `resolveStudioChannelId()` — реальный `UC…` из URL
@@ -44,7 +50,8 @@ myvideopril/
    - `setInputFilesViaCdp()` — передача файлов через CDP
    - `waitForBulkUploadComplete()` — дождаться загрузки
    - `processUploadItemInDialog()` — заголовок, превью, Далее → **Запланировать публикацию**
-4. Расписание: `AllocateSchedules()` в C# + `setSchedule()` / `publish()` в worker
+6. Расписание: `ScheduleGenerator` (2–5 мин внутри аккаунта, 10–15 мин между) + `setSchedule()` в worker
+7. TikTok: тот же сценарий «аккаунт → добавить видео»; `TitleCleaner` перед отправкой
 
 ## Версия worker
 

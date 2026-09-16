@@ -85,6 +85,9 @@ namespace VideoBatch {
         public List<string> TikTokCaptionBankRu=new List<string>(), TikTokCaptionBankEn=new List<string>();
         public List<string> TikTokDescriptionBankRu=new List<string>(), TikTokDescriptionBankEn=new List<string>();
         public List<string> TikTokMusicRu=new List<string>(), TikTokMusicEn=new List<string>();
+        /// <summary>Последний выбранный Profile ID (Dolphin) для быстрого «Добавить видео».</summary>
+        public string LastSelectedYouTubeProfileIdRu="", LastSelectedYouTubeProfileIdEn="";
+        public string LastSelectedTikTokProfileIdRu="", LastSelectedTikTokProfileIdEn="";
     }
     public static class Store {
         public static string Root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"VideoBatchDesktop");
