@@ -1,40 +1,38 @@
-# VideoBatch
+# VideoBatch (myvideopril)
 
-Windows-приложение для пакетной обработки видео и загрузки на YouTube / TikTok через профили **Dolphin Anty**.
+Windows-приложение: пакетная обработка видео + массовая загрузка на **YouTube** и **TikTok** через **Dolphin Anty**.
 
-## Быстрый старт
+**Репозиторий публичный** — весь исходный код в `src/` и `tools/uploader/`.
 
-1. Скачайте или соберите проект.
-2. В папке `tools/uploader` выполните один раз:
-   ```powershell
-   npm ci
-   ```
-3. Запустите `VideoBatch.exe` (нужны Windows 10/11 x64 и .NET Framework 4.8).
+## Быстрый обзор для GPT / аудита
 
-Подробная инструкция — в `Start_here.txt`.
+| Файл | Назначение |
+|------|------------|
+| [src/Uploader.cs](src/Uploader.cs) | UI YouTube, каналы, загрузка, расписание |
+| [tools/uploader/worker.js](tools/uploader/worker.js) | Playwright: Studio, upload, schedule |
+| [src/Core.cs](src/Core.cs) | Настройки, обработка видео |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Полная схема потоков |
+
+## Запуск
+
+1. Клонировать репозиторий
+2. `cd tools/uploader && npm ci`
+3. Запустить `VideoBatch.exe` (Windows 10/11, .NET 4.8)
 
 ## Сборка из исходников
 
 ```powershell
 dotnet build VideoBatch.csproj -c Release
+# exe → bin/Release/net48/VideoBatch.exe (скопировать рядом с tools/)
 ```
-
-Готовый `VideoBatch.exe` появится в `bin/Release/net48/`. Скопируйте его рядом с папкой `tools/`.
-
-## Структура
-
-| Путь | Описание |
-|------|----------|
-| `src/` | Исходники C# (WinForms) |
-| `tools/uploader/worker.js` | Автоматизация YouTube Studio (Playwright + Dolphin CDP) |
-| `tools/uploader/youtube-title-banks.json` | Банки заголовков RU/EN |
-| `VideoBatch.exe` | Собранное приложение |
 
 ## Dolphin
 
-- API-токен хранится локально в `%LocalAppData%\VideoBatchDesktop\settings.xml` (зашифрован Windows DPAPI).
-- В репозиторий настройки и токены **не попадают**.
+- Токен API вводится в приложении, хранится локально (DPAPI), **не в git**
+- Profile ID каналов — только в локальном `settings.xml`
 
-## Лицензия
+## Приватные данные
 
-Приватный проект. Все права у автора.
+В репозитории **нет**: токенов, IP прокси, имён каналов, логов, settings.xml.
+
+Подробнее: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
