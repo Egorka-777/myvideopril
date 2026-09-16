@@ -1,0 +1,30 @@
+# Build
+bin/
+obj/
+*.user
+*.suo
+.vs/
+tests/*.dll
+
+# Node
+node_modules/
+tools/uploader/node_modules/
+
+# Runtime / local data (never commit secrets)
+*.log
+settings.xml
+youtube-schedule.json
+youtube-queue-delay.json
+VideoBatch_NEW.exe
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Staging uploads
+Upload/
+
+# Temp
+*.tmp
+_yt_*
