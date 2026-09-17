@@ -81,7 +81,7 @@ namespace VideoBatch {
                     string line;
                     while((line=await process.StandardOutput.ReadLineAsync().ConfigureAwait(false))!=null) {
                         if(string.IsNullOrWhiteSpace(line))continue;
-                        try{using(var m=new MemoryStream(Encoding.UTF8.GetBytes(line))){var msg=(UploadMessage)MessageSerializer.ReadObject(m);if(update!=null)update(msg);if(msg.ip!=null)result.Ip=msg.ip;if(msg.url!=null)result.Url=msg.url;if(msg.stage=="done")result.Success=true;if(msg.stage=="error"){result.Error=msg.error??msg.text;result.KeptOpen=msg.keptOpen;}}}catch{if(update!=null)update(new UploadMessage{stage="log",text=line});}
+                        try{using(var m=new MemoryStream(Encoding.UTF8.GetBytes(line))){var msg=(UploadMessage)MessageSerializer.ReadObject(m);if(update!=null)update(msg);if(msg.ip!=null)result.Ip=msg.ip;if(msg.url!=null)result.Url=msg.url;if(msg.stage=="done"){result.Success=msg.success;if(!msg.success&&string.IsNullOrWhiteSpace(result.Error))result.Error=msg.text;}if(msg.stage=="error"){result.Error=msg.error??msg.text;result.KeptOpen=msg.keptOpen;}}}catch{if(update!=null)update(new UploadMessage{stage="log",text=line});}
                     }
                     await Task.Run(()=>process.WaitForExit()).ConfigureAwait(false);cancel.ThrowIfCancellationRequested();
                     string err=await stderr.ConfigureAwait(false);
