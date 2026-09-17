@@ -22,8 +22,9 @@ myvideopril/
 │   ├── UI.cs                   # Главное окно (создание видео)
 │   ├── Uploader.cs             # YouTube UI + запуск загрузки
 │   ├── QueueManager.cs         # Подготовка задач → UploadJob
-│   ├── TitleCleaner.cs         # Очистка «1. » только перед upload
-│   ├── ScheduleGenerator.cs    # Shorts: 2–5 мин / 10–15 мин между акк.
+│   ├── TitleCleaner.cs         # Заголовок YouTube + Windows-имя файла
+│   ├── ScheduleGenerator.cs    # Shorts: 15–60 мин между роликами профиля
+│   ├── UploadItemState.cs      # pending / scheduled / error / unknown …
 │   ├── ChannelStatus.cs        # Готов / Подготовка / Загрузка / …
 │   ├── TikTok.cs               # TikTok workspace
 │   ├── Audio.cs                # Озвучка (Windows / ElevenLabs)
@@ -33,29 +34,50 @@ myvideopril/
 │   ├── worker-tiktok.js
 │   ├── package.json            # playwright-core
 │   └── youtube-title-banks.json
-└── tests/                      # Интеграционные скрипты
+└── tests/                      # Регрессионные скрипты
 ```
 
 ## Поток загрузки YouTube
 
 1. UI: выбор канала → «Добавить видео» (видео сразу привязано к каналу)
-2. **QueueManager.Prepare()** — профиль, staging, `TitleCleaner`, `ScheduleGenerator` → `UploadJob`
-3. **Uploader.cs** → `UploadAll()` → `RunUploadWithRetry()` (2 попытки) → **worker.js**
+2. **QueueManager.Prepare()** — профиль, staging, `TitleCleaner.CleanForUpload()`, `ScheduleGenerator.GenerateForProfile()` → `UploadJob`
+3. **Uploader.cs** → `UploadAll()` → `RunUploadWithRetry()` (2 попытки, job пересобирается) → **worker.js**
 4. Запуск **worker.js** через Node с JSON-job (токен Dolphin в env, не в файле)
-5. **worker.js**:
+5. **worker.js** (один профиль на пачку):
    - `startOrConnectProfile()` — Dolphin API
    - `verifyYouTubeStudioReady()` — вход в Studio
-   - `resolveStudioChannelId()` — реальный `UC…` из URL
-   - `openUploadForPack()` — `…/videos/upload` или Создать → Добавить видео (RU/EN)
-   - `setInputFilesViaCdp()` — передача файлов через CDP
-   - `waitForBulkUploadComplete()` — дождаться загрузки
-   - `processUploadItemInDialog()` — заголовок, превью, Далее → **Запланировать публикацию**
-6. Расписание: `ScheduleGenerator` (2–5 мин внутри аккаунта, 10–15 мин между) + `setSchedule()` в worker
-7. TikTok: тот же сценарий «аккаунт → добавить видео»; `TitleCleaner` перед отправкой
+   - **`uploadPackSequentially()`** — для каждого ролика:
+     - `openUploadAndSetFiles(page, [oneVideo])` — **только один файл**
+     - `waitForUploadsReady()` — 100%
+     - заголовок (из C#, `validateUploadTitle()` — защита без изменения)
+     - `scheduleAndConfirmUpload()` — Schedule, проверка radio/date/time, подтверждение
+     - сообщение `stage: item` → C# сохраняет `UploadState=scheduled` через `SafeSave()`
+   - `uploadDraftsBulk()` — массовая передача **только для черновиков**
+6. Расписание: интервал **15–60 мин** (случайный) между соседними роликами одного `ProfileId`; состояние в `%LocalAppData%\VideoBatchDesktop\youtube-schedule.json` → `{"profiles":{"<ProfileId>":"ISO8601"}}`. После последнего ролика сохраняется **следующий свободный слот**, не время последнего ролика.
+7. При долгой загрузке worker переносит просроченное время вперёд (`adjustScheduleIfNeeded`) и логирует план/факт.
+8. TikTok: тот же сценарий «аккаунт → добавить видео»; `TitleCleaner` перед отправкой
+
+## Заголовки
+
+- **YouTube:** `TitleCleaner.CleanForUpload()` — единственный источник (убирает префикс номера, нормализует `|`, ≤100 символов с ошибкой)
+- **Windows-файл:** `TitleCleaner.MakeWindowsSafeTitle()` — `|` → ` . `, без запрещённых символов
+- **worker.js:** `validateUploadTitle()` — только проверка, без `.slice(0,100)`
+
+## Контрольные точки и повтор
+
+| UploadState | Поведение |
+|-------------|-----------|
+| `pending` | загружать |
+| `scheduled` | пропустить |
+| `error` | повторить (если финальная кнопка не была подтверждена) |
+| `unknown` | не загружать автоматически |
+
+- Статус «Отложено N ✓» — только если **все N** роликов канала подтверждены как `scheduled`
+- Ошибка расписания **не** сохраняется как Private/success; профиль остаётся открытым
 
 ## Версия worker
 
-В журнале загрузки ищите строку: `Загрузчик 2026-09-17-watch-recovery-v1`
+В журнале загрузки ищите строку: `Загрузчик 2026-09-17-sequential-schedule-v1`
 
 ## Что НЕ в репозитории (личные данные)
 
@@ -69,4 +91,9 @@ myvideopril/
 ```powershell
 dotnet build VideoBatch.csproj -c Release
 cd tools/uploader && npm ci
+node --check ../tools/uploader/worker.js
+node tests/title_cleaner_regressions.js
+node tests/schedule_regressions.js
+node tests/sequential_upload_regressions.js
+node tests/watch_regressions.js
 ```

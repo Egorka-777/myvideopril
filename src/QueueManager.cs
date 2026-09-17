@@ -22,12 +22,15 @@ namespace VideoBatch {
         public List<PreparedUploadItem> Items=new List<PreparedUploadItem>();
 
         public UploadJob ToUploadJob(string token,int localPort){
-            var first=Items[0];
+            var pending=Items.Where(it=>!UploadItemState.SkipAutoUpload(it.Source.UploadState)).ToList();
+            var work=pending.Count>0?pending:Items;
+            var first=work[0];
             return new UploadJob{
                 token=token,
                 localPort=localPort,
                 profileId=Channel.ProfileId,
                 expectedIp=Channel.ExpectedIp,
+                channelName=Channel.Name??"",
                 items=Items.Select(it=>new UploadItemJob{
                     video=it.StagedVideo,
                     title=it.UploadTitle,
@@ -35,7 +38,12 @@ namespace VideoBatch {
                     scheduleDate=it.ScheduleDate,
                     scheduleTime=it.ScheduleTime,
                     publishedVideoId=it.Source.PublishedVideoId??"",
-                    publishedUrl=it.Source.PublishedUrl??""
+                    publishedUrl=it.Source.PublishedUrl??"",
+                    uploadState=UploadItemState.Normalize(it.Source.UploadState),
+                    scheduledDate=it.Source.ScheduledDate??"",
+                    scheduledTime=it.Source.ScheduledTime??"",
+                    lastUploadError=it.Source.LastUploadError??"",
+                    packIndex=it.Index
                 }).ToArray(),
                 skipQueueDelay=true,
                 checkOnly=false,
@@ -58,6 +66,11 @@ namespace VideoBatch {
             var seenPerProfile=new Dictionary<string,HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             foreach(var job in jobs){
                 string ctx=job.ch.Name+" ["+job.index+"/"+job.total+"]";
+                if(UploadItemState.SkipAutoUpload(job.item.UploadState)){
+                    if(UploadItemState.Normalize(job.item.UploadState)==UploadItemState.Unknown)
+                        throw new Exception(ctx+": статус «unknown» — проверьте ролик вручную в открытом профиле.");
+                    continue;
+                }
                 if(string.IsNullOrWhiteSpace(job.ch.ProfileId))throw new Exception(job.ch.Name+": вставьте Profile ID из Dolphin.");
                 if(string.IsNullOrWhiteSpace(NormTitle(job.item.Title)))throw new Exception(ctx+": введите заголовок.");
                 if(string.IsNullOrWhiteSpace(job.item.Video)||!File.Exists(job.item.Video))throw new Exception(ctx+": файл видео не найден.");
@@ -79,23 +92,25 @@ namespace VideoBatch {
             Func<string,string,int,string> stageFile,
             Func<YouTubeChannel,YouTubeItem,int,int,string> plannedFileName,
             Func<string,int,int,string> cleanTitleForUpload){
-            ValidateBeforeStart(jobs,plannedFileName);
+            var active=jobs.Where(j=>{
+                if(!string.IsNullOrWhiteSpace(j.item.PublishedVideoId)||!string.IsNullOrWhiteSpace(j.item.PublishedUrl))return false;
+                return !UploadItemState.SkipAutoUpload(j.item.UploadState);
+            }).ToList();
+            ValidateBeforeStart(active,plannedFileName);
             string statePath=Path.Combine(Store.Root,"youtube-schedule.json");
-            var byProfile=jobs
+            var byProfile=active
                 .GroupBy(j=>(j.ch.ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase)
                 .Select(g=>new{list=g.OrderBy(x=>x.index).ToList(),row=g.First().row,ch=g.First().ch,pid=g.Key})
                 .ToList();
-            var counts=byProfile.Select(g=>g.list.Count).ToList();
-            var scheduleSlots=ScheduleGenerator.GenerateForProfileBatches(counts,statePath);
-            int slotCursor=0;
             var batches=new List<PreparedProfileBatch>();
             foreach(var g in byProfile){
+                var scheduleSlots=ScheduleGenerator.GenerateForProfile(g.pid,g.list.Count,statePath);
                 var batch=new PreparedProfileBatch{Row=g.row,Channel=g.ch,ProfileId=g.pid};
-                foreach(var j in g.list){
+                for(int i=0;i<g.list.Count;i++){
+                    var j=g.list[i];
                     string staged=stageFile(j.item.Video,g.pid,j.index);
                     if(!File.Exists(staged))throw new Exception(j.ch.Name+" ["+j.index+"/"+j.total+"]: staging не удался.");
-                    if(slotCursor>=scheduleSlots.Count)throw new Exception("Не хватило слотов расписания.");
-                    var sched=scheduleSlots[slotCursor++];
+                    var sched=scheduleSlots[i];
                     batch.Items.Add(new PreparedUploadItem{
                         Source=j.item,
                         Index=j.index,
@@ -106,7 +121,7 @@ namespace VideoBatch {
                         UploadTitle=cleanTitleForUpload(j.item.Title,j.index,j.total)
                     });
                 }
-                batches.Add(batch);
+                if(batch.Items.Count>0)batches.Add(batch);
             }
             return batches;
         }

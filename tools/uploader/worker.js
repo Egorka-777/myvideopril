@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-09-17-watch-recovery-v1";
+const WORKER_BUILD = "2026-09-17-sequential-schedule-v1";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -2339,6 +2339,39 @@ async function openScheduleOption(page) {
   await page.waitForTimeout(700);
 }
 
+async function readScheduleFromUI(page) {
+  return page.evaluate(() => {
+    const root = document.querySelector("ytcp-uploads-dialog");
+    if (!root) return { date: "", time: "", timezone: "" };
+    let date = "";
+    let time = "";
+    for (const inp of root.querySelectorAll("input")) {
+      const label = `${inp.getAttribute("aria-label") || ""} ${inp.placeholder || ""}`.toLowerCase();
+      if (inp.type === "date" || label.includes("date") || label.includes("дата")) date = inp.value || date;
+      if (inp.type === "time" || label.includes("time") || label.includes("время")) time = inp.value || time;
+    }
+    let timezone = "";
+    const tzNode = root.querySelector("ytcp-visibility-scheduler [class*='timezone'], [class*='time-zone']");
+    if (tzNode) timezone = (tzNode.innerText || "").replace(/\s+/g, " ").trim().slice(0, 120);
+    return { date, time, timezone };
+  }).catch(() => ({ date: "", time: "", timezone: "" }));
+}
+
+async function isScheduleRadioSelected(page) {
+  const dlg = uploadDialog(page);
+  const radio = dlg.locator("tp-yt-paper-radio-button[name='SCHEDULE'], #schedule-radio-button").first();
+  if (await radio.count().catch(() => 0)) {
+    const ac = await radio.getAttribute("aria-checked").catch(() => "");
+    if (ac === "true") return true;
+  }
+  return page.evaluate(() => {
+    for (const el of document.querySelectorAll("ytcp-uploads-dialog tp-yt-paper-radio-button[name='SCHEDULE'], ytcp-uploads-dialog #schedule-radio-button")) {
+      if (el.getAttribute("aria-checked") === "true" || el.classList.contains("iron-selected")) return true;
+    }
+    return false;
+  }).catch(() => false);
+}
+
 async function fillScheduleDateTime(page, isoDate, time24) {
   if (!isoDate || !time24) return;
   const dlg = uploadDialog(page);
@@ -2355,21 +2388,23 @@ async function fillScheduleDateTime(page, isoDate, time24) {
     if (!root) return;
     for (const inp of root.querySelectorAll("input")) {
       const label = `${inp.getAttribute("aria-label") || ""} ${inp.placeholder || ""}`.toLowerCase();
-      if (label.includes("date") || label.includes("дата")) {
+      if (inp.type === "date" || label.includes("date") || label.includes("дата")) {
         inp.focus();
         inp.value = isoDate;
         inp.dispatchEvent(new Event("input", { bubbles: true }));
         inp.dispatchEvent(new Event("change", { bubbles: true }));
+        inp.dispatchEvent(new Event("blur", { bubbles: true }));
       }
-      if (label.includes("time") || label.includes("время")) {
+      if (inp.type === "time" || label.includes("time") || label.includes("время")) {
         inp.focus();
         inp.value = time24;
         inp.dispatchEvent(new Event("input", { bubbles: true }));
         inp.dispatchEvent(new Event("change", { bubbles: true }));
+        inp.dispatchEvent(new Event("blur", { bubbles: true }));
       }
     }
   }, { isoDate, time24 }).catch(() => {});
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
 }
 
 async function saveAsPrivate(page) {
@@ -2404,44 +2439,56 @@ async function saveAsPrivate(page) {
   await page.waitForTimeout(500);
 }
 
-async function finishUploadVisibility(page, isoDate, time24) {
-  try {
-    await setSchedule(page, isoDate, time24);
-    return await publish(page);
-  } catch (e1) {
-    const msg = e1 instanceof Error ? e1.message : String(e1);
-    send("youtube", `Расписание: ${msg.slice(0, 72)} → сохраняю черновик (Done/Save)…`, { percent: 79 });
-    await saveAsPrivate(page).catch(() => {});
+async function verifyScheduleConfirmed(page, title, expectedDate, expectedTime) {
+  const successDlg = page.locator("ytcp-video-share-dialog, ytcp-video-upload-success").first();
+  if (await successDlg.count() && await successDlg.isVisible().catch(() => false)) {
+    const txt = await successDlg.innerText().catch(() => "");
+    if (/scheduled|запланир|will be published|будет опублик/i.test(txt)) return true;
+  }
+  const read = await readScheduleFromUI(page);
+  if (read.date === expectedDate && read.time === expectedTime) return true;
+  const body = await page.evaluate(() => (document.body.innerText || "").slice(0, 8000)).catch(() => "");
+  if (/scheduled|запланир/i.test(body) && normalizeStudioTitle(body).includes(normalizeStudioTitle(title).slice(0, 20))) return true;
+  return false;
+}
+
+async function scheduleAndConfirmUpload(page, isoDate, time24, meta) {
+  const ctx = meta && meta.ctx ? meta.ctx : "Расписание";
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      return await publish(page);
-    } catch (e2) {
-      const clicked = await clickByText(page, ["^Done$", "^Save$", "^Сохранить$", "^Готово$"], 2500);
-      if (clicked) {
-        await page.waitForTimeout(1500);
-        return "";
+      await openScheduleOption(page);
+      if (!(await isScheduleRadioSelected(page))) throw new Error("Radio Schedule не выбран.");
+      await fillScheduleDateTime(page, isoDate, time24);
+      const read = await readScheduleFromUI(page);
+      if (read.timezone) send("youtube", `Часовой пояс Studio: ${read.timezone}`, { percent: 79 });
+      if (read.date && read.time && (read.date !== isoDate || read.time !== time24)) {
+        throw new Error(`Время в Studio не совпало: ожидалось ${isoDate} ${time24}, в UI ${read.date} ${read.time}`);
       }
-      throw e2;
+      send("youtube", `${ctx}: Schedule / Запланировать (${isoDate} ${time24})…`, { percent: 80 });
+      const url = await publish(page);
+      const ok = await verifyScheduleConfirmed(page, meta.title || "", isoDate, time24);
+      if (!ok) throw new Error("YouTube не подтвердил расписание.");
+      return { url: url || "", schedule: { date: isoDate, time: time24 }, scheduleConfirmed: true };
+    } catch (e) {
+      lastErr = e;
+      send("youtube", `${ctx}: расписание повтор ${attempt}/3…`, { percent: 78 });
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(800);
     }
   }
+  await takeUploadErrorScreenshot(page, ctx);
+  throw lastErr || new Error(`${ctx}: не удалось подтвердить расписание.`);
+}
+
+async function finishUploadVisibility(page, isoDate, time24, meta) {
+  const result = await scheduleAndConfirmUpload(page, isoDate, time24, meta || { ctx: "Расписание" });
+  return result.url || "";
 }
 
 async function setSchedule(page, isoDate, time24) {
-  let lastErr = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      await openScheduleOption(page);
-      await fillScheduleDateTime(page, isoDate, time24);
-      const label = isoDate && time24 ? `${isoDate} ${time24}` : "по умолчанию YouTube";
-      send("youtube", `Schedule / Запланировать (${label})…`, { percent: 80 });
-      return true;
-    } catch (e) {
-      lastErr = e;
-      send("youtube", `Расписание: повтор ${attempt}/2…`, { percent: 78 });
-      await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(600);
-    }
-  }
-  throw lastErr || new Error("Не удалось выбрать Schedule / «Запланировать публикацию».");
+  await scheduleAndConfirmUpload(page, isoDate, time24, { ctx: "Расписание" });
+  return true;
 }
 
 async function publish(page) {
@@ -2962,8 +3009,79 @@ async function applyShortsThumbFrames(page, titles) {
   send("youtube", "Превью шортсов применено.", { percent: 95 });
 }
 
+/** Заголовок уже очищен в C# (TitleCleaner). Здесь только защитная проверка — не изменяем строку. */
+function validateUploadTitle(raw, ctx) {
+  const t = String(raw || "").trim();
+  if (!t) throw new Error(`${ctx}: пустой заголовок.`);
+  if (t.length > 100) throw new Error(`${ctx}: заголовок длиннее 100 символов (${t.length}).`);
+  if (/^\s*\d{1,3}[\.\)\-_]\s*/.test(t)) throw new Error(`${ctx}: заголовок не очищен (префикс номера).`);
+  if (/\|\s*\|/.test(t) || /^\|/.test(t) || /\|$/.test(t)) throw new Error(`${ctx}: некорректные разделители «|».`);
+  return t;
+}
+
 function cleanUploadTitle(raw) {
-  return String(raw || "").trim().replace(/\s*[·•]\s*\+\d+\s*$/, "").replace(/\s+\+\d+\s*$/, "").replace(/\s+/g, " ").trim().slice(0, 100);
+  return validateUploadTitle(raw, "Заголовок");
+}
+
+function parseLocalDateTime(isoDate, time24) {
+  const [y, m, d] = String(isoDate || "").split("-").map(Number);
+  const [hh, mm] = String(time24 || "").split(":").map(Number);
+  if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  return new Date(y, m - 1, d, hh, mm, 0, 0);
+}
+
+function formatIsoDate(dt) {
+  const y = dt.getFullYear();
+  const mo = String(dt.getMonth() + 1).padStart(2, "0");
+  const da = String(dt.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${da}`;
+}
+
+function formatTime24(dt) {
+  return `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+}
+
+function ceilMinute(dt) {
+  if (dt.getSeconds() === 0 && dt.getMilliseconds() === 0) return new Date(dt.getTime());
+  return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), dt.getHours(), dt.getMinutes() + 1, 0, 0);
+}
+
+function randomGapMinutes() {
+  return 15 + Math.floor(Math.random() * 46);
+}
+
+function adjustScheduleIfNeeded(isoDate, time24, minLeadMinutes = 15) {
+  const planned = parseLocalDateTime(isoDate, time24);
+  if (!planned) throw new Error(`Некорректное время расписания: ${isoDate} ${time24}`);
+  const min = ceilMinute(new Date(Date.now() + minLeadMinutes * 60000));
+  if (planned >= min) return { date: isoDate, time: time24, shifted: false };
+  const shifted = ceilMinute(min);
+  return { date: formatIsoDate(shifted), time: formatTime24(shifted), shifted: true };
+}
+
+function refreshRemainingSchedules(items, startIndex) {
+  let current = adjustScheduleIfNeeded(items[startIndex].scheduleDate, items[startIndex].scheduleTime);
+  items[startIndex].scheduleDate = current.date;
+  items[startIndex].scheduleTime = current.time;
+  for (let i = startIndex + 1; i < items.length; i++) {
+    const base = parseLocalDateTime(items[i - 1].scheduleDate, items[i - 1].scheduleTime);
+    const next = new Date(base.getTime() + randomGapMinutes() * 60000);
+    items[i].scheduleDate = formatIsoDate(next);
+    items[i].scheduleTime = formatTime24(ceilMinute(next));
+  }
+}
+
+async function takeUploadErrorScreenshot(page, label) {
+  try {
+    const dir = path.join(path.dirname(path.dirname(jobPath)), "upload-errors");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `schedule-${Date.now()}-${String(label || "err").replace(/[^\w.-]+/g, "_").slice(0, 40)}.png`);
+    await page.screenshot({ path: file, fullPage: false });
+    send("youtube", "Скриншот ошибки: " + path.basename(file), { percent: 79 });
+    return file;
+  } catch (_) {
+    return "";
+  }
 }
 
 function resolveItemSchedule(item, title) {
@@ -3002,13 +3120,31 @@ async function listExistingStudioTitles(page) {
   }).catch(() => []);
 }
 
+function normalizeUploadState(raw) {
+  const s = String(raw || "pending").trim().toLowerCase();
+  if (!s || s === "готов") return "pending";
+  if (s === "отложено") return "scheduled";
+  if (s === "ошибка") return "error";
+  return s;
+}
+
 async function filterPackForUpload(page, pack, opts = {}) {
   const draftOnly = opts.draftOnly === true;
   const skipped = [];
   const toUpload = [];
   for (let i = 0; i < pack.length; i++) {
-    const item = Object.assign({}, pack[i], { _origIndex: i });
-    const title = cleanUploadTitle(item.title);
+    const item = Object.assign({}, pack[i], { _origIndex: Number.isInteger(pack[i].packIndex) && pack[i].packIndex > 0 ? pack[i].packIndex - 1 : i });
+    const state = normalizeUploadState(item.uploadState);
+    if (state === "scheduled") {
+      skipped.push({ item, reason: "уже запланирован (scheduled)" });
+      continue;
+    }
+    if (state === "unknown") {
+      skipped.push({ item, reason: "статус unknown — проверьте вручную" });
+      continue;
+    }
+    const title = validateUploadTitle(item.title, `Ролик ${i + 1}`);
+    item.title = title;
     if (!title) continue;
     if (String(item.publishedVideoId || "").trim() || String(item.publishedUrl || "").trim()) {
       skipped.push({ item, reason: "уже в базе (PublishedUrl/Id)" });
@@ -3017,7 +3153,6 @@ async function filterPackForUpload(page, pack, opts = {}) {
     toUpload.push(item);
   }
   if (draftOnly) return { toUpload, skipped };
-  // Пачку назначили вручную — не сканируем Studio (медленно и ложно режет шаблоны из банка).
   return { toUpload, skipped };
 }
 
@@ -3228,26 +3363,35 @@ async function captureUploadMetaIfNeeded(page, title, url) {
   return out;
 }
 
-async function processUploadItemInDialog(page, item, index, total) {
+async function processUploadItemInDialog(page, item, index, total, channelLabel) {
   assertPageOpen(page);
-  const title = cleanUploadTitle(item.title);
+  const title = validateUploadTitle(item.title, `Ролик ${index}/${total}`);
   const video = item.video;
   if (!video || !fs.existsSync(video)) throw new Error(`Ролик ${index}/${total}: файл не найден.`);
-  if (!title) throw new Error(`Ролик ${index}/${total}: пустой заголовок.`);
   if (item.thumbnail && !fs.existsSync(item.thumbnail)) throw new Error(`Ролик ${index}/${total}: превью не найдено.`);
 
-  const schedule = resolveItemSchedule(item, title);
-  send("youtube", `Пачка ${index}/${total}: «${title.slice(0, 40)}» → ${schedule.date} ${schedule.time}`, {
+  const ctx = `${channelLabel || "Канал"} [${index}/${total}]`;
+  send("youtube", `${ctx} → план ${item.scheduleDate} ${item.scheduleTime} · «${title.slice(0, 40)}»`, {
     percent: Math.min(90, 20 + Math.round((index - 1) / Math.max(1, total) * 70))
   });
 
   await waitForUploadDialog(page);
   await fillTitle(page, title);
+  send("youtube", `Заголовок ${index}/${total} установлен`, { percent: 72 });
   await setThumbnail(page, item.thumbnail || "");
   await advance(page);
-  let url = await finishUploadVisibility(page, schedule.date, schedule.time);
+  send("youtube", `Расписание ${index}/${total}: ${item.scheduleDate} ${item.scheduleTime}`, { percent: 78 });
+  const schedResult = await scheduleAndConfirmUpload(page, item.scheduleDate, item.scheduleTime, { ctx, title });
+  let url = schedResult.url || "";
   url = await captureUploadMetaIfNeeded(page, title, url);
-  return { url, schedule, packIndex: (item._origIndex != null ? item._origIndex : index - 1) + 1 };
+  send("youtube", `${ctx} → установлено ${item.scheduleDate} ${item.scheduleTime}`, { percent: 88 });
+  return {
+    url,
+    schedule: { date: item.scheduleDate, time: item.scheduleTime },
+    scheduleConfirmed: true,
+    packIndex: (Number.isInteger(item.packIndex) && item.packIndex > 0 ? item.packIndex : (item._origIndex != null ? item._origIndex : index - 1) + 1),
+    uploadTitle: title
+  };
 }
 
 async function uploadDraftsBulk(page, pack) {
@@ -3283,49 +3427,91 @@ async function uploadDraftsBulk(page, pack) {
   return results;
 }
 
-async function uploadPackBulk(page, pack) {
+/** Последовательная загрузка с расписанием: один файл → 100% → заголовок → Schedule → следующий. */
+async function uploadPackSequentially(page, pack) {
   assertPageOpen(page);
   await verifyYouTubeStudioReady(page);
   const { toUpload, skipped } = await filterPackForUpload(page, pack);
+  const channelLabel = String(job.channelName || job.profileId || "Канал").trim();
   for (const s of skipped) {
-    const t = cleanUploadTitle(s.item.title);
+    const t = validateUploadTitle(s.item.title, "Пропуск");
     send("youtube", `Пропуск «${t.slice(0, 40)}» — ${s.reason}.`, {
       percent: 26,
       packIndex: (s.item._origIndex != null ? s.item._origIndex : 0) + 1
     });
   }
   if (!toUpload.length) {
-    send("youtube", "Все ролики уже на канале — новая загрузка не нужна.", { percent: 95 });
+    send("youtube", "Все ролики уже запланированы — новая загрузка не нужна.", { percent: 95 });
     return [];
   }
 
-  send("youtube", `Открываю загрузку ${toUpload.length} ролик(ов), затем запланирую…`, { percent: 27 });
-  await openUploadAndSetFiles(page, toUpload.map(it => it.video));
-  const labels = toUpload.map(it => path.basename(String(it.video || "")));
-  send("youtube", `Файлы переданы (${toUpload.length}), жду 100% на YouTube…`, { percent: 29 });
-  await waitForUploadsReady(page, toUpload.length, labels);
-
   const results = [];
+  const packIndexOf = (item) => (Number.isInteger(item.packIndex) && item.packIndex > 0 ? item.packIndex : item._origIndex + 1);
   for (let i = 0; i < toUpload.length; i++) {
-    if (!(await uploadDialog(page).isVisible().catch(() => false))) {
-      await openUploadItemFromProgressPanel(page, i);
-    } else if (i > 0) {
-      await selectUploadQueueItem(page, i);
+    const item = toUpload[i];
+    const index = i + 1;
+    const total = toUpload.length;
+    const pIdx = packIndexOf(item);
+    try {
+      refreshRemainingSchedules(toUpload, i);
+      const plan = adjustScheduleIfNeeded(item.scheduleDate, item.scheduleTime);
+      if (plan.shifted) {
+        send("youtube", `Время ${item.scheduleTime} стало слишком близким → перенесено на ${plan.time}`, { percent: 27 });
+        item.scheduleDate = plan.date;
+        item.scheduleTime = plan.time;
+      }
+
+      send("youtube", `Загрузка ${index}/${total}`, { percent: 28, packIndex: pIdx });
+      send("item", `${channelLabel} [${index}/${total}] → план ${item.scheduleDate} ${item.scheduleTime}`, {
+        stage: "item",
+        uploadState: "uploading",
+        packIndex: pIdx
+      });
+
+      await dismissAfterPublish(page);
+      await openUploadAndSetFiles(page, [item.video]);
+      const label = path.basename(String(item.video || ""));
+      send("youtube", `Файл ${index}/${total} передан, жду 100%…`, { percent: 32 });
+      await waitForUploadsReady(page, 1, [label]);
+      send("youtube", `Файл ${index}/${total} загружен на 100%`, { percent: 55 });
+
+      const one = await processUploadItemInDialog(page, item, index, total, channelLabel);
+      one.packIndex = pIdx;
+      results.push(one);
+
+      send("item", `Запланировано ${index}/${total} ✓`, {
+        stage: "item",
+        packIndex: pIdx,
+        scheduledDate: one.schedule.date,
+        scheduledTime: one.schedule.time,
+        scheduleConfirmed: true,
+        uploadTitle: one.uploadTitle,
+        uploadState: "scheduled",
+        url: one.url || "",
+        success: true
+      });
+      send("youtube", `Запланировано ${index}/${total} ✓`, {
+        percent: Math.min(95, 30 + Math.round(index / total * 65)),
+        url: one.url || "",
+        packIndex: pIdx
+      });
+
+      await dismissAfterPublish(page);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await takeUploadErrorScreenshot(page, `${channelLabel} [${index}/${total}]`);
+      send("item", `Ошибка ${index}/${total}: ${msg}`, {
+        stage: "item",
+        packIndex: pIdx,
+        uploadState: "error",
+        error: msg,
+        success: false
+      });
+      send("youtube", `Требуется проверка ${index}/${total} — профиль оставлен открытым`, { percent: 79, packIndex: pIdx });
+      fail(`${channelLabel} [${index}/${total}]: ${msg}`, { keptOpen: true, success: false, packIndex: pIdx });
+      return results;
     }
-    if (!(await uploadDialog(page).isVisible().catch(() => false))) {
-      const ok = await ensureUploadDialogOpen(page);
-      if (!ok) throw new Error(`Ролик ${i + 1}/${toUpload.length}: не открылось окно редактирования — нажмите ролик в «Загрузка завершена» вручную.`);
-    }
-    const one = await processUploadItemInDialog(page, toUpload[i], i + 1, toUpload.length);
-    results.push(one);
-    send("youtube", `Запланировано ${i + 1}/${toUpload.length}.`, {
-      percent: Math.min(95, 30 + Math.round((i + 1) / toUpload.length * 65)),
-      url: one.url || "",
-      packIndex: one.packIndex
-    });
-    if (i < toUpload.length - 1) await ensureUploadDialogOpen(page);
   }
-  await dismissAfterPublish(page);
   return results;
 }
 
@@ -3530,8 +3716,18 @@ async function main() {
     ? (pack.length > 1 ? `Черновики: пачка ${pack.length} роликов.` : "Черновики: один ролик.")
     : (pack.length > 1 ? `Загрузка ${pack.length} роликов с расписанием.` : "Загрузка с расписанием."), { percent: 25 });
 
-  const results = draftOnly ? await uploadDraftsBulk(page, pack) : await uploadPackBulk(page, pack);
+  const results = draftOnly ? await uploadDraftsBulk(page, pack) : await uploadPackSequentially(page, pack);
   const urls = results.map(r => r.url).filter(Boolean);
+  const expected = pack.filter(it => normalizeUploadState(it.uploadState) !== "scheduled" && normalizeUploadState(it.uploadState) !== "unknown").length;
+  const confirmed = results.filter(r => r.scheduleConfirmed).length;
+
+  if (!draftOnly && (confirmed < expected || confirmed !== results.length)) {
+    fail(`Запланировано ${confirmed}/${expected} — пачка остановлена. Профиль оставлен открытым.`, {
+      keptOpen: true,
+      success: false
+    });
+    return;
+  }
 
   await closeProfileSafely(page);
   markProfileCompleted();
@@ -3539,7 +3735,7 @@ async function main() {
   const last = urls[urls.length - 1] || "";
   send("done", draftOnly
     ? (pack.length > 1 ? `Черновики: ${pack.length} роликов сохранены.` : "Черновик сохранён.")
-    : (pack.length > 1 ? `Запланировано ${pack.length} роликов.` : (last ? `Запланировано: ${last}` : "Запланировано.")), { success: true, url: last, ip: verifiedIp, percent: 100 });
+    : (confirmed > 1 ? `Запланировано ${confirmed} роликов.` : (last ? `Запланировано: ${last}` : "Запланировано.")), { success: true, url: last, ip: verifiedIp, percent: 100 });
 }
 
 if (require.main === module) {
