@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-09-16-schedule-v3";
+const WORKER_BUILD = "2026-09-16-schedule-v5";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -2467,10 +2467,26 @@ async function resolveStudioChannelId(page) {
 }
 
 async function pickVideoFileInput(page) {
+  const pierced = page.locator(
+    "ytcp-uploads-dialog input[type=file], ytcp-uploads-file-picker input[type=file], ytcp-upload-dialog input[type=file], input[type=file][accept*='video']"
+  );
+  if (await pierced.count().catch(() => 0)) return pierced.first();
+
   await page.evaluate(() => {
     document.querySelectorAll('input[type=file][data-vb-pick="1"]').forEach(el => el.removeAttribute("data-vb-pick"));
   }).catch(() => {});
+
   const picked = await page.evaluate(() => {
+    const walk = (root, out) => {
+      if (!root) return;
+      try {
+        root.querySelectorAll('input[type=file]').forEach(el => out.push(el));
+      } catch (_) {}
+      const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (const el of nodes) {
+        if (el.shadowRoot) walk(el.shadowRoot, out);
+      }
+    };
     const score = (el) => {
       const name = (el.getAttribute("name") || "").toLowerCase();
       const accept = (el.getAttribute("accept") || "").toLowerCase();
@@ -2478,20 +2494,24 @@ async function pickVideoFileInput(page) {
       if (/image/i.test(accept) && !/video/i.test(accept)) return -50;
       let s = 0;
       if (/video/i.test(accept)) s += 40;
-      if (el.closest("ytcp-uploads-dialog, ytcp-uploads-file-picker, ytcp-video-dialog, ytcp-uploads-dialog")) s += 60;
+      const host = el.getRootNode && el.getRootNode().host;
+      const hostTag = (host && host.tagName) || "";
+      if (/ytcp-uploads|ytcp-video-dialog|ytcp-upload-dialog/i.test(hostTag)) s += 55;
+      if (el.closest("ytcp-uploads-dialog, ytcp-uploads-file-picker, ytcp-video-dialog, ytcp-upload-dialog")) s += 60;
       if (location.hostname.includes("studio.youtube.com")) s += 10;
       if (location.pathname.includes("/videos/upload")) s += 15;
       if (accept) s += 5;
       return s;
     };
-    const inputs = Array.from(document.querySelectorAll("input[type=file]"));
+    const inputs = [];
+    walk(document, inputs);
     let best = null;
     let bestScore = -999;
     for (const el of inputs) {
       const s = score(el);
       if (s > bestScore) { bestScore = s; best = el; }
     }
-    if (!best || bestScore < 10) return null;
+    if (!best || bestScore < 8) return null;
     best.setAttribute("data-vb-pick", "1");
     return bestScore;
   }).catch(() => null);
@@ -2502,18 +2522,88 @@ async function pickVideoFileInput(page) {
 }
 
 async function tryPickUploadInput(page) {
-  await waitForUploadDialog(page, 12000).catch(() => {});
-  let input = await pickVideoFileInput(page);
-  if (input) return input;
-  await clickByText(page, [
+  const end = Date.now() + 22000;
+  while (Date.now() < end) {
+    await waitForUploadDialog(page, 3000).catch(() => {});
+    const input = await pickVideoFileInput(page);
+    if (input) return input;
+    await page.waitForTimeout(600);
+  }
+  return null;
+}
+
+/** Клик «Выбрать файлы» только вместе с page.waitForEvent('filechooser') — иначе зависнет системный диалог. */
+async function clickBrowseForFileChooser(page) {
+  const zone = page.locator("ytcp-uploads-file-picker, ytcp-uploads-dialog, #upload-area").first();
+  if (await zone.isVisible().catch(() => false)) {
+    await zone.click({ timeout: 4000 }).catch(() => {});
+    return "zone";
+  }
+  return clickByText(page, [
     "Select files",
     "Выбрать файлы",
     "Choose files",
     "Browse",
-    "Обзор"
-  ], 2500);
-  await page.waitForTimeout(600);
-  return pickVideoFileInput(page);
+    "Обзор",
+    "Upload files",
+    "Загрузить файлы"
+  ], 3500);
+}
+
+async function injectFilesViaFileChooser(page, paths) {
+  const resolved = paths.map(p => path.resolve(String(p || "")));
+  if (!resolved.length || resolved.some(p => !p || !fs.existsSync(p))) {
+    throw new Error("Файл не найден: " + resolved.filter(Boolean).join(", "));
+  }
+  await dismissAfterPublish(page);
+  await dismissYouTubeOverlays(page).catch(() => {});
+  const channelId = await resolveStudioChannelId(page);
+  const uploadUrls = channelId
+    ? [
+        `https://studio.youtube.com/channel/${channelId}/videos/upload?d=ud`,
+        `https://studio.youtube.com/channel/${channelId}/videos/upload`
+      ]
+    : ["https://studio.youtube.com"];
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    for (const url of uploadUrls) {
+      try {
+        await gotoStable(page, url, { waitUntil: "domcontentloaded", timeout: 90000 });
+        await page.waitForTimeout(2000);
+        await waitForUploadDialog(page, 20000).catch(() => {});
+        send("youtube", `Перехват диалога выбора файлов (${resolved.length})…`, { percent: 26 });
+        const [chooser] = await Promise.all([
+          page.waitForEvent("filechooser", { timeout: 25000 }),
+          clickBrowseForFileChooser(page)
+        ]);
+        await chooser.setFiles(resolved);
+        send("youtube", `Файлы переданы (${resolved.length}) через перехват диалога.`, { percent: 28 });
+        return true;
+      } catch (e) {
+        if (attempt >= 3 && url === uploadUrls[uploadUrls.length - 1]) throw e;
+      }
+    }
+    send("youtube", `Диалог файлов: повтор ${attempt}/3…`, { percent: 24 });
+    await page.waitForTimeout(1200);
+  }
+  return false;
+}
+
+async function openUploadAndSetFiles(page, filePaths) {
+  const paths = (Array.isArray(filePaths) ? filePaths : [filePaths]).map(p => String(p || "")).filter(Boolean);
+  if (!paths.length) throw new Error("Нет файлов для передачи.");
+
+  let videoInput = await openUploadForPack(page);
+  if (videoInput) {
+    await waitForUploadDialog(page);
+    await setInputFilesRobust(page, videoInput, paths, "youtube");
+    return true;
+  }
+
+  send("youtube", "Скрытый input не найден — перехват системного диалога…", { percent: 25 });
+  const ok = await injectFilesViaFileChooser(page, paths);
+  if (!ok) throw new Error("Не удалось передать файлы в YouTube Studio (ни CDP, ни перехват диалога).");
+  return true;
 }
 
 async function openUploadViaCreateMenu(page) {
@@ -2559,10 +2649,10 @@ async function openUploadForPack(page) {
       ]
     : ["https://studio.youtube.com"];
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     for (const url of uploadUrls) {
       await gotoStable(page, url, { waitUntil: "domcontentloaded", timeout: 90000 }).catch(() => {});
-      await page.waitForTimeout(attempt === 1 ? 2000 : 1200);
+      await page.waitForTimeout(attempt === 1 ? 2800 : 1600);
       const input = await tryPickUploadInput(page);
       if (input) {
         send("youtube", "Окно «Загрузка видео» открыто.", { percent: 24 });
@@ -2576,7 +2666,7 @@ async function openUploadForPack(page) {
       return viaMenu;
     }
 
-    send("youtube", `Окно загрузки: повтор ${attempt}/3…`, { percent: 22 });
+    send("youtube", `Окно загрузки: повтор ${attempt}/4…`, { percent: 22 });
     await page.waitForTimeout(1000);
   }
   return null;
@@ -2873,50 +2963,133 @@ async function ensureUploadDialogOpen(page) {
   return false;
 }
 
-async function countUploadQueueItems(page) {
+/** Состояние пачки: угол «Загрузка завершена», «Загружено: 100%», диалог, picker. */
+async function scanUploadProgressState(page) {
   return page.evaluate(() => {
-    const selectors = [
-      "ytcp-uploads-file-picker-item",
-      "ytcp-uploads-dialog ytcp-uploads-file-picker .style-scope.ytcp-uploads-file-picker-item",
-      "ytcp-multi-progress-monitor ytcp-ve",
-      "#upload-list ytcp-ve"
-    ];
-    let max = 0;
-    for (const sel of selectors) {
-      const n = document.querySelectorAll(sel).length;
-      if (n > max) max = n;
+    const fullText = (document.body && document.body.innerText) || "";
+    const completedHeader = /Загрузка завершена|Upload complete|Uploads complete|All uploads complete/i.test(fullText);
+    const at100 = Math.max(
+      (fullText.match(/Загружено:\s*100\s*%/gi) || []).length,
+      (fullText.match(/Uploaded:\s*100\s*%/gi) || []).length,
+      (fullText.match(/Upload complete/gi) || []).length
+    );
+    let maxPct = 0;
+    for (const m of fullText.matchAll(/(\d{1,3})\s*%/g)) {
+      const p = Number(m[1]);
+      if (p > maxPct) maxPct = p;
     }
-    const drawer = document.querySelector("ytcp-multi-progress-panel, ytcp-multi-progress-monitor");
-    if (drawer) {
-      const rows = drawer.querySelectorAll("[role='listitem'], .progress-item, ytcp-ve");
-      if (rows.length > max) max = rows.length;
+    let itemCount = document.querySelectorAll("ytcp-uploads-file-picker-item").length;
+    const pickerItems = itemCount;
+    const panel = document.querySelector("ytcp-multi-progress-panel, ytcp-multi-progress-monitor");
+    if (panel) {
+      const rows = panel.querySelectorAll("ytcp-ve, [role='listitem'], ytcp-upload-progress-item, .progress-item");
+      itemCount = Math.max(itemCount, rows.length);
+      if (rows.length === 0) {
+        const lines = (panel.innerText || "").split("\n").filter(l => /100\s*%|\.mp4|\.mov|Reels|_0/i.test(l));
+        itemCount = Math.max(itemCount, lines.length);
+      }
     }
-    return max;
-  }).catch(() => 0);
+    itemCount = Math.max(itemCount, at100);
+    const dlgOpen = !!document.querySelector("ytcp-uploads-dialog, ytcp-upload-dialog");
+    return { itemCount, at100, maxPct, completedHeader, dlgOpen, pickerItems };
+  }).catch(() => ({ itemCount: 0, at100: 0, maxPct: 0, completedHeader: false, dlgOpen: false, pickerItems: 0 }));
 }
 
-async function waitForUploadQueue(page, expectedCount, timeoutMs = 240000) {
-  const end = Date.now() + timeoutMs;
-  let last = 0;
-  while (Date.now() < end) {
+async function countUploadQueueItems(page) {
+  const s = await scanUploadProgressState(page);
+  return Math.max(s.itemCount, s.at100, s.pickerItems);
+}
+
+/** Ждёт 100% без жёсткого лимита; ошибка только если нет прогресса 20+ мин. */
+async function waitForUploadsReady(page, expectedCount, fileLabels) {
+  const stallMs = 20 * 60 * 1000;
+  let lastSig = "";
+  let lastMove = Date.now();
+  send("youtube", `Жду загрузку ${expectedCount} файлов (без лимита по времени)…`, { percent: 30 });
+
+  while (true) {
     assertPageOpen(page);
-    const n = await countUploadQueueItems(page);
-    const dlgReady = await uploadDialog(page).isVisible().catch(() => false);
-    if (n >= expectedCount || (expectedCount === 1 && dlgReady)) {
-      send("youtube", `Принято ${Math.max(n, expectedCount)} из ${expectedCount}.`, { percent: 32 });
-      return Math.max(n, expectedCount);
+    const stat = await scanUploadProgressState(page);
+    const uploaded = stat.at100 >= expectedCount
+      || (stat.completedHeader && stat.at100 >= Math.max(1, expectedCount - 1))
+      || (stat.maxPct >= 99 && Math.max(stat.itemCount, stat.at100) >= expectedCount);
+
+    if (uploaded) {
+      send("youtube", `Загрузка ${expectedCount}/${expectedCount} на 100% — заголовки и расписание…`, { percent: 88 });
+      return stat;
     }
-    if (n !== last) {
-      send("youtube", `Принято ${n} из ${expectedCount}…`, { percent: 28 });
-      last = n;
+
+    const seen = Math.max(stat.itemCount, stat.at100, stat.pickerItems);
+    if (seen > 0 || stat.maxPct > 0) {
+      send("youtube", `Передача: ${seen} рол., ${stat.at100} на 100%, макс. ${stat.maxPct}%…`, {
+        percent: 32 + Math.min(50, Math.round(stat.maxPct * 0.5))
+      });
+    } else {
+      send("youtube", "Жду появления роликов в Studio…", { percent: 28 });
     }
-    await page.waitForTimeout(900);
+
+    const sig = `${seen}|${stat.at100}|${stat.maxPct}|${stat.completedHeader}`;
+    if (sig !== lastSig) { lastSig = sig; lastMove = Date.now(); }
+    else if (Date.now() - lastMove > stallMs) {
+      const name = (fileLabels && fileLabels[stat.at100]) || "?";
+      throw new Error(`Загрузка зависла ${Math.round(stallMs / 60000)} мин без прогресса (${stat.at100}/${expectedCount} на 100%). «${String(name).slice(0, 40)}». Профиль оставлен открытым.`);
+    }
+    await page.waitForTimeout(2000);
   }
-  const finalN = await countUploadQueueItems(page);
-  if (finalN > 0 && finalN < expectedCount) {
-    throw new Error(`Принято ${finalN} из ${expectedCount}. Повторная передача всей пачки отменена — проверьте профиль.`);
+}
+
+async function waitForUploadQueue(page, expectedCount) {
+  const stat = await scanUploadProgressState(page);
+  if (stat.at100 >= expectedCount || stat.itemCount >= expectedCount || stat.pickerItems >= expectedCount) {
+    return Math.max(stat.itemCount, stat.at100, expectedCount);
   }
-  throw new Error(`Принято 0 из ${expectedCount} — YouTube не принял файлы за ${Math.round(timeoutMs / 1000)} сек.`);
+  return expectedCount;
+}
+
+async function openUploadItemFromProgressPanel(page, index) {
+  send("youtube", `Открываю ролик ${index + 1} для настройки…`, { percent: 42 });
+  if (await uploadDialog(page).isVisible().catch(() => false)) return true;
+
+  const clicked = await page.evaluate((idx) => {
+    const panel = document.querySelector("ytcp-multi-progress-panel, ytcp-multi-progress-monitor");
+    if (!panel) return false;
+    const header = panel.querySelector("[role='button'], .header, #header, ytcp-button");
+    if (header) header.click();
+    const candidates = [];
+    const add = (el) => {
+      const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+      if (t.length < 4) return;
+      if (/^(Загрузка завершена|Upload complete|Свернуть|Expand|Close|Закрыть)$/i.test(t)) return;
+      if (/100\s*%|Загружено|Uploaded|\.mp4|\.mov|Reels|_0\d/i.test(t)) candidates.push(el);
+    };
+    panel.querySelectorAll("ytcp-ve, [role='listitem'], ytcp-upload-progress-item, .progress-item, a, button").forEach(add);
+    const uniq = [];
+    const seen = new Set();
+    for (const el of candidates) {
+      const key = (el.innerText || "").slice(0, 40);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniq.push(el);
+    }
+    if (uniq.length > idx) {
+      uniq[idx].click();
+      return true;
+    }
+    return false;
+  }, index).catch(() => false);
+
+  if (!clicked) {
+    const rows = page.locator("ytcp-multi-progress-panel ytcp-ve, ytcp-multi-progress-monitor ytcp-ve, ytcp-multi-progress-panel [role='listitem']");
+    if (await rows.count().catch(() => 0) > index) {
+      await rows.nth(index).click({ timeout: 8000 }).catch(() => {});
+    }
+  }
+  await page.waitForTimeout(1800);
+  await waitForUploadDialog(page, 180000).catch(() => {});
+  if (!(await uploadDialog(page).isVisible().catch(() => false))) {
+    await ensureUploadDialogOpen(page);
+  }
+  return uploadDialog(page).isVisible().catch(() => false);
 }
 
 async function selectUploadQueueItem(page, index) {
@@ -3006,16 +3179,11 @@ async function uploadDraftsBulk(page, pack) {
     return [];
   }
 
-  send("youtube", `Передаю ${toUpload.length} файл(ов) одним действием…`, { percent: 26 });
-  const videoInput = await openUploadForPack(page);
-  if (!videoInput) throw new Error("Не открылось окно «Загрузка видео» (Studio → Создать → Добавить видео).");
-  await waitForUploadDialog(page);
-  await setInputFilesRobust(page, videoInput, toUpload.map(it => it.video), "youtube");
-  send("youtube", `Файлы переданы (${toUpload.length}), жду очередь…`, { percent: 28 });
-  await waitForUploadQueue(page, toUpload.length);
-
+  send("youtube", `Открываю загрузку для ${toUpload.length} ролик(ов)…`, { percent: 26 });
+  await openUploadAndSetFiles(page, toUpload.map(it => it.video));
   const labels = toUpload.map(it => path.basename(String(it.video || "")));
-  await waitForBulkUploadComplete(page, toUpload.length, labels);
+  send("youtube", `Файлы переданы (${toUpload.length}), жду 100% на YouTube…`, { percent: 28 });
+  await waitForUploadsReady(page, toUpload.length, labels);
   await applyDraftThumbnails(page, toUpload);
   await verifyDraftsSaved(page, toUpload.length);
 
@@ -3044,26 +3212,22 @@ async function uploadPackBulk(page, pack) {
     return [];
   }
 
-  send("youtube", `Передаю ${toUpload.length} файл(ов), затем запланирую публикацию…`, { percent: 27 });
-  const videoInput = await openUploadForPack(page);
-  if (!videoInput) throw new Error("Не открылось окно «Загрузка видео» (Studio → Создать → Добавить видео).");
-  await waitForUploadDialog(page);
-  await setInputFilesRobust(page, videoInput, toUpload.map(it => it.video), "youtube");
-  send("youtube", `Файлы переданы (${toUpload.length}), жду очередь YouTube…`, { percent: 29 });
-  await waitForUploadQueue(page, toUpload.length);
-
+  send("youtube", `Открываю загрузку ${toUpload.length} ролик(ов), затем запланирую…`, { percent: 27 });
+  await openUploadAndSetFiles(page, toUpload.map(it => it.video));
   const labels = toUpload.map(it => path.basename(String(it.video || "")));
-  send("youtube", `Жду передачу файлов на YouTube (${toUpload.length})…`, { percent: 33 });
-  await waitForBulkUploadComplete(page, toUpload.length, labels);
+  send("youtube", `Файлы переданы (${toUpload.length}), жду 100% на YouTube…`, { percent: 29 });
+  await waitForUploadsReady(page, toUpload.length, labels);
 
   const results = [];
   for (let i = 0; i < toUpload.length; i++) {
-    if (i > 0) {
+    if (!(await uploadDialog(page).isVisible().catch(() => false))) {
+      await openUploadItemFromProgressPanel(page, i);
+    } else if (i > 0) {
       await selectUploadQueueItem(page, i);
-      if (!(await uploadDialog(page).isVisible().catch(() => false))) {
-        const ok = await ensureUploadDialogOpen(page);
-        if (!ok) throw new Error(`После ролика ${i}/${toUpload.length} Studio закрыл окно загрузки — проверьте профиль вручную.`);
-      }
+    }
+    if (!(await uploadDialog(page).isVisible().catch(() => false))) {
+      const ok = await ensureUploadDialogOpen(page);
+      if (!ok) throw new Error(`Ролик ${i + 1}/${toUpload.length}: не открылось окно редактирования — нажмите ролик в «Загрузка завершена» вручную.`);
     }
     const one = await processUploadItemInDialog(page, toUpload[i], i + 1, toUpload.length);
     results.push(one);
