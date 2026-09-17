@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-09-16-schedule-v5";
+const WORKER_BUILD = "2026-09-17-watch-recovery-v1";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -166,6 +166,29 @@ async function profileRunning() {
   } catch (_) { return false; }
 }
 
+async function restartAlreadyRunningProfile() {
+  const id = encodeURIComponent(job.profileId);
+  send("dolphin", "Профиль открыт без порта автоматизации — безопасно перезапускаю…", { percent: 9 });
+  await api(`/v1.0/browser_profiles/${id}/stop`);
+  profileStarted = false;
+
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    if (!(await profileRunning())) break;
+    await new Promise(r => setTimeout(r, 750));
+  }
+  if (await profileRunning()) {
+    throw new Error("Dolphin не остановил уже открытый профиль за 20 сек.");
+  }
+
+  const started = await api(`/v1.0/browser_profiles/${id}/start?automation=1`);
+  const endpoint = automationEndpoint(started);
+  if (!endpoint) throw new Error("Dolphin перезапустил профиль, но не вернул порт автоматизации.");
+  profileStarted = true;
+  send("dolphin", "Профиль перезапущен в режиме автоматизации.", { percent: 11 });
+  return endpoint;
+}
+
 async function startOrConnectProfile() {
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
   await api("/v1.0/auth/login-with-token", {
@@ -196,10 +219,11 @@ async function startOrConnectProfile() {
           return endpoint;
         }
         if (await profileRunning()) {
-          await new Promise(r => setTimeout(r, 2000 * attempt));
-          const retry = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`).catch(() => null);
-          const ep2 = automationEndpoint(retry);
-          if (ep2) { profileStarted = true; return ep2; }
+          try {
+            return await restartAlreadyRunningProfile();
+          } catch (restartError) {
+            lastErr = restartError;
+          }
         }
       }
       if (attempt < 3) await new Promise(r => setTimeout(r, 1200 * attempt));
@@ -1052,6 +1076,32 @@ function meshCatalogPath() {
   return root ? path.join(root, "VideoBatchDesktop", "youtube-mesh-catalog.json") : "";
 }
 
+function meshChannelCachePath(profileId) {
+  const root = process.env.LOCALAPPDATA || process.env.APPDATA || "";
+  const safe = String(profileId || "").trim().replace(/[^A-Za-z0-9_-]/g, "_");
+  return root && safe ? path.join(root, "VideoBatchDesktop", "mesh-channels", safe + ".json") : "";
+}
+
+function loadCachedChannelUrl(profileId) {
+  try {
+    const p = meshChannelCachePath(profileId);
+    if (!p || !fs.existsSync(p)) return "";
+    return normalizeChannelUrl(JSON.parse(fs.readFileSync(p, "utf8")).channelUrl || "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function saveCachedChannelUrl(profileId, channelUrl) {
+  const p = meshChannelCachePath(profileId);
+  const url = normalizeChannelUrl(channelUrl);
+  if (!p || !url) return;
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const temp = p + ".tmp-" + process.pid;
+  fs.writeFileSync(temp, JSON.stringify({ profileId: String(profileId), channelUrl: url, updatedAt: new Date().toISOString() }), "utf8");
+  fs.renameSync(temp, p);
+}
+
 function loadMeshCatalog() {
   try {
     const p = meshCatalogPath();
@@ -1086,6 +1136,9 @@ function enrichWatchTarget(target, catalog) {
   if (!String(t.channelUrl || "").trim()) {
     const hit = entries.find(v => String(v.channelUrl || "").trim());
     if (hit) t.channelUrl = String(hit.channelUrl).trim();
+  }
+  if (!String(t.channelUrl || "").trim() && ownerPid) {
+    t.channelUrl = loadCachedChannelUrl(ownerPid);
   }
   const fromCatalog = entries.map(v => ({
     videoId: String(v.videoId || "").trim(),
@@ -1491,9 +1544,9 @@ async function watchShortOnce(page, ownerName) {
   await ensureVideoPlaying(page);
   await page.waitForTimeout(1200);
 
-  if (await isVideoLiked(page)) {
-    send("youtube", (ownerName ? ownerName + ": " : "") + "Шортс уже с лайком — пропуск.", { percent: 91 });
-    return;
+  const alreadyLiked = await isVideoLiked(page);
+  if (alreadyLiked) {
+    send("youtube", (ownerName ? ownerName + ": " : "") + "Лайк уже стоит — всё равно смотрю шортс до конца.", { percent: 91 });
   }
 
   let duration = 0;
@@ -1506,33 +1559,40 @@ async function watchShortOnce(page, ownerName) {
   if (!(duration > 1)) duration = 45;
 
   const likeAt = Math.max(1, duration * 0.72);
-  const doneAt = Math.max(likeAt + 1, duration * 0.9);
-  let liked = false;
+  const doneAt = Math.max(likeAt + 1, duration - Math.min(0.35, duration * 0.01));
+  let liked = alreadyLiked;
+  let likeAttempted = alreadyLiked;
   let maxSeen = 0;
-  const deadline = Date.now() + Math.ceil(duration * 1000) + 12000;
+  const deadline = Date.now() + Math.ceil(duration * 1000) + 20000;
 
   while (Date.now() < deadline) {
     await skipAdIfPossible(page);
     const st = await readPlaybackState(page);
     const cur = Number(st.current) || 0;
-    if (maxSeen >= duration * 0.8 && cur < maxSeen - 1.5) {
-      if (!liked) await likeCurrentVideo(page);
-      send("youtube", (ownerName ? ownerName + ": " : "") + "Шортс: 1 проход (без зацикливания).", { percent: 94 });
+    if (maxSeen >= doneAt && cur < maxSeen - 1.5) {
+      if (!liked && !likeAttempted) {
+        likeAttempted = true;
+        liked = await tryLikeCurrentVideo(page, "Шортс");
+      }
+      send("youtube", (ownerName ? ownerName + ": " : "") + "Шортс: полный проход (без зацикливания).", { percent: 94 });
       return;
     }
     maxSeen = Math.max(maxSeen, cur);
-    if (!liked && cur >= likeAt) {
-      await likeCurrentVideo(page);
-      liked = true;
+    if (!liked && !likeAttempted && cur >= likeAt) {
+      likeAttempted = true;
+      liked = await tryLikeCurrentVideo(page, "Шортс");
     }
     if (st.ended || cur >= doneAt) {
-      if (!liked) await likeCurrentVideo(page);
-      send("youtube", (ownerName ? ownerName + ": " : "") + "Шортс просмотрен.", { percent: 94 });
+      if (!liked && !likeAttempted) {
+        likeAttempted = true;
+        liked = await tryLikeCurrentVideo(page, "Шортс");
+      }
+      send("youtube", (ownerName ? ownerName + ": " : "") + "Шортс просмотрен полностью.", { percent: 94 });
       return;
     }
     await page.waitForTimeout(350);
   }
-  if (!liked) await likeCurrentVideo(page);
+  throw new Error(`Шортс не дошёл до конца: ${formatClock(maxSeen)} / ${formatClock(duration)}.`);
 }
 
 const MESH_LONG_MAX = 1;
@@ -1550,9 +1610,12 @@ async function watchTodayOnChannel(page, channelUrl, skipId, ownerName, likeOnly
     await openVideoDirect(page, item.id, isShort || /\/shorts\//.test(item.href || ""));
 
     if (await isVideoLiked(page)) {
-      send("youtube", (ownerName ? ownerName + ": " : "") + "«" + label.slice(0, 40) + "» — лайк уже есть, пропуск.", { percent: 91 });
-      stats.skippedLiked++;
-      return false;
+      if (likeOnly) {
+        send("youtube", (ownerName ? ownerName + ": " : "") + "«" + label.slice(0, 40) + "» — лайк уже есть.", { percent: 91 });
+        stats.skippedLiked++;
+        return false;
+      }
+      send("youtube", (ownerName ? ownerName + ": " : "") + "«" + label.slice(0, 40) + "» — лайк уже есть, но просмотр выполняю полностью.", { percent: 91 });
     }
 
     if (!skipDateCheck && !isShort) {
@@ -1671,6 +1734,9 @@ async function watchTodayOnChannel(page, channelUrl, skipId, ownerName, likeOnly
     (stats.errors ? ", ошибок: " + stats.errors : "") +
     " → следующий канал", { percent: 92 });
   await leaveVideoPlayer(page, channelUrl);
+  if (stats.errors > 0) {
+    throw new Error("Не весь контент просмотрен: ошибок " + stats.errors + ", успешно " + count + ".");
+  }
   return count;
 }
 
@@ -1688,7 +1754,11 @@ async function watchChannelMeshWithTimeout(page, target, filter, viewerProfileId
     return await Promise.race([
       watchChannelMesh(page, target, filter, viewerProfileId),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Таймаут канала (18 мин) — перехожу к следующему.")), CHANNEL_MESH_TIMEOUT_MS);
+        timer = setTimeout(() => {
+          page.close().catch(() => {}).finally(() => {
+            reject(new Error("Таймаут канала (28 мин): страница закрыта, операция остановлена."));
+          });
+        }, CHANNEL_MESH_TIMEOUT_MS);
       })
     ]);
   } finally {
@@ -1718,7 +1788,8 @@ async function watchChannelMesh(page, target, filter, viewerProfileId) {
       send("youtube", (owner ? owner + ": " : "") + "канал подтверждён", { percent: 42 });
       sendMeshChannel(target, channelUrl);
       const extra = await watchTodayOnChannel(page, channelUrl, skipId, owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "");
-      return Math.max(extra, 1);
+      if (!isOwn && extra < 1) throw new Error("Канал открыт, но ни один ролик не был просмотрен.");
+      return extra;
     }
   }
 
@@ -1837,10 +1908,8 @@ async function waitForVideoEnd(page) {
     await new Promise(r => setTimeout(r, 800));
   }
 
-  if (await isVideoLiked(page)) {
-    send("youtube", "Лайк уже стоит — видео уже смотрели, пропуск.", { percent: 94 });
-    return;
-  }
+  const alreadyLiked = await isVideoLiked(page);
+  if (alreadyLiked) send("youtube", "Лайк уже стоит — всё равно смотрю видео до конца.", { percent: 86 });
 
   let duration = 0;
   const readyDeadline = Date.now() + 120000;
@@ -1860,7 +1929,8 @@ async function waitForVideoEnd(page) {
   const likeWindow = Math.min(30, Math.max(1, Math.floor(duration - 0.5)));
   const secondsBeforeEnd = 1 + Math.floor(Math.random() * likeWindow);
   const likeAt = Math.max(0, duration - secondsBeforeEnd);
-  let liked = false;
+  let liked = alreadyLiked;
+  let likeAttempted = alreadyLiked;
   send("youtube", `Смотрю до конца (${formatClock(duration)}). Лайк ~за ${secondsBeforeEnd} с до конца…`, { percent: 85 });
 
   const hardLimitMs = Math.min(4 * 60 * 60 * 1000, Math.max(3 * 60 * 1000, duration * 1000 + 8 * 60 * 1000));
@@ -1883,17 +1953,23 @@ async function waitForVideoEnd(page) {
     }
     const curRaw = Number(state.current) || 0;
     if (maxSeen >= duration * 0.85 && curRaw < maxSeen - 2) {
-      if (!liked) await likeCurrentVideo(page);
+      if (!liked && !likeAttempted) {
+        likeAttempted = true;
+        liked = await tryLikeCurrentVideo(page, "Видео");
+      }
       send("youtube", "Видео повторилось — выхожу.", { percent: 95 });
       return;
     }
     maxSeen = Math.max(maxSeen, curRaw);
-    if (!liked && (state.current || 0) >= likeAt) {
-      await likeCurrentVideo(page);
-      liked = true;
+    if (!liked && !likeAttempted && (state.current || 0) >= likeAt) {
+      likeAttempted = true;
+      liked = await tryLikeCurrentVideo(page, "Видео");
     }
     if (state.ended || (state.duration > 1 && state.current >= state.duration - 0.75)) {
-      if (!liked) await likeCurrentVideo(page);
+      if (!liked && !likeAttempted) {
+        likeAttempted = true;
+        liked = await tryLikeCurrentVideo(page, "Видео");
+      }
       send("youtube", "Видео закончилось.", { percent: 95 });
       return;
     }
@@ -1918,6 +1994,17 @@ async function waitForVideoEnd(page) {
       send("youtube", `Идёт просмотр… ${formatClock(state.current)} / ${formatClock(state.duration || duration)} · осталось ~${formatClock(left)}`, { percent: pct });
     }
     await new Promise(r => setTimeout(r, 1500));
+  }
+}
+
+async function tryLikeCurrentVideo(page, mediaLabel) {
+  try {
+    await likeCurrentVideo(page);
+    return true;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    send("youtube", (mediaLabel || "Ролик") + ": лайк не поставлен, просмотр продолжается — " + msg, { percent: 96 });
+    return false;
   }
 }
 
@@ -3250,12 +3337,13 @@ async function main() {
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
 
   if (!job.searchOnly && !job.watchMesh && !job.skipQueueDelay) await waitBetweenProfiles();
-  const endpoint = await startOrConnectProfile();
+  let endpoint = await startOrConnectProfile();
   browser = await connectBrowser(endpoint);
-  const context = browser.contexts()[0];
+  let context = browser.contexts()[0];
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
-  const page = await context.newPage();
+  let page = await context.newPage();
   attachPageGuards(page);
+  await page.bringToFront().catch(() => {});
   // IP не блокируем: прокси уже в Dolphin. Только пишем в лог, если удалось узнать.
   let verifiedIp = "";
   try {
@@ -3280,27 +3368,89 @@ async function main() {
     youtubeOpened = true;
     const viewerPid = String(job.profileId || "").trim();
     const meshCatalog = loadMeshCatalog();
+
+    const ownTarget = targets.find(t => String((t && t.ownerProfileId) || "").trim().toLowerCase() === viewerPid.toLowerCase());
+    if (ownTarget && !normalizeChannelUrl(ownTarget.channelUrl || "") && !loadCachedChannelUrl(viewerPid)) {
+      send("youtube", "Определяю URL собственного канала для общей сетки…", { percent: 23 });
+      try {
+        const ownChannelId = await resolveStudioChannelId(page);
+        if (ownChannelId) {
+          const ownChannelUrl = "https://www.youtube.com/channel/" + ownChannelId;
+          saveCachedChannelUrl(viewerPid, ownChannelUrl);
+          ownTarget.channelUrl = ownChannelUrl;
+          send("mesh", "URL собственного канала сохранён: " + ownChannelUrl, {
+            channelUrl: ownChannelUrl,
+            meshOwner: viewerPid,
+            percent: 24
+          });
+        } else {
+          send("youtube", "URL собственного канала не определён — использую данные сетки.", { percent: 24 });
+        }
+      } catch (e) {
+        send("youtube", "Не удалось определить URL собственного канала: " + (e instanceof Error ? e.message : String(e)), { percent: 24 });
+      }
+    }
+
     send("youtube", "Сетка: " + targets.length + " каналов (свои — лайк, чужие — просмотр)…", { percent: 25 });
     let totalViews = 0;
     let failed = 0;
+
+    const recoverWatchPage = async (reason) => {
+      send("youtube", "Восстанавливаю окно просмотра" + (reason ? ": " + reason : "") + "…", { percent: 24 });
+      if (page && !page.isClosed()) await page.close().catch(() => {});
+      if (!browser || !browser.isConnected()) {
+        endpoint = await startOrConnectProfile();
+        browser = await connectBrowser(endpoint);
+      }
+      context = browser.contexts()[0];
+      if (!context) {
+        await browser.close().catch(() => {});
+        browser = null;
+        endpoint = await startOrConnectProfile();
+        browser = await connectBrowser(endpoint);
+        context = browser.contexts()[0];
+      }
+      if (!context) throw new Error("После восстановления нет контекста браузера.");
+      page = await context.newPage();
+      attachPageGuards(page);
+      await page.bringToFront().catch(() => {});
+    };
+
     for (let i = 0; i < targets.length; i++) {
       const t = enrichWatchTarget(targets[i] || {}, meshCatalog);
       const label = channelDisplayName(t.ownerName || "") || t.ownerName || "?";
       send("youtube", "Канал " + (i + 1) + "/" + targets.length + " · " + label + "…", {
         percent: 25 + Math.round((i / Math.max(1, targets.length)) * 65)
       });
-      try {
-        totalViews += await watchChannelMeshWithTimeout(page, t, "none", viewerPid);
-        send("youtube", "✓ Канал " + (i + 1) + "/" + targets.length + " · " + label + " — готов", {
-          percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65)
-        });
-      } catch (e) {
+      let channelDone = false;
+      let lastChannelError = null;
+      for (let attempt = 1; attempt <= 2 && !channelDone; attempt++) {
+        try {
+          if (!page || page.isClosed() || !browser || !browser.isConnected()) {
+            await recoverWatchPage("браузер был закрыт");
+          }
+          const watched = await watchChannelMeshWithTimeout(page, t, "none", viewerPid);
+          totalViews += watched;
+          channelDone = true;
+          send("youtube", "✓ Канал " + (i + 1) + "/" + targets.length + " · " + label + " — готов (просмотров: " + watched + ")", {
+            percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65)
+          });
+        } catch (e) {
+          lastChannelError = e;
+          const msg = e instanceof Error ? e.message : String(e);
+          if (attempt < 2) {
+            send("youtube", "Канал «" + label + "»: ошибка — " + msg + ". Восстановление и повтор 2/2…", { percent: 25 });
+            await recoverWatchPage(msg.slice(0, 100));
+          }
+        }
+      }
+      if (!channelDone) {
         failed++;
-        const msg = e instanceof Error ? e.message : String(e);
-        send("youtube", "Пропуск «" + label + "»: " + msg, {
+        const msg = lastChannelError instanceof Error ? lastChannelError.message : String(lastChannelError || "неизвестная ошибка");
+        send("youtube", "Пропуск «" + label + "» после 2 попыток: " + msg, {
           percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65)
         });
-        try { await leaveVideoPlayer(page, t.channelUrl || channelUrlFromHandle(parseChannelHandle(t.ownerName))); } catch (_) {}
+        try { if (page && !page.isClosed()) await leaveVideoPlayer(page, t.channelUrl || channelUrlFromHandle(parseChannelHandle(t.ownerName))); } catch (_) {}
       }
       if (i < targets.length - 1) {
         const next = enrichWatchTarget(targets[i + 1] || {}, meshCatalog);
@@ -3308,7 +3458,7 @@ async function main() {
         send("youtube", "→ Канал " + (i + 2) + "/" + targets.length + " · " + nextLabel + "…", {
           percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65)
         });
-        await page.waitForTimeout(1200);
+        if (page && !page.isClosed()) await page.waitForTimeout(1200);
       }
     }
     send("youtube", "Аккаунт завершил сетку (" + totalViews + " просмотров). Профиль Dolphin закрывается…", { percent: 99 });
@@ -3318,12 +3468,15 @@ async function main() {
     await pauseAfterWatch();
     finished = true;
     const summary = "Сетка: " + totalViews + " просмотров, " + (targets.length - failed) + "/" + targets.length + " каналов";
-    send("done", failed ? summary + " (" + failed + " пропущено)" : summary + ".", {
-      success: failed < targets.length,
-      keptOpen: false,
-      ip: verifiedIp,
-      percent: 100
-    });
+    if (failed) {
+      fail(summary + " (" + failed + " пропущено). Сетка завершена не полностью.", {
+        keptOpen: false,
+        ip: verifiedIp,
+        percent: 100
+      });
+      return;
+    }
+    send("done", summary + ".", { success: true, keptOpen: false, ip: verifiedIp, percent: 100 });
     return;
   }
 
@@ -3401,4 +3554,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled };
+module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd };
