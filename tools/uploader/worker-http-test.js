@@ -8,10 +8,11 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 
-const BUILD = "2026-09-18-http-test-v2";
+const BUILD = "2026-09-18-http-test-v3";
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const STUDIO_ORIGIN = "https://studio.youtube.com";
 const STUDIO_READY_TIMEOUT_MS = 5 * 60 * 1000;
+const DOLPHIN_START_TIMEOUT_MS = 2 * 60 * 1000;
 
 let job = null;
 let activePage = null;
@@ -171,9 +172,9 @@ function automationEndpoint(data) {
   return port ? `http://127.0.0.1:${port}` : null;
 }
 
-async function dolphinApi(path, options = {}) {
+async function dolphinApi(path, options = {}, timeoutMs = 35000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 35000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`http://127.0.0.1:${job.localPort}${path}`, Object.assign({}, options, { signal: controller.signal }));
     const raw = await response.text();
@@ -183,27 +184,63 @@ async function dolphinApi(path, options = {}) {
       throw new Error(`Dolphin API: HTTP ${response.status}. ${data.message || data.error || "операция отклонена"}`);
     return data;
   } catch (error) {
-    if (error && error.name === "AbortError") throw new Error("Dolphin не ответил за 35 секунд.");
+    if (error && error.name === "AbortError") throw new Error(`Dolphin не ответил за ${Math.round(timeoutMs / 1000)} секунд.`);
     if (/ECONNREFUSED|fetch failed/i.test(String(error && error.message || error)))
       throw new Error(`Dolphin Anty недоступен на порту ${job.localPort}. Запустите Dolphin.`);
     throw error;
   } finally { clearTimeout(timer); }
 }
 
+function dolphinProfileStatus(data) {
+  const root = data && (data.data || data.browserProfile || data.profile || data);
+  return String(root && (root.status || root.state || root.browserStatus) || "").trim().toLowerCase();
+}
+
+function dolphinProfileIsRunning(status) {
+  return /(^|[^a-z])(running|started|active)([^a-z]|$)|запущен/i.test(String(status || ""));
+}
+
+async function startDolphinProfile() {
+  const startedAt = Date.now();
+  const heartbeat = setInterval(() => {
+    const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    send("dolphin", `Dolphin запускает профиль (${seconds} сек.) — продолжаю ждать ответ API…`, { percent: 4 });
+  }, 10000);
+  try {
+    return await dolphinApi(
+      `/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`,
+      {},
+      DOLPHIN_START_TIMEOUT_MS
+    );
+  } finally { clearInterval(heartbeat); }
+}
+
 async function startOrConnectProfile() {
+  send("dolphin", "Проверяю локальный API Dolphin…", { percent: 2 });
   await dolphinApi("/v1.0/auth/login-with-token", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
   });
+  send("dolphin", "API Dolphin доступен. Запускаю выбранный закрытый профиль в режиме автоматизации…", { percent: 3 });
   try {
-    const started = await dolphinApi(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
+    const started = await startDolphinProfile();
     const endpoint = automationEndpoint(started);
     if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
     return endpoint;
   } catch (startError) {
+    const original = redactDiagnostic(startError && startError.message || startError);
+    record("dolphin", "Запуск профиля через API завершился ошибкой.", { reason: original });
     const info = await dolphinApi(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
     const endpoint = automationEndpoint(info);
-    if (endpoint) return endpoint;
-    throw new Error("Профиль уже открыт без порта автоматизации. Закройте только этот профиль в Dolphin и повторите. Тест сам профиль не перезапускает.");
+    if (endpoint) {
+      send("dolphin", "Dolphin запустил профиль с задержкой; порт автоматизации найден.", { percent: 5 });
+      return endpoint;
+    }
+    const status = dolphinProfileStatus(info);
+    if (dolphinProfileIsRunning(status)) {
+      throw new Error(`Dolphin действительно сообщает статус «${status}», но не отдал порт автоматизации. Исходная ошибка запуска: ${original}`);
+    }
+    const statusText = status ? ` Текущий статус по API: «${status}».` : " Статус профиля API не сообщил.";
+    throw new Error(`Dolphin не запустил выбранный профиль или не вернул результат запуска.${statusText} Исходная ошибка: ${original}`);
   }
 }
 
@@ -595,5 +632,5 @@ module.exports = {
   automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap,
   studioPageState, waitForStudioChannel, assertExpectedChannel,
   makeContext, makeCreateVideoBody, makeMetadataBody, validateJob,
-  safeDiagnosticUrl, redactDiagnostic
+  safeDiagnosticUrl, redactDiagnostic, dolphinProfileStatus, dolphinProfileIsRunning
 };

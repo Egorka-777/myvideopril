@@ -20,6 +20,10 @@ assert.strictEqual(worker.safeDiagnosticUrl("https://studio.youtube.com/channel/
 assert.doesNotMatch(worker.redactDiagnostic("Authorization: Bearer top-secret"),/top-secret/);
 assert.doesNotMatch(worker.redactDiagnostic("SAPISID=private-value"),/private-value/);
 assert.doesNotMatch(worker.redactDiagnostic("Ошибка https://studio.youtube.com/path?token=private"),/private/);
+assert.strictEqual(worker.dolphinProfileStatus({data:{status:"stopped"}}),"stopped");
+assert.strictEqual(worker.dolphinProfileIsRunning("stopped"),false);
+assert.strictEqual(worker.dolphinProfileIsRunning("running"),true);
+assert.strictEqual(worker.dolphinProfileIsRunning("запущен"),true);
 
 worker.assertExpectedChannel("UC123456789","UC123456789");
 assert.throws(()=>worker.assertExpectedChannel("UCexpected","UCwrong"),/другой YouTube-канал/);
@@ -63,6 +67,10 @@ assert.doesNotMatch(testWorker,/page\.goto\("https:\/\/studio\.youtube\.com"[\s\
 assert.match(testWorker,/diagnostics/);
 assert.match(testWorker,/screenshot/);
 assert.match(testWorker,/requestfailed/);
+assert.match(testWorker,/DOLPHIN_START_TIMEOUT_MS\s*=\s*2\s*\*\s*60\s*\*\s*1000/);
+assert.doesNotMatch(testWorker,/throw new Error\("Профиль уже открыт без порта автоматизации/,
+  "The worker must not invent an already-running state after an unrelated start failure.");
+assert.match(testWorker,/Исходная ошибка запуска|Исходная ошибка:/);
 assert.ok(mainWorker.length>100000,"The existing production worker must remain present and separate.");
 
 console.log("http upload regression checks passed");
