@@ -32,4 +32,5 @@ try {
     if(-not (Test-Path $exe)){throw "После сборки не найден VideoBatch.HttpTest.exe."}
     Write-Host "PASS: изолированная сборка готова: $exe" -ForegroundColor Green
     Write-Host "Обычный VideoBatch.exe и его файлы не изменялись." -ForegroundColor Green
+    Write-Host "STOP ДЛЯ CURSOR: не запускайте EXE и не запускайте/не останавливайте Dolphin. Живой тест выполняет владелец вручную." -ForegroundColor Yellow
 } finally { Pop-Location }
