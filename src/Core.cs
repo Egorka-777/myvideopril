@@ -88,6 +88,13 @@ namespace VideoBatch {
         /// <summary>Последний выбранный Profile ID (Dolphin) для быстрого «Добавить видео».</summary>
         public string LastSelectedYouTubeProfileIdRu="", LastSelectedYouTubeProfileIdEn="";
         public string LastSelectedTikTokProfileIdRu="", LastSelectedTikTokProfileIdEn="";
+        public bool KeepDolphinProfileOpenAfterUpload=true;
+        /// <summary>random | period</summary>
+        public string YouTubeScheduleMode="random";
+        public int YouTubeScheduleMinMinutes=10, YouTubeScheduleMaxMinutes=30;
+        public int YouTubeSchedulePeriodMinGapMinutes=10;
+        public string YouTubeScheduleFirstPublish="";
+        public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
     }
     public static class Store {
         public static string Root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"VideoBatchDesktop");

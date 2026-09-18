@@ -78,15 +78,20 @@ namespace VideoBatch {
             IList<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> jobs,
             Func<string,string,int,string> stageFile,
             Func<YouTubeChannel,YouTubeItem,int,int,string> plannedFileName,
-            Func<string,int,int,string> cleanTitleForUpload){
+            Func<string,int,int,string> cleanTitleForUpload,
+            Preferences schedulePrefs=null){
             ValidateBeforeStart(jobs,plannedFileName);
-            string statePath=Path.Combine(Store.Root,"youtube-schedule.json");
             var byProfile=jobs
                 .GroupBy(j=>(j.ch.ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase)
                 .Select(g=>new{list=g.OrderBy(x=>x.index).ToList(),row=g.First().row,ch=g.First().ch,pid=g.Key})
                 .ToList();
-            var counts=byProfile.Select(g=>g.list.Count).ToList();
-            var scheduleSlots=ScheduleGenerator.GenerateForProfileBatches(counts,statePath);
+            var allSlots=new List<(string date,string time)>();
+            foreach(var g in byProfile){
+                string statePath=ScheduleGenerator.ProfileStatePath(g.pid);
+                var slots=ScheduleGenerator.GenerateForProfileBatches(new[]{g.list.Count},statePath,schedulePrefs);
+                allSlots.AddRange(slots);
+            }
+            var scheduleSlots=allSlots;
             int slotCursor=0;
             var batches=new List<PreparedProfileBatch>();
             foreach(var g in byProfile){
