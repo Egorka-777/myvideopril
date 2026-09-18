@@ -23,8 +23,33 @@ try {
         Copy-Item (Join-Path $UploaderSrc "node_modules") (Join-Path $destTools "node_modules") -Recurse -Force
     }
 
-    Rename-Item -Path (Join-Path $OutDir "VideoBatch.exe") -NewName "VideoBatch.AsphaltTest.exe" -Force
-    Write-Host "OK: $(Join-Path $OutDir 'VideoBatch.AsphaltTest.exe')"
+    $builtExe = Join-Path $OutDir "VideoBatch.exe"
+    $testExe = Join-Path $OutDir "VideoBatch.AsphaltTest.exe"
+    Copy-Item -Path $builtExe -Destination $testExe -Force
+    Remove-Item -Path $builtExe -Force -ErrorAction SilentlyContinue
+
+    $toolsOut = Join-Path $OutDir "tools"
+    $ffmpegCandidates = @(
+        (Join-Path $Root "..\VideoBatch\VideoBatch_Desktop"),
+        (Join-Path $Root "..\VideoBatch_Desktop"),
+        (Join-Path $env:LOCALAPPDATA "VideoBatchDesktop")
+    )
+    foreach ($cand in $ffmpegCandidates) {
+        try {
+            $cand = (Resolve-Path $cand -ErrorAction Stop).Path
+        } catch { continue }
+        $ff = Join-Path $cand "tools\ffmpeg.exe"
+        $fp = Join-Path $cand "tools\ffprobe.exe"
+        if ((Test-Path $ff) -and (Test-Path $fp)) {
+            New-Item -ItemType Directory -Force -Path $toolsOut | Out-Null
+            Copy-Item $ff (Join-Path $toolsOut "ffmpeg.exe") -Force
+            Copy-Item $fp (Join-Path $toolsOut "ffprobe.exe") -Force
+            Write-Host "Copied ffmpeg from $cand"
+            break
+        }
+    }
+
+    Write-Host "OK: $testExe"
 } finally {
     Pop-Location
 }

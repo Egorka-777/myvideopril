@@ -91,7 +91,8 @@ namespace VideoBatch {
         public bool KeepDolphinProfileOpenAfterUpload=true;
         /// <summary>random | period</summary>
         public string YouTubeScheduleMode="random";
-        public int YouTubeScheduleMinMinutes=10, YouTubeScheduleMaxMinutes=30;
+        public int YouTubeScheduleMinMinutes=10, YouTubeScheduleMaxMinutes=60;
+        public int YouTubeScheduleLongMinMinutes=1, YouTubeScheduleLongMaxMinutes=5;
         public int YouTubeSchedulePeriodMinGapMinutes=10;
         public string YouTubeScheduleFirstPublish="";
         public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
@@ -149,6 +150,12 @@ namespace VideoBatch {
             if(p.YouTubeSearchTitle==null)p.YouTubeSearchTitle="";
             if(p.YouTubeSearchUrl==null)p.YouTubeSearchUrl="";
             if(string.IsNullOrWhiteSpace(p.YouTubeMarketView)||(p.YouTubeMarketView!="RU"&&p.YouTubeMarketView!="EN"))p.YouTubeMarketView="RU";
+            if(string.IsNullOrWhiteSpace(p.YouTubeScheduleMode))p.YouTubeScheduleMode="random";
+            if(p.YouTubeScheduleMinMinutes<1)p.YouTubeScheduleMinMinutes=10;
+            if(p.YouTubeScheduleMaxMinutes==30)p.YouTubeScheduleMaxMinutes=60;
+            if(p.YouTubeScheduleMaxMinutes<p.YouTubeScheduleMinMinutes)p.YouTubeScheduleMaxMinutes=Math.Max(60,p.YouTubeScheduleMinMinutes+30);
+            if(p.YouTubeScheduleLongMinMinutes<1)p.YouTubeScheduleLongMinMinutes=1;
+            if(p.YouTubeScheduleLongMaxMinutes<p.YouTubeScheduleLongMinMinutes)p.YouTubeScheduleLongMaxMinutes=5;
             if(p.YouTubeSearchTitleRu==null)p.YouTubeSearchTitleRu="";
             if(p.YouTubeSearchUrlRu==null)p.YouTubeSearchUrlRu="";
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchFilterRu))p.YouTubeSearchFilterRu="today";
@@ -273,7 +280,7 @@ namespace VideoBatch {
             return t;
         }
         public static string BundledYouTubeTitleBanksPath(){
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tools","uploader","youtube-title-banks.json");
+            return Path.Combine(AppPaths.UploaderRoot,"youtube-title-banks.json");
         }
         [DataContract] class YouTubeTitleBanksDto {
             [DataMember] public string[] TitleBankLongRu;

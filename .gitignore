@@ -1,6 +1,10 @@
 # Build
 bin/
 obj/
+artifacts/
+tools/uploader/node.exe
+tools/uploader/ffmpeg.exe
+tools/uploader/ffprobe.exe
 *.user
 *.suo
 .vs/

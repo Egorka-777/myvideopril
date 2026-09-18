@@ -137,7 +137,7 @@ namespace VideoBatch.HttpTest {
         }
 
         async Task RunWorker(string jobPath,string token,CancellationToken ct) {
-            string root=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tools","uploader");
+            string root=AppPaths.UploaderRoot;
             string node=Path.Combine(root,"node.exe"),script=Path.Combine(root,"worker-http-test.js");
             if(!File.Exists(node)||!File.Exists(script)||!Directory.Exists(Path.Combine(root,"node_modules","playwright-core")))
                 throw new Exception("Рядом с тестовым EXE нет полного tools\\uploader (node.exe, worker-http-test.js, node_modules\\playwright-core).");

@@ -270,14 +270,31 @@ namespace VideoBatch {
             else settings.LastSelectedTikTokProfileIdRu=acc.ProfileId.Trim();
             SafeSave();
         }
-        public void ApplyNavigationContext(){
-            string pid=(NavigationContext.SelectedProfileId??"").Trim();
-            if(string.IsNullOrWhiteSpace(pid)||!string.Equals(NavigationContext.SelectedPlatform,"TikTok",StringComparison.OrdinalIgnoreCase))return;
-            string m=NormMarket(NavigationContext.SelectedMarket);
-            if(m!=marketView)SwitchMarket(m);
+        public event Action<string> LogLine;
+        public void ReloadFromSettings(){LoadGrid();RefreshMarketUi();}
+        public void SetMarketView(string market){SwitchMarket(NormMarket(market));}
+        public void SelectProfileById(string profileId,string market){
+            if(!string.IsNullOrWhiteSpace(market))SwitchMarket(NormMarket(market));
+            string pid=(profileId??"").Trim();
+            if(string.IsNullOrWhiteSpace(pid))return;
             var row=VisibleRows().FirstOrDefault(r=>string.Equals((((TikTokAccount)r.Tag).ProfileId??"").Trim(),pid,StringComparison.OrdinalIgnoreCase));
             if(row!=null){grid.ClearSelection();row.Selected=true;grid.CurrentCell=row.Cells[CName];RememberSelectedAccount((TikTokAccount)row.Tag);}
         }
+        public void ApplyNavigationContext(){SelectProfileById(NavigationContext.SelectedProfileId,NavigationContext.SelectedMarket);}
+        public Task RunUploadAsync()=>UploadAll();
+        public Task RunCheckProfilesAsync()=>CheckProfiles();
+        public void RequestStopUpload(){stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
+        public void AssignVideosToProfile(string profileId,string market,string[] files){
+            if(files==null||files.Length==0)return;
+            SetMarketView(market);
+            SelectProfileById(profileId,market);
+            var row=CurrentAccountRow();
+            if(row==null)throw new Exception("Аккаунт не найден для Profile ID "+profileId);
+            AssignVideoPackToAccount((TikTokAccount)row.Tag,row,files);
+            SaveGrid();LoadGrid();
+            row.Cells[COn].Value=true;SaveGrid();
+        }
+        public string CurrentLogFile=>logFile;
         void AssignVideosToSelectedAccount(){
             SaveGrid();
             var row=CurrentAccountRow();
@@ -406,6 +423,7 @@ namespace VideoBatch {
         void Write(string text){
             if(InvokeRequired){BeginInvoke(new Action<string>(Write),text);return;}
             string line=DateTime.Now.ToString("HH:mm:ss")+"  "+text;
+            try{LogLine?.Invoke(line);}catch{}
             log.AppendText(line+Environment.NewLine);log.ScrollToCaret();
             try{Directory.CreateDirectory(Store.Root);if(string.IsNullOrWhiteSpace(logFile))logFile=Path.Combine(Store.Root,"tiktok-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".log");File.AppendAllText(logFile,line+Environment.NewLine,Encoding.UTF8);}catch{}
         }

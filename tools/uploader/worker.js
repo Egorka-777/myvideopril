@@ -1558,7 +1558,8 @@ async function watchShortOnce(page, ownerName) {
   }
   if (!(duration > 1)) duration = 45;
 
-  const likeAt = Math.max(1, duration * 0.72);
+  const likeRatio = 0.55 + crypto.randomInt(0, 41) / 100;
+  const likeAt = Math.max(1, duration * likeRatio);
   const doneAt = Math.max(likeAt + 1, duration - Math.min(0.35, duration * 0.01));
   let liked = alreadyLiked;
   let likeAttempted = alreadyLiked;

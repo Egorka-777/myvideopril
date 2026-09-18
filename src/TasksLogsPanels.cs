@@ -26,6 +26,7 @@ namespace VideoBatch {
 
             grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
             Theme.StyleGrid(grid);
+            grid.AlternatingRowsDefaultCellStyle.BackColor = Theme.ColorFromHex("#282828");
             grid.Columns.Add("id", "ID");
             grid.Columns.Add("platform", "Платформа");
             grid.Columns.Add("account", "Аккаунт");
@@ -83,12 +84,8 @@ namespace VideoBatch {
             accountFilter.Width = 120;
             taskFilter = Theme.MakeSearchBox();
             taskFilter.Width = 120;
-            platformFilter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100 };
-            platformFilter.Items.AddRange(new object[] { "Все", "YouTube", "TikTok" });
-            platformFilter.SelectedIndex = 0;
-            levelFilter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100 };
-            levelFilter.Items.AddRange(new object[] { "Все", "info", "warning", "error" });
-            levelFilter.SelectedIndex = 0;
+            platformFilter = Theme.MakeCombo(new[] { "Все", "YouTube", "TikTok" });
+            levelFilter = Theme.MakeCombo(new[] { "Все", "info", "warning", "error" });
             filters.Controls.Add(new Label { Text = "Аккаунт", AutoSize = true, ForeColor = Theme.TextSecondary });
             filters.Controls.Add(accountFilter);
             filters.Controls.Add(new Label { Text = "Задача", AutoSize = true, ForeColor = Theme.TextSecondary });

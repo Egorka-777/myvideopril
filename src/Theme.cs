@@ -111,5 +111,61 @@ namespace VideoBatch {
                 Font = FontBody
             };
         }
+
+        public static ComboBox MakeCombo(string[] items) {
+            var c = new ComboBox {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Elevated,
+                ForeColor = TextPrimary,
+                FlatStyle = FlatStyle.Flat,
+                Font = FontBody,
+                Width = 130
+            };
+            if (items != null) c.Items.AddRange(items);
+            if (c.Items.Count > 0) c.SelectedIndex = 0;
+            return c;
+        }
+
+        public static RichTextBox MakeLogBox() {
+            return new RichTextBox {
+                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                BackColor = Card,
+                ForeColor = TextPrimary,
+                BorderStyle = BorderStyle.None,
+                Font = new Font("Consolas", 9f),
+                DetectUrls = true
+            };
+        }
+
+        public static FlowLayoutPanel MakeToolbar() {
+            return new FlowLayoutPanel {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                WrapContents = true,
+                Padding = new Padding(0, 0, 0, 8),
+                BackColor = Background
+            };
+        }
+
+        public static Button MakeToggle(string text, bool active, Action action) {
+            var b = MakeButton(text, accent: active, ghost: !active, action: action);
+            b.MinimumSize = new Size(56, 32);
+            return b;
+        }
+
+        public static void StyleCheckBox(CheckBox box) {
+            box.ForeColor = TextPrimary;
+            box.BackColor = Color.Transparent;
+        }
+
+        public static ContextMenuStrip MakeContextMenu() {
+            var m = new ContextMenuStrip {
+                BackColor = Elevated,
+                ForeColor = TextPrimary,
+                RenderMode = ToolStripRenderMode.System
+            };
+            return m;
+        }
     }
 }
