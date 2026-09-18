@@ -34,7 +34,12 @@ namespace VideoBatch {
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException+=(s,e)=>ShowError(e.Exception);
             AppDomain.CurrentDomain.UnhandledException+=(s,e)=>ShowError(e.ExceptionObject as Exception);
-            try{Application.Run(new MainWindow());}catch(Exception e){ShowError(e);}}
+            try{
+                Preferences settings;
+                try{settings=Store.Load();}catch{settings=new Preferences();Store.Normalize(settings);}
+                TaskQueueStore.RecoverAfterCrash();
+                Application.Run(new AppShell(settings));
+            }catch(Exception e){ShowError(e);}}
         }
         static void ShowError(Exception e) {
             string message=e==null?"Неизвестная ошибка.":e.Message;
