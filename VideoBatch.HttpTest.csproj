@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>VideoBatch.HttpTest</AssemblyName>
+    <RootNamespace>VideoBatch.HttpTest</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src\HttpTestProgram.cs" />
+    <Compile Include="src\HttpTestModels.cs" />
+    <Compile Include="src\HttpTestForm.cs" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Security" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+  </ItemGroup>
+</Project>
