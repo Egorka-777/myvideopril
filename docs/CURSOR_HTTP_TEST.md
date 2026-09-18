@@ -109,8 +109,12 @@ Get-FileHash "$env:LOCALAPPDATA\VideoBatchDesktop\settings.xml"
 - `Открыт другой YouTube-канал`: исправь привязку Profile ID/Channel URL.
 - `sessionToken`/`SAPISID`: войди в YouTube Studio вручную в этом Dolphin-профиле и повтори один раз.
 - Ошибка после получения `videoId`: ролик уже может существовать; проверка Studio обязательна.
+- Медленный старт Studio сам по себе не является ошибкой: тест ждёт фактический URL канала и подтверждение сессии до 5 минут, показывая сообщение каждые 10 секунд.
 
 Лог теста: `%LocalAppData%\VideoBatchDesktop-HttpTest\http-test.log`.
+
+Подробная диагностика каждого запуска: `%LocalAppData%\VideoBatchDesktop-HttpTest\diagnostics\http-*.jsonl`.
+При ошибке после подключения к вкладке рядом создаётся `http-*-error.png`. В JSONL записываются этап, точное время, длительность, безопасный URL без query-параметров и сетевые отказы YouTube/Google. Cookies, SAPISID, sessionToken, Dolphin-токен, Authorization и пароли прокси маскируются и не сохраняются.
 
 ## Отчёт, который Cursor должен вернуть владельцу
 

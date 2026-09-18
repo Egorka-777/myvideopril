@@ -12,6 +12,15 @@ assert.deepStrictEqual(bootstrap,{
   channelId:"UC123456789",apiKey:"test-key",authUser:"2",delegatedSessionId:"delegate",clientVersion:"1.20260918.00.00"
 });
 
+assert.deepStrictEqual(worker.studioPageState("https://studio.youtube.com/", "Загрузка"),{ready:false,blocker:""});
+assert.deepStrictEqual(worker.studioPageState("https://studio.youtube.com/channel/UC123456789", "Панель управления"),{ready:true,blocker:""});
+assert.match(worker.studioPageState("https://accounts.google.com/ServiceLogin", "").blocker,/вход в Google/);
+assert.match(worker.studioPageState("https://studio.youtube.com/", "unusual traffic challenge").blocker,/проверку безопасности/);
+assert.strictEqual(worker.safeDiagnosticUrl("https://studio.youtube.com/channel/UC123/videos?key=secret#part"),"https://studio.youtube.com/channel/UC123/videos");
+assert.doesNotMatch(worker.redactDiagnostic("Authorization: Bearer top-secret"),/top-secret/);
+assert.doesNotMatch(worker.redactDiagnostic("SAPISID=private-value"),/private-value/);
+assert.doesNotMatch(worker.redactDiagnostic("Ошибка https://studio.youtube.com/path?token=private"),/private/);
+
 worker.assertExpectedChannel("UC123456789","UC123456789");
 assert.throws(()=>worker.assertExpectedChannel("UCexpected","UCwrong"),/другой YouTube-канал/);
 assert.throws(()=>worker.assertProxy("1.2.3.4","9.9.9.9","9.9.9.9"),/Прокси не используется/);
@@ -48,6 +57,12 @@ assert.match(testWorker,/never\s*\/\/ stops a Dolphin profile/);
 assert.doesNotMatch(testWorker,/browser_profiles\/\$\{[^}]+\}\/stop/);
 assert.match(testWorker,/credentials:\s*"include"/);
 assert.match(testWorker,/x-goog-upload-offset/);
+assert.match(testWorker,/STUDIO_READY_TIMEOUT_MS\s*=\s*5\s*\*\s*60\s*\*\s*1000/);
+assert.doesNotMatch(testWorker,/page\.goto\("https:\/\/studio\.youtube\.com"[\s\S]{0,500}waitForTimeout\(2500\)/,
+  "Studio readiness must not be decided by a fixed 2.5 second sleep.");
+assert.match(testWorker,/diagnostics/);
+assert.match(testWorker,/screenshot/);
+assert.match(testWorker,/requestfailed/);
 assert.ok(mainWorker.length>100000,"The existing production worker must remain present and separate.");
 
 console.log("http upload regression checks passed");

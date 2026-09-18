@@ -6,23 +6,139 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
+const path = require("path");
 
-const BUILD = "2026-09-18-http-test-v1";
+const BUILD = "2026-09-18-http-test-v2";
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const STUDIO_ORIGIN = "https://studio.youtube.com";
+const STUDIO_READY_TIMEOUT_MS = 5 * 60 * 1000;
 
 let job = null;
+let activePage = null;
+let diagnosticFile = "";
+const runId = crypto.randomUUID();
+const runStartedAt = Date.now();
+
+function safeDiagnosticUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    return parsed.origin + parsed.pathname;
+  } catch (_) { return String(value || "").split(/[?#]/)[0]; }
+}
+
+function redactDiagnostic(value) {
+  return String(value == null ? "" : value)
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/(Authorization)\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+/gi, "$1=[скрыто]")
+    .replace(/(SAPISID|__Secure-3PAPISID|SESSION_TOKEN|sessionToken|Cookie|VIDEOBATCH_DOLPHIN_TOKEN|password|proxyPassword)\s*[:=]\s*[^\s,;]+/gi, "$1=[скрыто]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [скрыто]")
+    .replace(/https?:\/\/[^\s"']+/gi, match => safeDiagnosticUrl(match));
+}
+
+function sanitizeExtra(extra) {
+  const result = {};
+  for (const [key, value] of Object.entries(extra || {})) {
+    if (/token|cookie|authorization|password|sapisid|proxy(user|pass)/i.test(key)) {
+      result[key] = "[скрыто]";
+    } else if (typeof value === "string") {
+      result[key] = redactDiagnostic(value);
+    } else if (value == null || typeof value === "number" || typeof value === "boolean") {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function eventData(stage, text, extra) {
+  return Object.assign({
+    timestamp: new Date().toISOString(),
+    elapsedMs: Date.now() - runStartedAt,
+    runId,
+    build: BUILD,
+    stage: String(stage || "log"),
+    text: redactDiagnostic(text)
+  }, sanitizeExtra(extra));
+}
+
+function writeDiagnostic(event) {
+  if (!diagnosticFile) return;
+  try { fs.appendFileSync(diagnosticFile, JSON.stringify(event) + "\n", "utf8"); } catch (_) {}
+}
 
 function send(stage, text, extra = {}) {
-  process.stdout.write(JSON.stringify(Object.assign({ stage, text }, extra)) + "\n");
+  const event = eventData(stage, text, extra);
+  writeDiagnostic(event);
+  process.stdout.write(JSON.stringify(event) + "\n");
+}
+
+function record(stage, text, extra = {}) {
+  writeDiagnostic(eventData(stage, text, extra));
+}
+
+function setupDiagnostics(jobPath) {
+  const root = path.dirname(path.dirname(path.resolve(jobPath)));
+  const directory = path.join(root, "diagnostics");
+  fs.mkdirSync(directory, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  diagnosticFile = path.join(directory, `http-${stamp}-${process.pid}.jsonl`);
+  send("diagnostic", `Подробная диагностика: ${diagnosticFile}`, { diagnosticFile });
 }
 
 function fail(error, extra = {}) {
-  const text = String(error && error.message || error || "Неизвестная ошибка")
-    .replace(/\x1b\[[0-9;]*m/g, "")
-    .replace(/(SAPISID|SESSION_TOKEN|Authorization|Cookie)\s*[:=]\s*\S+/gi, "$1=[скрыто]");
+  const text = redactDiagnostic(error && error.message || error || "Неизвестная ошибка");
   send("error", text, Object.assign({ success: false, error: text }, extra));
   process.exitCode = 1;
+}
+
+function relevantNetworkUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    return /(^|\.)(youtube\.com|googlevideo\.com|google\.com)$/i.test(parsed.hostname);
+  } catch (_) { return false; }
+}
+
+function attachPageDiagnostics(page) {
+  page.on("requestfailed", request => {
+    if (!relevantNetworkUrl(request.url())) return;
+    const failure = request.failure();
+    record("network", "Сетевой запрос не выполнен.", {
+      method: request.method(), resourceType: request.resourceType(),
+      requestUrl: safeDiagnosticUrl(request.url()), reason: failure && failure.errorText || "unknown"
+    });
+  });
+  page.on("response", response => {
+    if (response.status() < 400 || !relevantNetworkUrl(response.url())) return;
+    const request = response.request();
+    record("network", `YouTube/Google вернул HTTP ${response.status()}.`, {
+      status: response.status(), method: request.method(), resourceType: request.resourceType(),
+      requestUrl: safeDiagnosticUrl(response.url())
+    });
+  });
+  page.on("pageerror", error => record("page", "Ошибка JavaScript страницы: " + redactDiagnostic(error && error.message || error)));
+  page.on("crash", () => record("page", "Вкладка браузера аварийно завершилась."));
+}
+
+async function captureFailureDiagnostics(error) {
+  if (!activePage || activePage.isClosed() || !diagnosticFile) return {};
+  const details = {
+    pageUrl: safeDiagnosticUrl(activePage.url()),
+    failure: redactDiagnostic(error && error.message || error)
+  };
+  try {
+    details.pageTitle = redactDiagnostic(await Promise.race([
+      activePage.title(),
+      new Promise(resolve => setTimeout(() => resolve("[тайм-аут чтения заголовка]"), 5000))
+    ]));
+  } catch (_) { details.pageTitle = "[не удалось прочитать]"; }
+  const screenshotFile = diagnosticFile.replace(/\.jsonl$/i, "-error.png");
+  try {
+    await activePage.screenshot({ path: screenshotFile, fullPage: false, timeout: 15000 });
+    details.screenshotFile = screenshotFile;
+    send("diagnostic", `Снимок окна при ошибке: ${screenshotFile}`, details);
+  } catch (screenshotError) {
+    record("diagnostic", "Не удалось сделать снимок окна: " + redactDiagnostic(screenshotError && screenshotError.message || screenshotError), details);
+  }
+  return details;
 }
 
 function validateJob(value) {
@@ -177,6 +293,38 @@ function parseStudioBootstrap(html, url) {
   return result;
 }
 
+function studioPageState(urlValue, textValue) {
+  const url = String(urlValue || "");
+  const text = String(textValue || "");
+  if (/accounts\.google\.com|ServiceLogin|signin|oauth/i.test(url))
+    return { ready: false, blocker: "Требуется вход в Google." };
+  if (/captcha|unusual traffic|challenge|robot/i.test(text + " " + url))
+    return { ready: false, blocker: "Google запросил CAPTCHA/проверку безопасности." };
+  return { ready: /studio\.youtube\.com\/channel\//i.test(url), blocker: "" };
+}
+
+async function waitForStudioChannel(page, timeoutMs = STUDIO_READY_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let nextHeartbeat = 0;
+  while (Date.now() < deadline) {
+    if (page.isClosed()) throw new Error("Окно Dolphin было закрыто во время загрузки YouTube Studio.");
+    const snapshot = await page.evaluate(() => ({
+      url: location.href || "",
+      text: ((document.body && document.body.innerText) || "").slice(0, 20000)
+    })).catch(() => ({ url: page.url(), text: "" }));
+    const state = studioPageState(snapshot.url, snapshot.text);
+    if (state.blocker) throw new Error(state.blocker);
+    if (state.ready) return snapshot.url;
+    if (Date.now() >= nextHeartbeat) {
+      const shown = String(snapshot.url || page.url() || "").slice(0, 120);
+      send("youtube", "YouTube Studio ещё загружается — продолжаю ждать" + (shown ? ` (${shown})` : "") + "…", { percent: 15 });
+      nextHeartbeat = Date.now() + 10000;
+    }
+    await page.waitForTimeout(1000);
+  }
+  throw new Error("YouTube Studio не открыл канал за 5 минут. Профиль оставлен открытым для проверки.");
+}
+
 function assertExpectedChannel(expectedChannelId, actualChannelId) {
   const expected = String(expectedChannelId || "").trim();
   const actual = String(actualChannelId || "").trim();
@@ -274,29 +422,52 @@ function authHeaders(data, sapisid) {
 }
 
 async function acquireStudioSession(page) {
-  let tokenResponse = null;
-  const tokenPromise = page.waitForResponse(response => /studio\.youtube\.com\/youtubei\/v1\/ars\/grst/i.test(response.url()), { timeout: 90000 })
-    .then(async response => {
-      const body = await response.json().catch(() => null);
-      return body && body.sessionToken ? String(body.sessionToken) : "";
-    }).catch(() => "");
+  let sessionToken = "";
+  let tokenReadError = "";
+  const onResponse = async response => {
+    if (!/studio\.youtube\.com\/youtubei\/v1\/ars\/grst/i.test(response.url())) return;
+    try {
+      const body = await response.json();
+      if (body && body.sessionToken) sessionToken = String(body.sessionToken);
+    } catch (error) { tokenReadError = String(error && error.message || error); }
+  };
+  page.on("response", onResponse);
+  try {
+    send("youtube", "Открываю YouTube Studio. Медленный профиль не считается ошибкой — жду готовый канал до 5 минут…", { percent: 14 });
+    await page.goto("https://studio.youtube.com", { waitUntil: "domcontentloaded", timeout: 180000 }).catch(error => {
+      send("youtube", "Первичная загрузка Studio идёт медленно — продолжаю ждать в открытом профиле…", { percent: 15 });
+    });
+    await waitForStudioChannel(page);
+    send("youtube", "Канал YouTube Studio открылся. Получаю данные сессии…", { percent: 16 });
 
-  await page.goto("https://studio.youtube.com", { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForTimeout(2500);
-  const blocker = await page.evaluate(() => {
-    const url = location.href || "";
-    const text = document.body && document.body.innerText || "";
-    if (/accounts\.google\.com|ServiceLogin|signin|oauth/i.test(url)) return "Требуется вход в Google.";
-    if (/captcha|unusual traffic|challenge|robot/i.test(text + url)) return "Google запросил CAPTCHA/проверку безопасности.";
-    if (!/studio\.youtube\.com\/channel\//i.test(url)) return "YouTube Studio не открыл канал.";
-    return "";
-  });
-  if (blocker) throw new Error(blocker);
-  tokenResponse = await tokenPromise;
-  const html = await page.content();
-  const data = parseStudioBootstrap(html, page.url());
-  if (!tokenResponse) throw new Error("YouTube Studio не вернул sessionToken за 90 секунд. Ничего не загружено; профиль оставлен открытым.");
-  return { data, sessionToken: tokenResponse };
+    const deadline = Date.now() + STUDIO_READY_TIMEOUT_MS;
+    let reloaded = false;
+    let data = null;
+    let nextHeartbeat = 0;
+    while (Date.now() < deadline) {
+      if (page.isClosed()) throw new Error("Окно Dolphin было закрыто во время чтения сессии YouTube.");
+      try { data = parseStudioBootstrap(await page.content(), page.url()); } catch (_) {}
+      if (data && sessionToken) return { data, sessionToken };
+
+      const state = studioPageState(page.url(), await page.locator("body").innerText({ timeout: 3000 }).catch(() => ""));
+      if (state.blocker) throw new Error(state.blocker);
+      if (Date.now() >= nextHeartbeat) {
+        send("youtube", "Канал открыт, ожидаю подтверждение сессии YouTube…", { percent: 16 });
+        nextHeartbeat = Date.now() + 10000;
+      }
+      if (!reloaded && Date.now() > deadline - STUDIO_READY_TIMEOUT_MS + 60000) {
+        reloaded = true;
+        send("youtube", "Сессия ещё не подтверждена — один раз обновляю Studio и продолжаю ждать…", { percent: 16 });
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 180000 }).catch(() => {});
+        await waitForStudioChannel(page, Math.max(1000, deadline - Date.now()));
+      }
+      await page.waitForTimeout(1000);
+    }
+    const detail = tokenReadError ? " Последняя ошибка чтения: " + tokenReadError.slice(0, 120) : "";
+    throw new Error("Канал открылся, но YouTube не подтвердил sessionToken за 5 минут. Ничего не загружено; профиль оставлен открытым." + detail);
+  } finally {
+    page.off("response", onResponse);
+  }
 }
 
 async function uploadBinary(page, uploadUrl, filePath) {
@@ -380,6 +551,7 @@ async function uploadOne(page, context, session, sapisid) {
 async function main() {
   const jobPath = process.argv[2];
   if (!jobPath || !fs.existsSync(jobPath)) throw new Error("Файл задания не найден.");
+  setupDiagnostics(jobPath);
   job = validateJob(JSON.parse(fs.readFileSync(jobPath, "utf8")));
   job.token = String(process.env.VIDEOBATCH_DOLPHIN_TOKEN || "").trim();
   if (!job.token) throw new Error("API-токен Dolphin не передан.");
@@ -397,6 +569,8 @@ async function main() {
   send("ip", `Прокси подтверждён: ${actualIp}`, { ip: actualIp, percent: 12 });
 
   const page = context.pages()[0] || await context.newPage();
+  activePage = page;
+  attachPageDiagnostics(page);
   const session = await acquireStudioSession(page);
   assertExpectedChannel(job.expectedChannelId, session.data.channelId);
   const cookies = await context.cookies([STUDIO_ORIGIN, "https://youtube.com"]);
@@ -411,10 +585,15 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(error => fail(error, { keptOpen: true }));
+  main().catch(async error => {
+    const details = await captureFailureDiagnostics(error);
+    fail(error, Object.assign({ keptOpen: true, diagnosticFile }, details));
+  });
 }
 
 module.exports = {
   automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap,
-  assertExpectedChannel, makeContext, makeCreateVideoBody, makeMetadataBody, validateJob
+  studioPageState, waitForStudioChannel, assertExpectedChannel,
+  makeContext, makeCreateVideoBody, makeMetadataBody, validateJob,
+  safeDiagnosticUrl, redactDiagnostic
 };
