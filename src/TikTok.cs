@@ -270,6 +270,14 @@ namespace VideoBatch {
             else settings.LastSelectedTikTokProfileIdRu=acc.ProfileId.Trim();
             SafeSave();
         }
+        public void ApplyNavigationContext(){
+            string pid=(NavigationContext.SelectedProfileId??"").Trim();
+            if(string.IsNullOrWhiteSpace(pid)||!string.Equals(NavigationContext.SelectedPlatform,"TikTok",StringComparison.OrdinalIgnoreCase))return;
+            string m=NormMarket(NavigationContext.SelectedMarket);
+            if(m!=marketView)SwitchMarket(m);
+            var row=VisibleRows().FirstOrDefault(r=>string.Equals((((TikTokAccount)r.Tag).ProfileId??"").Trim(),pid,StringComparison.OrdinalIgnoreCase));
+            if(row!=null){grid.ClearSelection();row.Selected=true;grid.CurrentCell=row.Cells[CName];RememberSelectedAccount((TikTokAccount)row.Tag);}
+        }
         void AssignVideosToSelectedAccount(){
             SaveGrid();
             var row=CurrentAccountRow();
