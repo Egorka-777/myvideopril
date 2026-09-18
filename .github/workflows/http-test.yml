@@ -1,0 +1,38 @@
+name: HTTP test safety checks
+
+on:
+  push:
+    branches: [feature/youtube-http-dolphin-test]
+  pull_request:
+    paths:
+      - "VideoBatch.HttpTest.csproj"
+      - "src/HttpTest*.cs"
+      - "tools/uploader/worker-http-test.js"
+      - "tests/http_upload_regressions.js"
+      - ".github/workflows/http-test.yml"
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: New HTTP worker regressions
+        run: node tests/http_upload_regressions.js
+      - name: Existing worker regressions
+        run: node tests/watch_regressions.js
+      - name: Compile isolated Windows executable
+        run: dotnet build VideoBatch.HttpTest.csproj -c Release
+      - name: Upload compiled executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoBatch-HttpTest-exe
+          path: |
+            bin/Release/net48/VideoBatch.HttpTest.exe
+            bin/Release/net48/VideoBatch.HttpTest.exe.config
+            tools/uploader/worker-http-test.js
