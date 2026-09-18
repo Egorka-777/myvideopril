@@ -24,6 +24,8 @@ assert.strictEqual(worker.dolphinProfileStatus({data:{status:"stopped"}}),"stopp
 assert.strictEqual(worker.dolphinProfileIsRunning("stopped"),false);
 assert.strictEqual(worker.dolphinProfileIsRunning("running"),true);
 assert.strictEqual(worker.dolphinProfileIsRunning("запущен"),true);
+assert.strictEqual(worker.retryableDolphinStartError(new Error("HTTP 500. initConnectionError")),true);
+assert.strictEqual(worker.retryableDolphinStartError(new Error("HTTP 401")),false);
 
 worker.assertExpectedChannel("UC123456789","UC123456789");
 assert.throws(()=>worker.assertExpectedChannel("UCexpected","UCwrong"),/другой YouTube-канал/);
@@ -70,7 +72,9 @@ assert.match(testWorker,/requestfailed/);
 assert.match(testWorker,/DOLPHIN_START_TIMEOUT_MS\s*=\s*2\s*\*\s*60\s*\*\s*1000/);
 assert.doesNotMatch(testWorker,/throw new Error\("Профиль уже открыт без порта автоматизации/,
   "The worker must not invent an already-running state after an unrelated start failure.");
-assert.match(testWorker,/Исходная ошибка запуска|Исходная ошибка:/);
+assert.match(testWorker,/Ошибки запуска:/);
+assert.match(testWorker,/initConnectionError\. Профиль не запущен — через 5 секунд повторю ровно один раз/);
+assert.match(testWorker,/for \(let attempt = 1; attempt <= 2; attempt\+\+\)/);
 assert.ok(mainWorker.length>100000,"The existing production worker must remain present and separate.");
 
 console.log("http upload regression checks passed");

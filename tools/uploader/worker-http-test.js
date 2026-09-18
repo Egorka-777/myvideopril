@@ -8,7 +8,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 
-const BUILD = "2026-09-18-http-test-v3";
+const BUILD = "2026-09-18-http-test-v4";
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const STUDIO_ORIGIN = "https://studio.youtube.com";
 const STUDIO_READY_TIMEOUT_MS = 5 * 60 * 1000;
@@ -200,6 +200,10 @@ function dolphinProfileIsRunning(status) {
   return /(^|[^a-z])(running|started|active)([^a-z]|$)|запущен/i.test(String(status || ""));
 }
 
+function retryableDolphinStartError(error) {
+  return /initConnectionError/i.test(String(error && error.message || error || ""));
+}
+
 async function startDolphinProfile() {
   const startedAt = Date.now();
   const heartbeat = setInterval(() => {
@@ -221,27 +225,38 @@ async function startOrConnectProfile() {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
   });
   send("dolphin", "API Dolphin доступен. Запускаю выбранный закрытый профиль в режиме автоматизации…", { percent: 3 });
-  try {
-    const started = await startDolphinProfile();
-    const endpoint = automationEndpoint(started);
-    if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
-    return endpoint;
-  } catch (startError) {
-    const original = redactDiagnostic(startError && startError.message || startError);
-    record("dolphin", "Запуск профиля через API завершился ошибкой.", { reason: original });
-    const info = await dolphinApi(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
-    const endpoint = automationEndpoint(info);
-    if (endpoint) {
-      send("dolphin", "Dolphin запустил профиль с задержкой; порт автоматизации найден.", { percent: 5 });
+  const failures = [];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const started = await startDolphinProfile();
+      const endpoint = automationEndpoint(started);
+      if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
+      if (attempt > 1) send("dolphin", "Повторный запуск профиля подтверждён Dolphin.", { percent: 5 });
       return endpoint;
+    } catch (startError) {
+      const original = redactDiagnostic(startError && startError.message || startError);
+      failures.push(original);
+      record("dolphin", `Попытка запуска профиля ${attempt} завершилась ошибкой.`, { attempt, reason: original });
+      const info = await dolphinApi(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
+      const endpoint = automationEndpoint(info);
+      if (endpoint) {
+        send("dolphin", "Dolphin запустил профиль с задержкой; порт автоматизации найден.", { percent: 5 });
+        return endpoint;
+      }
+      const status = dolphinProfileStatus(info);
+      if (dolphinProfileIsRunning(status)) {
+        throw new Error(`Dolphin действительно сообщает статус «${status}», но не отдал порт автоматизации. Ошибки запуска: ${failures.join("; ")}`);
+      }
+      if (attempt === 1 && retryableDolphinStartError(startError)) {
+        send("dolphin", "Dolphin вернул initConnectionError. Профиль не запущен — через 5 секунд повторю ровно один раз…", { percent: 4 });
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        continue;
+      }
+      const statusText = status ? ` Текущий статус по API: «${status}».` : " Статус профиля API не сообщил.";
+      throw new Error(`Dolphin не запустил выбранный профиль или не вернул результат запуска.${statusText} Ошибки запуска: ${failures.join("; ")}`);
     }
-    const status = dolphinProfileStatus(info);
-    if (dolphinProfileIsRunning(status)) {
-      throw new Error(`Dolphin действительно сообщает статус «${status}», но не отдал порт автоматизации. Исходная ошибка запуска: ${original}`);
-    }
-    const statusText = status ? ` Текущий статус по API: «${status}».` : " Статус профиля API не сообщил.";
-    throw new Error(`Dolphin не запустил выбранный профиль или не вернул результат запуска.${statusText} Исходная ошибка: ${original}`);
   }
+  throw new Error(`Dolphin не запустил выбранный профиль. Ошибки запуска: ${failures.join("; ")}`);
 }
 
 function normalizeIp(value) {
@@ -632,5 +647,6 @@ module.exports = {
   automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap,
   studioPageState, waitForStudioChannel, assertExpectedChannel,
   makeContext, makeCreateVideoBody, makeMetadataBody, validateJob,
-  safeDiagnosticUrl, redactDiagnostic, dolphinProfileStatus, dolphinProfileIsRunning
+  safeDiagnosticUrl, redactDiagnostic, dolphinProfileStatus, dolphinProfileIsRunning,
+  retryableDolphinStartError
 };
