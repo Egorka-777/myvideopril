@@ -6,5 +6,6 @@ namespace VideoBatch {
         public const string Scheduled="Отложено";
         public const string Published="Опубликовано";
         public const string Error="Ошибка";
+        public const string ManualCheck="Требуется проверка";
     }
 }

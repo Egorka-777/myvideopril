@@ -176,6 +176,7 @@ namespace VideoBatch {
                 batches.Add(batch);
             }
             ScheduleGenerator.AssignCrossBatchSchedule(batches,schedulePrefs);
+            ScheduleGenerator.EnsureValidYouTubeSchedule(batches,schedulePrefs);
             return batches;
         }
 

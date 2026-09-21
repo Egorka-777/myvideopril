@@ -9,8 +9,15 @@ const worker = require("../tools/uploader/worker-http-test.js");
 const html = '<script>ytcfg.set({"INNERTUBE_API_KEY":"test-key","SESSION_INDEX":"2","DELEGATED_SESSION_ID":"delegate","INNERTUBE_CLIENT_VERSION":"1.20260918.00.00"})</script>';
 const bootstrap = worker.parseStudioBootstrap(html,"https://studio.youtube.com/channel/UC123456789/videos");
 assert.deepStrictEqual(bootstrap,{
-  channelId:"UC123456789",apiKey:"test-key",authUser:"2",delegatedSessionId:"delegate",clientVersion:"1.20260918.00.00"
+  channelId:"UC123456789",apiKey:"test-key",authUser:"2",delegatedSessionId:"delegate",
+  channelRoleType:"CREATOR_CHANNEL_ROLE_TYPE_OWNER",clientVersion:"1.20260918.00.00"
 });
+
+const personalHeaders = worker.authHeaders({ authUser: "0", delegatedSessionId: null }, "test-sapisid");
+assert.strictEqual(personalHeaders["x-goog-pageid"], undefined);
+const delegatedHeaders = worker.authHeaders({ authUser: "2", delegatedSessionId: "delegate" }, "test-sapisid");
+assert.strictEqual(delegatedHeaders["x-goog-pageid"], "delegate");
+assert.strictEqual(worker.isSchedule403(new Error("YouTube HTTP 403: PERMISSION_DENIED")), true);
 
 assert.deepStrictEqual(worker.studioPageState("https://studio.youtube.com/", "Загрузка"),{ready:false,blocker:""});
 assert.deepStrictEqual(worker.studioPageState("https://studio.youtube.com/channel/UC123456789", "Панель управления"),{ready:true,blocker:""});

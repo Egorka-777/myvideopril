@@ -431,11 +431,45 @@ namespace VideoBatch {
             port.Leave += (s, e) => { if (int.TryParse(port.Text, out var v) && v > 0 && v < 65536) { settings.DolphinPort = v; save(); } };
             card.Controls.Add(Labeled("Dolphin порт", port));
 
-            var parallel = Theme.MakeSearchBox();
-            parallel.Text = settings.MaxParallelUploads.ToString();
-            parallel.Width = 80;
-            parallel.Leave += (s, e) => { if (int.TryParse(parallel.Text, out var v)) { settings.MaxParallelUploads = Math.Max(1, Math.Min(20, v)); save(); } };
-            card.Controls.Add(Labeled("Параллельно профилей", parallel));
+            var customWorkers = Theme.MakeSearchBox();
+            customWorkers.Text = (settings.HttpWorkerCustomCount <= 0 ? HttpWorkerSettings.DefaultWorkers : settings.HttpWorkerCustomCount).ToString();
+            customWorkers.Width = 80;
+            customWorkers.Enabled = (settings.HttpWorkerPreset ?? "normal") == "custom";
+
+            var workerPreset = Theme.MakeCombo(new[] { "safe", "normal", "fast", "custom", "auto" });
+            workerPreset.SelectedItem = string.IsNullOrWhiteSpace(settings.HttpWorkerPreset) ? "normal" : settings.HttpWorkerPreset;
+            workerPreset.SelectedIndexChanged += (s, e) => {
+                settings.HttpWorkerPreset = workerPreset.SelectedItem?.ToString() ?? "normal";
+                customWorkers.Enabled = settings.HttpWorkerPreset == "custom";
+                save();
+            };
+            card.Controls.Add(Labeled("HTTP workers (safe/normal/fast/custom/auto)", workerPreset));
+            customWorkers.Leave += (s, e) => {
+                if (int.TryParse(customWorkers.Text, out var v)) {
+                    settings.HttpWorkerCustomCount = Math.Max(1, Math.Min(HttpWorkerSettings.MaxCustomWorkers, v));
+                    settings.MaxParallelUploads = settings.HttpWorkerCustomCount;
+                    save();
+                    customWorkers.Text = settings.HttpWorkerCustomCount.ToString();
+                }
+            };
+            card.Controls.Add(Labeled("Пользовательский pool (1–10)", customWorkers));
+
+            var publishMode = Theme.MakeCombo(new[] { "scheduled", "immediate", "private" });
+            publishMode.SelectedItem = string.IsNullOrWhiteSpace(settings.YouTubeHttpPublishMode) ? "scheduled" : settings.YouTubeHttpPublishMode;
+            publishMode.SelectedIndexChanged += (s, e) => { settings.YouTubeHttpPublishMode = publishMode.SelectedItem?.ToString() ?? "scheduled"; save(); };
+            card.Controls.Add(Labeled("HTTP публикация (scheduled/immediate/private)", publishMode));
+
+            var lead = Theme.MakeSearchBox();
+            lead.Text = settings.YouTubeScheduleLeadMinutes.ToString();
+            lead.Width = 80;
+            lead.Leave += (s, e) => {
+                if (int.TryParse(lead.Text, out var v)) {
+                    settings.YouTubeScheduleLeadMinutes = Math.Max(ScheduleGenerator.PreflightMinLeadMinutes, v);
+                    save();
+                    lead.Text = settings.YouTubeScheduleLeadMinutes.ToString();
+                }
+            };
+            card.Controls.Add(Labeled("Запас до 1-й публикации, мин (≥20)", lead));
 
             var schedMode = Theme.MakeCombo(new[] { "random", "period" });
             schedMode.SelectedItem = settings.YouTubeScheduleMode ?? "random";

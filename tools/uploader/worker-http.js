@@ -8,7 +8,8 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 
-const BUILD = "2026-09-18-http-prod-v1";
+const BUILD = "2026-09-18-http-pool-v2";
+const WORKER_EXIT_DELAY_MS = 150;
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const STUDIO_ORIGIN = "https://studio.youtube.com";
 const STUDIO_READY_TIMEOUT_MS = 5 * 60 * 1000;
@@ -76,19 +77,24 @@ function record(stage, text, extra = {}) {
   writeDiagnostic(eventData(stage, text, extra));
 }
 
-function setupDiagnostics(jobPath) {
+function setupDiagnostics(jobPath, jobRunId) {
   const root = path.dirname(path.dirname(path.resolve(jobPath)));
   const directory = path.join(root, "diagnostics");
   fs.mkdirSync(directory, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  diagnosticFile = path.join(directory, `http-${stamp}-${process.pid}.jsonl`);
+  const rid = String(jobRunId || runId || process.pid).replace(/[^\w-]/g, "").slice(0, 32);
+  diagnosticFile = path.join(directory, `http-${stamp}-${rid}-${process.pid}.jsonl`);
   send("diagnostic", `Подробная диагностика: ${diagnosticFile}`, { diagnosticFile });
+}
+
+function finishProcess(code) {
+  setTimeout(() => process.exit(code), WORKER_EXIT_DELAY_MS);
 }
 
 function fail(error, extra = {}) {
   const text = redactDiagnostic(error && error.message || error || "Неизвестная ошибка");
   send("error", text, Object.assign({ success: false, error: text }, extra));
-  process.exitCode = 1;
+  finishProcess(1);
 }
 
 function relevantNetworkUrl(value) {
@@ -142,6 +148,10 @@ async function captureFailureDiagnostics(error) {
   return details;
 }
 
+function resolvePublishMode(value) {
+  return String(value && value.publishMode || "scheduled").trim().toLowerCase();
+}
+
 function validateJob(value) {
   if (!value || typeof value !== "object") throw new Error("Пустое задание.");
   if (!String(value.profileId || "").trim()) throw new Error("Не выбран Profile ID Dolphin.");
@@ -154,12 +164,20 @@ function validateJob(value) {
   if (!title) throw new Error("Заголовок пуст.");
   if (title.length > 100) throw new Error("Заголовок длиннее 100 символов.");
   if (/[<>]/.test(title)) throw new Error("В заголовке нельзя использовать < или >.");
-  const unix = Number(value.scheduledUnixSeconds);
-  if (!Number.isFinite(unix) || unix <= Math.floor(Date.now() / 1000) + 15 * 60)
-    throw new Error("Время публикации должно быть минимум через 15 минут.");
+  const publishMode = resolvePublishMode(value);
+  let scheduledUnixSeconds = 0;
+  if (publishMode === "scheduled") {
+    const unix = Number(value.scheduledUnixSeconds);
+    if (!Number.isFinite(unix) || unix <= Math.floor(Date.now() / 1000) + 15 * 60)
+      throw new Error("Время публикации должно быть минимум через 15 минут.");
+    scheduledUnixSeconds = Math.floor(unix);
+  }
   if (!String(value.expectedIp || "").trim())
     throw new Error("У аккаунта не сохранён ожидаемый IP. Сначала в основном приложении нажмите «Проверить профили».");
-  return Object.assign({}, value, { title, scheduledUnixSeconds: Math.floor(unix) });
+  const thumbnail = String(value.thumbnail || "").trim();
+  if (thumbnail && !fs.existsSync(thumbnail)) throw new Error("Файл превью не найден.");
+  const contentKind = String(value.contentKind || "long").trim().toLowerCase();
+  return Object.assign({}, value, { title, scheduledUnixSeconds, publishMode, thumbnail, contentKind });
 }
 
 function validateBatchJob(value) {
@@ -171,18 +189,24 @@ function validateBatchJob(value) {
     throw new Error("У аккаунта не сохранён ожидаемый IP.");
   const rawItems = Array.isArray(value.items) ? value.items : [];
   if (rawItems.length === 0) throw new Error("Пустой список items[].");
+  const publishMode = resolvePublishMode(value);
   const items = rawItems.map((it, index) => {
-    const merged = Object.assign({}, value, it || {});
+    const merged = Object.assign({}, value, it || {}, { publishMode });
     const validated = validateJob(merged);
     return {
       localJobId: String(it.localJobId || validated.localJobId || `item-${index + 1}`),
       video: validated.video,
       title: validated.title,
-      scheduledUnixSeconds: validated.scheduledUnixSeconds
+      scheduledUnixSeconds: validated.scheduledUnixSeconds,
+      thumbnail: validated.thumbnail || "",
+      contentKind: validated.contentKind || "long",
+      thumbnailStatus: "pending"
     };
   });
   return Object.assign({}, value, {
     keepProfileOpen: value.keepProfileOpen !== false,
+    publishMode,
+    runId: String(value.runId || process.env.VIDEOBATCH_RUN_ID || runId),
     items
   });
 }
@@ -361,6 +385,11 @@ function findBootstrapValue(html, name) {
   try { return JSON.parse(`"${match[1]}"`); } catch (_) { return match[1]; }
 }
 
+function parseChannelRoleType(html) {
+  const match = String(html || "").match(/channelRoleType["\s:]+([A-Z_]+)/);
+  return match && match[1] ? match[1] : "CREATOR_CHANNEL_ROLE_TYPE_OWNER";
+}
+
 function parseStudioBootstrap(html, url) {
   const channelMatch = String(url || "").match(/studio\.youtube\.com\/channel\/([^/?#]+)/i);
   const result = {
@@ -368,6 +397,7 @@ function parseStudioBootstrap(html, url) {
     apiKey: findBootstrapValue(html, "INNERTUBE_API_KEY"),
     authUser: findBootstrapValue(html, "SESSION_INDEX"),
     delegatedSessionId: findBootstrapValue(html, "DELEGATED_SESSION_ID") || null,
+    channelRoleType: parseChannelRoleType(html),
     clientVersion: findBootstrapValue(html, "INNERTUBE_CLIENT_VERSION") || "1.20231215.01.00"
   };
   if (!result.channelId || !result.apiKey || result.authUser === "")
@@ -414,9 +444,13 @@ function assertExpectedChannel(expectedChannelId, actualChannelId) {
     throw new Error(`Открыт другой YouTube-канал: ожидался ${expected}, открыт ${actual}. Ничего не загружено.`);
 }
 
+function channelRoleType(data) {
+  return String((data && data.channelRoleType) || "CREATOR_CHANNEL_ROLE_TYPE_OWNER").trim() || "CREATOR_CHANNEL_ROLE_TYPE_OWNER";
+}
+
 function makeContext(data, sessionToken) {
   const user = {
-    delegationContext: { externalChannelId: data.channelId, roleType: { channelRoleType: "CREATOR_CHANNEL_ROLE_TYPE_OWNER" } }
+    delegationContext: { externalChannelId: data.channelId, roleType: { channelRoleType: channelRoleType(data) } }
   };
   if (data.delegatedSessionId) user.onBehalfOfUser = data.delegatedSessionId;
   return {
@@ -430,15 +464,15 @@ function makeContext(data, sessionToken) {
   };
 }
 
-function delegationContext(channelId) {
-  return { externalChannelId: channelId, roleType: { channelRoleType: "CREATOR_CHANNEL_ROLE_TYPE_OWNER" } };
+function delegationContext(channelId, data) {
+  return { externalChannelId: channelId, roleType: { channelRoleType: channelRoleType(data || { channelId }) } };
 }
 
 function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourceId, title) {
   return {
     channelId: data.channelId,
     context: makeContext(data, sessionToken),
-    delegationContext: delegationContext(data.channelId),
+    delegationContext: delegationContext(data.channelId, data),
     frontendUploadId: frontEndUploadId,
     initialMetadata: {
       title: { newTitle: title }, description: { newDescription: "", shouldSegment: true },
@@ -449,16 +483,24 @@ function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourc
   };
 }
 
-function makeMetadataBody(data, sessionToken, videoId, scheduledUnixSeconds) {
-  return {
+function makeMetadataBody(data, sessionToken, videoId, publishMode, scheduledUnixSeconds) {
+  const body = {
     context: makeContext(data, sessionToken),
-    delegationContext: delegationContext(data.channelId),
+    delegationContext: delegationContext(data.channelId, data),
     encryptedVideoId: videoId,
     madeForKids: { newMfk: "MDE_MADE_FOR_KIDS_TYPE_NOT_MFK", operation: "MDE_MADE_FOR_KIDS_UPDATE_OPERATION_SET" },
-    draftState: { operation: "MDE_DRAFT_STATE_UPDATE_OPERATION_REMOVE_DRAFT_STATE" },
-    privacyState: { newPrivacy: "PRIVATE" },
-    scheduledPublishing: { set: { timeSec: String(scheduledUnixSeconds), privacy: "PUBLIC" } }
+    draftState: { operation: "MDE_DRAFT_STATE_UPDATE_OPERATION_REMOVE_DRAFT_STATE" }
   };
+  const mode = String(publishMode || "scheduled").toLowerCase();
+  if (mode === "immediate") {
+    body.privacyState = { newPrivacy: "PUBLIC" };
+  } else if (mode === "private") {
+    body.privacyState = { newPrivacy: "PRIVATE" };
+  } else {
+    body.privacyState = { newPrivacy: "PRIVATE" };
+    body.scheduledPublishing = { set: { timeSec: String(scheduledUnixSeconds), privacy: "PUBLIC" } };
+  }
+  return body;
 }
 
 function sapiSidHash(sapisid) {
@@ -495,12 +537,97 @@ async function studioFetch(page, url, options) {
 }
 
 function authHeaders(data, sapisid) {
-  return {
+  const headers = {
     "authorization": `SAPISIDHASH ${sapiSidHash(sapisid)}`,
     "x-origin": STUDIO_ORIGIN,
     "x-goog-authuser": String(data.authUser),
     "content-type": "application/json"
   };
+  if (data.delegatedSessionId) headers["x-goog-pageid"] = String(data.delegatedSessionId);
+  return headers;
+}
+
+function isSchedule403(error) {
+  const text = String(error && error.message || error || "");
+  return /403|PERMISSION_DENIED|permission denied|forbidden/i.test(text);
+}
+
+async function applyMetadataSchedule(page, session, sapisid, data, videoId, publishMode, scheduledUnixSeconds) {
+  const headers = authHeaders(data, sapisid);
+  const metadata = await studioFetch(page, `${STUDIO_ORIGIN}/youtubei/v1/video_manager/metadata_update?key=${encodeURIComponent(data.apiKey)}&alt=json`, {
+    method: "POST", timeoutMs: 90000, headers,
+    body: JSON.stringify(makeMetadataBody(data, session.sessionToken, videoId, publishMode, scheduledUnixSeconds))
+  });
+  let metadataJson = null;
+  try { metadataJson = metadata.text ? JSON.parse(metadata.text) : null; } catch (_) {}
+  if (metadataJson && metadataJson.error) throw new Error("YouTube отклонил метаданные: " + JSON.stringify(metadataJson.error).slice(0, 240));
+  return { metadata, metadataJson, applied: true };
+}
+
+async function applyScheduleViaEditPage(page, session, sapisid, data, videoId, publishMode, scheduledUnixSeconds) {
+  const editUrl = `${STUDIO_ORIGIN}/video/${encodeURIComponent(videoId)}/edit`;
+  await page.goto(editUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
+  await page.waitForTimeout(2500);
+  if (!page.url().includes(`/video/${videoId}/`)) throw new Error("Страница редактирования видео не открылась.");
+  let editData = data;
+  try {
+    editData = parseStudioBootstrap(await page.content(), page.url());
+    editData.delegatedSessionId = editData.delegatedSessionId || data.delegatedSessionId;
+    if (!editData.channelRoleType) editData.channelRoleType = data.channelRoleType;
+  } catch (_) { editData = data; }
+  await applyMetadataSchedule(page, session, sapisid, editData, videoId, publishMode, scheduledUnixSeconds);
+  return true;
+}
+
+async function setThumbnail(page, thumbPath) {
+  if (!thumbPath) return;
+  const inputs = page.locator("input[type=file]");
+  const count = await inputs.count();
+  for (let i = 0; i < count; i++) {
+    const accept = (await inputs.nth(i).getAttribute("accept").catch(() => "")) || "";
+    if (/image|jpeg|png|webp/i.test(accept)) {
+      await inputs.nth(i).setInputFiles(thumbPath);
+      await page.waitForTimeout(1500);
+      return;
+    }
+  }
+  throw new Error("YouTube не показал поле превью.");
+}
+
+async function applyItemThumbnail(page, item, videoId, packIndex, packTotal) {
+  const base = {
+    profileId: job.profileId,
+    localJobId: item.localJobId,
+    fileName: path.basename(item.video),
+    packIndex,
+    packTotal,
+    videoId
+  };
+  const thumb = String(item.thumbnail || "").trim();
+  if (!thumb) {
+    item.thumbnailStatus = "skipped";
+    return { status: "skipped" };
+  }
+  const kind = String(item.contentKind || "long").toLowerCase();
+  if (kind === "shorts" || kind === "short") {
+    item.thumbnailStatus = "skipped";
+    send("thumbnail", "Shorts: произвольное изображение не применяется — используйте кадр из видео.", Object.assign({ thumbnailStatus: "skipped" }, base));
+    return { status: "skipped", reason: "Shorts не поддерживают произвольное превью через HTTP" };
+  }
+  try {
+    const editUrl = `${STUDIO_ORIGIN}/video/${encodeURIComponent(videoId)}/edit`;
+    await page.goto(editUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
+    await page.waitForTimeout(2000);
+    await setThumbnail(page, thumb);
+    item.thumbnailStatus = "applied";
+    send("thumbnail", "Превью применено.", Object.assign({ percent: 93, thumbnailStatus: "applied" }, base));
+    return { status: "applied" };
+  } catch (error) {
+    const reason = String(error && error.message || error);
+    item.thumbnailStatus = "error";
+    send("thumbnail_warning", "Видео загружено, превью не применено: " + reason, Object.assign({ thumbnailStatus: "error" }, base));
+    return { status: "error", reason };
+  }
 }
 
 async function acquireStudioSession(page) {
@@ -609,7 +736,7 @@ async function uploadOne(page, context, session, sapisid, item, packIndex, packT
   if (!uploadUrl || !/^https:\/\//i.test(uploadUrl)) throw new Error("YouTube не вернул URL загрузки. Ничего не загружено.");
 
   const scottyId = await uploadBinary(page, uploadUrl, item.video);
-  send("video_created", "Файл принят. Создаю ролик…", Object.assign({ percent: 78 }, base));
+  send("video_created", "Файл принят. Создаю ролик…", Object.assign({ percent: 78, lastStage: "video_created" }, base));
   const create = await studioFetch(page, `${STUDIO_ORIGIN}/youtubei/v1/upload/createvideo?key=${encodeURIComponent(data.apiKey)}&alt=json`, {
     method: "POST", timeoutMs: 90000, headers,
     body: JSON.stringify(makeCreateVideoBody(data, session.sessionToken, frontEndUploadId, scottyId, item.title))
@@ -620,28 +747,58 @@ async function uploadOne(page, context, session, sapisid, item, packIndex, packT
   const videoId = createJson && createJson.videoId;
   if (!videoId) throw new Error("Файл загружен, но YouTube не подтвердил создание видео. Повторно не запускайте; профиль оставлен открытым.");
 
-  send("schedule", "Ставлю отложенную публикацию…", Object.assign({ percent: 88, videoId }, base));
-  const metadata = await studioFetch(page, `${STUDIO_ORIGIN}/youtubei/v1/video_manager/metadata_update?key=${encodeURIComponent(data.apiKey)}&alt=json`, {
-    method: "POST", timeoutMs: 90000, headers,
-    body: JSON.stringify(makeMetadataBody(data, session.sessionToken, videoId, item.scheduledUnixSeconds))
-  });
-  let metadataJson = null;
-  try { metadataJson = metadata.text ? JSON.parse(metadata.text) : null; } catch (_) {}
-  if (metadataJson && metadataJson.error) throw new Error("YouTube отклонил расписание: " + JSON.stringify(metadataJson.error).slice(0, 240));
+  const publishMode = resolvePublishMode(job);
+  const scheduleLabel = publishMode === "immediate" ? "Публикую сразу…"
+    : publishMode === "private" ? "Сохраняю как приватное…"
+      : "Ставлю отложенную публикацию…";
+  send("schedule", scheduleLabel, Object.assign({ percent: 88, videoId, lastStage: "video_created" }, base));
+  try {
+    await applyMetadataSchedule(page, session, sapisid, data, videoId, publishMode, item.scheduledUnixSeconds);
+  } catch (scheduleError) {
+    if (!isSchedule403(scheduleError)) throw scheduleError;
+    try {
+      await applyScheduleViaEditPage(page, session, sapisid, data, videoId, publishMode, item.scheduledUnixSeconds);
+    } catch (fallbackError) {
+      return {
+        videoId,
+        url: `https://youtu.be/${videoId}`,
+        manualCheck: true,
+        scheduleError: String(scheduleError && scheduleError.message || scheduleError),
+        lastStage: "video_created"
+      };
+    }
+  }
 
-  // Independent read-back: open the edit page and require the video id there.
-  const editUrl = `${STUDIO_ORIGIN}/video/${encodeURIComponent(videoId)}/edit`;
-  await page.goto(editUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForTimeout(2500);
-  if (!page.url().includes(`/video/${videoId}/`)) throw new Error("YouTube вернул videoId, но проверочная страница видео не открылась. Профиль оставлен открытым.");
-  return { videoId, url: `https://youtu.be/${videoId}` };
+  let editPageWarning = "";
+  try {
+    const editUrl = `${STUDIO_ORIGIN}/video/${encodeURIComponent(videoId)}/edit`;
+    await page.goto(editUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
+    await page.waitForTimeout(2500);
+    if (!page.url().includes(`/video/${videoId}/`)) {
+      editPageWarning = "Проверочная страница видео не открылась — HTTP-метаданные уже применены.";
+      record("warning", editPageWarning, { videoId, pageUrl: safeDiagnosticUrl(page.url()) });
+    }
+  } catch (editError) {
+    editPageWarning = "Страница edit не открылась: " + String(editError && editError.message || editError);
+    record("warning", editPageWarning, { videoId });
+  }
+
+  const thumb = await applyItemThumbnail(page, item, videoId, packIndex, packTotal);
+  return {
+    videoId,
+    url: `https://youtu.be/${videoId}`,
+    editPageWarning,
+    thumbnailStatus: thumb.status,
+    thumbnailWarning: thumb.reason || ""
+  };
 }
 
 async function main() {
   const jobPath = process.argv[2];
   if (!jobPath || !fs.existsSync(jobPath)) throw new Error("Файл задания не найден.");
-  setupDiagnostics(jobPath);
-  job = validateBatchJob(JSON.parse(fs.readFileSync(jobPath, "utf8")));
+  const rawJob = JSON.parse(fs.readFileSync(jobPath, "utf8"));
+  setupDiagnostics(jobPath, rawJob && rawJob.runId);
+  job = validateBatchJob(rawJob);
   job.token = String(process.env.VIDEOBATCH_DOLPHIN_TOKEN || "").trim();
   if (!job.token) throw new Error("API-токен Dolphin не передан.");
   const total = job.items.length;
@@ -666,14 +823,39 @@ async function main() {
   const cookies = await context.cookies([STUDIO_ORIGIN, "https://youtube.com"]);
   const sapisidCookie = cookies.find(cookie => cookie.name === "SAPISID") || cookies.find(cookie => cookie.name === "__Secure-3PAPISID");
   if (!sapisidCookie || !sapisidCookie.value) throw new Error("В Dolphin-профиле нет SAPISID. Войдите в YouTube вручную; cookies нигде не сохранялись.");
-  send("youtube", `Канал подтверждён: ${session.data.channelId}.`, { profileId: job.profileId, percent: 17 });
+  send("youtube", `Канал подтверждён: ${session.data.channelId}.`, {
+    profileId: job.profileId, percent: 17, hasDelegatedSessionId: !!session.data.delegatedSessionId
+  });
 
   for (let i = 0; i < total; i++) {
     const item = job.items[i];
     const packIndex = i + 1;
     try {
       const result = await uploadOne(page, context, session, sapisidCookie.value, item, packIndex, total);
-      send("done", `(${packIndex}/${total}) Отложено: ${result.url}`, {
+      if (result.manualCheck) {
+        send("manual_check", `(${packIndex}/${total}) Ролик создан: ${result.url}. Расписание не сохранено — проверьте в Studio.`, {
+          success: false,
+          profileId: job.profileId,
+          localJobId: item.localJobId,
+          fileName: path.basename(item.video),
+          packIndex,
+          packTotal: total,
+          percent: Math.min(95, Math.floor(18 + (82 * packIndex) / total)),
+          url: result.url,
+          videoId: result.videoId,
+          lastStage: result.lastStage || "video_created",
+          error: result.scheduleError || "metadata_update 403",
+          diagnosticFile,
+          keptOpen: job.keepProfileOpen !== false
+        });
+        continue;
+      }
+      const doneText = result.editPageWarning
+        ? `(${packIndex}/${total}) Загружено: ${result.url} · ${result.editPageWarning}`
+        : result.thumbnailStatus === "error"
+          ? `(${packIndex}/${total}) Загружено: ${result.url} · превью не применено`
+          : `(${packIndex}/${total}) Готово: ${result.url}`;
+      send("done", doneText, {
         success: true,
         profileId: job.profileId,
         localJobId: item.localJobId,
@@ -684,7 +866,9 @@ async function main() {
         url: result.url,
         videoId: result.videoId,
         ip: actualIp,
-        keptOpen: job.keepProfileOpen !== false
+        keptOpen: job.keepProfileOpen !== false,
+        thumbnailStatus: result.thumbnailStatus || item.thumbnailStatus || "skipped",
+        warning: result.editPageWarning || result.thumbnailWarning || ""
       });
     } catch (error) {
       if (isAmbiguousUploadError(error)) {
@@ -701,14 +885,16 @@ async function main() {
       throw error;
     }
   }
-  send("done", `Пачка из ${total} видео завершена. Профиль оставлен открытым.`, {
+  send("done", `Пачка из ${total} видео завершена.`, {
     success: true,
     profileId: job.profileId,
     percent: 100,
     ip: actualIp,
     keptOpen: job.keepProfileOpen !== false,
-    packTotal: total
+    packTotal: total,
+    batchComplete: true
   });
+  finishProcess(0);
 }
 
 if (require.main === module) {
@@ -719,10 +905,10 @@ if (require.main === module) {
 }
 
 module.exports = {
-  automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap,
+  automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap, parseChannelRoleType,
   studioPageState, waitForStudioChannel, assertExpectedChannel,
-  makeContext, makeCreateVideoBody, makeMetadataBody, validateJob, validateBatchJob,
-  isAmbiguousUploadError,
+  makeContext, makeCreateVideoBody, makeMetadataBody, validateJob, validateBatchJob, resolvePublishMode,
+  authHeaders, isSchedule403, isAmbiguousUploadError,
   safeDiagnosticUrl, redactDiagnostic, dolphinProfileStatus, dolphinProfileIsRunning,
   retryableDolphinStartError
 };

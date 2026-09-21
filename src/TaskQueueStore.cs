@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
-using System.Text;
 
 namespace VideoBatch {
     public static class TaskQueueStatus {
@@ -53,43 +50,37 @@ namespace VideoBatch {
     }
 
     [DataContract]
-    sealed class TaskQueueFile {
+    public sealed class TaskQueueFile {
         [DataMember] public List<TaskQueueItem> Items = new List<TaskQueueItem>();
         [DataMember] public List<TaskEventLog> Events = new List<TaskEventLog>();
     }
 
     public static class TaskQueueStore {
-        static readonly DataContractJsonSerializer Serializer = new DataContractJsonSerializer(typeof(TaskQueueFile));
-        static string PathFile => System.IO.Path.Combine(Store.Root, "task-queue.json");
-
-        public static event Action Changed;
-
-        public static List<TaskQueueItem> Load() {
-            try {
-                if (!File.Exists(PathFile)) return new List<TaskQueueItem>();
-                using (var f = File.OpenRead(PathFile))
-                    return ((TaskQueueFile)Serializer.ReadObject(f)).Items ?? new List<TaskQueueItem>();
-            } catch { return new List<TaskQueueItem>(); }
+        public static event Action Changed {
+            add { TaskQueueWriter.Changed += value; }
+            remove { TaskQueueWriter.Changed -= value; }
         }
 
-        static TaskQueueFile LoadAll() {
-            try {
-                if (!File.Exists(PathFile)) return new TaskQueueFile();
-                using (var f = File.OpenRead(PathFile))
-                    return (TaskQueueFile)Serializer.ReadObject(f);
-            } catch { return new TaskQueueFile(); }
-        }
+        public static List<TaskQueueItem> Load() => TaskQueueWriter.Items();
+
+        static TaskQueueFile LoadAll() => TaskQueueWriter.Snapshot();
 
         public static void Save(List<TaskQueueItem> items, List<TaskEventLog> events = null) {
-            var file = LoadAll();
-            file.Items = items ?? new List<TaskQueueItem>();
-            if (events != null) file.Events = events;
-            Directory.CreateDirectory(Store.Root);
-            string temp = PathFile + ".tmp";
-            using (var f = File.Create(temp)) Serializer.WriteObject(f, file);
-            if (File.Exists(PathFile)) File.Replace(temp, PathFile, null);
-            else File.Move(temp, PathFile);
-            Changed?.Invoke();
+            foreach (var item in items ?? new List<TaskQueueItem>()) {
+                string id = item.Id;
+                TaskQueueWriter.Upsert(id, t => {
+                    t.Platform = item.Platform; t.Account = item.Account; t.ProfileId = item.ProfileId;
+                    t.File = item.File; t.UploadMethod = item.UploadMethod; t.ScheduledAt = item.ScheduledAt;
+                    t.Progress = item.Progress; t.Stage = item.Stage; t.Status = item.Status;
+                    t.Result = item.Result; t.Url = item.Url; t.DiagnosticPath = item.DiagnosticPath;
+                    t.LastConfirmedStage = item.LastConfirmedStage; t.UpdatedAt = item.UpdatedAt;
+                }, immediate: true);
+            }
+            if (events != null) {
+                foreach (var ev in events)
+                    TaskQueueWriter.LogEvent(ev.Account, ev.Action, ev.Result, ev.Url, immediate: false);
+                TaskQueueWriter.FlushNow();
+            }
         }
 
         public static void RecoverAfterCrash() {
@@ -113,43 +104,21 @@ namespace VideoBatch {
             return true;
         }
 
-        public static int ActiveCount() {
-            return Load().Count(t => IsActive(t.Status));
-        }
+        public static int ActiveCount() => Load().Count(t => IsActive(t.Status));
 
-        public static TaskQueueItem Upsert(string id, Action<TaskQueueItem> edit) {
-            var file = LoadAll();
-            var item = file.Items.FirstOrDefault(x => x.Id == id);
-            if (item == null) {
-                item = new TaskQueueItem { Id = id };
-                file.Items.Add(item);
-            }
-            edit(item);
-            item.UpdatedAt = DateTime.Now.ToString("o");
-            Save(file.Items, file.Events);
-            return item;
+        public static TaskQueueItem Upsert(string id, Action<TaskQueueItem> edit, bool immediate = false) {
+            return TaskQueueWriter.Upsert(id, edit, immediate);
         }
 
         public static void LogEvent(string account, string action, string result, string url = "") {
-            var file = LoadAll();
-            file.Events.Insert(0, new TaskEventLog {
-                Account = account,
-                Action = action,
-                Result = result,
-                Time = DateTime.Now.ToString("HH:mm dd.MM"),
-                Url = url ?? ""
-            });
-            if (file.Events.Count > 200) file.Events = file.Events.Take(200).ToList();
-            Save(file.Items, file.Events);
+            TaskQueueWriter.LogEvent(account, action, result, url, immediate: true);
         }
 
         public static List<TaskEventLog> RecentEvents(int max) {
             return LoadAll().Events.Take(max).ToList();
         }
 
-        public static string NewId() {
-            return Guid.NewGuid().ToString("N");
-        }
+        public static string NewId() => Guid.NewGuid().ToString("N");
 
         public static string MapStage(string workerStage) {
             switch ((workerStage ?? "").ToLowerInvariant()) {
@@ -160,7 +129,10 @@ namespace VideoBatch {
                 case "youtube": return TaskQueueStatus.YoutubeConfirm;
                 case "upload": return TaskQueueStatus.Uploading;
                 case "video_created": return TaskQueueStatus.Creating;
-                case "schedule": return TaskQueueStatus.Scheduling;
+                case "schedule":
+                case "metadata": return TaskQueueStatus.Scheduling;
+                case "thumbnail":
+                case "thumbnail_warning": return TaskQueueStatus.Scheduling;
                 case "done": return TaskQueueStatus.Done;
                 case "manual_check": return TaskQueueStatus.ManualCheck;
                 case "error": return TaskQueueStatus.Error;

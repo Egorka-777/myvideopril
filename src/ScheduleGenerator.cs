@@ -14,7 +14,56 @@ namespace VideoBatch {
 
     /// <summary>Publishing slots: per-profile legacy or global cross-channel queue (Shorts 10–30 min, Long 1–5 min, no night pause).</summary>
     public static class ScheduleGenerator {
+        /// <summary>YouTube API rejects schedules sooner than this.</summary>
+        public const int YouTubeApiMinLeadMinutes = 15;
+        /// <summary>Preflight/UI minimum before upload may start.</summary>
+        public const int PreflightMinLeadMinutes = 20;
+        public const int DefaultLeadMinutes = 30;
+
         static readonly Random Rng = new Random();
+
+        public static int ResolveLeadMinutes(Preferences prefs) {
+            int lead = prefs?.YouTubeScheduleLeadMinutes ?? DefaultLeadMinutes;
+            return Math.Max(PreflightMinLeadMinutes, lead);
+        }
+
+        public static DateTime ScheduleFloor(Preferences prefs) {
+            return DateTime.Now.AddMinutes(ResolveLeadMinutes(prefs));
+        }
+
+        public static bool TryParseSlot(string date, string time, out DateTime at) {
+            at = DateTime.MinValue;
+            if (string.IsNullOrWhiteSpace(date) || string.IsNullOrWhiteSpace(time)) return false;
+            return DateTime.TryParse(date.Trim() + " " + time.Trim(), out at);
+        }
+
+        public static DateTime ParseSlot(string date, string time) {
+            if (!TryParseSlot(date, time, out var at))
+                throw new Exception("Некорректное расписание: «" + date + " " + time + "».");
+            return at;
+        }
+
+        static bool BatchNeedsRecalculation(IList<PreparedProfileBatch> batches, Preferences prefs) {
+            if (batches == null) return false;
+            DateTime floor = ScheduleFloor(prefs);
+            foreach (var batch in batches) {
+                if (batch?.Items == null) continue;
+                foreach (var it in batch.Items) {
+                    if (!TryParseSlot(it.ScheduleDate, it.ScheduleTime, out var at)) return true;
+                    if (at < floor) return true;
+                    if (at <= DateTime.Now.AddMinutes(YouTubeApiMinLeadMinutes)) return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Recalculate entire queue when any slot is too soon for YouTube HTTP (+lead buffer).</summary>
+        public static bool EnsureValidYouTubeSchedule(IList<PreparedProfileBatch> batches, Preferences prefs) {
+            if (batches == null || batches.Count == 0) return false;
+            if (!BatchNeedsRecalculation(batches, prefs)) return false;
+            AssignCrossBatchSchedule(batches, prefs, forceFromFloor: true);
+            return true;
+        }
 
         public static List<(string date, string time)> GenerateForProfileBatches(IList<int> itemCountsPerProfile, string statePath, Preferences prefs = null) {
             var slots = new List<(string, string)>();
@@ -40,7 +89,7 @@ namespace VideoBatch {
             if (kinds == null || kinds.Count == 0) return result;
 
             DateTime cursor = LoadNextSlot(statePath);
-            DateTime floor = DateTime.Now.AddMinutes(2);
+            DateTime floor = ScheduleFloor(prefs);
             if (cursor < floor) cursor = floor;
             if (!string.IsNullOrWhiteSpace(prefs?.YouTubeScheduleFirstPublish)
                 && DateTime.TryParse(prefs.YouTubeScheduleFirstPublish, null, System.Globalization.DateTimeStyles.RoundtripKind, out var firstOverride)
@@ -75,7 +124,7 @@ namespace VideoBatch {
 
         static List<ScheduleSlot> GenerateRandomIntervalMode(int count, Preferences prefs, string statePath, string kind) {
             DateTime next = LoadNextSlot(statePath);
-            DateTime minimum = DateTime.Now.AddMinutes(2);
+            DateTime minimum = ScheduleFloor(prefs);
             if (next < minimum) next = minimum;
             if (!string.IsNullOrWhiteSpace(prefs?.YouTubeScheduleFirstPublish)
                 && DateTime.TryParse(prefs.YouTubeScheduleFirstPublish, null, System.Globalization.DateTimeStyles.RoundtripKind, out var firstOverride)
@@ -94,7 +143,7 @@ namespace VideoBatch {
         }
 
         static List<ScheduleSlot> GeneratePeriodMode(int count, Preferences prefs, string statePath) {
-            DateTime start = DateTime.Now.AddMinutes(2);
+            DateTime start = ScheduleFloor(prefs);
             DateTime end = start.AddHours(24);
             if (!string.IsNullOrWhiteSpace(prefs?.YouTubeSchedulePeriodStart)
                 && DateTime.TryParse(prefs.YouTubeSchedulePeriodStart, null, System.Globalization.DateTimeStyles.RoundtripKind, out var ps))
@@ -150,11 +199,11 @@ namespace VideoBatch {
         }
 
         /// <summary>Across channels: first video +1–10 min from previous channel; within channel use Shorts/Long gaps.</summary>
-        public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null) {
+        public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool forceFromFloor = false) {
             if (batches == null || batches.Count == 0) return;
 
-            DateTime cursor = LoadNextSlot(GlobalStatePath());
-            DateTime floor = DateTime.Now.AddMinutes(2);
+            DateTime floor = ScheduleFloor(prefs);
+            DateTime cursor = forceFromFloor ? floor : LoadNextSlot(GlobalStatePath());
             if (cursor < floor) cursor = floor;
             if (!string.IsNullOrWhiteSpace(prefs?.YouTubeScheduleFirstPublish)
                 && DateTime.TryParse(prefs.YouTubeScheduleFirstPublish, null, System.Globalization.DateTimeStyles.RoundtripKind, out var firstOverride)
@@ -240,6 +289,20 @@ namespace VideoBatch {
                 if (b.Count != 3) return false;
                 for (int i = 1; i < b.Count; i++)
                     if (b[i].At <= b[i - 1].At) return false;
+                prefs.YouTubeScheduleLeadMinutes = 30;
+                var cross = new List<PreparedProfileBatch>();
+                for (int i = 0; i < 3; i++) {
+                    var at = DateTime.Now.AddMinutes(5);
+                    cross.Add(new PreparedProfileBatch {
+                        Items = new List<PreparedUploadItem> {
+                            new PreparedUploadItem { ScheduleDate = at.ToString("yyyy-MM-dd"), ScheduleTime = at.ToString("HH:mm") }
+                        }
+                    });
+                }
+                if (!EnsureValidYouTubeSchedule(cross, prefs)) return false;
+                if (cross[0].Items[0].ScheduleDate == null) return false;
+                if (!TryParseSlot(cross[0].Items[0].ScheduleDate, cross[0].Items[0].ScheduleTime, out var firstAt)) return false;
+                if (firstAt < DateTime.Now.AddMinutes(ResolveLeadMinutes(prefs) - 1)) return false;
                 return true;
             } finally {
                 try { File.Delete(temp); } catch { }

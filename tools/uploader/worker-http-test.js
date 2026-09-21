@@ -331,6 +331,11 @@ function findBootstrapValue(html, name) {
   try { return JSON.parse(`"${match[1]}"`); } catch (_) { return match[1]; }
 }
 
+function parseChannelRoleType(html) {
+  const match = String(html || "").match(/channelRoleType["\s:]+([A-Z_]+)/);
+  return match && match[1] ? match[1] : "CREATOR_CHANNEL_ROLE_TYPE_OWNER";
+}
+
 function parseStudioBootstrap(html, url) {
   const channelMatch = String(url || "").match(/studio\.youtube\.com\/channel\/([^/?#]+)/i);
   const result = {
@@ -338,6 +343,7 @@ function parseStudioBootstrap(html, url) {
     apiKey: findBootstrapValue(html, "INNERTUBE_API_KEY"),
     authUser: findBootstrapValue(html, "SESSION_INDEX"),
     delegatedSessionId: findBootstrapValue(html, "DELEGATED_SESSION_ID") || null,
+    channelRoleType: parseChannelRoleType(html),
     clientVersion: findBootstrapValue(html, "INNERTUBE_CLIENT_VERSION") || "1.20231215.01.00"
   };
   if (!result.channelId || !result.apiKey || result.authUser === "")
@@ -384,9 +390,13 @@ function assertExpectedChannel(expectedChannelId, actualChannelId) {
     throw new Error(`Открыт другой YouTube-канал: ожидался ${expected}, открыт ${actual}. Ничего не загружено.`);
 }
 
+function channelRoleType(data) {
+  return String((data && data.channelRoleType) || "CREATOR_CHANNEL_ROLE_TYPE_OWNER").trim() || "CREATOR_CHANNEL_ROLE_TYPE_OWNER";
+}
+
 function makeContext(data, sessionToken) {
   const user = {
-    delegationContext: { externalChannelId: data.channelId, roleType: { channelRoleType: "CREATOR_CHANNEL_ROLE_TYPE_OWNER" } }
+    delegationContext: { externalChannelId: data.channelId, roleType: { channelRoleType: channelRoleType(data) } }
   };
   if (data.delegatedSessionId) user.onBehalfOfUser = data.delegatedSessionId;
   return {
@@ -400,15 +410,15 @@ function makeContext(data, sessionToken) {
   };
 }
 
-function delegationContext(channelId) {
-  return { externalChannelId: channelId, roleType: { channelRoleType: "CREATOR_CHANNEL_ROLE_TYPE_OWNER" } };
+function delegationContext(channelId, data) {
+  return { externalChannelId: channelId, roleType: { channelRoleType: channelRoleType(data || { channelId }) } };
 }
 
 function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourceId, title) {
   return {
     channelId: data.channelId,
     context: makeContext(data, sessionToken),
-    delegationContext: delegationContext(data.channelId),
+    delegationContext: delegationContext(data.channelId, data),
     frontendUploadId: frontEndUploadId,
     initialMetadata: {
       title: { newTitle: title }, description: { newDescription: "", shouldSegment: true },
@@ -422,7 +432,7 @@ function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourc
 function makeMetadataBody(data, sessionToken, videoId, scheduledUnixSeconds) {
   return {
     context: makeContext(data, sessionToken),
-    delegationContext: delegationContext(data.channelId),
+    delegationContext: delegationContext(data.channelId, data),
     encryptedVideoId: videoId,
     madeForKids: { newMfk: "MDE_MADE_FOR_KIDS_TYPE_NOT_MFK", operation: "MDE_MADE_FOR_KIDS_UPDATE_OPERATION_SET" },
     draftState: { operation: "MDE_DRAFT_STATE_UPDATE_OPERATION_REMOVE_DRAFT_STATE" },
@@ -465,12 +475,19 @@ async function studioFetch(page, url, options) {
 }
 
 function authHeaders(data, sapisid) {
-  return {
+  const headers = {
     "authorization": `SAPISIDHASH ${sapiSidHash(sapisid)}`,
     "x-origin": STUDIO_ORIGIN,
     "x-goog-authuser": String(data.authUser),
     "content-type": "application/json"
   };
+  if (data.delegatedSessionId) headers["x-goog-pageid"] = String(data.delegatedSessionId);
+  return headers;
+}
+
+function isSchedule403(error) {
+  const text = String(error && error.message || error || "");
+  return /403|PERMISSION_DENIED|permission denied|forbidden/i.test(text);
 }
 
 async function acquireStudioSession(page) {
@@ -644,9 +661,10 @@ if (require.main === module) {
 }
 
 module.exports = {
-  automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap,
+  automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap, parseChannelRoleType,
   studioPageState, waitForStudioChannel, assertExpectedChannel,
   makeContext, makeCreateVideoBody, makeMetadataBody, validateJob,
+  authHeaders, isSchedule403,
   safeDiagnosticUrl, redactDiagnostic, dolphinProfileStatus, dolphinProfileIsRunning,
   retryableDolphinStartError
 };

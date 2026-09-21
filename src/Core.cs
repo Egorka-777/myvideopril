@@ -65,7 +65,12 @@ namespace VideoBatch {
         public List<Binding> Narrations=new List<Binding>();
         public string Provider="windows", WindowsVoice="", ElevenVoice="", ProtectedKey="";
         public string ProtectedDolphinToken=""; public int DolphinPort=3001;
-        public int MaxParallelUploads=10;
+        public int MaxParallelUploads=3;
+        /// <summary>safe | normal | fast | custom | auto</summary>
+        public string HttpWorkerPreset="normal";
+        public int HttpWorkerCustomCount=3;
+        /// <summary>scheduled | immediate | private</summary>
+        public string YouTubeHttpPublishMode="scheduled";
         public string UploadStagingFolder=@"C:\VideoBatch\Upload";
         public List<YouTubeChannel> YouTubeChannels=new List<YouTubeChannel>();
         public string YouTubeSearchTitle="", YouTubeSearchUrl="", YouTubeSearchFilter="today";
@@ -92,6 +97,7 @@ namespace VideoBatch {
         /// <summary>random | period</summary>
         public string YouTubeScheduleMode="random";
         public int YouTubeScheduleMinMinutes=10, YouTubeScheduleMaxMinutes=60;
+        public int YouTubeScheduleLeadMinutes=30;
         public int YouTubeScheduleLongMinMinutes=1, YouTubeScheduleLongMaxMinutes=5;
         public int YouTubeSchedulePeriodMinGapMinutes=10;
         public string YouTubeScheduleFirstPublish="";
@@ -156,6 +162,13 @@ namespace VideoBatch {
             if(p.YouTubeScheduleMaxMinutes<p.YouTubeScheduleMinMinutes)p.YouTubeScheduleMaxMinutes=Math.Max(60,p.YouTubeScheduleMinMinutes+30);
             if(p.YouTubeScheduleLongMinMinutes<1)p.YouTubeScheduleLongMinMinutes=1;
             if(p.YouTubeScheduleLongMaxMinutes<p.YouTubeScheduleLongMinMinutes)p.YouTubeScheduleLongMaxMinutes=5;
+            if(p.YouTubeScheduleLeadMinutes<ScheduleGenerator.PreflightMinLeadMinutes)p.YouTubeScheduleLeadMinutes=ScheduleGenerator.DefaultLeadMinutes;
+            if(string.IsNullOrWhiteSpace(p.HttpWorkerPreset))p.HttpWorkerPreset="normal";
+            if(p.HttpWorkerCustomCount<1)p.HttpWorkerCustomCount=HttpWorkerSettings.DefaultWorkers;
+            if(p.HttpWorkerCustomCount>HttpWorkerSettings.MaxCustomWorkers)p.HttpWorkerCustomCount=HttpWorkerSettings.MaxCustomWorkers;
+            if(string.IsNullOrWhiteSpace(p.YouTubeHttpPublishMode))p.YouTubeHttpPublishMode="scheduled";
+            if(p.MaxParallelUploads<1)p.MaxParallelUploads=HttpWorkerSettings.DefaultWorkers;
+            if(p.MaxParallelUploads>HttpWorkerSettings.MaxCustomWorkers)p.MaxParallelUploads=HttpWorkerSettings.MaxCustomWorkers;
             if(p.YouTubeSearchTitleRu==null)p.YouTubeSearchTitleRu="";
             if(p.YouTubeSearchUrlRu==null)p.YouTubeSearchUrlRu="";
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchFilterRu))p.YouTubeSearchFilterRu="today";
