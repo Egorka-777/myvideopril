@@ -11,7 +11,8 @@ using System.Windows.Forms;
 
 namespace VideoBatch {
     public class TikTokItem {
-        public string Video="",Title="",Description="",Caption=""; // Caption — старое имя Title
+        public string Video="",Title="",Description="",Caption=""; // Title/Description остаются для старых settings.xml
+        public bool Published;
     }
     public class TikTokAccount {
         public bool Enabled=true;
@@ -21,10 +22,10 @@ namespace VideoBatch {
     }
 
     public class TikTokUploadWindow:Form {
-        const int COn=0,CName=1,CLang=2,CProfile=3,CIp=4,CVideo=5,CVideoPick=6,CTitle=7,CDesc=8,CStatus=9,CRemove=10;
+        const int COn=0,CName=1,CLang=2,CProfile=3,CIp=4,CVideo=5,CVideoPick=6,CCaption=7,CStatus=8,CRemove=9;
         static readonly string[] LangLabels=new[]{"RU","EN"};
         Preferences settings;DataGridView grid;RichTextBox log;
-        Button setup,add,importYt,files,titlesBtn,descBtn,musicBtn,check,upload,stop,marketRu,marketEn;
+        Button setup,add,importYt,files,captionsBtn,musicBtn,check,upload,stop,marketRu,marketEn;
         Label marketHint,runHint;CancellationTokenSource cancellation;CancellationTokenSource uploadCts;
         int uploadsInFlight;readonly HashSet<string> busyProfiles=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string logFile;string marketView="RU";readonly object saveLock=new object();readonly object uploadLock=new object();
@@ -63,19 +64,18 @@ namespace VideoBatch {
             add=Ui.Button("+ Аккаунт",AddRow);
             importYt=Ui.Button("Из YouTube",ImportFromYouTube);
             files=Ui.Button("Добавить видео",AssignVideosToSelectedAccount);
-            titlesBtn=Ui.Button("Заголовки",()=>EditTextBank(true));
-            descBtn=Ui.Button("Описание",()=>EditTextBank(false));
+            captionsBtn=Ui.Button("Подписи",EditCaptionBank);
             musicBtn=Ui.Button("Музыка",EditTikTokMusic);
             check=Ui.Button("Проверить",null);check.Click+=async(s,e)=>await CheckProfiles();
             var help=Ui.Button("?",()=>MessageBox.Show(this,
                 "Пространство TikTok — только короткие.\n\n"+
-                "Заголовки и Описание — две базы. При выборе видео берутся сами.\n"+
+                "Подписи — единая циклическая база. При выборе видео берутся по кругу.\n"+
                 "Из YouTube — копирует Profile ID.\n"+
                 "В профиле должен быть вход в TikTok.\n\n"+
                 "Выберите аккаунт → Добавить видео → Проверить → Загрузить.\n"+
                 "«⋯» — распределить видео по нескольким аккаунтам.",
                 "TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information));
-            tools.Controls.Add(setup);tools.Controls.Add(add);tools.Controls.Add(importYt);tools.Controls.Add(files);tools.Controls.Add(titlesBtn);tools.Controls.Add(descBtn);tools.Controls.Add(musicBtn);tools.Controls.Add(check);tools.Controls.Add(help);
+            tools.Controls.Add(setup);tools.Controls.Add(add);tools.Controls.Add(importYt);tools.Controls.Add(files);tools.Controls.Add(captionsBtn);tools.Controls.Add(musicBtn);tools.Controls.Add(check);tools.Controls.Add(help);
             root.Controls.Add(tools,0,3);
 
             grid=new DataGridView{Dock=DockStyle.Fill,BackgroundColor=Color.White,BorderStyle=BorderStyle.None,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,RowHeadersVisible=false,AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.None,SelectionMode=DataGridViewSelectionMode.FullRowSelect};
@@ -132,24 +132,23 @@ namespace VideoBatch {
             if(a.Items==null)a.Items=new List<TikTokItem>();
             foreach(var it in a.Items){
                 if(it==null)continue;
-                if(string.IsNullOrWhiteSpace(it.Title)&&!string.IsNullOrWhiteSpace(it.Caption))it.Title=it.Caption;
-                if(it.Description==null)it.Description="";
-                it.Caption=it.Title??"";
+                if(!string.IsNullOrWhiteSpace(it.Description)&&(string.IsNullOrWhiteSpace(it.Caption)||it.Description.Length>it.Caption.Length))it.Caption=it.Description;
+                if(string.IsNullOrWhiteSpace(it.Caption))it.Caption=it.Title;
+                it.Caption=(it.Caption??"").Trim();it.Description=it.Caption;
             }
             if(a.Items.Count==0&&(!string.IsNullOrWhiteSpace(a.Video)||!string.IsNullOrWhiteSpace(a.Title)||!string.IsNullOrWhiteSpace(a.Caption)))
-                a.Items.Add(new TikTokItem{Video=a.Video??"",Title=string.IsNullOrWhiteSpace(a.Title)?(a.Caption??""):a.Title,Description=a.Description??""});
+                a.Items.Add(new TikTokItem{Video=a.Video??"",Title=a.Title??"",Description=!string.IsNullOrWhiteSpace(a.Caption)?a.Caption:(a.Description??""),Caption=!string.IsNullOrWhiteSpace(a.Caption)?a.Caption:(a.Description??"")});
             if(a.Items.Count>0){
                 a.Video=a.Items[0].Video??"";
                 a.Title=a.Items[0].Title??"";
-                a.Description=a.Items[0].Description??"";
-                a.Caption=a.Title;
+                a.Caption=a.Items[0].Caption??"";a.Description=a.Caption;
             }
         }
         static string Short(string path){return string.IsNullOrWhiteSpace(path)?"":Path.GetFileName(path);}
         static string PackLabel(IEnumerable<string> values){
-            var list=(values??Enumerable.Empty<string>()).Select(x=>Store.CleanStoredTitle(x)).Where(x=>x.Length>0).ToList();
+            var list=(values??Enumerable.Empty<string>()).Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             if(list.Count==0)return "";
-            return list[0]; // без « · +N» в ячейке — иначе попадало обратно в Title
+            return list[0];
         }
         void BuildColumns(){
             grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="on",HeaderText="✓",Width=36});
@@ -159,8 +158,7 @@ namespace VideoBatch {
             grid.Columns.Add(new DataGridViewTextBoxColumn{Name="ip",HeaderText="IP",Width=100,ReadOnly=true});
             grid.Columns.Add(new DataGridViewTextBoxColumn{Name="video",HeaderText="Видео",Width=120,ReadOnly=true});
             grid.Columns.Add(new DataGridViewButtonColumn{Name="videoPick",HeaderText="",Text="…",UseColumnTextForButtonValue=true,Width=34});
-            grid.Columns.Add(new DataGridViewTextBoxColumn{Name="title",HeaderText="Заголовок",Width=160});
-            grid.Columns.Add(new DataGridViewTextBoxColumn{Name="desc",HeaderText="Описание",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,MinimumWidth=140});
+            grid.Columns.Add(new DataGridViewTextBoxColumn{Name="caption",HeaderText="Подпись TikTok",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,MinimumWidth=260});
             grid.Columns.Add(new DataGridViewTextBoxColumn{Name="status",HeaderText="Статус",Width=120,ReadOnly=true});
             grid.Columns.Add(new DataGridViewButtonColumn{Name="remove",HeaderText="",Text="×",UseColumnTextForButtonValue=true,Width=34});
         }
@@ -168,22 +166,19 @@ namespace VideoBatch {
             a.Market=NormMarket(a.Market);if(a.Items==null)a.Items=new List<TikTokItem>();SyncPrimary(a);
             string videoLabel=a.Items.Count>1?(a.Items.Count+" файлов"):Short(a.Video);
             grid.Rows.Add(a.Enabled,a.Name,a.Market,a.ProfileId,a.ExpectedIp,videoLabel,"…",
-                PackLabel(a.Items.Select(x=>x.Title)),PackLabel(a.Items.Select(x=>x.Description)),
+                PackLabel(a.Items.Select(x=>x.Caption)),
                 string.IsNullOrWhiteSpace(a.Status)?"Готов":a.Status,"×");
             var row=grid.Rows[grid.Rows.Count-1];row.Tag=a;
             row.Cells[CVideo].ToolTipText=a.Items.Count>1?string.Join(Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+Short(it.Video))):a.Video;
-            row.Cells[CTitle].ToolTipText=string.Join(Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+it.Title));
-            row.Cells[CDesc].ToolTipText=string.Join(Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+it.Description));
+            row.Cells[CCaption].ToolTipText=string.Join(Environment.NewLine+Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+it.Caption));
         }
         void RefreshRowDisplay(DataGridViewRow row){
             var a=(TikTokAccount)row.Tag;SyncPrimary(a);
             row.Cells[COn].Value=a.Enabled;
             row.Cells[CVideo].Value=a.Items!=null&&a.Items.Count>1?(a.Items.Count+" файлов"):Short(a.Video);
-            row.Cells[CTitle].Value=PackLabel(a.Items.Select(x=>x.Title));
-            row.Cells[CDesc].Value=PackLabel(a.Items.Select(x=>x.Description));
+            row.Cells[CCaption].Value=PackLabel(a.Items.Select(x=>x.Caption));
             row.Cells[CVideo].ToolTipText=a.Items!=null&&a.Items.Count>1?string.Join(Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+Short(it.Video))):a.Video;
-            row.Cells[CTitle].ToolTipText=string.Join(Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+it.Title));
-            row.Cells[CDesc].ToolTipText=string.Join(Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+it.Description));
+            row.Cells[CCaption].ToolTipText=string.Join(Environment.NewLine+Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+it.Caption));
         }
         void AddRow(){SaveGrid();AddGridRow(new TikTokAccount{Name=(marketView=="EN"?"Account ":"Аккаунт ")+(grid.Rows.Count+1),Market=marketView});SaveGrid();RefreshMarketUi();}
         void ImportFromYouTube(){
@@ -205,15 +200,14 @@ namespace VideoBatch {
             Save();LoadGrid();
             Write("Импорт из YouTube: добавлено "+added+" аккаунтов (уже существующие Profile ID пропущены).");
         }
-        List<string> TitleBank(){return marketView=="EN"?settings.TikTokCaptionBankEn:settings.TikTokCaptionBankRu;}
-        List<string> DescBank(){return marketView=="EN"?settings.TikTokDescriptionBankEn:settings.TikTokDescriptionBankRu;}
-        void EditTextBank(bool titles){
+        List<string> CaptionBank(){return marketView=="EN"?settings.TikTokDescriptionBankEn:settings.TikTokFullCaptionBankRu;}
+        void EditCaptionBank(){
             SaveGrid();
-            var bank=titles?TitleBank():DescBank();
-            using(var dlg=new TitleBankDialog((titles?"Заголовки":"Описание")+" · TikTok · "+MarketLabel(marketView),bank)){
+            var bank=CaptionBank();
+            using(var dlg=new TitleBankDialog("Подписи · TikTok · "+MarketLabel(marketView),bank)){
                 if(dlg.ShowDialog(this)!=DialogResult.OK)return;
                 bank.Clear();bank.AddRange(dlg.Titles??new List<string>());Save();
-                Write("["+MarketLabel(marketView)+"] "+(titles?"заголовки":"описания")+": "+bank.Count+" шт.");
+                Write("["+MarketLabel(marketView)+"] подписи: "+bank.Count+" шт.");
             }
         }
         void EditTikTokMusic(){
@@ -223,21 +217,12 @@ namespace VideoBatch {
                 Write("["+MarketLabel(marketView)+"] музыка TikTok: "+(marketView=="EN"?settings.TikTokMusicEn:settings.TikTokMusicRu).Count+" трек(ов).");
             }
         }
-        List<string> AllocFromBank(List<string> bank,int count,string label){
-            if(count<=0)return new List<string>();
-            if(bank.Count==0)throw new Exception(label+" TikTok ("+MarketLabel(marketView)+") пусты. Сначала нажмите «"+label+"».");
-            if(bank.Count==1){
-                string one=bank[0];
-                var list=new List<string>();
-                for(int i=0;i<count;i++)list.Add(count<=1?one:(one+" ("+(i+1)+")"));
-                return list;
-            }
-            if(bank.Count<count)throw new Exception(label+": в базе "+bank.Count+", нужно "+count+".");
-            var taken=bank.Take(count).ToList();bank.RemoveRange(0,count);Save();
-            return taken;
+        List<string> AllocCaptions(int count){
+            int cursor=marketView=="EN"?settings.TikTokCaptionCursorEn:settings.TikTokCaptionCursorRu;
+            var result=TikTokCaptionTemplates.Allocate(CaptionBank(),count,ref cursor);
+            if(marketView=="EN")settings.TikTokCaptionCursorEn=cursor;else settings.TikTokCaptionCursorRu=cursor;
+            Save();return result;
         }
-        List<string> AllocTitles(int count){return AllocFromBank(TitleBank(),count,"Заголовки");}
-        List<string> AllocDescriptions(int count){return AllocFromBank(DescBank(),count,"Описание");}
         void CellClick(object sender,DataGridViewCellEventArgs e){
             if(e.RowIndex<0)return;
             var row=grid.Rows[e.RowIndex];var a=(TikTokAccount)row.Tag;
@@ -245,9 +230,9 @@ namespace VideoBatch {
                 var p=Ui.File(this,"Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все файлы|*.*");
                 if(p==null)return;
                 if(a.Items!=null&&a.Items.Count>1&&MessageBox.Show(this,"Уже пачка из "+a.Items.Count+". Заменить?","TikTok",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-                string title,desc;
-                try{title=AllocTitles(1)[0];desc=AllocDescriptions(1)[0];}catch(Exception ex){Ui.Error(this,ex);return;}
-                a.Items=new List<TikTokItem>{new TikTokItem{Video=p,Title=title,Description=desc,Caption=title}};
+                string caption;
+                try{caption=AllocCaptions(1)[0];}catch(Exception ex){Ui.Error(this,ex);return;}
+                a.Items=new List<TikTokItem>{new TikTokItem{Video=p,Description=caption,Caption=caption}};
                 a.Enabled=true;row.Cells[COn].Value=true;SyncPrimary(a);RefreshRowDisplay(row);
             } else if(e.ColumnIndex==CRemove) grid.Rows.RemoveAt(e.RowIndex);
             SaveGrid();RefreshMarketUi();
@@ -313,16 +298,15 @@ namespace VideoBatch {
         }
         void AssignVideoPackToAccount(TikTokAccount acc,DataGridViewRow row,string[] filePaths){
             var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
-            List<string> titles,descs;
-            try{titles=AllocTitles(paths.Length);descs=AllocDescriptions(paths.Length);}catch(Exception ex){throw;}
             if(acc.Items!=null&&acc.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
                 if(MessageBox.Show(this,"«"+acc.Name+"» уже имеет видео. Заменить новой пачкой ("+paths.Length+")?","TikTok",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             }
+            List<string> captions=AllocCaptions(paths.Length);
             var items=new List<TikTokItem>();
-            for(int i=0;i<paths.Length;i++)items.Add(new TikTokItem{Video=paths[i],Title=i<titles.Count?titles[i]:"",Description=i<descs.Count?descs[i]:"",Caption=i<titles.Count?titles[i]:""});
+            for(int i=0;i<paths.Length;i++)items.Add(new TikTokItem{Video=paths[i],Description=captions[i],Caption=captions[i]});
             acc.Items=items;acc.Enabled=true;acc.Market=marketView;acc.Status=ChannelStatus.Ready;
             SyncPrimary(acc);RefreshRowDisplay(row);
-            Write("«"+acc.Name+"»: "+paths.Length+" видео, заголовки и описания из базы.");
+            Write("«"+acc.Name+"»: "+paths.Length+" видео, подписи назначены по кругу.");
         }
         void AssignVideosToAccounts(){
             using(var d=new OpenFileDialog{Multiselect=true,Filter="Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все файлы|*.*"}){
@@ -336,19 +320,19 @@ namespace VideoBatch {
                     foreach(var g in assign.Result.GroupBy(x=>x.Account)){
                         var acc=g.Key;
                         var vids=g.Select(x=>x.Path).ToList();
-                        List<string> titles,descs;
-                        try{titles=AllocTitles(vids.Count);descs=AllocDescriptions(vids.Count);}catch(Exception ex){Ui.Error(this,ex);return;}
                         if(acc.Items!=null&&acc.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
                             if(MessageBox.Show(this,"«"+acc.Name+"» уже имеет видео. Заменить?","TikTok",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)continue;
                         }
+                        List<string> captions;
+                        try{captions=AllocCaptions(vids.Count);}catch(Exception ex){Ui.Error(this,ex);return;}
                         var items=new List<TikTokItem>();
-                        for(int i=0;i<vids.Count;i++)items.Add(new TikTokItem{Video=vids[i],Title=i<titles.Count?titles[i]:"",Description=i<descs.Count?descs[i]:"",Caption=i<titles.Count?titles[i]:""});
+                        for(int i=0;i<vids.Count;i++)items.Add(new TikTokItem{Video=vids[i],Description=captions[i],Caption=captions[i]});
                         acc.Items=items;acc.Enabled=true;acc.Market=marketView;SyncPrimary(acc);
                     }
                     SaveGrid();LoadGrid();
                     foreach(DataGridViewRow row in grid.Rows)if(((TikTokAccount)row.Tag).Enabled)row.Cells[COn].Value=true;
                     SaveGrid();
-                    Write("["+MarketLabel(marketView)+"] видео назначены, заголовки и описания из базы.");
+                    Write("["+MarketLabel(marketView)+"] видео назначены, подписи распределены по кругу.");
                 }
             }
         }
@@ -359,7 +343,7 @@ namespace VideoBatch {
             if(sel.Count>0)return sel;
             return VisibleRows().Where(r=>{
                 var a=(TikTokAccount)r.Tag;SyncPrimary(a);
-                return a.Items!=null&&a.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Title)&&!string.IsNullOrWhiteSpace(it.Description));
+                return a.Items!=null&&a.Items.Any(it=>!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption));
             }).ToList();
         }
         void Configure(){using(var d=new DolphinSetupDialog(settings.ProtectedDolphinToken,settings.DolphinPort,settings.MaxParallelUploads,settings.UploadStagingFolder))if(d.ShowDialog(this)==DialogResult.OK){settings.ProtectedDolphinToken=WindowsSupport.Protect(d.Token);settings.DolphinPort=d.Port;settings.MaxParallelUploads=d.MaxParallel;settings.UploadStagingFolder=d.StagingFolder;d.Token="";Save();Write("Настройки Dolphin сохранены.");}}
@@ -377,14 +361,13 @@ namespace VideoBatch {
                 a.ProfileId=Convert.ToString(row.Cells[CProfile].Value??"").Trim();
                 a.Status=Convert.ToString(row.Cells[CStatus].Value??"");
                 if(a.Items.Count<=1){
-                    string cellTitle=Store.CleanStoredTitle(Convert.ToString(row.Cells[CTitle].Value??""));
-                    string cellDesc=Convert.ToString(row.Cells[CDesc].Value??"").Trim();
-                    a.Title=cellTitle;a.Description=cellDesc;a.Caption=cellTitle;
-                    if(a.Items.Count==1){a.Items[0].Title=cellTitle;a.Items[0].Description=cellDesc;a.Items[0].Caption=cellTitle;}
-                    else if(!string.IsNullOrWhiteSpace(cellTitle)||!string.IsNullOrWhiteSpace(cellDesc)||!string.IsNullOrWhiteSpace(a.Video))
-                        a.Items.Add(new TikTokItem{Video=a.Video??"",Title=cellTitle,Description=cellDesc,Caption=cellTitle});
+                    string cellCaption=Convert.ToString(row.Cells[CCaption].Value??"").Trim();
+                    a.Description=cellCaption;a.Caption=cellCaption;
+                    if(a.Items.Count==1){a.Items[0].Description=cellCaption;a.Items[0].Caption=cellCaption;}
+                    else if(!string.IsNullOrWhiteSpace(cellCaption)||!string.IsNullOrWhiteSpace(a.Video))
+                        a.Items.Add(new TikTokItem{Video=a.Video??"",Description=cellCaption,Caption=cellCaption});
                 } else {
-                    foreach(var it in a.Items)if(it!=null){it.Title=Store.CleanStoredTitle(it.Title);it.Caption=it.Title;}
+                    foreach(var it in a.Items)if(it!=null){if(string.IsNullOrWhiteSpace(it.Caption))it.Caption=it.Description??"";it.Caption=(it.Caption??"").Trim();it.Description=it.Caption;}
                 }
                 SyncPrimary(a);visible.Add(a);
             }
@@ -396,7 +379,7 @@ namespace VideoBatch {
             if(moved.Count>0)BeginInvoke(new Action(()=>{LoadGrid();Write("Аккаунты перенесены на другой рынок: "+moved.Count+".");}));
         }
         void Busy(bool value){
-            foreach(var b in new[]{setup,add,importYt,files,titlesBtn,descBtn,musicBtn,check,upload,marketRu,marketEn})b.Enabled=!value;
+            foreach(var b in new[]{setup,add,importYt,files,captionsBtn,musicBtn,check,upload,marketRu,marketEn})b.Enabled=!value;
             grid.Enabled=!value;
             stop.Visible=value||uploadsInFlight>0;stop.Enabled=value||uploadsInFlight>0;
             if(runHint!=null){runHint.Visible=value;runHint.Text=value?"Идёт проверка…":"";}
@@ -404,7 +387,7 @@ namespace VideoBatch {
         void UploadBusyStart(){
             uploadsInFlight++;upload.Enabled=true;stop.Visible=true;stop.Enabled=true;
             check.Enabled=false;setup.Enabled=false;marketRu.Enabled=false;marketEn.Enabled=false;
-            add.Enabled=true;importYt.Enabled=true;files.Enabled=true;titlesBtn.Enabled=true;descBtn.Enabled=true;musicBtn.Enabled=true;grid.Enabled=true;
+            add.Enabled=true;importYt.Enabled=true;files.Enabled=true;captionsBtn.Enabled=true;musicBtn.Enabled=true;grid.Enabled=true;
             if(runHint!=null){runHint.Visible=true;runHint.Text="Идёт загрузка ("+uploadsInFlight+"). Можно снова нажать «Загрузить» для другого аккаунта.";}
         }
         void UploadBusyEnd(){
@@ -431,7 +414,7 @@ namespace VideoBatch {
             DolphinRunner.CheckFilesTikTok();
             if(string.IsNullOrWhiteSpace(WindowsSupport.Unprotect(settings.ProtectedDolphinToken)))throw new Exception("Шаг 1: укажите API-токен Dolphin.");
             var rows=forUpload?UploadTargets():Selected();
-            if(rows.Count==0)throw new Exception(forUpload?"Отметьте аккаунты с видео, заголовком и описанием.":"Отметьте аккаунты галочкой.");
+            if(rows.Count==0)throw new Exception(forUpload?"Отметьте аккаунты с видео и подписью.":"Отметьте аккаунты галочкой.");
             foreach(var row in rows){
                 var a=(TikTokAccount)row.Tag;
                 if(string.IsNullOrWhiteSpace(a.ProfileId))throw new Exception(a.Name+": укажите Profile ID.");
@@ -474,18 +457,24 @@ namespace VideoBatch {
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}
             finally{Finish();}
         }
-        async Task<UploadRunResult> RunUploadWithRetry(UploadJob job,TikTokAccount acc,DataGridViewRow row,CancellationToken ct,string token){
+        async Task<UploadRunResult> RunUploadWithRetry(UploadJob job,TikTokAccount acc,DataGridViewRow row,List<TikTokItem> items,CancellationToken ct,string token){
             const int maxAttempts=2;
             Exception last=null;
             for(int attempt=1;attempt<=maxAttempts;attempt++){
                 try{
                     return await DolphinRunner.RunTikTok(job,m=>{
                         if(!string.IsNullOrWhiteSpace(m.ip))PropagateIp(acc.ProfileId,m.ip);
+                        if(m.stage=="item_done"&&m.packIndex>0&&m.packIndex<=items.Count){
+                            items[m.packIndex-1].Published=true;
+                            SafeSave();
+                        }
                         if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
                     },ct).ConfigureAwait(false);
                 }catch(OperationCanceledException){throw;}
                 catch(Exception e){
                     last=e;
+                    // После открытия TikTok повтор может создать дубль: оставляем профиль для ручной проверки.
+                    if(e is UploadException uncertain&&uncertain.KeptOpen)break;
                     if(attempt>=maxAttempts)break;
                     Write(acc.Name+": ошибка, перезапуск профиля (попытка "+attempt+"/"+maxAttempts+")…");
                     Status(row,ChannelStatus.Preparing);
@@ -504,20 +493,18 @@ namespace VideoBatch {
                 var packs=new List<(DataGridViewRow row,TikTokAccount acc,List<TikTokItem> items)>();
                 foreach(var row in rows){
                     var a=(TikTokAccount)row.Tag;SyncPrimary(a);
-                    var items=(a.Items??new List<TikTokItem>()).Where(it=>!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Title)&&!string.IsNullOrWhiteSpace(it.Description)).ToList();
-                    if(items.Count==0)throw new Exception(a.Name+": нет видео + заголовок + описание.");
+                    var items=(a.Items??new List<TikTokItem>()).Where(it=>!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption)).ToList();
+                    if(items.Count==0){Write(a.Name+": нет ожидающих публикации видео.");continue;}
                     foreach(var it in items){
                         if(!File.Exists(it.Video))throw new Exception(a.Name+": файл не найден — "+it.Video);
-                        it.Title=Store.CleanStoredTitle(it.Title);it.Caption=it.Title;
-                        if(string.IsNullOrWhiteSpace(it.Title))throw new Exception(a.Name+": пустой заголовок.");
-                        string uploadTitle=TitleCleaner.CleanForUpload(it.Title);
-                        if(string.IsNullOrWhiteSpace(uploadTitle))throw new Exception(a.Name+": пустой заголовок после очистки.");
-                        if(string.IsNullOrWhiteSpace(it.Description))throw new Exception(a.Name+": пустое описание.");
-                        if(it.Description.Length>2200)it.Description=it.Description.Substring(0,2200).Trim();
+                        it.Caption=(it.Caption??"").Trim();it.Description=it.Caption;
+                        if(string.IsNullOrWhiteSpace(it.Caption))throw new Exception(a.Name+": пустая подпись.");
+                        if(it.Caption.Length>2200)throw new Exception(a.Name+": подпись длиннее 2200 символов — сократите её в базе подписей.");
                     }
                     packs.Add((row,a,items));
                     Status(row,ChannelStatus.Preparing);
                 }
+                if(packs.Count==0){Write("Нет ожидающих публикации видео.");return;}
                 List<(DataGridViewRow row,TikTokAccount acc,List<TikTokItem> items)> free;
                 lock(uploadLock){free=packs.Where(p=>!busyProfiles.Contains((p.acc.ProfileId??"").Trim())).ToList();}
                 if(free.Count==0){MessageBox.Show(this,"Выбранные аккаунты уже загружаются.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
@@ -528,25 +515,30 @@ namespace VideoBatch {
                 }
                 var ct=uploadCts.Token;token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 UploadBusyStart();uiStarted=true;
-                Write("["+MarketLabel(marketView)+"] старт TikTok: "+free.Count+" акк.");
+                int parallel=Math.Max(1,Math.Min(2,settings.TikTokMaxParallelUploads));
+                Write("["+MarketLabel(marketView)+"] старт TikTok: "+free.Count+" акк. · одновременно "+parallel+".");
 
                 var errors=new ConcurrentBag<string>();
+                using(var gate=new SemaphoreSlim(parallel,parallel)){
                 var tasks=free.Select(pack=>Task.Run(async()=>{
                     var row=pack.row;var a=pack.acc;var pid=(a.ProfileId??"").Trim();
+                    bool entered=false;
                     try{
+                        await gate.WaitAsync(ct).ConfigureAwait(false);entered=true;
                         ct.ThrowIfCancellationRequested();
                         Status(row,ChannelStatus.Uploading);
                         var items=pack.items.Select(it=>new UploadItemJob{
                             video=it.Video,
-                            title=TitleCleaner.CleanForUpload(it.Title),
-                            description=it.Description
+                            caption=it.Caption,
+                            description=it.Caption
                         }).ToArray();
                         var job=new UploadJob{
                             token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,expectedIp=a.ExpectedIp,
                             items=items,skipQueueDelay=true,checkOnly=false,
-                            video=items[0].video,title=items[0].title
+                            video=items[0].video
                         };
-                        var result=await RunUploadWithRetry(job,a,row,ct,token).ConfigureAwait(false);
+                        var result=await RunUploadWithRetry(job,a,row,pack.items,ct,token).ConfigureAwait(false);
+                        foreach(var it in pack.items)it.Published=true;
                         a.Status=ChannelStatus.Published;
                         Status(row,pack.items.Count>1?("Опубликовано "+pack.items.Count+" ✓"):(string.IsNullOrWhiteSpace(result.Url)?"Опубликовано ✓":"Опубликовано ✓ "+result.Url));
                         if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(a.ProfileId,result.Ip);
@@ -556,10 +548,11 @@ namespace VideoBatch {
                         a.Status=ChannelStatus.Error;
                         string msg=e.Message+(e is UploadException ue&&ue.KeptOpen?" (профиль открыт)":"");
                         errors.Add(a.Name+": "+msg);Status(row,ChannelStatus.Error);
-                    }finally{lock(uploadLock)busyProfiles.Remove(pid);}
+                    }finally{if(entered)gate.Release();lock(uploadLock)busyProfiles.Remove(pid);}
                 })).ToArray();
 
                 await Task.WhenAll(tasks).ConfigureAwait(true);
+                }
                 if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"TikTok",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 else Write("["+MarketLabel(marketView)+"] загрузка TikTok завершена.");
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}

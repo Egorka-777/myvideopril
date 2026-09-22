@@ -89,6 +89,11 @@ namespace VideoBatch {
         public string TikTokMarketView="RU";
         public List<string> TikTokCaptionBankRu=new List<string>(), TikTokCaptionBankEn=new List<string>();
         public List<string> TikTokDescriptionBankRu=new List<string>(), TikTokDescriptionBankEn=new List<string>();
+        // Полные подписи: старые банки заголовков и описаний сохраняются для совместимости.
+        public List<string> TikTokFullCaptionBankRu=new List<string>();
+        public int TikTokCaptionCursorRu, TikTokCaptionCursorEn;
+        public int TikTokMaxParallelUploads=1;
+        public int WatchMaxParallelProfiles=1;
         public List<string> TikTokMusicRu=new List<string>(), TikTokMusicEn=new List<string>();
         /// <summary>Последний выбранный Profile ID (Dolphin) для быстрого «Добавить видео».</summary>
         public string LastSelectedYouTubeProfileIdRu="", LastSelectedYouTubeProfileIdEn="";
@@ -102,6 +107,42 @@ namespace VideoBatch {
         public int YouTubeSchedulePeriodMinGapMinutes=10;
         public string YouTubeScheduleFirstPublish="";
         public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
+    }
+
+    public static class TikTokCaptionTemplates {
+        public const string HashTags="#BinoDex #обучениетрейдингу #pocketoption #трейдинг #aitrading";
+
+        public static List<string> RussianDefaults(){return new List<string>{
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nТестирую ИИ трейдинг и AI-инструменты для анализа рынка. В этом видео — Binodex: обзор платформы, сигналы, стратегия и мой опыт использования. Показываю трейдинг для начинающих, обучение трейдингу с нуля и разбираю, как работает ИИ бот для трейдинга и анализа бинарных опционов.\n\nBinodex / Бинодекс • Binodex трейдинг • Binodex обзор • Binodex сигналы • ИИ трейдинг • трейдинг с нуля\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nПоказываю, как использовать ИИ трейдинг и AI-инструменты для анализа рынка. В ролике разбираю Binodex: обзор платформы, сигналы, стратегия и личный опыт. Объясняю трейдинг для начинающих, обучение трейдингу с нуля и работу ИИ бота для анализа бинарных опционов.\n\nBinodex обзор • Binodex сигналы • Binodex трейдинг • Бинодекс • ИИ трейдинг • трейдинг с нуля\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nВ этом видео тестирую Binodex и инструменты для ИИ трейдинга. Показываю платформу, сигналы и стратегию, делюсь опытом использования. Также разбираю обучение трейдингу с нуля, трейдинг для начинающих и принцип работы AI-бота для анализа рынка и бинарных опционов.\n\nБинодекс • Binodex обзор • Binodex трейдинг • Binodex сигналы • трейдинг с нуля • ИИ трейдинг\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nРазбираю Binodex и возможности AI-инструментов для трейдинга. В видео показываю обзор платформы, торговые сигналы, стратегию и свой опыт. Материал подойдёт тем, кто изучает трейдинг с нуля и хочет понять, как ИИ бот анализирует рынок бинарных опционов.\n\nBinodex трейдинг • Binodex обзор • Бинодекс • ИИ трейдинг • Binodex сигналы • трейдинг с нуля\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nТестирую платформу Binodex вместе с ИИ-инструментами анализа рынка. Рассматриваю сигналы, стратегию и основные функции платформы. Объясняю трейдинг для начинающих и показываю, как AI-бот применяется в анализе бинарных опционов.\n\nBinodex сигналы • Binodex обзор • Binodex трейдинг • ИИ трейдинг • Бинодекс • трейдинг с нуля\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nПроверяю, как работает Binodex для анализа рынка и ИИ трейдинга. В ролике — обзор платформы, сигналы, торговая стратегия и личный опыт. Показываю основы трейдинга с нуля и работу ИИ бота с бинарными опционами.\n\nИИ трейдинг • Binodex трейдинг • Binodex сигналы • Binodex обзор • Бинодекс • трейдинг с нуля\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nЗнакомлюсь с платформой Binodex и тестирую её AI-инструменты. Разбираю торговые сигналы, стратегию и возможности анализа рынка. Видео рассчитано на начинающих, которые изучают трейдинг с нуля и применение ИИ бота в бинарных опционах.\n\nBinodex / Бинодекс • Binodex обзор • ИИ трейдинг • Binodex сигналы • Binodex трейдинг • трейдинг с нуля\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nВ видео показываю Binodex, сигналы платформы и стратегию работы с рынком. Тестирую ИИ трейдинг, делюсь своим опытом и объясняю базовые принципы для начинающих. Отдельно разбираю, как AI-бот анализирует рынок бинарных опционов.\n\nBinodex сигналы • ИИ трейдинг • Binodex обзор • Бинодекс • трейдинг с нуля • Binodex трейдинг\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nДелаю обзор Binodex и проверяю инструменты ИИ для анализа рынка. Показываю сигналы, торговую стратегию и практическое использование платформы. Объясняю трейдинг с нуля и возможности AI-бота для работы с бинарными опционами.\n\nBinodex обзор • Бинодекс • ИИ трейдинг • Binodex трейдинг • трейдинг с нуля • Binodex сигналы\n\n"+HashTags,
+            "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nИзучаю Binodex и тестирую AI-инструменты для трейдинга. В этом ролике рассматриваю платформу, сигналы, стратегию и анализ рынка. Показываю понятный разбор для начинающих и объясняю работу ИИ бота с бинарными опционами.\n\nТрейдинг с нуля • ИИ трейдинг • Binodex сигналы • Binodex трейдинг • Binodex обзор • Бинодекс\n\n"+HashTags
+        };}
+
+        public static List<string> Allocate(IList<string> bank,int count,ref int cursor){
+            if(bank==null||bank.Count==0)throw new Exception("Банк подписей TikTok пуст.");
+            var clean=bank.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            if(clean.Count==0)throw new Exception("Банк подписей TikTok пуст.");
+            cursor=((cursor%clean.Count)+clean.Count)%clean.Count;
+            var result=new List<string>();
+            for(int i=0;i<count;i++)result.Add(clean[(cursor+i)%clean.Count]);
+            cursor=(cursor+count)%clean.Count;
+            return result;
+        }
+
+        public static bool RunSelfTests(){
+            var bank=RussianDefaults();
+            if(bank.Count!=10||bank.Distinct(StringComparer.Ordinal).Count()!=10)return false;
+            if(bank.Any(x=>x.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries).Last().Trim()!=HashTags))return false;
+            int cursor=0;var first=Allocate(bank,10,ref cursor);var next=Allocate(bank,1,ref cursor);
+            return first.Count==10&&next.Count==1&&next[0]==first[0]&&bank.Count==10;
+        }
     }
     public static class Store {
         public static string Root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"VideoBatchDesktop");
@@ -169,6 +210,10 @@ namespace VideoBatch {
             if(string.IsNullOrWhiteSpace(p.YouTubeHttpPublishMode))p.YouTubeHttpPublishMode="scheduled";
             if(p.MaxParallelUploads<1)p.MaxParallelUploads=HttpWorkerSettings.DefaultWorkers;
             if(p.MaxParallelUploads>HttpWorkerSettings.MaxCustomWorkers)p.MaxParallelUploads=HttpWorkerSettings.MaxCustomWorkers;
+            if(p.TikTokMaxParallelUploads<1)p.TikTokMaxParallelUploads=1;
+            if(p.TikTokMaxParallelUploads>2)p.TikTokMaxParallelUploads=2;
+            if(p.WatchMaxParallelProfiles<1)p.WatchMaxParallelProfiles=1;
+            if(p.WatchMaxParallelProfiles>2)p.WatchMaxParallelProfiles=2;
             if(p.YouTubeSearchTitleRu==null)p.YouTubeSearchTitleRu="";
             if(p.YouTubeSearchUrlRu==null)p.YouTubeSearchUrlRu="";
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchFilterRu))p.YouTubeSearchFilterRu="today";
@@ -205,12 +250,17 @@ namespace VideoBatch {
             if(p.TikTokCaptionBankEn==null)p.TikTokCaptionBankEn=new List<string>();
             if(p.TikTokDescriptionBankRu==null)p.TikTokDescriptionBankRu=new List<string>();
             if(p.TikTokDescriptionBankEn==null)p.TikTokDescriptionBankEn=new List<string>();
+            if(p.TikTokFullCaptionBankRu==null)p.TikTokFullCaptionBankRu=new List<string>();
             if(p.TikTokMusicRu==null)p.TikTokMusicRu=new List<string>();
             if(p.TikTokMusicEn==null)p.TikTokMusicEn=new List<string>();
             p.TikTokCaptionBankRu=p.TikTokCaptionBankRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.TikTokCaptionBankEn=p.TikTokCaptionBankEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.TikTokDescriptionBankRu=p.TikTokDescriptionBankRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.TikTokDescriptionBankEn=p.TikTokDescriptionBankEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            p.TikTokFullCaptionBankRu=p.TikTokFullCaptionBankRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            if(p.TikTokFullCaptionBankRu.Count==0)p.TikTokFullCaptionBankRu=TikTokCaptionTemplates.RussianDefaults();
+            p.TikTokCaptionCursorRu=((p.TikTokCaptionCursorRu%p.TikTokFullCaptionBankRu.Count)+p.TikTokFullCaptionBankRu.Count)%p.TikTokFullCaptionBankRu.Count;
+            p.TikTokCaptionCursorEn=p.TikTokDescriptionBankEn.Count==0?0:((p.TikTokCaptionCursorEn%p.TikTokDescriptionBankEn.Count)+p.TikTokDescriptionBankEn.Count)%p.TikTokDescriptionBankEn.Count;
             p.TikTokMusicRu=p.TikTokMusicRu.Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             p.TikTokMusicEn=p.TikTokMusicEn.Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             // Если музыка TikTok ещё пустая — один раз копируем из коротких (общая база).
@@ -220,23 +270,23 @@ namespace VideoBatch {
                 if(a==null)continue;
                 if(string.IsNullOrWhiteSpace(a.Market)||(a.Market!="RU"&&a.Market!="EN"))a.Market="RU";
                 if(a.Items==null)a.Items=new List<TikTokItem>();
-                // Старое поле Caption → Title
-                if(string.IsNullOrWhiteSpace(a.Title)&&!string.IsNullOrWhiteSpace(a.Caption))a.Title=a.Caption;
+                if(!string.IsNullOrWhiteSpace(a.Description)&&(string.IsNullOrWhiteSpace(a.Caption)||a.Description.Length>a.Caption.Length))a.Caption=a.Description;
+                if(string.IsNullOrWhiteSpace(a.Caption))a.Caption=a.Title;
                 foreach(var it in a.Items){
                     if(it==null)continue;
-                    if(string.IsNullOrWhiteSpace(it.Title)&&!string.IsNullOrWhiteSpace(it.Caption))it.Title=it.Caption;
-                    it.Title=CleanStoredTitle(it.Title);
-                    if(it.Description==null)it.Description="";
-                    it.Caption=it.Title;
+                    if(!string.IsNullOrWhiteSpace(it.Description)&&(string.IsNullOrWhiteSpace(it.Caption)||it.Description.Length>it.Caption.Length))it.Caption=it.Description;
+                    if(string.IsNullOrWhiteSpace(it.Caption))it.Caption=it.Title;
+                    it.Caption=(it.Caption??"").Trim();
+                    it.Description=it.Caption;
                 }
                 if(a.Items.Count==0&&(!string.IsNullOrWhiteSpace(a.Video)||!string.IsNullOrWhiteSpace(a.Title)||!string.IsNullOrWhiteSpace(a.Caption)))
-                    a.Items.Add(new TikTokItem{Video=a.Video??"",Title=CleanStoredTitle(string.IsNullOrWhiteSpace(a.Title)?(a.Caption??""):a.Title),Description=a.Description??""});
+                    a.Items.Add(new TikTokItem{Video=a.Video??"",Title=a.Title??"",Description=a.Caption??"",Caption=a.Caption??""});
                 if(a.Items.Count>0){
                     a.Video=a.Items[0].Video??"";
                     a.Title=a.Items[0].Title??"";
-                    a.Description=a.Items[0].Description??"";
-                    a.Caption=a.Title;
-                } else a.Title=CleanStoredTitle(a.Title);
+                    a.Caption=a.Items[0].Caption??"";
+                    a.Description=a.Caption;
+                }
             }
             // Одноразовый перенос старых общих полей поиска в RU, если раздельные ещё пустые.
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchTitleRu)&&string.IsNullOrWhiteSpace(p.YouTubeSearchTitleEn)&&!string.IsNullOrWhiteSpace(p.YouTubeSearchTitle))
@@ -361,7 +411,17 @@ namespace VideoBatch {
         }
         public static Preferences Load(){Directory.CreateDirectory(Root);Preferences p;if(!File.Exists(Config)){p=new Preferences();Normalize(p);return p;}using(var f=File.OpenRead(Config))p=(Preferences)new XmlSerializer(typeof(Preferences)).Deserialize(f);
             if(p.SettingsVersion<1&&!File.Exists(Config+".v3-backup"))File.Copy(Config,Config+".v3-backup");Normalize(p);return p;}
-        public static void Save(Preferences p){Directory.CreateDirectory(Root);string temp=Config+".tmp";using(var f=File.Create(temp))new XmlSerializer(typeof(Preferences)).Serialize(f,p);if(File.Exists(Config))File.Replace(temp,Config,null);else File.Move(temp,Config);}
+        static readonly object SaveLock=new object();
+        public static void Save(Preferences p){
+            lock(SaveLock){
+                Directory.CreateDirectory(Root);
+                string temp=Config+"."+Guid.NewGuid().ToString("N")+".tmp";
+                try{
+                    using(var f=File.Create(temp))new XmlSerializer(typeof(Preferences)).Serialize(f,p);
+                    if(File.Exists(Config))File.Replace(temp,Config,null);else File.Move(temp,Config);
+                }finally{try{if(File.Exists(temp))File.Delete(temp);}catch{}}
+            }
+        }
     }
     [DataContract] public class ProbeResult {[DataMember]public ProbeStream[] streams;[DataMember]public ProbeFormat format;}
     [DataContract] public class ProbeFormat {[DataMember]public string duration,bit_rate;[DataMember]public Dictionary<string,string> tags;}

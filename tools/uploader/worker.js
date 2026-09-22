@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-09-17-watch-recovery-v1";
+const WORKER_BUILD = "2026-09-21-watch-completeness-v2";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -14,11 +14,6 @@ let browser = null;
 let profileStarted = false;
 let finished = false;
 let youtubeOpened = false;
-
-function localStatePath(name) {
-  return path.join(path.dirname(path.dirname(jobPath)), name);
-}
-
 function randomDelaySeconds() { return crypto.randomInt(1, 31); }
 
 /** Playwright CDP к Dolphin часто не «collocated» → setInputFiles режет файлы >50 МБ. Локальный путь через DOM.setFileInputFiles. */
@@ -1114,10 +1109,10 @@ function loadMeshCatalog() {
 
 function enrichWatchTarget(target, catalog) {
   const t = Object.assign({}, target || {});
-  if (!catalog || !Array.isArray(catalog.videos)) return t;
   const ownerPid = String(t.ownerProfileId || "").trim();
   const ownerNorm = normalizeTitle(t.ownerName || t.channel || "");
-  const entries = catalog.videos.filter(v => {
+  const catalogEntries = catalog && Array.isArray(catalog.videos) ? catalog.videos : [];
+  const entries = catalogEntries.filter(v => {
     if (!v) return false;
     if (ownerPid && String(v.profileId || "").trim() === ownerPid) return true;
     return ownerNorm && normalizeTitle(v.channel || "") === ownerNorm;
@@ -1154,7 +1149,7 @@ function enrichWatchTarget(target, catalog) {
   })).filter(v => v.videoId || v.title);
   const merged = [];
   const seenKeys = new Set();
-  for (const v of fromJob.concat(fromCatalog)) {
+  for (const v of (fromJob.length ? fromJob : fromCatalog)) {
     const key = v.videoId || normalizeTitle(v.title);
     if (!key || seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -1538,6 +1533,29 @@ function titleMatchesCatalog(videoTitle, catalogTitle) {
   return v.includes(c.slice(0, chunk)) || c.includes(v.slice(0, chunk));
 }
 
+function buildCatalogPlan(knownVideos, skipId, anchorTitle) {
+  const catalog = [];
+  const seen = new Set();
+  for (const raw of (knownVideos || [])) {
+    if (!raw) continue;
+    const videoId = String(raw.videoId || "").trim();
+    if (videoId && videoId === String(skipId || "").trim()) continue;
+    const key = videoId || normalizeTitle(raw.title || "");
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    catalog.push({
+      videoId,
+      url: String(raw.url || "").trim(),
+      title: String(raw.title || "").trim(),
+      kind: String(raw.kind || "long").trim().toLowerCase() === "shorts" ? "shorts" : "long"
+    });
+  }
+  if (!catalog.length && !(knownVideos || []).length && anchorTitle) {
+    catalog.push({ title: String(anchorTitle).trim(), kind: "long", videoId: "", url: "" });
+  }
+  return catalog;
+}
+
 /** Шортс зацикливается — один проход, лайк, выход (не waitForVideoEnd). */
 async function watchShortOnce(page, ownerName) {
   await dismissYouTubeOverlays(page);
@@ -1560,7 +1578,7 @@ async function watchShortOnce(page, ownerName) {
 
   const likeRatio = 0.55 + crypto.randomInt(0, 41) / 100;
   const likeAt = Math.max(1, duration * likeRatio);
-  const doneAt = Math.max(likeAt + 1, duration - Math.min(0.35, duration * 0.01));
+  const doneAt = duration - Math.min(0.35, duration * 0.01);
   let liked = alreadyLiked;
   let likeAttempted = alreadyLiked;
   let maxSeen = 0;
@@ -1596,16 +1614,21 @@ async function watchShortOnce(page, ownerName) {
   throw new Error(`Шортс не дошёл до конца: ${formatClock(maxSeen)} / ${formatClock(duration)}.`);
 }
 
-const MESH_LONG_MAX = 1;
-const MESH_SHORTS_MAX = 5;
-
-async function watchTodayOnChannel(page, channelUrl, skipId, ownerName, likeOnly, knownVideos, anchorTitle) {
+async function watchTodayOnChannel(page, channelUrl, skipId, ownerName, likeOnly, knownVideos, anchorTitle, completed, ownerKey) {
   let count = 0;
   const watched = new Set(skipId ? [skipId] : []);
   const stats = { long: 0, shorts: 0, skippedLiked: 0, errors: 0 };
 
   async function watchOne(item, isShort, skipDateCheck) {
     if (!item || !item.id || watched.has(item.id)) return false;
+    const checkpointKey = String(ownerKey || ownerName) + ":" + item.id;
+    if (completed && completed.has(checkpointKey)) {
+      watched.add(item.id);
+      count++;
+      if (isShort) stats.shorts++; else stats.long++;
+      send("youtube", (ownerName ? ownerName + ": " : "") + "ролик " + item.id + " просмотрен до текущего повтора — пропускаю.", { percent: 90 });
+      return true;
+    }
     watched.add(item.id);
     const label = (item.title && !isDurationOnly(item.title)) ? item.title : item.id;
     await openVideoDirect(page, item.id, isShort || /\/shorts\//.test(item.href || ""));
@@ -1641,93 +1664,50 @@ async function watchTodayOnChannel(page, channelUrl, skipId, ownerName, likeOnly
       stats.long++;
     }
     count++;
+    if (completed) completed.add(checkpointKey);
     return true;
   }
+  const catalog = buildCatalogPlan(knownVideos, skipId, anchorTitle);
+  if (!catalog.length && skipId && (knownVideos || []).length) {
+    await leaveVideoPlayer(page, channelUrl);
+    return 0;
+  }
+  if (!catalog.length) throw new Error("Каталог роликов канала пуст — нельзя подтвердить полный просмотр.");
 
-  for (const kv of (knownVideos || [])) {
-    if (!kv.videoId || watched.has(kv.videoId)) continue;
-    try {
-      await watchOne({ id: kv.videoId, title: kv.title, href: kv.url || "", meta: "" }, kv.kind === "shorts", true);
-    } catch (e) {
-      stats.errors++;
-      send("youtube", (ownerName ? ownerName + ": " : "") + "Каталог: пропуск — " + (e instanceof Error ? e.message : String(e)), { percent: 90 });
-    }
-  }
+  let allLong = null;
+  let allShorts = null;
+  const plannedLong = catalog.filter(v => String(v.kind || "long").toLowerCase() !== "shorts").length;
+  const plannedShorts = catalog.length - plannedLong;
+  send("youtube", (ownerName ? ownerName + ": " : "") + `план: длинных ${plannedLong}, шортсов ${plannedShorts}.`, { percent: 86 });
 
-  send("youtube", (ownerName ? ownerName + ": " : "") + "канал · вкладка Видео" + (likeOnly ? " · лайки" : "") + "…", { percent: 86 });
-  const allLong = await collectLinksOnChannelTab(page, channelUrl, "/videos", skipId, false, 15);
-  let longList = [];
-  const catalogLongs = (knownVideos || []).filter(v => v.kind !== "shorts");
-  for (const plan of catalogLongs) {
-    if (longList.length >= MESH_LONG_MAX) break;
-    if (plan.videoId) {
-      const hit = allLong.find(v => v.id === plan.videoId);
-      longList.push(hit || { id: plan.videoId, title: plan.title, href: plan.url || "" });
-    } else if (plan.title) {
-      const hit = allLong.find(v => titleMatchesCatalog(v.title, plan.title));
-      if (hit) longList.push(hit);
-    }
-  }
-  if (!longList.length && anchorTitle) {
-    const hit = allLong.find(v => titleMatchesCatalog(v.title, anchorTitle));
-    if (hit) longList.push(hit);
-  }
-  if (!longList.length) {
-    const todayLong = allLong.filter(v => isTodayUploadMeta(v.meta)).slice(0, MESH_LONG_MAX);
-    if (todayLong.length) longList = todayLong;
-  }
-  longList = longList.slice(0, MESH_LONG_MAX);
-  if (!longList.length) {
-    send("youtube", (ownerName ? ownerName + ": " : "") + "длинное видео не найдено — вкладка Видео", { percent: 87 });
-  }
-  for (const item of longList) {
-    try {
-      await watchOne(item, false, false);
-    } catch (e) {
-      stats.errors++;
-      send("youtube", (ownerName ? ownerName + ": " : "") + "Видео: пропуск — " + (e instanceof Error ? e.message : String(e)), { percent: 90 });
-    }
-    await openChannelTab(page, channelUrl, "videos");
-  }
-
-  send("youtube", (ownerName ? ownerName + ": " : "") + "канал · вкладка Shorts" + (likeOnly ? " · лайки" : "") + "…", { percent: 88 });
-  const allShorts = await collectLinksOnChannelTab(page, channelUrl, "/shorts", skipId, false, 25, { shortsTop: true });
-  send("youtube", (ownerName ? ownerName + ": " : "") + "Shorts: найдено " + allShorts.length + ", план до " + MESH_SHORTS_MAX + "…", { percent: 88 });
-  const catalogShorts = (knownVideos || []).filter(v => v.kind === "shorts" && v.title);
-  let shortsList = [];
-  for (const plan of catalogShorts) {
-    if (shortsList.length >= MESH_SHORTS_MAX) break;
-    if (plan.videoId) {
-      const hit = allShorts.find(s => s.id === plan.videoId);
-      if (hit && !shortsList.some(x => x.id === hit.id)) shortsList.push(hit);
-      else if (!shortsList.some(x => x.id === plan.videoId)) {
-        shortsList.push({ id: plan.videoId, title: plan.title, href: plan.url || "" });
+  for (let ci = 0; ci < catalog.length; ci++) {
+    const plan = catalog[ci];
+    const isShort = String(plan.kind || "long").toLowerCase() === "shorts";
+    let item = null;
+    const id = String(plan.videoId || "").trim();
+    if (id) item = { id, title: plan.title || id, href: plan.url || "", meta: "" };
+    else {
+      if (isShort) {
+        if (!allShorts) allShorts = await collectLinksOnChannelTab(page, channelUrl, "/shorts", "", false, 100, { shortsTop: true });
+        item = allShorts.find(v => titleMatchesCatalog(v.title, plan.title));
+      } else {
+        if (!allLong) allLong = await collectLinksOnChannelTab(page, channelUrl, "/videos", "", false, 100);
+        item = allLong.find(v => titleMatchesCatalog(v.title, plan.title));
       }
-    } else {
-      const hit = allShorts.find(s => titleMatchesCatalog(s.title, plan.title));
-      if (hit && !shortsList.some(x => x.id === hit.id)) shortsList.push(hit);
     }
-  }
-  for (const item of allShorts) {
-    if (shortsList.length >= MESH_SHORTS_MAX) break;
-    if (!shortsList.some(x => x.id === item.id)) shortsList.push(item);
-  }
-  shortsList = shortsList.slice(0, MESH_SHORTS_MAX);
-  if (!shortsList.length) {
-    send("youtube", (ownerName ? ownerName + ": " : "") + "шортсы на канале не найдены", { percent: 89 });
-  }
-  for (let si = 0; si < shortsList.length; si++) {
+    if (!item) {
+      stats.errors++;
+      send("youtube", (ownerName ? ownerName + ": " : "") + `Ролик ${ci + 1}/${catalog.length} не найден: ${(plan.title || "без названия").slice(0, 55)}`, { percent: 90 });
+      continue;
+    }
     try {
-      await watchOne(shortsList[si], true, true);
+      await watchOne(item, isShort, true);
     } catch (e) {
       stats.errors++;
-      send("youtube", (ownerName ? ownerName + ": " : "") + "Шортс " + (si + 1) + "/" + shortsList.length + ": пропуск — " + (e instanceof Error ? e.message : String(e)), { percent: 90 });
+      send("youtube", (ownerName ? ownerName + ": " : "") + `Ролик ${ci + 1}/${catalog.length}: ошибка — ` + (e instanceof Error ? e.message : String(e)), { percent: 90 });
     }
-    if (si < shortsList.length - 1) await openChannelTab(page, channelUrl, "shorts");
   }
 
-  const plannedLong = longList.length;
-  const plannedShorts = shortsList.length;
   send("youtube", (ownerName ? ownerName + ": " : "") +
     "итог: длинных " + stats.long + "/" + plannedLong +
     ", шортсов " + stats.shorts + "/" + plannedShorts +
@@ -1735,8 +1715,8 @@ async function watchTodayOnChannel(page, channelUrl, skipId, ownerName, likeOnly
     (stats.errors ? ", ошибок: " + stats.errors : "") +
     " → следующий канал", { percent: 92 });
   await leaveVideoPlayer(page, channelUrl);
-  if (stats.errors > 0) {
-    throw new Error("Не весь контент просмотрен: ошибок " + stats.errors + ", успешно " + count + ".");
+  if (stats.errors > 0 || count !== catalog.length) {
+    throw new Error("Не весь контент просмотрен: успешно " + count + "/" + catalog.length + ", ошибок " + stats.errors + ".");
   }
   return count;
 }
@@ -1747,28 +1727,13 @@ function sendMeshChannel(target, channelUrl) {
   }
 }
 
-const CHANNEL_MESH_TIMEOUT_MS = 28 * 60 * 1000;
-
-async function watchChannelMeshWithTimeout(page, target, filter, viewerProfileId) {
-  let timer = null;
-  try {
-    return await Promise.race([
-      watchChannelMesh(page, target, filter, viewerProfileId),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          page.close().catch(() => {}).finally(() => {
-            reject(new Error("Таймаут канала (28 мин): страница закрыта, операция остановлена."));
-          });
-        }, CHANNEL_MESH_TIMEOUT_MS);
-      })
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+async function watchChannelMeshWithTimeout(page, target, filter, viewerProfileId, completed) {
+  // Время канала зависит от суммы длительностей; каждый ролик контролируется отдельно.
+  return watchChannelMesh(page, target, filter, viewerProfileId, completed);
 }
 
 /** Канал из базы / по ID / по имени / поиск → сегодняшние видео и шортс. Свой канал — только лайки. */
-async function watchChannelMesh(page, target, filter, viewerProfileId) {
+async function watchChannelMesh(page, target, filter, viewerProfileId, completed) {
   const fullTitle = String(target.searchFullTitle || target.title || "").trim();
   const videoId = String(target.videoId || extractVideoId(target.searchUrl || "")).trim();
   const keys = parseKeywordList(target.searchKeys, target.title || fullTitle);
@@ -1788,7 +1753,8 @@ async function watchChannelMesh(page, target, filter, viewerProfileId) {
       channelUrl = resolved;
       send("youtube", (owner ? owner + ": " : "") + "канал подтверждён", { percent: 42 });
       sendMeshChannel(target, channelUrl);
-      const extra = await watchTodayOnChannel(page, channelUrl, skipId, owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "");
+      // Канал открыт напрямую: якорный ролик ещё не просмотрен, поэтому его нельзя добавлять в skipId.
+      const extra = await watchTodayOnChannel(page, channelUrl, "", owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "", completed, ownerPid);
       if (!isOwn && extra < 1) throw new Error("Канал открыт, но ни один ролик не был просмотрен.");
       return extra;
     }
@@ -1798,12 +1764,12 @@ async function watchChannelMesh(page, target, filter, viewerProfileId) {
     send("youtube", (owner ? owner + ": " : "") + "открываю по ID из базы…", { percent: 44 });
     await openVideoDirect(page, videoId, false);
     if (isOwn) await quickLikeVideo(page);
-    else await waitForVideoEnd(page);
+    else if (!completed || !completed.has(ownerPid + ":" + videoId)) { await waitForVideoEnd(page); if (completed) completed.add(ownerPid + ":" + videoId); }
     anchorViews = 1;
     channelUrl = normalizeChannelUrl(await extractChannelUrlFromPage(page));
     sendMeshChannel(target, channelUrl);
     if (channelUrl) {
-      const extra = await watchTodayOnChannel(page, channelUrl, videoId, owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "");
+      const extra = await watchTodayOnChannel(page, channelUrl, videoId, owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "", completed, ownerPid);
       return anchorViews + extra;
     }
   }
@@ -1818,7 +1784,7 @@ async function watchChannelMesh(page, target, filter, viewerProfileId) {
     searchFullTitle: fullTitle
   });
   if (isOwn) await quickLikeVideo(page);
-  else await waitForVideoEnd(page);
+  else if (!completed || !completed.has(ownerPid + ":" + (videoId || extractVideoId(page.url())))) { await waitForVideoEnd(page); if (completed) completed.add(ownerPid + ":" + (videoId || extractVideoId(page.url()))); }
   anchorViews = 1;
 
   if (!channelUrl) channelUrl = normalizeChannelUrl(await extractChannelUrlFromPage(page));
@@ -1826,7 +1792,7 @@ async function watchChannelMesh(page, target, filter, viewerProfileId) {
 
   let extra = 0;
   if (channelUrl) {
-    extra = await watchTodayOnChannel(page, channelUrl, videoId || extractVideoId(page.url()), owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "");
+    extra = await watchTodayOnChannel(page, channelUrl, videoId || extractVideoId(page.url()), owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "", completed, ownerPid);
   } else {
     send("youtube", "Ссылку на канал не нашёл — только якорное видео.", { percent: 92 });
   }
@@ -1953,7 +1919,7 @@ async function waitForVideoEnd(page) {
       continue;
     }
     const curRaw = Number(state.current) || 0;
-    if (maxSeen >= duration * 0.85 && curRaw < maxSeen - 2) {
+    if (maxSeen >= duration - 0.75 && curRaw < maxSeen - 2) {
       if (!liked && !likeAttempted) {
         likeAttempted = true;
         liked = await tryLikeCurrentVideo(page, "Видео");
@@ -3395,6 +3361,7 @@ async function main() {
     send("youtube", "Сетка: " + targets.length + " каналов (свои — лайк, чужие — просмотр)…", { percent: 25 });
     let totalViews = 0;
     let failed = 0;
+    const completedInRun = new Set();
 
     const recoverWatchPage = async (reason) => {
       send("youtube", "Восстанавливаю окно просмотра" + (reason ? ": " + reason : "") + "…", { percent: 24 });
@@ -3430,7 +3397,7 @@ async function main() {
           if (!page || page.isClosed() || !browser || !browser.isConnected()) {
             await recoverWatchPage("браузер был закрыт");
           }
-          const watched = await watchChannelMeshWithTimeout(page, t, "none", viewerPid);
+          const watched = await watchChannelMeshWithTimeout(page, t, "none", viewerPid, completedInRun);
           totalViews += watched;
           channelDone = true;
           send("youtube", "✓ Канал " + (i + 1) + "/" + targets.length + " · " + label + " — готов (просмотров: " + watched + ")", {
@@ -3555,4 +3522,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd };
+module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan };

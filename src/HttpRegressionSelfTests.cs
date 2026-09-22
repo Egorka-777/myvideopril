@@ -10,6 +10,7 @@ namespace VideoBatch {
         public static bool RunAll() {
             if (!HttpUploadRunner.RunParallelSerializationSelfTest(10)) return false;
             if (!ScheduleGenerator.RunSelfTests()) return false;
+            if (!TikTokCaptionTemplates.RunSelfTests()) return false;
             if (!RunLog160617Scenario()) return false;
             if (!TaskQueueWriter.RunConcurrentWriteSelfTest(40, 25)) return false;
             return RunWorkerPoolScenario();

@@ -1,0 +1,31 @@
+name: VideoBatch Windows regression
+on:
+  push:
+    branches: [fix/tiktok-caption-watch-completeness-20260921]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tools/uploader/**'
+      - 'tests/**'
+      - 'VideoBatch.csproj'
+      - '.github/workflows/windows-regression.yml'
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Node regressions
+        shell: pwsh
+        run: |
+          Get-ChildItem tests -Filter *.js | ForEach-Object {
+            node $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Failed: $($_.Name)" }
+          }
+      - name: Compile desktop application
+        run: dotnet build VideoBatch.csproj -c Release

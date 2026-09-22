@@ -26,7 +26,7 @@ namespace VideoBatch {
         public List<YouTubeItem> Items=new List<YouTubeItem>(); // пачка роликов на одном канале
     }
     [DataContract] public class UploadItemJob {
-        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,description,publishedVideoId,publishedUrl;
+        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,description,caption,publishedVideoId,publishedUrl;
     }
     [DataContract] public class CatalogVideoJob {
         [DataMember]public string title,videoId,url,kind;
@@ -227,15 +227,15 @@ namespace VideoBatch {
         }
     }
 
-    /// <summary>Редактор одной базы (TikTok и т.п.).</summary>
+    /// <summary>Редактор многострочных подписей TikTok. Разделитель записей — строка ---.</summary>
     public class TitleBankDialog:Dialog {
         public List<string> Titles;TextBox words;ListBox preview;Label counter;
         public TitleBankDialog(string caption,IList<string> current):base(caption,640){
             ClientSize=new Size(640,640);
             var all=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};Body.Controls.Add(all);
-            all.Controls.Add(Ui.Label("Один заголовок = одна строка. База сохраняется и не съедается при выборе видео.",true));
-            words=new TextBox{Multiline=true,AcceptsReturn=true,AcceptsTab=true,WordWrap=false,ScrollBars=ScrollBars.Both,Width=580,Height=200,Font=new Font("Consolas",10)};
-            if(current!=null&&current.Count>0)words.Text=string.Join(Environment.NewLine,current);
+            all.Controls.Add(Ui.Label("Одна полная подпись может занимать несколько строк. Между подписями оставляйте отдельную строку ---. База сохраняется и используется по кругу.",true));
+            words=new TextBox{Multiline=true,AcceptsReturn=true,AcceptsTab=true,WordWrap=true,ScrollBars=ScrollBars.Both,Width=580,Height=300,Font=new Font("Consolas",10)};
+            if(current!=null&&current.Count>0)words.Text=string.Join(Environment.NewLine+"---"+Environment.NewLine,current);
             words.TextChanged+=(s,e)=>RefreshPreview();
             all.Controls.Add(words);
             counter=new Label{AutoSize=true,ForeColor=Ui.Blue,Font=new Font("Segoe UI",10,FontStyle.Bold),Margin=new Padding(0,8,0,4)};
@@ -250,23 +250,25 @@ namespace VideoBatch {
         static List<string> ParseLines(string text){
             if(string.IsNullOrEmpty(text))return new List<string>();
             var normalized=text.Replace("\r\n","\n").Replace('\r','\n').Replace('\u2028','\n').Replace('\u2029','\n').Replace('\v','\n');
-            return normalized.Split('\n').Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            return System.Text.RegularExpressions.Regex.Split(normalized,@"(?m)^\s*---\s*$")
+                .Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
         }
         void RefreshPreview(){
             var lines=ParseLines(words.Text);
             preview.BeginUpdate();preview.Items.Clear();
             for(int i=0;i<lines.Count;i++){
                 string t=lines[i];
-                preview.Items.Add((i+1)+". "+(t.Length>90?t.Substring(0,90)+"…":t)+(t.Length>100?" ⚠":""));
+                string oneLine=t.Replace("\r"," ").Replace("\n"," ");
+                preview.Items.Add((i+1)+". "+(oneLine.Length>90?oneLine.Substring(0,90)+"…":oneLine)+(t.Length>2200?" ⚠":""));
             }
             preview.EndUpdate();
-            counter.Text=lines.Count==0?"База будет пустой":("В базе: "+lines.Count+" заголовков");
+            counter.Text=lines.Count==0?"База будет пустой":("В базе: "+lines.Count+" подписей");
             counter.ForeColor=lines.Count==0?Color.FromArgb(180,60,40):Color.FromArgb(30,130,70);
         }
         void SaveList(){
             Titles=ParseLines(words.Text);
-            var tooLong=Titles.Select((t,i)=>new{t,i}).Where(x=>x.t.Length>100).ToList();
-            if(tooLong.Count>0)throw new Exception("Заголовок №"+(tooLong[0].i+1)+" длиннее 100 символов.");
+            var tooLong=Titles.Select((t,i)=>new{t,i}).Where(x=>x.t.Length>2200).ToList();
+            if(tooLong.Count>0)throw new Exception("Подпись №"+(tooLong[0].i+1)+" длиннее 2200 символов.");
         }
     }
 
@@ -741,7 +743,6 @@ namespace VideoBatch {
                 if(it==null||string.IsNullOrWhiteSpace(it.Title))continue;
                 SyncPublishedMeta(it);
                 string kind=baseKind;
-                if(ch.Items.Count>1&&baseKind=="long"&&i>0)kind="shorts";
                 string vid=it.PublishedVideoId??"";
                 string url=it.PublishedUrl??"";
                 if(string.IsNullOrWhiteSpace(url)&&!string.IsNullOrWhiteSpace(vid))url="https://www.youtube.com/watch?v="+vid;
@@ -1356,14 +1357,20 @@ namespace VideoBatch {
                 cancellation=new CancellationTokenSource();Busy(true);
                 token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 var unique=rows.GroupBy(r=>(((YouTubeChannel)r.Tag).ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase).Select(g=>g.First()).ToList();
-                Write("["+MarketLabel(marketView)+"] сетка: "+unique.Count+" аккаунтов, "+meshChannels.Count+" каналов (свои — лайк, чужие — просмотр). База: "+Store.MeshCatalogPath);
+                int parallel=Math.Max(1,Math.Min(2,settings.WatchMaxParallelProfiles));
+                Write("["+MarketLabel(marketView)+"] сетка: "+unique.Count+" аккаунтов, "+meshChannels.Count+" каналов · одновременно профилей "+parallel+". Свои каналы исключены. База: "+Store.MeshCatalogPath);
                 var errors=new ConcurrentBag<string>();
+                using(var gate=new SemaphoreSlim(parallel,parallel)){
                 var tasks=unique.Select(row=>Task.Run(async()=>{
                     var viewer=(YouTubeChannel)row.Tag;
                     string viewerPid=(viewer.ProfileId??"").Trim();
-                    var watchTargets=meshChannels.Select(BuildMeshTarget).Where(t=>t!=null).ToArray();
+                    bool entered=false;
+                    var watchTargets=meshChannels
+                        .Where(ch=>!string.Equals((ch.ProfileId??"").Trim(),viewerPid,StringComparison.OrdinalIgnoreCase))
+                        .Select(BuildMeshTarget).Where(t=>t!=null).ToArray();
                     if(watchTargets.Length==0){Status(row,"Нечего смотреть");return;}
                     try{
+                        await gate.WaitAsync(cancellation.Token).ConfigureAwait(false);entered=true;
                         cancellation.Token.ThrowIfCancellationRequested();
                         Status(row,"Сетка: "+watchTargets.Length+" каналов…");
                         var result=await DolphinRunner.Run(new UploadJob{
@@ -1378,8 +1385,10 @@ namespace VideoBatch {
                         SafeSave();
                     }catch(OperationCanceledException){throw;}
                     catch(Exception e){errors.Add(viewer.Name+": "+e.Message);Status(row,"Ошибка сетки");}
+                    finally{if(entered)gate.Release();}
                 })).ToArray();
                 try{await Task.WhenAll(tasks).ConfigureAwait(true);}catch(OperationCanceledException){Write("Сетка просмотра остановлена.");}
+                }
                 if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Сетка просмотр",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 else{Write("["+MarketLabel(marketView)+"] сетка просмотра завершена.");MessageBox.Show(this,"Все аккаунты просмотрели ролики друг друга.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);}
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}

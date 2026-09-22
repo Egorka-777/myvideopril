@@ -2,13 +2,14 @@
 
 /**
  * VideoBatch · TikTok uploader через Dolphin Anty + Playwright CDP.
- * Job JSON: title = название, description = описание.
+ * Job JSON: caption = полная подпись TikTok. title/description читаются только для совместимости.
  */
 
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { chromium } = require("playwright-core");
+const WORKER_BUILD = "2026-09-21-tiktok-caption-v1";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -16,6 +17,25 @@ let browser = null;
 let profileStarted = false;
 let finished = false;
 let tiktokOpened = false;
+let activePage = null;
+let diagnosticFile = "";
+
+function setupDiagnostics() {
+  const dir = path.join(path.dirname(path.dirname(jobPath)), "diagnostics");
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  diagnosticFile = path.join(dir, `tiktok-${stamp}-${process.pid}.jsonl`);
+}
+
+function record(stage, text, extra = {}) {
+  if (!diagnosticFile) return;
+  try {
+    fs.appendFileSync(diagnosticFile, JSON.stringify(Object.assign({
+      at: new Date().toISOString(), stage, text: String(text || ""),
+      profileId: job && job.profileId ? String(job.profileId) : ""
+    }, extra)) + "\n", "utf8");
+  } catch (_) {}
+}
 
 function localStatePath(name) {
   return path.join(path.dirname(path.dirname(jobPath)), name);
@@ -65,12 +85,13 @@ async function waitBetweenProfiles() {
 
 function markProfileCompleted() {
   const target = localStatePath("tiktok-queue-delay.json");
-  const temp = target + ".tmp";
+  const temp = target + "." + process.pid + ".tmp";
   fs.writeFileSync(temp, JSON.stringify({ lastCompleted: Date.now() }), "utf8");
   fs.renameSync(temp, target);
 }
 
 function send(stage, text, extra = {}) {
+  record(stage, text, extra);
   process.stdout.write(JSON.stringify(Object.assign({ stage, text }, extra)) + "\n");
 }
 
@@ -335,81 +356,15 @@ async function pickFileInput(page) {
   return n > 0 ? inputs.first() : null;
 }
 
-async function fillEditable(page, text, selectors, preferTitle) {
-  const value = String(text || "").trim();
-  if (!value) return false;
-  for (const sel of selectors) {
-    const box = typeof sel === "string" ? page.locator(sel) : sel;
-    if (!(await visible(box, 2000))) continue;
-    const el = box.first();
-    await el.click({ timeout: 3000 }).catch(() => {});
-    await page.keyboard.press("Control+A").catch(() => {});
-    await page.keyboard.press("Backspace").catch(() => {});
-    const ok = await page.evaluate((payload) => {
-      const { value, preferTitle } = payload;
-      const nodes = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"], div[role="textbox"]'));
-      const scored = nodes.map(n => {
-        const placeholder = `${n.getAttribute("placeholder") || ""} ${n.getAttribute("aria-label") || ""} ${n.getAttribute("data-e2e") || ""}`.toLowerCase();
-        const r = n.getBoundingClientRect();
-        let score = 0;
-        if (r.width < 40 || r.height < 16) return { n, score: -1 };
-        if (preferTitle) {
-          if (/title|назван|headline|add a title/.test(placeholder)) score += 5;
-          if (/caption|describe|описан|опишите|подпись/.test(placeholder)) score -= 3;
-          if (n.tagName === "INPUT") score += 2;
-        } else {
-          if (/caption|describe|описан|опишите|подпись|hashtag/.test(placeholder)) score += 5;
-          if (/title|назван|headline/.test(placeholder) && n.tagName === "INPUT") score -= 2;
-          if (n.getAttribute("contenteditable") === "true") score += 2;
-        }
-        score += Math.min(3, Math.floor(r.height / 40));
-        return { n, score };
-      }).filter(x => x.score >= 0).sort((a, b) => b.score - a.score);
-      const target = scored[0] && scored[0].n;
-      if (!target) return false;
-      target.focus();
-      if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
-        target.value = value;
-        target.dispatchEvent(new Event("input", { bubbles: true }));
-        return true;
-      }
-      try {
-        document.execCommand("selectAll", false, null);
-        document.execCommand("insertText", false, value);
-        return true;
-      } catch (_) {
-        target.textContent = value;
-        target.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }));
-        return true;
-      }
-    }, { value, preferTitle: !!preferTitle }).catch(() => false);
-    if (ok) return true;
-    await el.fill(value).catch(async () => { await page.keyboard.type(value, { delay: 6 }); });
-    return true;
-  }
-  return false;
+function normalizeCaption(value) {
+  return String(value || "").replace(/\r\n/g, "\n").trim();
 }
 
-async function fillTitleAndDescription(page, title, description) {
-  const titleText = String(title || "").trim();
-  const descText = String(description || "").trim();
-  if (!titleText) throw new Error("Пустой заголовок.");
-  if (!descText) throw new Error("Пустое описание.");
-
-  const titleSelectors = [
-    'input[placeholder*="title" i]',
-    'input[placeholder*="назван" i]',
-    'input[aria-label*="title" i]',
-    'input[aria-label*="назван" i]',
-    'input[data-e2e*="title" i]',
-    page.getByPlaceholder(/title|назван/i)
-  ];
-  const titleOk = await fillEditable(page, titleText, titleSelectors, true);
-  if (!titleOk) {
-    send("tiktok", "Поле названия не найдено — название добавлю в начало описания.", { percent: 55 });
-  }
-
-  const descSelectors = [
+async function fillCaption(page, caption) {
+  const captionText = normalizeCaption(caption);
+  if (!captionText) throw new Error("Пустая подпись TikTok.");
+  if (captionText.length > 2200) throw new Error("Подпись TikTok длиннее 2200 символов.");
+  const selectors = [
     '[contenteditable="true"][data-text="true"]',
     '.public-DraftEditor-content[contenteditable="true"]',
     '[contenteditable="true"].notranslate',
@@ -420,9 +375,84 @@ async function fillTitleAndDescription(page, title, description) {
     'textarea[placeholder*="описан" i]',
     'div[role="textbox"]'
   ];
-  const captionBody = titleOk ? descText : (titleText + "\n\n" + descText);
-  const descOk = await fillEditable(page, captionBody, descSelectors, false);
-  if (!descOk) throw new Error("Не найдено поле описания TikTok. Проверьте вход в аккаунт. Профиль оставлен открытым.");
+  let found = false;
+  for (const selector of selectors) {
+    const boxes = page.locator(selector);
+    const n = Math.min(3, await boxes.count().catch(() => 0));
+    for (let i = 0; i < n; i++) {
+      const box = boxes.nth(i);
+      if (!(await visible(box, 400))) continue;
+      const label = ((await box.getAttribute("aria-label").catch(() => "")) || "") + " " +
+        ((await box.getAttribute("placeholder").catch(() => "")) || "");
+      if (/\btitle\b|назван/i.test(label)) continue;
+      found = true;
+      try { await box.fill(captionText, { timeout: 5000 }); }
+      catch (_) {
+        await box.click({ timeout: 3000 });
+        await page.keyboard.press("Control+A");
+        await page.keyboard.insertText(captionText);
+      }
+      await page.waitForTimeout(400);
+      const actual = await box.evaluate(el => el.value != null ? el.value : (el.innerText || el.textContent || "")).catch(() => "");
+      if (normalizeCaption(actual) === captionText) return;
+    }
+  }
+  throw new Error(found
+    ? "TikTok не подтвердил полную подпись в поле ввода. Публикация не начиналась; профиль оставлен открытым."
+    : "Не найдено поле подписи TikTok. Проверьте вход в аккаунт. Профиль оставлен открытым.");
+}
+
+async function clickPublishConfirmation(page) {
+  const dialog = page.locator('[role="dialog"]');
+  if (!(await visible(dialog, 1500))) return false;
+  const names = [/^Confirm$/i, /^Post now$/i, /^Publish now$/i, /^Подтвердить$/i, /^Опубликовать сейчас$/i];
+  for (const name of names) {
+    const btn = dialog.getByRole("button", { name });
+    if (await visible(btn, 600)) {
+      if (!(await btn.first().isDisabled().catch(() => true))) {
+        await btn.first().click({ timeout: 3000 });
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function publishAndConfirm(page) {
+  let networkEvidence = "";
+  const onResponse = async response => {
+    try {
+      const req = response.request();
+      const url = response.url();
+      if (req.method() !== "POST" || !/(publish|post|commit|create)/i.test(url) || /upload/i.test(url)) return;
+      if (response.status() < 200 || response.status() >= 300) return;
+      const body = (await response.text().catch(() => "")).slice(0, 12000);
+      if (/(item_id|video_id|post_id|aweme_id)/i.test(body) || /"status_code"\s*:\s*0/.test(body)) {
+        networkEvidence = `HTTP ${response.status()} ${new URL(url).pathname}`;
+      }
+    } catch (_) {}
+  };
+  page.on("response", onResponse);
+  try {
+    const posted = await clickPost(page);
+    if (!posted) throw new Error("Не нажалась кнопка публикации. Профиль оставлен открытым.");
+    await page.waitForTimeout(900);
+    await clickPublishConfirmation(page).catch(() => false);
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      if (networkEvidence) return networkEvidence;
+      const state = await page.evaluate(() => ({
+        url: location.href,
+        text: (document.body && document.body.innerText || "").slice(0, 30000)
+      })).catch(() => ({ url: "", text: "" }));
+      if (/\/(content|posts?|manage)(\/|\?|$)/i.test(state.url) && !/\/upload/i.test(state.url)) return "страница публикаций";
+      if (/(successfully posted|successfully uploaded|post published|video is being processed|успешно опубликован|видео опубликовано|публикация обрабатывается)/i.test(state.text)) return "подтверждение TikTok Studio";
+      await page.waitForTimeout(1500);
+    }
+    throw new Error("Кнопка публикации нажата, но TikTok не подтвердил результат за 2 минуты. Автоповтор запрещён, чтобы не создать дубль; проверьте открытый профиль.");
+  } finally {
+    page.off("response", onResponse);
+  }
 }
 
 async function clickPost(page) {
@@ -488,12 +518,10 @@ async function waitUploadReady(page) {
 }
 
 async function uploadOne(page, item, index, total) {
-  const title = String(item.title || "").trim().replace(/\s*[·•]\s*\+\d+\s*$/, "").replace(/\s+\+\d+\s*$/, "").replace(/\s+/g, " ").trim().slice(0, 100);
-  const description = String(item.description || item.caption || "").trim().slice(0, 2200);
+  const caption = normalizeCaption(item.caption || item.description || item.title || "");
   const video = item.video;
   if (!video || !fs.existsSync(video)) throw new Error(`Ролик ${index}/${total}: файл не найден.`);
-  if (!title) throw new Error(`Ролик ${index}/${total}: пустой заголовок.`);
-  if (!description) throw new Error(`Ролик ${index}/${total}: пустое описание.`);
+  if (!caption) throw new Error(`Ролик ${index}/${total}: пустая подпись.`);
 
   send("tiktok", `Пачка ${index}/${total}: открываю студию…`, {
     percent: Math.min(90, 20 + Math.round((index - 1) / Math.max(1, total) * 70))
@@ -519,34 +547,32 @@ async function uploadOne(page, item, index, total) {
   }
   if (!opened) throw new Error("Не найдена страница загрузки TikTok. Войдите в аккаунт в этом профиле Dolphin и повторите.");
 
-  send("tiktok", `Пачка ${index}/${total}: файл передан, заполняю название и описание…`, {
+  send("tiktok", `Пачка ${index}/${total}: файл передан, заполняю подпись…`, {
     percent: Math.min(92, 30 + Math.round(index / Math.max(1, total) * 55))
   });
   await page.waitForTimeout(2000);
   await dismissOverlays(page);
-  await fillTitleAndDescription(page, title, description);
+  await fillCaption(page, caption);
   await waitUploadReady(page);
 
   send("tiktok", `Пачка ${index}/${total}: публикую…`, { percent: Math.min(95, 50 + Math.round(index / Math.max(1, total) * 45)) });
-  const posted = await clickPost(page);
-  if (!posted) throw new Error("Не нажалась кнопка публикации. Профиль оставлен открытым.");
-
-  // подтверждение «Post now» / модалки
-  await page.waitForTimeout(1200);
-  await clickPost(page).catch(() => {});
-  await page.waitForTimeout(4000);
-  send("tiktok", `Готово ${index}/${total}.`, { percent: Math.min(98, 60 + Math.round(index / Math.max(1, total) * 38)) });
+  const evidence = await publishAndConfirm(page);
+  send("item_done", `TikTok подтвердил публикацию ${index}/${total}: ${evidence}.`, { packIndex: index, packTotal: total });
+  send("tiktok", `Готово ${index}/${total}: ${evidence}.`, { percent: Math.min(98, 60 + Math.round(index / Math.max(1, total) * 38)) });
   return page.url();
 }
 
 async function main() {
   if (!jobPath || !fs.existsSync(jobPath)) throw new Error("Не найдено задание загрузки.");
   job = JSON.parse(fs.readFileSync(jobPath, "utf8"));
+  setupDiagnostics();
   job.token = process.env.VIDEOBATCH_DOLPHIN_TOKEN || job.token;
   if (!job.token || !job.profileId) throw new Error("Укажите токен Dolphin и ID профиля.");
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
 
   if (!job.checkOnly && !job.skipQueueDelay) await waitBetweenProfiles();
+  send("start", `TikTok worker ${WORKER_BUILD}`, { percent: 1, diagnosticFile });
+  send("diagnostic", "Подробная диагностика: " + diagnosticFile, { percent: 1, diagnosticFile });
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
   await api("/v1.0/auth/login-with-token", {
     method: "POST",
@@ -563,6 +589,7 @@ async function main() {
   const context = browser.contexts()[0];
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
   const page = await context.newPage();
+  activePage = page;
   let verifiedIp = "";
   try {
     const ip = await publicIp(page);
@@ -582,7 +609,7 @@ async function main() {
 
   const pack = Array.isArray(job.items) && job.items.length
     ? job.items
-    : [{ video: job.video, title: job.title, description: job.description }];
+    : [{ video: job.video, caption: job.caption || job.description || job.title }];
 
   tiktokOpened = true;
   send("tiktok", pack.length > 1
@@ -608,8 +635,16 @@ if (require.main === module) {
   process.on("SIGINT", async () => { await stopProfile(); process.exit(130); });
   process.on("SIGTERM", async () => { await stopProfile(); process.exit(143); });
   main().catch(async e => {
+    if (activePage && !activePage.isClosed() && diagnosticFile) {
+      const imagePath = diagnosticFile.replace(/\.jsonl$/i, "-error.png");
+      await activePage.screenshot({ path: imagePath, fullPage: false }).catch(() => {});
+      record("screenshot", "Снимок окна при ошибке", { imagePath, pageUrl: activePage.url().split("?")[0] });
+      send("tiktok", "Снимок окна при ошибке: " + imagePath, { diagnosticFile });
+    }
     if (!tiktokOpened && browser) await browser.close().catch(() => {});
     if (!tiktokOpened) await stopProfile();
     fail(e, { keptOpen: tiktokOpened && profileStarted });
   });
 }
+
+module.exports = { normalizeCaption };
