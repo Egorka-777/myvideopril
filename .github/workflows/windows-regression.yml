@@ -30,4 +30,4 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Failed: $($_.Name)" }
           }
       - name: Compile desktop application
-        run: dotnet build VideoBatch.csproj -c Release
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
