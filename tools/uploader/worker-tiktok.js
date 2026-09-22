@@ -427,7 +427,7 @@ async function publishAndConfirm(page) {
       if (req.method() !== "POST" || !/(publish|post|commit|create)/i.test(url) || /upload/i.test(url)) return;
       if (response.status() < 200 || response.status() >= 300) return;
       const body = (await response.text().catch(() => "")).slice(0, 12000);
-      if (/(item_id|video_id|post_id|aweme_id)/i.test(body) || /"status_code"\s*:\s*0/.test(body)) {
+      if (/(item_id|video_id|post_id|aweme_id)/i.test(body)) {
         networkEvidence = `HTTP ${response.status()} ${new URL(url).pathname}`;
       }
     } catch (_) {}
@@ -446,7 +446,7 @@ async function publishAndConfirm(page) {
         text: (document.body && document.body.innerText || "").slice(0, 30000)
       })).catch(() => ({ url: "", text: "" }));
       if (/\/(content|posts?|manage)(\/|\?|$)/i.test(state.url) && !/\/upload/i.test(state.url)) return "страница публикаций";
-      if (/(successfully posted|successfully uploaded|post published|video is being processed|успешно опубликован|видео опубликовано|публикация обрабатывается)/i.test(state.text)) return "подтверждение TikTok Studio";
+      if (/(successfully posted|post published|успешно опубликован|видео опубликовано)/i.test(state.text)) return "подтверждение TikTok Studio";
       await page.waitForTimeout(1500);
     }
     throw new Error("Кнопка публикации нажата, но TikTok не подтвердил результат за 2 минуты. Автоповтор запрещён, чтобы не создать дубль; проверьте открытый профиль.");
