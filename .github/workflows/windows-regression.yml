@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install worker dependency
+        run: npm ci --prefix tools/uploader --ignore-scripts
       - name: Node regressions
         shell: pwsh
         run: |
