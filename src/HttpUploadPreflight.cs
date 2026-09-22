@@ -18,9 +18,6 @@ namespace VideoBatch {
             if (!File.Exists(DolphinRunner.Node))
                 problems.Add("Не найден node.exe: " + DolphinRunner.Node);
 
-            string publishMode = HttpWorkerSettings.ResolvePublishMode(settings);
-            bool requireSchedule = publishMode == "scheduled";
-
             var profileIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var batch in batches) {
                 string account = batch?.Channel?.Name ?? "(без имени)";
@@ -51,7 +48,7 @@ namespace VideoBatch {
                     if (!string.IsNullOrWhiteSpace(it.Source?.Thumbnail) && !File.Exists(it.Source.Thumbnail))
                         problems.Add(ctx + ": файл превью не найден — " + it.Source.Thumbnail);
 
-                    if (!requireSchedule) continue;
+                    if (HttpWorkerSettings.ResolvePublishMode(settings, it.Kind ?? batch.Channel?.Kind) != "scheduled") continue;
 
                     if (!ScheduleGenerator.TryParseSlot(it.ScheduleDate, it.ScheduleTime, out var at)) {
                         problems.Add(ctx + ": некорректное расписание «" + it.ScheduleDate + " " + it.ScheduleTime + "».");

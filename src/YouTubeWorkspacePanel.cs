@@ -57,6 +57,7 @@ namespace VideoBatch {
             top.Controls.Add(new Label { Text = "Поиск", AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(12, 8, 6, 0) });
             top.Controls.Add(accountSearch);
             top.Controls.Add(statusFilter);
+            top.Controls.Add(Theme.MakeButton("+ Канал", ghost: true, action: AddChannel));
             top.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: AddVideos));
             root.Controls.Add(top, 0, 0);
 
@@ -78,6 +79,8 @@ namespace VideoBatch {
             grid.Columns.Add("account", "Аккаунт");
             grid.Columns.Add("country", "Страна");
             grid.Columns.Add("profile", "Profile ID");
+            grid.Columns["account"].ReadOnly = true;
+            grid.Columns["profile"].ReadOnly = true;
             grid.Columns.Add("files", "Файлы");
             grid.Columns.Add("title", "Заголовок");
             var thumbCol = new DataGridViewButtonColumn { Name = "thumb", HeaderText = "Превью", Text = "…", UseColumnTextForButtonValue = true, Width = 64 };
@@ -156,9 +159,24 @@ namespace VideoBatch {
         }
 
         string ScheduleSummary() {
-            return "Shorts: " + settings.YouTubeScheduleMinMinutes + "–" + settings.YouTubeScheduleMaxMinutes
-                + " мин · Long: " + settings.YouTubeScheduleLongMinMinutes + "–" + settings.YouTubeScheduleLongMaxMinutes
-                + " мин · без ночной паузы · слоты фиксируются при загрузке";
+            return "HTTP · Shorts: " + (HttpWorkerSettings.ResolvePublishMode(settings, "shorts") == "scheduled"
+                ? settings.YouTubeScheduleMinMinutes + "–" + settings.YouTubeScheduleMaxMinutes + " мин" : HttpWorkerSettings.ResolvePublishMode(settings, "shorts"))
+                + " · Long: " + (HttpWorkerSettings.ResolvePublishMode(settings, "long") == "immediate" ? "сразу" : HttpWorkerSettings.ResolvePublishMode(settings, "long"))
+                + " · время ПК " + DateTime.Now.ToString("zzz");
+        }
+
+        void AddChannel() {
+            if (!NewAccountDialog.TryShow(FindForm(), "YouTube · " + marketView + " · " + kindView, out var name, out var profileId)) return;
+            if (settings.YouTubeChannels == null) settings.YouTubeChannels = new List<YouTubeChannel>();
+            if (settings.YouTubeChannels.Any(ch => ch != null && string.Equals((ch.ProfileId ?? "").Trim(), profileId, StringComparison.OrdinalIgnoreCase))) {
+                MessageBox.Show(this, "Этот Profile ID уже добавлен в YouTube. Найдите канал через поиск.", "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            var channel = new YouTubeChannel { Enabled = true, Name = name, ProfileId = profileId, Market = marketView, Kind = kindView, Status = "Готов" };
+            settings.YouTubeChannels.Add(channel);
+            try { Store.Save(settings); backend.Reload(); accountSearch.Text = ""; statusFilter.SelectedIndex = 0; RefreshGrid();
+                foreach (DataGridViewRow row in grid.Rows) if (ReferenceEquals(row.Tag, channel)) { grid.ClearSelection(); row.Selected = true; grid.CurrentCell = row.Cells["account"]; break; }
+            } catch (Exception ex) { settings.YouTubeChannels.Remove(channel); MessageBox.Show(this, ex.Message, "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         public void RefreshGrid() {
@@ -183,18 +201,24 @@ namespace VideoBatch {
                 grid.Rows[ri].Tag = ch;
                 grid.Rows[ri].Cells["thumb"].ToolTipText = string.IsNullOrWhiteSpace(thumb) ? "Нажмите, чтобы выбрать превью (Studio)" : thumb;
                 if (!string.IsNullOrWhiteSpace(ch.ExpectedIp))
-                    _ = ResolveCountryAsync(ch.ExpectedIp, ri);
+                    _ = ResolveCountryAsync(ch.ExpectedIp, ch);
                 n++;
             }
             marketHint.Text = (marketView == "EN" ? "English" : "Русские") + " · " + (kindView == "long" ? "Long" : "Shorts") + " · каналов: " + n;
             scheduleHint.Text = ScheduleSummary();
         }
 
-        async Task ResolveCountryAsync(string ip, int rowIndex) {
+        async Task ResolveCountryAsync(string ip, YouTubeChannel channel) {
             string code = await GeoIpCache.LookupAsync(ip).ConfigureAwait(false);
-            if (IsDisposed || rowIndex >= grid.Rows.Count) return;
-            grid.Rows[rowIndex].Cells["country"].Value = code;
-            grid.Rows[rowIndex].Cells["country"].ToolTipText = ip;
+            if (IsDisposed || !IsHandleCreated) return;
+            BeginInvoke(new Action(() => {
+                if (IsDisposed) return;
+                foreach (DataGridViewRow row in grid.Rows) if (ReferenceEquals(row.Tag, channel)) {
+                    row.Cells["country"].Value = code;
+                    row.Cells["country"].ToolTipText = ip;
+                    break;
+                }
+            }));
         }
 
         void OnGridClick(object sender, DataGridViewCellEventArgs e) {
@@ -209,7 +233,7 @@ namespace VideoBatch {
                 try { Store.Save(settings); } catch { }
                 grid.Rows[e.RowIndex].Cells["thumb"].Value = Path.GetFileName(d.FileName);
                 grid.Rows[e.RowIndex].Cells["thumb"].ToolTipText = d.FileName;
-                AppendLog("Превью: " + Path.GetFileName(d.FileName) + " (используется при загрузке через Studio; HTTP берёт кадр автоматически)");
+                AppendLog("Превью: " + Path.GetFileName(d.FileName) + " (HTTP проверяет результат отдельно после загрузки)");
             }
         }
 
@@ -301,6 +325,35 @@ namespace VideoBatch {
             if (InvokeRequired) { BeginInvoke(new Action<string>(AppendLog), line); return; }
             log.AppendText(line + Environment.NewLine);
             log.ScrollToCaret();
+        }
+    }
+
+    internal static class NewAccountDialog {
+        public static bool TryShow(IWin32Window owner, string platform, out string name, out string profileId) {
+            name = "";
+            profileId = "";
+            using (var dialog = new Form { Text = "Добавить · " + platform, Width = 440, Height = 230,
+                StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false, MinimizeBox = false, BackColor = Theme.Background, ForeColor = Theme.TextPrimary }) {
+                var title = new Label { Text = "Имя аккаунта", Left = 20, Top = 18, Width = 380 };
+                var nameBox = new TextBox { Left = 20, Top = 42, Width = 380 };
+                var idLabel = new Label { Text = "Profile ID в Dolphin", Left = 20, Top = 78, Width = 380 };
+                var idBox = new TextBox { Left = 20, Top = 102, Width = 380 };
+                var ok = new Button { Text = "Добавить", Left = 228, Top = 143, Width = 82, DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "Отмена", Left = 318, Top = 143, Width = 82, DialogResult = DialogResult.Cancel };
+                dialog.Controls.AddRange(new Control[] { title, nameBox, idLabel, idBox, ok, cancel });
+                dialog.AcceptButton = ok;
+                dialog.CancelButton = cancel;
+                ok.Click += (s, e) => {
+                    if (!string.IsNullOrWhiteSpace(nameBox.Text) && !string.IsNullOrWhiteSpace(idBox.Text)) return;
+                    dialog.DialogResult = DialogResult.None;
+                    MessageBox.Show(dialog, "Укажите имя и Profile ID из Dolphin.", "VideoBatch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                };
+                if (dialog.ShowDialog(owner) != DialogResult.OK) return false;
+                name = nameBox.Text.Trim();
+                profileId = idBox.Text.Trim();
+                return true;
+            }
         }
     }
 }

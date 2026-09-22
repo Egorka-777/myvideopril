@@ -43,6 +43,7 @@ namespace VideoBatch {
             top.Controls.Add(marketHint);
             top.Controls.Add(new Label { Text = "Поиск", AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(12, 8, 6, 0) });
             top.Controls.Add(accountSearch);
+            top.Controls.Add(Theme.MakeButton("+ Аккаунт", ghost: true, action: AddAccount));
             top.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: AddVideos));
             top.Controls.Add(Theme.MakeButton("Проверить", ghost: true, action: async () => await RunCheck()));
             root.Controls.Add(top, 0, 0);
@@ -54,10 +55,11 @@ namespace VideoBatch {
             grid.Columns.Add("account", "Аккаунт");
             grid.Columns.Add("market", "Рынок");
             grid.Columns.Add("profile", "Profile ID");
+            grid.Columns["account"].ReadOnly = true;
+            grid.Columns["profile"].ReadOnly = true;
             grid.Columns.Add("ip", "IP");
             grid.Columns.Add("files", "Файлы");
-            grid.Columns.Add("title", "Заголовок");
-            grid.Columns.Add("desc", "Описание");
+            grid.Columns.Add("caption", "Подпись TikTok");
             grid.Columns.Add("status", "Статус");
             root.Controls.Add(grid, 0, 1);
 
@@ -75,6 +77,20 @@ namespace VideoBatch {
         }
 
         static string NormMarket(string m) { return (m ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU"; }
+
+        void AddAccount() {
+            if (!NewAccountDialog.TryShow(FindForm(), "TikTok · " + marketView, out var name, out var profileId)) return;
+            if (settings.TikTokAccounts == null) settings.TikTokAccounts = new List<TikTokAccount>();
+            if (settings.TikTokAccounts.Any(acc => acc != null && string.Equals((acc.ProfileId ?? "").Trim(), profileId, StringComparison.OrdinalIgnoreCase))) {
+                MessageBox.Show(this, "Этот Profile ID уже добавлен в TikTok.", "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            var account = new TikTokAccount { Enabled = true, Name = name, ProfileId = profileId, Market = marketView, Status = "Готов" };
+            settings.TikTokAccounts.Add(account);
+            try { Store.Save(settings); backend.Reload(); accountSearch.Text = ""; RefreshGrid();
+                foreach (DataGridViewRow row in grid.Rows) if (ReferenceEquals(row.Tag, account)) { grid.ClearSelection(); row.Selected = true; grid.CurrentCell = row.Cells["account"]; break; }
+            } catch (Exception ex) { settings.TikTokAccounts.Remove(account); MessageBox.Show(this, ex.Message, "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
 
         public void OnNavigated() {
             ApplyNavigationContext();
@@ -115,11 +131,12 @@ namespace VideoBatch {
                 if (acc == null || NormMarket(acc.Market) != marketView) continue;
                 if (!string.IsNullOrEmpty(q) && (acc.Name ?? "").ToLowerInvariant().IndexOf(q) < 0) continue;
                 int files = acc.Items?.Count(i => !string.IsNullOrWhiteSpace(i.Video)) ?? 0;
-                string title = acc.Items?.FirstOrDefault()?.Title ?? acc.Title ?? "";
-                string desc = acc.Items?.FirstOrDefault()?.Description ?? acc.Description ?? "";
+                string caption = acc.Items?.FirstOrDefault()?.Caption ?? acc.Caption ?? "";
                 int ri = grid.Rows.Add(acc.Enabled, acc.Name, acc.Market, acc.ProfileId, acc.ExpectedIp,
-                    files > 0 ? files.ToString() : "—", title, desc, acc.Status ?? "Готов");
+                    files > 0 ? files.ToString() : "—", caption, acc.Status ?? "Готов");
                 grid.Rows[ri].Tag = acc;
+                grid.Rows[ri].Cells["caption"].ToolTipText = string.Join(Environment.NewLine + Environment.NewLine,
+                    (acc.Items ?? new List<TikTokItem>()).Select((it, i) => (i + 1) + ". " + (it?.Caption ?? "")));
                 n++;
             }
             marketHint.Text = (marketView == "EN" ? "English" : "Русские") + " · аккаунтов: " + n;

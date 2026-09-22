@@ -11,7 +11,7 @@ namespace VideoBatch {
     [DataContract]
     public sealed class HttpUploadItemJob {
         [DataMember] public string localJobId, video, title, scheduleDate, scheduleTime;
-        [DataMember] public string thumbnail, contentKind, thumbnailStatus;
+        [DataMember] public string thumbnail, contentKind, thumbnailStatus, publishMode;
         [DataMember] public long scheduledUnixSeconds;
     }
 

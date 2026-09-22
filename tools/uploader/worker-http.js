@@ -191,13 +191,14 @@ function validateBatchJob(value) {
   if (rawItems.length === 0) throw new Error("Пустой список items[].");
   const publishMode = resolvePublishMode(value);
   const items = rawItems.map((it, index) => {
-    const merged = Object.assign({}, value, it || {}, { publishMode });
+    const merged = Object.assign({}, value, it || {});
     const validated = validateJob(merged);
     return {
       localJobId: String(it.localJobId || validated.localJobId || `item-${index + 1}`),
       video: validated.video,
       title: validated.title,
       scheduledUnixSeconds: validated.scheduledUnixSeconds,
+      publishMode: validated.publishMode,
       thumbnail: validated.thumbnail || "",
       contentKind: validated.contentKind || "long",
       thumbnailStatus: "pending"
@@ -747,7 +748,7 @@ async function uploadOne(page, context, session, sapisid, item, packIndex, packT
   const videoId = createJson && createJson.videoId;
   if (!videoId) throw new Error("Файл загружен, но YouTube не подтвердил создание видео. Повторно не запускайте; профиль оставлен открытым.");
 
-  const publishMode = resolvePublishMode(job);
+  const publishMode = resolvePublishMode(item);
   const scheduleLabel = publishMode === "immediate" ? "Публикую сразу…"
     : publishMode === "private" ? "Сохраняю как приватное…"
       : "Ставлю отложенную публикацию…";

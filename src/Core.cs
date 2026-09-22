@@ -71,6 +71,7 @@ namespace VideoBatch {
         public int HttpWorkerCustomCount=3;
         /// <summary>scheduled | immediate | private</summary>
         public string YouTubeHttpPublishMode="scheduled";
+        public string YouTubeHttpLongPublishMode="immediate";
         public string UploadStagingFolder=@"C:\VideoBatch\Upload";
         public List<YouTubeChannel> YouTubeChannels=new List<YouTubeChannel>();
         public string YouTubeSearchTitle="", YouTubeSearchUrl="", YouTubeSearchFilter="today";
@@ -101,7 +102,8 @@ namespace VideoBatch {
         public bool KeepDolphinProfileOpenAfterUpload=true;
         /// <summary>random | period</summary>
         public string YouTubeScheduleMode="random";
-        public int YouTubeScheduleMinMinutes=10, YouTubeScheduleMaxMinutes=60;
+        public int YouTubeScheduleMinMinutes=15, YouTubeScheduleMaxMinutes=20;
+        public bool YouTubeShortSchedule20260922Migrated;
         public int YouTubeScheduleLeadMinutes=30;
         public int YouTubeScheduleLongMinMinutes=1, YouTubeScheduleLongMaxMinutes=5;
         public int YouTubeSchedulePeriodMinGapMinutes=10;
@@ -198,9 +200,14 @@ namespace VideoBatch {
             if(p.YouTubeSearchUrl==null)p.YouTubeSearchUrl="";
             if(string.IsNullOrWhiteSpace(p.YouTubeMarketView)||(p.YouTubeMarketView!="RU"&&p.YouTubeMarketView!="EN"))p.YouTubeMarketView="RU";
             if(string.IsNullOrWhiteSpace(p.YouTubeScheduleMode))p.YouTubeScheduleMode="random";
-            if(p.YouTubeScheduleMinMinutes<1)p.YouTubeScheduleMinMinutes=10;
-            if(p.YouTubeScheduleMaxMinutes==30)p.YouTubeScheduleMaxMinutes=60;
-            if(p.YouTubeScheduleMaxMinutes<p.YouTubeScheduleMinMinutes)p.YouTubeScheduleMaxMinutes=Math.Max(60,p.YouTubeScheduleMinMinutes+30);
+            // Старое значение по умолчанию 10–60 было чрезмерным для пачек Shorts.
+            // Индивидуальные настройки сохраняются без изменения.
+            if(!p.YouTubeShortSchedule20260922Migrated){
+                if(p.YouTubeScheduleMinMinutes==10&&p.YouTubeScheduleMaxMinutes==60){p.YouTubeScheduleMinMinutes=15;p.YouTubeScheduleMaxMinutes=20;}
+                p.YouTubeShortSchedule20260922Migrated=true;
+            }
+            if(p.YouTubeScheduleMinMinutes<1)p.YouTubeScheduleMinMinutes=15;
+            if(p.YouTubeScheduleMaxMinutes<p.YouTubeScheduleMinMinutes)p.YouTubeScheduleMaxMinutes=p.YouTubeScheduleMinMinutes;
             if(p.YouTubeScheduleLongMinMinutes<1)p.YouTubeScheduleLongMinMinutes=1;
             if(p.YouTubeScheduleLongMaxMinutes<p.YouTubeScheduleLongMinMinutes)p.YouTubeScheduleLongMaxMinutes=5;
             if(p.YouTubeScheduleLeadMinutes<ScheduleGenerator.PreflightMinLeadMinutes)p.YouTubeScheduleLeadMinutes=ScheduleGenerator.DefaultLeadMinutes;
@@ -208,6 +215,7 @@ namespace VideoBatch {
             if(p.HttpWorkerCustomCount<1)p.HttpWorkerCustomCount=HttpWorkerSettings.DefaultWorkers;
             if(p.HttpWorkerCustomCount>HttpWorkerSettings.MaxCustomWorkers)p.HttpWorkerCustomCount=HttpWorkerSettings.MaxCustomWorkers;
             if(string.IsNullOrWhiteSpace(p.YouTubeHttpPublishMode))p.YouTubeHttpPublishMode="scheduled";
+            if(string.IsNullOrWhiteSpace(p.YouTubeHttpLongPublishMode))p.YouTubeHttpLongPublishMode="immediate";
             if(p.MaxParallelUploads<1)p.MaxParallelUploads=HttpWorkerSettings.DefaultWorkers;
             if(p.MaxParallelUploads>HttpWorkerSettings.MaxCustomWorkers)p.MaxParallelUploads=HttpWorkerSettings.MaxCustomWorkers;
             if(p.TikTokMaxParallelUploads<1)p.TikTokMaxParallelUploads=1;

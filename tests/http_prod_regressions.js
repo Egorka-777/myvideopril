@@ -19,11 +19,16 @@ const batch = worker.validateBatchJob({
   profileId: "p1",
   localPort: 3001,
   expectedIp: "1.2.3.4",
+  publishMode: "scheduled",
   items: [
-    { localJobId: "a", video: path.join(__dirname, "title_cleaner_regressions.js"), title: "Test title", scheduledUnixSeconds: Math.floor(Date.now() / 1000) + 3600 }
+    { localJobId: "a", video: path.join(__dirname, "title_cleaner_regressions.js"), title: "Test Shorts", contentKind: "shorts", scheduledUnixSeconds: Math.floor(Date.now() / 1000) + 3600 },
+    { localJobId: "b", video: path.join(__dirname, "title_cleaner_regressions.js"), title: "Test Long", contentKind: "long", publishMode: "immediate", scheduledUnixSeconds: 0 }
   ]
 });
-assert.strictEqual(batch.items.length, 1);
+assert.strictEqual(batch.items.length, 2);
 assert.strictEqual(batch.items[0].localJobId, "a");
+assert.strictEqual(batch.items[0].publishMode, "scheduled");
+assert.strictEqual(batch.items[1].publishMode, "immediate");
+assert.strictEqual(batch.items[1].scheduledUnixSeconds, 0);
 
 console.log("http production worker regression checks passed");

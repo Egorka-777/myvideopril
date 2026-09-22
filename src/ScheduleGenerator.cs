@@ -12,7 +12,7 @@ namespace VideoBatch {
         public int MinutesAfterPrevious;
     }
 
-    /// <summary>Publishing slots: per-profile legacy or global cross-channel queue (Shorts 10–30 min, Long 1–5 min, no night pause).</summary>
+    /// <summary>Время ПК для планирования; перед HTTP-запросом переводится в Unix timestamp.</summary>
     public static class ScheduleGenerator {
         /// <summary>YouTube API rejects schedules sooner than this.</summary>
         public const int YouTubeApiMinLeadMinutes = 15;
@@ -43,14 +43,17 @@ namespace VideoBatch {
             return at;
         }
 
-        static bool BatchNeedsRecalculation(IList<PreparedProfileBatch> batches, Preferences prefs) {
+        static bool BatchNeedsRecalculation(IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled) {
             if (batches == null) return false;
             DateTime floor = ScheduleFloor(prefs);
             foreach (var batch in batches) {
                 if (batch?.Items == null) continue;
                 foreach (var it in batch.Items) {
+                    if (!allScheduled && HttpWorkerSettings.ResolvePublishMode(prefs, it.Kind ?? batch.Channel?.Kind) != "scheduled") continue;
                     if (!TryParseSlot(it.ScheduleDate, it.ScheduleTime, out var at)) return true;
-                    if (at < floor) return true;
+                    // Позволяем пройти предпросмотр: его несколько секунд не требуют
+                    // нового расписания, если до публикации ещё есть безопасный запас.
+                    if (at < floor.AddMinutes(-2)) return true;
                     if (at <= DateTime.Now.AddMinutes(YouTubeApiMinLeadMinutes)) return true;
                 }
             }
@@ -58,10 +61,10 @@ namespace VideoBatch {
         }
 
         /// <summary>Recalculate entire queue when any slot is too soon for YouTube HTTP (+lead buffer).</summary>
-        public static bool EnsureValidYouTubeSchedule(IList<PreparedProfileBatch> batches, Preferences prefs) {
+        public static bool EnsureValidYouTubeSchedule(IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled=false) {
             if (batches == null || batches.Count == 0) return false;
-            if (!BatchNeedsRecalculation(batches, prefs)) return false;
-            AssignCrossBatchSchedule(batches, prefs, forceFromFloor: true);
+            if (!BatchNeedsRecalculation(batches, prefs, allScheduled)) return false;
+            AssignCrossBatchSchedule(batches, prefs, forceFromFloor: true, allScheduled: allScheduled);
             return true;
         }
 
@@ -83,7 +86,7 @@ namespace VideoBatch {
             return result;
         }
 
-        /// <summary>Global queue: channel1 all videos, then channel2… Gap from previous slot; Shorts 10–30 min, Long 1–5 min.</summary>
+        /// <summary>Legacy global queue, separate from the HTTP batch scheduler.</summary>
         public static List<ScheduleSlot> GenerateGlobalQueue(IList<string> kinds, string statePath, Preferences prefs = null) {
             var result = new List<ScheduleSlot>();
             if (kinds == null || kinds.Count == 0) return result;
@@ -113,13 +116,20 @@ namespace VideoBatch {
         public static int RandomGapForKind(string kind, Preferences prefs) {
             bool shorts = !string.Equals((kind ?? "").Trim(), "long", StringComparison.OrdinalIgnoreCase);
             if (shorts) {
-                int minM = Math.Max(1, prefs?.YouTubeScheduleMinMinutes ?? 10);
-                int maxM = Math.Max(minM, prefs?.YouTubeScheduleMaxMinutes ?? 60);
+                int minM = Math.Max(1, prefs?.YouTubeScheduleMinMinutes ?? 15);
+                int maxM = Math.Max(minM, prefs?.YouTubeScheduleMaxMinutes ?? 20);
                 return Rng.Next(minM, maxM + 1);
             }
             int lmin = Math.Max(1, prefs?.YouTubeScheduleLongMinMinutes ?? 1);
             int lmax = Math.Max(lmin, prefs?.YouTubeScheduleLongMaxMinutes ?? 5);
             return Rng.Next(lmin, lmax + 1);
+        }
+
+        static int RandomGapSecondsForKind(string kind, Preferences prefs) {
+            bool shorts = !string.Equals((kind ?? "").Trim(), "long", StringComparison.OrdinalIgnoreCase);
+            int min = Math.Max(1, shorts ? prefs?.YouTubeScheduleMinMinutes ?? 15 : prefs?.YouTubeScheduleLongMinMinutes ?? 1);
+            int max = Math.Max(min, shorts ? prefs?.YouTubeScheduleMaxMinutes ?? 20 : prefs?.YouTubeScheduleLongMaxMinutes ?? 5);
+            return Rng.Next(min * 60, max * 60 + 1);
         }
 
         static List<ScheduleSlot> GenerateRandomIntervalMode(int count, Preferences prefs, string statePath, string kind) {
@@ -193,18 +203,18 @@ namespace VideoBatch {
             return new ScheduleSlot {
                 At = at,
                 date = at.ToString("yyyy-MM-dd"),
-                time = at.ToString("HH:mm"),
+                time = at.ToString("HH:mm:ss"),
                 MinutesAfterPrevious = prev == DateTime.MinValue ? 0 : (int)Math.Round((at - prev).TotalMinutes)
             };
         }
 
-        /// <summary>Across channels: first video +1–10 min from previous channel; within channel use Shorts/Long gaps.</summary>
-        public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool forceFromFloor = false) {
+        /// <summary>Общее расписание только для запланированных роликов; публикация Long по умолчанию мгновенная.</summary>
+        public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool forceFromFloor = false, bool allScheduled = false) {
             if (batches == null || batches.Count == 0) return;
 
             DateTime floor = ScheduleFloor(prefs);
-            DateTime cursor = forceFromFloor ? floor : LoadNextSlot(GlobalStatePath());
-            if (cursor < floor) cursor = floor;
+            // Подготовка/отмена пачки не резервирует часы в следующем запуске.
+            DateTime cursor = floor;
             if (!string.IsNullOrWhiteSpace(prefs?.YouTubeScheduleFirstPublish)
                 && DateTime.TryParse(prefs.YouTubeScheduleFirstPublish, null, System.Globalization.DateTimeStyles.RoundtripKind, out var firstOverride)
                 && firstOverride > DateTime.Now)
@@ -213,26 +223,19 @@ namespace VideoBatch {
             DateTime prev = DateTime.MinValue;
             foreach (var batch in batches) {
                 if (batch?.Items == null) continue;
-                int vi = 0;
                 foreach (var it in batch.Items) {
-                    if (prev != DateTime.MinValue) {
-                        int gap;
-                        if (vi == 0)
-                            gap = Rng.Next(1, 11);
-                        else if (batch.Items.Count > 1)
-                            gap = Rng.Next(30, 61);
-                        else
-                            gap = RandomGapForKind(batch.Channel?.Kind ?? "shorts", prefs);
-                        cursor = prev.AddMinutes(gap);
+                    string kind=it.Kind ?? batch.Channel?.Kind ?? "shorts";
+                    if (!allScheduled && HttpWorkerSettings.ResolvePublishMode(prefs, kind) != "scheduled") {
+                        it.ScheduleDate="";it.ScheduleTime="";
+                        continue;
                     }
+                    if (prev != DateTime.MinValue) cursor = prev.AddSeconds(RandomGapSecondsForKind(kind, prefs));
                     var slot = MakeSlot(cursor, prev);
                     it.ScheduleDate = slot.date;
                     it.ScheduleTime = slot.time;
                     prev = cursor;
-                    vi++;
                 }
             }
-            if (prev != DateTime.MinValue) SaveNextSlot(GlobalStatePath(), prev);
         }
 
         public static string ProfileStatePath(string profileId) {
@@ -303,6 +306,34 @@ namespace VideoBatch {
                 if (cross[0].Items[0].ScheduleDate == null) return false;
                 if (!TryParseSlot(cross[0].Items[0].ScheduleDate, cross[0].Items[0].ScheduleTime, out var firstAt)) return false;
                 if (firstAt < DateTime.Now.AddMinutes(ResolveLeadMinutes(prefs) - 1)) return false;
+                var shortsPrefs = new Preferences { YouTubeScheduleMinMinutes = 15, YouTubeScheduleMaxMinutes = 20,
+                    YouTubeHttpPublishMode = "scheduled", YouTubeHttpLongPublishMode = "immediate" };
+                var mixed = new List<PreparedProfileBatch>();
+                for (int i = 0; i < 6; i++) {
+                    var p = new PreparedProfileBatch { Channel = new YouTubeChannel { Kind = "shorts" }, Items = new List<PreparedUploadItem>() };
+                    for (int j = 0; j < 5; j++) p.Items.Add(new PreparedUploadItem { Kind = "shorts" });
+                    mixed.Add(p);
+                }
+                mixed.Add(new PreparedProfileBatch { Channel = new YouTubeChannel { Kind = "long" },
+                    Items = new List<PreparedUploadItem> { new PreparedUploadItem { Kind = "long" } } });
+                AssignCrossBatchSchedule(mixed, shortsPrefs);
+                DateTime previous = DateTime.MinValue;
+                int scheduled = 0;
+                foreach (var batch in mixed) foreach (var item in batch.Items) {
+                    if (item.Kind == "long") {
+                        if (!string.IsNullOrEmpty(item.ScheduleDate) || !string.IsNullOrEmpty(item.ScheduleTime)) return false;
+                        continue;
+                    }
+                    if (!TryParseSlot(item.ScheduleDate, item.ScheduleTime, out var slot)) return false;
+                    if (slot < DateTime.Now.AddMinutes(PreflightMinLeadMinutes - 1)) return false;
+                    if (previous != DateTime.MinValue && (slot - previous).TotalSeconds < 900) return false;
+                    if (previous != DateTime.MinValue && (slot - previous).TotalSeconds > 1200) return false;
+                    long unix = new DateTimeOffset(DateTime.SpecifyKind(slot, DateTimeKind.Local)).ToUnixTimeSeconds();
+                    if (DateTimeOffset.FromUnixTimeSeconds(unix).LocalDateTime != slot) return false;
+                    previous = slot;
+                    scheduled++;
+                }
+                if (scheduled != 30 || (previous - ParseSlot(mixed[0].Items[0].ScheduleDate, mixed[0].Items[0].ScheduleTime)).TotalHours > 10) return false;
                 return true;
             } finally {
                 try { File.Delete(temp); } catch { }

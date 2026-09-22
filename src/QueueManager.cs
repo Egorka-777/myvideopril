@@ -14,6 +14,7 @@ namespace VideoBatch {
         public string ScheduleDate;
         public string ScheduleTime;
         public string UploadTitle;
+        public string Kind;
     }
 
     public sealed class PreparedProfileBatch {
@@ -134,7 +135,7 @@ namespace VideoBatch {
             Func<string,string,int,int,string,string,string> stageFile,
             Func<YouTubeChannel,YouTubeItem,int,int,string> plannedFileName,
             Func<string,int,int,string> cleanTitleForUpload,
-            Preferences schedulePrefs=null){
+            Preferences schedulePrefs=null,bool studioSchedule=false){
             jobs=DeduplicateJobs(jobs);
             ValidateBeforeStart(jobs,plannedFileName);
             var grouped=new Dictionary<string,List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)>>(StringComparer.OrdinalIgnoreCase);
@@ -170,13 +171,16 @@ namespace VideoBatch {
                         Index=j.index,
                         Total=j.total,
                         StagedVideo=staged,
-                        UploadTitle=uploadTitles[ti]
+                        UploadTitle=uploadTitles[ti],
+                        Kind=j.ch.Kind
                     });
                 }
                 batches.Add(batch);
             }
-            ScheduleGenerator.AssignCrossBatchSchedule(batches,schedulePrefs);
-            ScheduleGenerator.EnsureValidYouTubeSchedule(batches,schedulePrefs);
+            ScheduleGenerator.AssignCrossBatchSchedule(batches,schedulePrefs,allScheduled:studioSchedule);
+            ScheduleGenerator.EnsureValidYouTubeSchedule(batches,schedulePrefs,allScheduled:studioSchedule);
+            if(studioSchedule)foreach(var batch in batches)foreach(var it in batch.Items)
+                if(!string.IsNullOrEmpty(it.ScheduleTime)&&it.ScheduleTime.Length>5)it.ScheduleTime=it.ScheduleTime.Substring(0,5);
             return batches;
         }
 

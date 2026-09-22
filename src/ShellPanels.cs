@@ -143,7 +143,8 @@ namespace VideoBatch {
             var bottom = Theme.MakeToolbar();
             bottom.Controls.Add(Theme.MakeButton("YouTube", accent: true, action: () => OpenPlatform(NavSection.YouTube)));
             bottom.Controls.Add(Theme.MakeButton("TikTok", action: () => OpenPlatform(NavSection.TikTok)));
-            bottom.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: () => { OpenPlatform(NavSection.YouTube); }));
+            bottom.Controls.Add(Theme.MakeButton("+ Канал YouTube", ghost: true, action: () => OpenPlatform(NavSection.YouTube)));
+            bottom.Controls.Add(Theme.MakeButton("+ Аккаунт TikTok", ghost: true, action: () => OpenPlatform(NavSection.TikTok)));
             bottom.Controls.Add(Theme.MakeButton("Проверить IP", ghost: true, action: async () => await CheckSelectedIp()));
             Controls.Add(bottom);
             RefreshData();
@@ -457,7 +458,29 @@ namespace VideoBatch {
             var publishMode = Theme.MakeCombo(new[] { "scheduled", "immediate", "private" });
             publishMode.SelectedItem = string.IsNullOrWhiteSpace(settings.YouTubeHttpPublishMode) ? "scheduled" : settings.YouTubeHttpPublishMode;
             publishMode.SelectedIndexChanged += (s, e) => { settings.YouTubeHttpPublishMode = publishMode.SelectedItem?.ToString() ?? "scheduled"; save(); };
-            card.Controls.Add(Labeled("HTTP публикация (scheduled/immediate/private)", publishMode));
+            card.Controls.Add(Labeled("YouTube HTTP · Shorts", publishMode));
+
+            var longMode = Theme.MakeCombo(new[] { "immediate", "scheduled", "private" });
+            longMode.SelectedItem = HttpWorkerSettings.ResolvePublishMode(settings, "long");
+            longMode.SelectedIndexChanged += (s, e) => { settings.YouTubeHttpLongPublishMode = longMode.SelectedItem?.ToString() ?? "immediate"; save(); };
+            card.Controls.Add(Labeled("YouTube HTTP · Long", longMode));
+
+            var shortsMin = Theme.MakeSearchBox();
+            shortsMin.Text = settings.YouTubeScheduleMinMinutes.ToString(); shortsMin.Width = 80;
+            var shortsMax = Theme.MakeSearchBox();
+            shortsMax.Text = settings.YouTubeScheduleMaxMinutes.ToString(); shortsMax.Width = 80;
+            shortsMin.Leave += (s, e) => {
+                if (int.TryParse(shortsMin.Text, out var v) && v >= 1 && v <= settings.YouTubeScheduleMaxMinutes) { settings.YouTubeScheduleMinMinutes = v; save(); }
+                shortsMin.Text = settings.YouTubeScheduleMinMinutes.ToString();
+            };
+            shortsMax.Leave += (s, e) => {
+                if (int.TryParse(shortsMax.Text, out var v) && v >= settings.YouTubeScheduleMinMinutes && v <= 1440) { settings.YouTubeScheduleMaxMinutes = v; save(); }
+                shortsMax.Text = settings.YouTubeScheduleMaxMinutes.ToString();
+            };
+            card.Controls.Add(Labeled("Shorts · минимум, мин", shortsMin));
+            card.Controls.Add(Labeled("Shorts · максимум, мин", shortsMax));
+            card.Controls.Add(new Label { Text = "Отложенные Shorts используют время и часовой пояс этого ПК. Ранее созданные отложенные ролики не меняются.",
+                ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0) });
 
             var lead = Theme.MakeSearchBox();
             lead.Text = settings.YouTubeScheduleLeadMinutes.ToString();

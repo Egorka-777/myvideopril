@@ -945,7 +945,7 @@ namespace VideoBatch {
             foreach(var job in flat)job.item.Title=CleanTitle(job.item.Title);
             if(flat.Count==0){MessageBox.Show(this,"Нет готовых роликов для предпросмотра.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return false;}
             var batches=QueueManager.Prepare(flat,(src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),(ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),(title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),settings);
-            using(var dlg=new SchedulePreviewDialog(batches))return dlg.ShowDialog(this)==DialogResult.OK;
+            using(var dlg=new SchedulePreviewDialog(batches,settings,true,true))return dlg.ShowDialog(this)==DialogResult.OK;
         }
         public string CurrentLogFile=>logFile;
         void RemoveSelectedFromQueue(){
@@ -1513,7 +1513,7 @@ namespace VideoBatch {
                     (src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),
                     (ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),
                     (title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),
-                    settings);
+                    settings,studioSchedule:true);
                 if(!ShowSchedulePreview(batches))return;
                 batches=QueueManager.ShuffleBatches(batches);
                 Write("Порядок каналов перемешан · пауза между стартами профилей 2–12 сек.");
@@ -1617,13 +1617,16 @@ namespace VideoBatch {
                 if(free.Count==0){MessageBox.Show(this,"Выбранные каналы уже загружаются.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 foreach(var j in free)Status(j.row,ChannelStatus.Preparing);
                 var batches=QueueManager.Prepare(free,(src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),(ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),(title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),settings);
-                string publishModePreflight=HttpWorkerSettings.ResolvePublishMode(settings);
-                if(publishModePreflight=="scheduled"){
+                bool hasScheduled=batches.Any(b=>b.Items.Any(it=>HttpWorkerSettings.ResolvePublishMode(settings,it.Kind??b.Channel?.Kind)=="scheduled"));
+                if(hasScheduled){
                     if(ScheduleGenerator.EnsureValidYouTubeSchedule(batches,settings))
                         Write("Расписание пересчитано: первая публикация не раньше чем через "+ScheduleGenerator.ResolveLeadMinutes(settings)+" мин.");
-                    if(!ShowSchedulePreview(batches))return;
-                    ScheduleGenerator.EnsureValidYouTubeSchedule(batches,settings);
-                }
+                    if(!ShowSchedulePreview(batches,true))return;
+                    if(ScheduleGenerator.EnsureValidYouTubeSchedule(batches,settings)){
+                        Write("Расписание изменилось во время предпросмотра — подтвердите обновлённые слоты.");
+                        if(!ShowSchedulePreview(batches,true))return;
+                    }
+                } else if(!ShowSchedulePreview(batches,true))return;
                 var preflight=HttpUploadPreflight.Validate(batches,settings);
                 if(preflight.Count>0){
                     MessageBox.Show(this,string.Join(Environment.NewLine,preflight),"HTTP: проверка не пройдена",MessageBoxButtons.OK,MessageBoxIcon.Warning);
@@ -1635,7 +1638,7 @@ namespace VideoBatch {
                 int maxParallel=HttpWorkerSettings.ResolveWorkerCount(settings);
                 bool autoWorkers=HttpWorkerSettings.IsAutoMode(settings);
                 string publishMode=HttpWorkerSettings.ResolvePublishMode(settings);
-                Write("HTTP worker pool: "+HttpWorkerSettings.PresetLabel(settings)+", режим публикации: "+PublishModeLabel(publishMode)+".");
+                Write("HTTP worker pool: "+HttpWorkerSettings.PresetLabel(settings)+", Shorts: "+PublishModeLabel(publishMode)+", Long: "+PublishModeLabel(HttpWorkerSettings.ResolvePublishMode(settings,"long"))+".");
                 lock(uploadLock){if(uploadCts==null)uploadCts=new CancellationTokenSource();foreach(var b in batches)busyProfiles.Add(b.ProfileId);}
                 var ct=uploadCts.Token;token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 UploadBusyStart();uiStarted=true;
@@ -1681,8 +1684,9 @@ namespace VideoBatch {
                             metrics.Finish("manual_check");
                             SafeSave();
                         }else{
-                            string okLabel=publishMode=="immediate"?"HTTP · опубликовано ✓":publishMode=="private"?"HTTP · приватное ✓":"HTTP · отложено ✓";
-                            ch.Status=publishMode=="immediate"?ChannelStatus.Published:ChannelStatus.Scheduled;
+                            string batchMode=HttpWorkerSettings.ResolvePublishMode(settings,batch.Items[0].Kind??batch.Channel?.Kind);
+                            string okLabel=batchMode=="immediate"?"HTTP · опубликовано ✓":batchMode=="private"?"HTTP · приватное ✓":"HTTP · отложено ✓";
+                            ch.Status=batchMode=="immediate"?ChannelStatus.Published:ChannelStatus.Scheduled;
                             Status(row,batch.Items.Count>1?(okLabel+" · "+batch.Items.Count):okLabel);
                             if(run!=null&&run.ThumbnailWarning)metrics.Finish("warning");else metrics.Finish("success");
                             TaskQueueStore.LogEvent(ch.Name,"HTTP загрузка",run!=null&&run.ThumbnailWarning?"Успех с предупреждением":"Успех","");
@@ -1733,17 +1737,21 @@ namespace VideoBatch {
                 localPort=settings.DolphinPort,keepProfileOpen=settings.KeepDolphinProfileOpenAfterUpload,
                 runId=runId,publishMode=publishMode??"scheduled",
                 items=batch.Items.Select(it=>{
+                    string itemKind=string.Equals(it.Kind??kind,"shorts",StringComparison.OrdinalIgnoreCase)?"shorts":"long";
+                    string itemMode=HttpWorkerSettings.ResolvePublishMode(settings,itemKind);
                     long unix=0;
-                    if(!string.Equals(publishMode,"scheduled",StringComparison.OrdinalIgnoreCase))unix=0;
-                    else unix=new DateTimeOffset(DateTime.Parse(it.ScheduleDate+" "+it.ScheduleTime)).ToUnixTimeSeconds();
+                    if(itemMode=="scheduled"){
+                        DateTime local=ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime);
+                        unix=new DateTimeOffset(DateTime.SpecifyKind(local,DateTimeKind.Local)).ToUnixTimeSeconds();
+                    }
                     string id=TaskQueueStore.NewId();
                     TaskQueueStore.Upsert(id,t=>{
                         t.Platform="YouTube";t.Account=batch.Channel.Name;t.ProfileId=batch.ProfileId;t.File=Path.GetFileName(it.StagedVideo);
-                        t.UploadMethod="HTTP";t.ScheduledAt=it.ScheduleDate+" "+it.ScheduleTime;t.Status=TaskQueueStatus.Waiting;
+                        t.UploadMethod="HTTP";t.ScheduledAt=itemMode=="scheduled"?it.ScheduleDate+" "+it.ScheduleTime:"";t.Status=TaskQueueStatus.Waiting;
                     },immediate:true);
                     return new HttpUploadItemJob{
                         localJobId=id,video=it.StagedVideo,title=it.UploadTitle,scheduleDate=it.ScheduleDate,scheduleTime=it.ScheduleTime,
-                        scheduledUnixSeconds=unix,thumbnail=it.Source?.Thumbnail??"",contentKind=kind,thumbnailStatus="pending"
+                        scheduledUnixSeconds=unix,thumbnail=it.Source?.Thumbnail??"",contentKind=itemKind,publishMode=itemMode,thumbnailStatus="pending"
                     };
                 }).ToArray()
             };
@@ -1752,8 +1760,8 @@ namespace VideoBatch {
             var match=System.Text.RegularExpressions.Regex.Match(value??"",@"(?:youtube\.com/)?channel/(UC[A-Za-z0-9_-]+)",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             return match.Success?match.Groups[1].Value:"";
         }
-        bool ShowSchedulePreview(System.Collections.Generic.List<PreparedProfileBatch> batches){
-            using(var dlg=new SchedulePreviewDialog(batches))return dlg.ShowDialog(this)==DialogResult.OK;
+        bool ShowSchedulePreview(System.Collections.Generic.List<PreparedProfileBatch> batches,bool http=false){
+            using(var dlg=new SchedulePreviewDialog(batches,settings,http))return dlg.ShowDialog(this)==DialogResult.OK;
         }
         void Finish(){if(cancellation!=null){cancellation.Dispose();cancellation=null;}Busy(false);SaveGrid();SaveSearchFields();RefreshMarketUi();}
     }
