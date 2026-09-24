@@ -34,29 +34,37 @@ namespace VideoBatch {
 
             int n = 0;
             DateTime? prev = null;
-            foreach (var batch in batches ?? new List<PreparedProfileBatch>()) {
-                foreach (var it in batch.Items) {
-                    n++;
-                    string mode=http?HttpWorkerSettings.ResolvePublishMode(prefs,it.Kind??batch.Channel?.Kind):"scheduled";
-                    DateTime at=DateTime.MinValue;
-                    int gap=0;
-                    if(mode=="scheduled"){
-                        if(!ScheduleGenerator.TryParseSlot(it.ScheduleDate,it.ScheduleTime,out at))
-                            throw new Exception("Нет времени публикации для «"+it.UploadTitle+"».");
-                        gap=prev.HasValue?(int)Math.Round((at-prev.Value).TotalMinutes):0;
-                        prev=at;
-                    }
-                    grid.Rows.Add(n, Path.GetFileName(it.StagedVideo ?? it.Source?.Video ?? ""), it.UploadTitle,
-                        batch.Channel?.Name ?? "", mode=="immediate"?"Сразу":mode=="private"?"Приватное":"Отложено",
-                        mode=="scheduled"?it.ScheduleDate:"—",mode=="scheduled"?it.ScheduleTime:"—",gap>0?gap.ToString():"—");
+            var ordered = new List<(PreparedUploadItem it, PreparedProfileBatch batch)>();
+            foreach (var batch in batches ?? new List<PreparedProfileBatch>())
+                foreach (var it in batch.Items ?? new List<PreparedUploadItem>())
+                    ordered.Add((it, batch));
+            if (string.Equals(prefs?.YouTubeScheduleMode ?? "network", "network", StringComparison.OrdinalIgnoreCase))
+                ordered = ScheduleGenerator.OrderScheduledItems(batches);
+            foreach (var pair in ordered) {
+                var it = pair.it;
+                var batch = pair.batch;
+                n++;
+                string mode=http?HttpWorkerSettings.ResolvePublishMode(prefs,it.Kind??batch.Channel?.Kind):"scheduled";
+                DateTime at=DateTime.MinValue;
+                int gap=0;
+                if(mode=="scheduled"){
+                    if(!ScheduleGenerator.TryParseSlot(it.ScheduleDate,it.ScheduleTime,out at))
+                        throw new Exception("Нет времени публикации для «"+it.UploadTitle+"».");
+                    gap=prev.HasValue?(int)Math.Round((at-prev.Value).TotalMinutes):0;
+                    prev=at;
                 }
+                grid.Rows.Add(n, Path.GetFileName(it.StagedVideo ?? it.Source?.Video ?? ""), it.UploadTitle,
+                    batch.Channel?.Name ?? "", mode=="immediate"?"Сразу":mode=="private"?"Приватное":"Отложено",
+                    mode=="scheduled"?it.ScheduleDate:"—",mode=="scheduled"?it.ScheduleTime:"—",gap>0?gap.ToString():"—");
             }
 
             var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(12) };
             TimeSpan offset=TimeZoneInfo.Local.GetUtcOffset(DateTime.Now);
             string sign=offset<TimeSpan.Zero?"-":"+";
             var note=new Label { AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(8,8,14,4),
-                Text="Время этого ПК: "+DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")+" (UTC"+sign+offset.Duration().ToString(@"hh\:mm")+"). Страна канала не меняет время слота." };
+                Text="Время этого ПК: "+DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")+" (UTC"+sign+offset.Duration().ToString(@"hh\:mm")+"). Сеть: "
+                +(prefs?.YouTubeScheduleNetworkPeriodMinutes??480)+" мин · интервал "
+                +(prefs?.YouTubeScheduleNetworkMinMinutes??3)+"–"+(prefs?.YouTubeScheduleNetworkMaxMinutes??15)+" мин. Часовой пояс аккаунта не учитывается." };
             bottom.Controls.Add(note);
             var ok = Theme.MakeButton(previewOnly?"Закрыть":"Запустить", accent: true, action: () => { DialogResult = DialogResult.OK; Close(); });
             var cancel = Theme.MakeButton("Отмена", ghost: true, action: () => { DialogResult = DialogResult.Cancel; Close(); });

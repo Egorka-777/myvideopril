@@ -208,12 +208,16 @@ namespace VideoBatch {
             };
         }
 
-        /// <summary>Общее расписание только для запланированных роликов; публикация Long по умолчанию мгновенная.</summary>
+        /// <summary>Общее расписание запланированных роликов (режим network — сеть аккаунтов на период ПК).</summary>
         public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool forceFromFloor = false, bool allScheduled = false) {
             if (batches == null || batches.Count == 0) return;
+            string mode = (prefs?.YouTubeScheduleMode ?? "network").Trim().ToLowerInvariant();
+            if (mode == "network") {
+                AssignNetworkSchedule(batches, prefs, allScheduled);
+                return;
+            }
 
             DateTime floor = ScheduleFloor(prefs);
-            // Подготовка/отмена пачки не резервирует часы в следующем запуске.
             DateTime cursor = floor;
             if (!string.IsNullOrWhiteSpace(prefs?.YouTubeScheduleFirstPublish)
                 && DateTime.TryParse(prefs.YouTubeScheduleFirstPublish, null, System.Globalization.DateTimeStyles.RoundtripKind, out var firstOverride)
@@ -236,6 +240,139 @@ namespace VideoBatch {
                     prev = cursor;
                 }
             }
+        }
+
+        /// <summary>Интервал между публикациями для N аккаунтов × 10 роликов (таблица 6–10 акк.).</summary>
+        public static (int minMinutes, int maxMinutes) ResolveNetworkGapBounds(int accountCount, int totalVideos, Preferences prefs) {
+            int hardMin = Math.Max(1, prefs?.YouTubeScheduleNetworkMinMinutes ?? 3);
+            int hardMax = Math.Max(hardMin, prefs?.YouTubeScheduleNetworkMaxMinutes ?? 15);
+            int[] tableMin = { 0, 0, 0, 0, 0, 0, 5, 4, 4, 3, 3 };
+            int[] tableMax = { 0, 0, 0, 0, 0, 0, 12, 10, 9, 8, 7 };
+            int tMin = hardMin, tMax = hardMax;
+            if (accountCount >= 6 && accountCount <= 10) {
+                tMin = tableMin[accountCount];
+                tMax = tableMax[accountCount];
+            }
+            int period = Math.Max(60, prefs?.YouTubeScheduleNetworkPeriodMinutes ?? 480);
+            double avg = totalVideos > 1 ? (double)period / (totalVideos - 1) : period;
+            int fromAvgMin = Math.Max(1, (int)Math.Floor(avg * 0.7));
+            int fromAvgMax = Math.Max(fromAvgMin, (int)Math.Ceiling(avg * 1.3));
+            int min = Math.Max(hardMin, Math.Min(tMin, fromAvgMin));
+            int max = Math.Min(hardMax, Math.Max(tMax, fromAvgMax));
+            if (max < min) max = min;
+            return (min, max);
+        }
+
+        static void ShuffleList<T>(IList<T> list) {
+            for (int i = list.Count - 1; i > 0; i--) {
+                int j = Rng.Next(i + 1);
+                T tmp = list[i];
+                list[i] = list[j];
+                list[j] = tmp;
+            }
+        }
+
+        /// <summary>Очередь: раунд 1 — по одному ролику с каждого аккаунта (перемешано), раунд 2…</summary>
+        public static List<(PreparedUploadItem item, string profileId)> BuildNetworkInterleavedQueue(
+            IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled) {
+            var profiles = new List<(string profileId, List<PreparedUploadItem> items)>();
+            foreach (var batch in batches) {
+                if (batch?.Items == null || batch.Items.Count == 0) continue;
+                var scheduled = new List<PreparedUploadItem>();
+                foreach (var it in batch.Items) {
+                    string kind = it.Kind ?? batch.Channel?.Kind ?? "shorts";
+                    if (!allScheduled && HttpWorkerSettings.ResolvePublishMode(prefs, kind) != "scheduled") {
+                        it.ScheduleDate = "";
+                        it.ScheduleTime = "";
+                        continue;
+                    }
+                    scheduled.Add(it);
+                }
+                if (scheduled.Count > 0)
+                    profiles.Add(((batch.ProfileId ?? "").Trim(), scheduled));
+            }
+            if (profiles.Count == 0) return new List<(PreparedUploadItem, string)>();
+
+            ShuffleList(profiles);
+            int maxRound = profiles.Max(p => p.items.Count);
+            var queue = new List<(PreparedUploadItem item, string profileId)>();
+            for (int round = 0; round < maxRound; round++) {
+                var roundProfiles = profiles.Where(p => round < p.items.Count).ToList();
+                if (roundProfiles.Count == 0) continue;
+                ShuffleList(roundProfiles);
+                if (queue.Count > 0 && roundProfiles.Count > 1) {
+                    string lastPid = queue[queue.Count - 1].profileId;
+                    if (string.Equals(roundProfiles[0].profileId, lastPid, StringComparison.OrdinalIgnoreCase)) {
+                        int swap = 1 + Rng.Next(roundProfiles.Count - 1);
+                        var tmp = roundProfiles[0];
+                        roundProfiles[0] = roundProfiles[swap];
+                        roundProfiles[swap] = tmp;
+                    }
+                }
+                foreach (var p in roundProfiles)
+                    queue.Add((p.items[round], p.profileId));
+            }
+            return queue;
+        }
+
+        /// <summary>Распределить все отложенные публикации на период активности (время ПК), без двух подряд с одного аккаунта.</summary>
+        public static void AssignNetworkSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool allScheduled = false) {
+            var queue = BuildNetworkInterleavedQueue(batches, prefs, allScheduled);
+            if (queue.Count == 0) return;
+
+            DateTime floor = ScheduleFloor(prefs);
+            if (!string.IsNullOrWhiteSpace(prefs?.YouTubeScheduleFirstPublish)
+                && DateTime.TryParse(prefs.YouTubeScheduleFirstPublish, null, System.Globalization.DateTimeStyles.RoundtripKind, out var firstOverride)
+                && firstOverride > DateTime.Now)
+                floor = firstOverride;
+
+            if (queue.Count == 1) {
+                var slot = MakeSlot(floor, DateTime.MinValue);
+                queue[0].item.ScheduleDate = slot.date;
+                queue[0].item.ScheduleTime = slot.time;
+                return;
+            }
+
+            int accountCount = queue.Select(q => q.profileId).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            int periodMinutes = Math.Max(60, prefs?.YouTubeScheduleNetworkPeriodMinutes ?? 480);
+            double avgMinutes = (double)periodMinutes / (queue.Count - 1);
+            var bounds = ResolveNetworkGapBounds(accountCount, queue.Count, prefs);
+
+            DateTime cursor = floor;
+            DateTime prev = DateTime.MinValue;
+            for (int i = 0; i < queue.Count; i++) {
+                if (i > 0) {
+                    double jitter = avgMinutes * (0.7 + Rng.NextDouble() * 0.6);
+                    int gapSec = (int)Math.Round(Math.Max(bounds.minMinutes * 60.0, Math.Min(bounds.maxMinutes * 60.0, jitter * 60.0)));
+                    cursor = prev.AddSeconds(gapSec);
+                }
+                var slot = MakeSlot(cursor, prev);
+                queue[i].item.ScheduleDate = slot.date;
+                queue[i].item.ScheduleTime = slot.time;
+                prev = cursor;
+            }
+        }
+
+        /// <summary>Все запланированные ролики в хронологическом порядке (для предпросмотра).</summary>
+        public static List<(PreparedUploadItem item, PreparedProfileBatch batch)> OrderScheduledItems(IList<PreparedProfileBatch> batches) {
+            var list = new List<(PreparedUploadItem item, PreparedProfileBatch batch, DateTime at)>();
+            foreach (var batch in batches ?? Array.Empty<PreparedProfileBatch>()) {
+                if (batch?.Items == null) continue;
+                foreach (var it in batch.Items) {
+                    if (!TryParseSlot(it.ScheduleDate, it.ScheduleTime, out var at)) continue;
+                    list.Add((it, batch, at));
+                }
+            }
+            list.Sort((a, b) => a.at.CompareTo(b.at));
+            return list.Select(x => (x.item, x.batch)).ToList();
+        }
+
+        public static bool NetworkQueueHasConsecutiveSameProfile(IList<(PreparedUploadItem item, string profileId)> queue) {
+            if (queue == null || queue.Count < 2) return false;
+            for (int i = 1; i < queue.Count; i++)
+                if (string.Equals(queue[i].profileId, queue[i - 1].profileId, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
         }
 
         public static string ProfileStatePath(string profileId) {
@@ -306,34 +443,52 @@ namespace VideoBatch {
                 if (cross[0].Items[0].ScheduleDate == null) return false;
                 if (!TryParseSlot(cross[0].Items[0].ScheduleDate, cross[0].Items[0].ScheduleTime, out var firstAt)) return false;
                 if (firstAt < DateTime.Now.AddMinutes(ResolveLeadMinutes(prefs) - 1)) return false;
-                var shortsPrefs = new Preferences { YouTubeScheduleMinMinutes = 15, YouTubeScheduleMaxMinutes = 20,
-                    YouTubeHttpPublishMode = "scheduled", YouTubeHttpLongPublishMode = "immediate" };
-                var mixed = new List<PreparedProfileBatch>();
+                var networkPrefs = new Preferences {
+                    YouTubeScheduleMode = "network",
+                    YouTubeScheduleNetworkPeriodMinutes = 480,
+                    YouTubeScheduleNetworkMinMinutes = 3,
+                    YouTubeScheduleNetworkMaxMinutes = 15,
+                    YouTubeScheduleLeadMinutes = 30,
+                    YouTubeHttpPublishMode = "scheduled",
+                    YouTubeHttpLongPublishMode = "scheduled"
+                };
+                var network = new List<PreparedProfileBatch>();
                 for (int i = 0; i < 6; i++) {
-                    var p = new PreparedProfileBatch { Channel = new YouTubeChannel { Kind = "shorts" }, Items = new List<PreparedUploadItem>() };
-                    for (int j = 0; j < 5; j++) p.Items.Add(new PreparedUploadItem { Kind = "shorts" });
-                    mixed.Add(p);
+                    network.Add(new PreparedProfileBatch {
+                        ProfileId = "pid-" + i,
+                        Channel = new YouTubeChannel { Kind = "shorts", ProfileId = "pid-" + i },
+                        Items = Enumerable.Range(0, 10).Select(_ => new PreparedUploadItem { Kind = "shorts" }).ToList()
+                    });
                 }
-                mixed.Add(new PreparedProfileBatch { Channel = new YouTubeChannel { Kind = "long" },
-                    Items = new List<PreparedUploadItem> { new PreparedUploadItem { Kind = "long" } } });
-                AssignCrossBatchSchedule(mixed, shortsPrefs);
-                DateTime previous = DateTime.MinValue;
-                int scheduled = 0;
-                foreach (var batch in mixed) foreach (var item in batch.Items) {
-                    if (item.Kind == "long") {
-                        if (!string.IsNullOrEmpty(item.ScheduleDate) || !string.IsNullOrEmpty(item.ScheduleTime)) return false;
-                        continue;
-                    }
-                    if (!TryParseSlot(item.ScheduleDate, item.ScheduleTime, out var slot)) return false;
-                    if (slot < DateTime.Now.AddMinutes(PreflightMinLeadMinutes - 1)) return false;
-                    if (previous != DateTime.MinValue && (slot - previous).TotalSeconds < 900) return false;
-                    if (previous != DateTime.MinValue && (slot - previous).TotalSeconds > 1200) return false;
-                    long unix = new DateTimeOffset(DateTime.SpecifyKind(slot, DateTimeKind.Local)).ToUnixTimeSeconds();
-                    if (DateTimeOffset.FromUnixTimeSeconds(unix).LocalDateTime != slot) return false;
-                    previous = slot;
-                    scheduled++;
+                var interleaved = BuildNetworkInterleavedQueue(network, networkPrefs, false);
+                if (interleaved.Count != 60) return false;
+                if (NetworkQueueHasConsecutiveSameProfile(interleaved)) return false;
+                AssignCrossBatchSchedule(network, networkPrefs);
+                var ordered = OrderScheduledItems(network);
+                if (ordered.Count != 60) return false;
+                DateTime first = ParseSlot(ordered[0].item.ScheduleDate, ordered[0].item.ScheduleTime);
+                DateTime last = ParseSlot(ordered[ordered.Count - 1].item.ScheduleDate, ordered[ordered.Count - 1].item.ScheduleTime);
+                double spanHours = (last - first).TotalHours;
+                if (spanHours < 6.5 || spanHours > 9.5) return false;
+                var bounds = ResolveNetworkGapBounds(6, 60, networkPrefs);
+                for (int i = 1; i < ordered.Count; i++) {
+                    var slot = ParseSlot(ordered[i].item.ScheduleDate, ordered[i].item.ScheduleTime);
+                    var prev = ParseSlot(ordered[i - 1].item.ScheduleDate, ordered[i - 1].item.ScheduleTime);
+                    if (slot <= prev) return false;
+                    double gapMin = (slot - prev).TotalMinutes;
+                    if (gapMin < bounds.minMinutes - 0.5 || gapMin > bounds.maxMinutes + 0.5) return false;
                 }
-                if (scheduled != 30 || (previous - ParseSlot(mixed[0].Items[0].ScheduleDate, mixed[0].Items[0].ScheduleTime)).TotalHours > 10) return false;
+                var tenAccounts = new List<PreparedProfileBatch>();
+                for (int i = 0; i < 10; i++) {
+                    tenAccounts.Add(new PreparedProfileBatch {
+                        ProfileId = "t-" + i,
+                        Channel = new YouTubeChannel { ProfileId = "t-" + i, Kind = "shorts" },
+                        Items = Enumerable.Range(0, 10).Select(_ => new PreparedUploadItem { Kind = "shorts" }).ToList()
+                    });
+                }
+                AssignCrossBatchSchedule(tenAccounts, networkPrefs);
+                var tenBounds = ResolveNetworkGapBounds(10, 100, networkPrefs);
+                if (tenBounds.minMinutes != 3 || tenBounds.maxMinutes != 7) return false;
                 return true;
             } finally {
                 try { File.Delete(temp); } catch { }

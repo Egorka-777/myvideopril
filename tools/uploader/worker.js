@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-09-21-watch-completeness-v2";
+const WORKER_BUILD = "2026-09-24-connect-open-profile-v1";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -147,6 +147,62 @@ async function api(path, options = {}) {
   throw lastError || new Error("Dolphin API недоступен.");
 }
 
+async function apiRaw(path, options = {}, timeoutMs = 35000) {
+  const url = `http://127.0.0.1:${job.localPort}${path}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+    return { ok: response.ok, status: response.status, data, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function automationEndpoint(data) {
+  const root = data && (data.automation || (data.success && typeof data.success === "object" ? data.success.automation || data.success : null) || data.data || data);
+  if (!root) return null;
+  const port = root.port || root.automationPort || root.automation_port;
+  const ws = root.wsEndpoint || root.ws_endpoint;
+  if (ws && /^wss?:\/\//i.test(ws)) return ws;
+  if (ws && port) return `ws://127.0.0.1:${port}${ws.startsWith("/") ? "" : "/"}${ws}`;
+  return port ? `http://127.0.0.1:${port}` : null;
+}
+
+function extractAutomationEndpoint(data) {
+  if (!data) return null;
+  const queue = [data];
+  const seen = new Set();
+  while (queue.length) {
+    const node = queue.shift();
+    if (!node || typeof node !== "object" || seen.has(node)) continue;
+    seen.add(node);
+    const direct = automationEndpoint(node);
+    if (direct) return direct;
+    for (const key of ["automation", "data", "browserProfile", "profile", "success", "browser_profile"]) {
+      if (node[key] && typeof node[key] === "object") queue.push(node[key]);
+    }
+  }
+  return null;
+}
+
+function isAlreadyRunningError(msg) {
+  return /already running|profile id .* already|уже запущен|profile is running|запущен/i.test(String(msg || ""));
+}
+
+function profileStatusFrom(data) {
+  const root = data && (data.data || data.browserProfile || data.profile || data);
+  return String(root && (root.status || root.state || root.browserStatus) || "").trim().toLowerCase();
+}
+
+function profileLooksRunning(data) {
+  const st = profileStatusFrom(data);
+  return /(^|[^a-z])(running|started|active)([^a-z]|$)|запущен/i.test(st);
+}
+
 async function stopProfile() {
   if (!profileStarted || !job) return;
   try { await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
@@ -155,16 +211,20 @@ async function stopProfile() {
 
 async function profileRunning() {
   try {
-    const info = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`);
-    const st = String((info && (info.status || info.data && info.data.status)) || "").toLowerCase();
-    return st.includes("run") || st === "active" || st === "started";
+    const info = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`);
+    return profileLooksRunning(info.data);
   } catch (_) { return false; }
+}
+
+async function readProfileAutomationEndpoint() {
+  const res = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
+  return res ? extractAutomationEndpoint(res.data) : null;
 }
 
 async function restartAlreadyRunningProfile() {
   const id = encodeURIComponent(job.profileId);
-  send("dolphin", "Профиль открыт без порта автоматизации — безопасно перезапускаю…", { percent: 9 });
-  await api(`/v1.0/browser_profiles/${id}/stop`);
+  send("dolphin", "Открытый профиль без CDP — перезапускаю в режиме автоматизации…", { percent: 9 });
+  await api(`/v1.0/browser_profiles/${id}/stop`).catch(() => {});
   profileStarted = false;
 
   const deadline = Date.now() + 20000;
@@ -172,16 +232,60 @@ async function restartAlreadyRunningProfile() {
     if (!(await profileRunning())) break;
     await new Promise(r => setTimeout(r, 750));
   }
-  if (await profileRunning()) {
-    throw new Error("Dolphin не остановил уже открытый профиль за 20 сек.");
-  }
 
   const started = await api(`/v1.0/browser_profiles/${id}/start?automation=1`);
-  const endpoint = automationEndpoint(started);
+  const endpoint = extractAutomationEndpoint(started);
   if (!endpoint) throw new Error("Dolphin перезапустил профиль, но не вернул порт автоматизации.");
   profileStarted = true;
   send("dolphin", "Профиль перезапущен в режиме автоматизации.", { percent: 11 });
   return endpoint;
+}
+
+async function connectToOpenProfile() {
+  send("dolphin", "Профиль уже открыт — подключаюсь к существующему окну…", { percent: 8 });
+
+  let endpoint = await readProfileAutomationEndpoint();
+  if (endpoint) {
+    profileStarted = true;
+    send("dolphin", "Порт автоматизации найден у открытого профиля.", { percent: 10 });
+    return endpoint;
+  }
+
+  const startRes = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
+  endpoint = extractAutomationEndpoint(startRes.data);
+  if (endpoint) {
+    profileStarted = true;
+    send("dolphin", startRes.ok
+      ? "Профиль запущен."
+      : "Профиль уже был открыт — подключение через CDP.", { percent: 10 });
+    return endpoint;
+  }
+
+  const waitUntil = Date.now() + 18000;
+  while (Date.now() < waitUntil) {
+    await new Promise(r => setTimeout(r, 900));
+    endpoint = await readProfileAutomationEndpoint();
+    if (endpoint) {
+      profileStarted = true;
+      send("dolphin", "Профиль уже открыт — CDP готов.", { percent: 10 });
+      return endpoint;
+    }
+    if (startRes.status >= 500) {
+      const retry = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`).catch(() => null);
+      endpoint = retry ? extractAutomationEndpoint(retry.data) : null;
+      if (endpoint) {
+        profileStarted = true;
+        send("dolphin", "Профиль уже открыт — CDP получен.", { percent: 10 });
+        return endpoint;
+      }
+    }
+  }
+
+  if (await profileRunning()) {
+    return await restartAlreadyRunningProfile();
+  }
+
+  throw new Error("Не удалось подключиться к открытому профилю Dolphin. Закройте профиль вручную и повторите.");
 }
 
 async function startOrConnectProfile() {
@@ -192,39 +296,35 @@ async function startOrConnectProfile() {
     body: JSON.stringify({ token: job.token })
   });
 
-  let lastErr = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      send("dolphin", attempt === 1 ? "Запуск профиля…" : `Профиль: повтор ${attempt}/3…`, { percent: 5 + attempt });
-      const started = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
-      profileStarted = true;
-      const endpoint = automationEndpoint(started);
-      if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
-      return endpoint;
-    } catch (e) {
-      lastErr = e;
-      const msg = String((e && e.message) || e);
-      const already = /already running|уже запущен|HTTP 500|profile is running|запущен/i.test(msg);
-      if (already) {
-        send("dolphin", `Профиль уже открыт — подключаюсь (${attempt}/3)…`, { percent: 8 });
-        const info = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
-        const endpoint = automationEndpoint(info);
-        if (endpoint) {
-          profileStarted = true;
-          return endpoint;
-        }
-        if (await profileRunning()) {
-          try {
-            return await restartAlreadyRunningProfile();
-          } catch (restartError) {
-            lastErr = restartError;
-          }
-        }
-      }
-      if (attempt < 3) await new Promise(r => setTimeout(r, 1200 * attempt));
+  try {
+    send("dolphin", "Запуск профиля…", { percent: 5 });
+    const started = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
+    profileStarted = true;
+    const endpoint = extractAutomationEndpoint(started);
+    if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
+    send("dolphin", "Профиль запущен.", { percent: 10 });
+    return endpoint;
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (isAlreadyRunningError(msg)) {
+      return await connectToOpenProfile();
     }
+    if (/initConnection|ECONNREFUSED/i.test(msg)) {
+      send("dolphin", "Dolphin занят — повтор через 3 сек…", { percent: 6 });
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const started = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
+        profileStarted = true;
+        const endpoint = extractAutomationEndpoint(started);
+        if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
+        return endpoint;
+      } catch (e2) {
+        if (isAlreadyRunningError(String((e2 && e2.message) || e2))) return await connectToOpenProfile();
+        throw e2;
+      }
+    }
+    throw e;
   }
-  throw lastErr || new Error("Не удалось запустить или подключиться к профилю Dolphin.");
 }
 
 async function connectBrowser(endpoint) {
@@ -384,16 +484,6 @@ async function closeProfileSafely(page) {
     profileStarted = false;
   }
   send("dolphin", "Профиль закрыт.", { percent: 98 });
-}
-
-function automationEndpoint(data) {
-  const root = data && (data.automation || (data.success && typeof data.success === "object" ? data.success.automation || data.success : null) || data.data || data);
-  if (!root) return null;
-  const port = root.port || root.automationPort || root.automation_port;
-  const ws = root.wsEndpoint || root.ws_endpoint;
-  if (ws && /^wss?:\/\//i.test(ws)) return ws;
-  if (ws && port) return `ws://127.0.0.1:${port}${ws.startsWith("/") ? "" : "/"}${ws}`;
-  return port ? `http://127.0.0.1:${port}` : null;
 }
 
 async function fetchText(url, timeoutMs = 20000) {
@@ -1118,7 +1208,8 @@ function enrichWatchTarget(target, catalog) {
     return ownerNorm && normalizeTitle(v.channel || "") === ownerNorm;
   });
   if (!String(t.videoId || "").trim()) {
-    const hit = entries.find(v => String(v.videoId || "").trim());
+    const withId = entries.filter(v => String(v.videoId || "").trim());
+    const hit = withId.length ? withId[withId.length - 1] : null;
     if (hit) {
       t.videoId = String(hit.videoId).trim();
       if (!String(t.searchUrl || "").trim() && hit.url) t.searchUrl = hit.url;
@@ -1212,8 +1303,14 @@ async function openVideoDirect(page, videoId, preferShorts) {
   for (const u of urls) {
     await gotoStable(page, u, { waitUntil: "domcontentloaded", timeout: 60000 });
     await dismissYouTubeOverlays(page);
+    await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 45000 }).catch(() => {});
     if (extractVideoId(page.url())) {
-      await ensureVideoPlaying(page);
+      for (let i = 0; i < 4; i++) {
+        await ensureVideoPlaying(page);
+        const st = await readPlaybackState(page);
+        if (!st.missing && (st.duration > 1 || st.current > 0.2 || !st.paused)) break;
+        await page.waitForTimeout(700);
+      }
       return page.url().split("&")[0];
     }
   }
@@ -1827,6 +1924,7 @@ async function ensureVideoPlaying(page) {
     "button.ytp-play-button[title*='Смотр' i]"
   ].join(", "));
   if (await visible(play, 1200)) await play.first().click({ timeout: 2000 }).catch(() => {});
+  await page.keyboard.press("k").catch(() => {});
   await page.evaluate(() => {
     const v = document.querySelector("video.html5-main-video") || document.querySelector("#movie_player video") || document.querySelector("video");
     if (!v) return false;
@@ -1889,6 +1987,22 @@ async function waitForVideoEnd(page) {
     }
     await ensureVideoPlaying(page);
     await new Promise(r => setTimeout(r, 1000));
+  }
+  if (!(duration > 1)) {
+    send("youtube", "Нет длительности — перезагружаю страницу и повторяю Play…", { percent: 84 });
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+    await dismissYouTubeOverlays(page);
+    const retryUntil = Date.now() + 45000;
+    while (Date.now() < retryUntil) {
+      await skipAdIfPossible(page);
+      await ensureVideoPlaying(page);
+      const state = await readPlaybackState(page);
+      if (!state.missing && isFinite(state.duration) && state.duration > 1) {
+        duration = state.duration;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 900));
+    }
   }
   if (!(duration > 1)) throw new Error("Видео открылось, но воспроизведение не стартовало (нет длительности). Профиль оставлен открытым — нажмите Play вручную.");
 

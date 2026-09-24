@@ -21,7 +21,8 @@ namespace VideoBatch {
             int maxWorkers,
             bool autoMode,
             Func<PreparedProfileBatch, HttpAccountMetrics, CancellationToken, Task> runBatch,
-            CancellationToken externalCancel) {
+            CancellationToken externalCancel,
+            ProfileLaunchGate launchGate = null) {
             if (batches == null || batches.Count == 0) return;
             if (runBatch == null) throw new ArgumentNullException(nameof(runBatch));
             maxWorkers = Math.Max(1, maxWorkers);
@@ -51,8 +52,14 @@ namespace VideoBatch {
                             using (workerCts.Token.Register(() => { try { workerCts.Cancel(); } catch { } })) {
                                 workerCts.CancelAfter(HttpWorkerSettings.WorkerTimeout);
                                 try {
-                                    metrics.MarkStarted();
-                                    await runBatch(batch, metrics, workerCts.Token).ConfigureAwait(false);
+                                    if (launchGate != null)
+                                        await launchGate.EnterAsync(workerCts.Token).ConfigureAwait(false);
+                                    try {
+                                        metrics.MarkStarted();
+                                        await runBatch(batch, metrics, workerCts.Token).ConfigureAwait(false);
+                                    } finally {
+                                        if (launchGate != null) launchGate.Exit();
+                                    }
                                 } catch (OperationCanceledException) {
                                     metrics.Finish("stopped");
                                 } catch (Exception) {

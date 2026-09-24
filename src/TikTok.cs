@@ -89,7 +89,7 @@ namespace VideoBatch {
             logs.Controls.Add(log,0,1);root.Controls.Add(logs,0,5);
 
             var bottom=Ui.Flow();
-            upload=Ui.Button("Загрузить",null,true);upload.MinimumSize=new Size(180,42);upload.Click+=async(s,e)=>await UploadAll();
+            upload=Ui.Button("Загрузить",null,true);upload.MinimumSize=new Size(180,42);upload.Click+=async(s,e)=>await UploadAll(null);
             stop=Ui.Button("Стоп",()=>{stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка…");});stop.Visible=false;
             var openLog=Ui.Button("Лог",()=>{try{if(File.Exists(logFile))Ui.Open(logFile);else throw new Exception("Лог ещё не создан.");}catch(Exception e){Ui.Error(this,e);}});
             bottom.Controls.Add(upload);bottom.Controls.Add(stop);bottom.Controls.Add(openLog);root.Controls.Add(bottom,0,6);
@@ -181,24 +181,18 @@ namespace VideoBatch {
             row.Cells[CCaption].ToolTipText=string.Join(Environment.NewLine+Environment.NewLine,a.Items.Select((it,i)=>(i+1)+". "+it.Caption));
         }
         void AddRow(){SaveGrid();AddGridRow(new TikTokAccount{Name=(marketView=="EN"?"Account ":"Аккаунт ")+(grid.Rows.Count+1),Market=marketView});SaveGrid();RefreshMarketUi();}
-        void ImportFromYouTube(){
+        public TikTokSyncResult SyncFromYouTube(){
             SaveGrid();
-            var yt=(settings.YouTubeChannels??new List<YouTubeChannel>()).Where(c=>NormMarket(c.Market)==marketView&&!string.IsNullOrWhiteSpace(c.ProfileId)).ToList();
-            if(yt.Count==0){MessageBox.Show(this,"В YouTube на рынке "+MarketLabel(marketView)+" нет каналов с Profile ID.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
-            int added=0;
-            foreach(var c in yt){
-                string pid=(c.ProfileId??"").Trim();
-                bool exists=(settings.TikTokAccounts??new List<TikTokAccount>()).Any(a=>
-                    NormMarket(a.Market)==marketView&&string.Equals((a.ProfileId??"").Trim(),pid,StringComparison.OrdinalIgnoreCase));
-                if(exists)continue;
-                var acc=new TikTokAccount{
-                    Enabled=true,Name=string.IsNullOrWhiteSpace(c.Name)?("TT "+pid):c.Name,
-                    ProfileId=pid,ExpectedIp=c.ExpectedIp??"",Market=marketView,Status="Импорт из YouTube"
-                };
-                settings.TikTokAccounts.Add(acc);added++;
-            }
+            var r=TikTokProfileSync.SyncFromYouTube(settings,marketView);
             Save();LoadGrid();
-            Write("Импорт из YouTube: добавлено "+added+" аккаунтов (уже существующие Profile ID пропущены).");
+            Write("Синхронизация YouTube→TikTok: привязано "+r.Linked+", новых "+r.Imported
+                +(r.RemovedEmpty>0?", убрано пустых "+r.RemovedEmpty:"")+".");
+            return r;
+        }
+        void ImportFromYouTube(){
+            var r=SyncFromYouTube();
+            if(r.Linked+r.Imported==0)
+                MessageBox.Show(this,"На рынке "+MarketLabel(marketView)+" нет новых профилей из YouTube (или у YouTube-каналов нет Profile ID).","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);
         }
         List<string> CaptionBank(){return marketView=="EN"?settings.TikTokDescriptionBankEn:settings.TikTokFullCaptionBankRu;}
         void EditCaptionBank(){
@@ -266,7 +260,8 @@ namespace VideoBatch {
             if(row!=null){grid.ClearSelection();row.Selected=true;grid.CurrentCell=row.Cells[CName];RememberSelectedAccount((TikTokAccount)row.Tag);}
         }
         public void ApplyNavigationContext(){SelectProfileById(NavigationContext.SelectedProfileId,NavigationContext.SelectedMarket);}
-        public Task RunUploadAsync()=>UploadAll();
+        public Task RunUploadAsync()=>UploadAll(null);
+        public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter);
         public Task RunCheckProfilesAsync()=>CheckProfiles();
         public void RequestStopUpload(){stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
         public void AssignVideosToProfile(string profileId,string market,string[] files){
@@ -340,11 +335,36 @@ namespace VideoBatch {
         List<DataGridViewRow> Selected(){grid.EndEdit();return grid.Rows.Cast<DataGridViewRow>().Where(r=>r.Visible&&Convert.ToBoolean(r.Cells[COn].Value??false)).ToList();}
         List<DataGridViewRow> UploadTargets(){
             var sel=Selected();
-            if(sel.Count>0)return sel;
-            return VisibleRows().Where(r=>{
-                var a=(TikTokAccount)r.Tag;SyncPrimary(a);
-                return a.Items!=null&&a.Items.Any(it=>!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption));
-            }).ToList();
+            if(sel.Count>0)return sel.Where(r=>AccountReadyForUpload((TikTokAccount)r.Tag)).ToList();
+            return VisibleRows().Where(r=>AccountReadyForUpload((TikTokAccount)r.Tag)).ToList();
+        }
+        static bool AccountReadyForUpload(TikTokAccount a){
+            if(a==null||string.IsNullOrWhiteSpace(a.ProfileId))return false;
+            SyncPrimary(a);
+            return a.Items!=null&&a.Items.Any(it=>it!=null&&!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption));
+        }
+        DataGridViewRow FindAccountRow(TikTokAccount account){
+            if(account==null)return null;
+            SaveGrid();
+            if(!string.IsNullOrWhiteSpace(account.ProfileId)){
+                var byPid=VisibleRows().FirstOrDefault(r=>string.Equals((((TikTokAccount)r.Tag).ProfileId??"").Trim(),account.ProfileId.Trim(),StringComparison.OrdinalIgnoreCase));
+                if(byPid!=null)return byPid;
+            }
+            return VisibleRows().FirstOrDefault(r=>ReferenceEquals(r.Tag,account));
+        }
+        List<DataGridViewRow> ResolveUploadRows(IReadOnlyList<TikTokAccount> accountsFilter){
+            if(accountsFilter!=null&&accountsFilter.Count>0){
+                SaveGrid();
+                var rows=new List<DataGridViewRow>();
+                foreach(var acc in accountsFilter){
+                    if(acc==null)continue;
+                    var row=FindAccountRow(acc);
+                    if(row!=null&&!rows.Contains(row))rows.Add(row);
+                }
+                if(rows.Count==0)LoadGrid();
+                return rows;
+            }
+            return UploadTargets();
         }
         void Configure(){using(var d=new DolphinSetupDialog(settings.ProtectedDolphinToken,settings.DolphinPort,settings.MaxParallelUploads,settings.UploadStagingFolder))if(d.ShowDialog(this)==DialogResult.OK){settings.ProtectedDolphinToken=WindowsSupport.Protect(d.Token);settings.DolphinPort=d.Port;settings.MaxParallelUploads=d.MaxParallel;settings.UploadStagingFolder=d.StagingFolder;d.Token="";Save();Write("Настройки Dolphin сохранены.");}}
         void Save(){try{Store.Save(settings);}catch(Exception e){Write("ОШИБКА СОХРАНЕНИЯ: "+e.Message);}}
@@ -410,14 +430,14 @@ namespace VideoBatch {
             log.AppendText(line+Environment.NewLine);log.ScrollToCaret();
             try{Directory.CreateDirectory(Store.Root);if(string.IsNullOrWhiteSpace(logFile))logFile=Path.Combine(Store.Root,"tiktok-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".log");File.AppendAllText(logFile,line+Environment.NewLine,Encoding.UTF8);}catch{}
         }
-        void ValidateCommon(bool forUpload){
+        void ValidateCommon(bool forUpload,IReadOnlyList<TikTokAccount> accountsFilter=null){
             DolphinRunner.CheckFilesTikTok();
             if(string.IsNullOrWhiteSpace(WindowsSupport.Unprotect(settings.ProtectedDolphinToken)))throw new Exception("Шаг 1: укажите API-токен Dolphin.");
-            var rows=forUpload?UploadTargets():Selected();
-            if(rows.Count==0)throw new Exception(forUpload?"Отметьте аккаунты с видео и подписью.":"Отметьте аккаунты галочкой.");
+            var rows=forUpload?ResolveUploadRows(accountsFilter):Selected();
+            if(rows.Count==0)throw new Exception(forUpload?"Отметьте галочкой ✓ аккаунты с видео и Profile ID. Ещё → «Из YouTube» подтянет ID.":"Отметьте аккаунты галочкой.");
             foreach(var row in rows){
                 var a=(TikTokAccount)row.Tag;
-                if(string.IsNullOrWhiteSpace(a.ProfileId))throw new Exception(a.Name+": укажите Profile ID.");
+                if(string.IsNullOrWhiteSpace(a.ProfileId))throw new Exception("«"+a.Name+"»: нет Profile ID. Меню «Ещё» → «Из YouTube» или добавьте ID вручную.");
             }
         }
         void PropagateIp(string profileId,string ip){
@@ -484,12 +504,14 @@ namespace VideoBatch {
             }
             throw last??new Exception("Неизвестная ошибка загрузки TikTok.");
         }
-        async Task UploadAll(){
+        async Task UploadAll(IReadOnlyList<TikTokAccount> accountsFilter){
             if(cancellation!=null){MessageBox.Show(this,"Сначала дождитесь проверки или нажмите Стоп.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             string token="";bool uiStarted=false;
             try{
-                SaveGrid();ValidateCommon(true);
-                var rows=UploadTargets();
+                SyncFromYouTube();
+                SaveGrid();ValidateCommon(true,accountsFilter);
+                var rows=ResolveUploadRows(accountsFilter);
+                Write("К загрузке TikTok: "+rows.Count+" акк.");
                 var packs=new List<(DataGridViewRow row,TikTokAccount acc,List<TikTokItem> items)>();
                 foreach(var row in rows){
                     var a=(TikTokAccount)row.Tag;SyncPrimary(a);
@@ -515,44 +537,47 @@ namespace VideoBatch {
                 }
                 var ct=uploadCts.Token;token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 UploadBusyStart();uiStarted=true;
-                int parallel=Math.Max(1,Math.Min(2,settings.TikTokMaxParallelUploads));
-                Write("["+MarketLabel(marketView)+"] старт TikTok: "+free.Count+" акк. · одновременно "+parallel+".");
+                int parallel=1;
+                int minMs=Math.Max(60000,settings.TikTokUploadStaggerMinMinutes*60000);
+                int maxMs=Math.Max(minMs,settings.TikTokUploadStaggerMaxMinutes*60000);
+                var launchGate=new ProfileLaunchGate(parallel,minMs,maxMs);
+                Write("["+MarketLabel(marketView)+"] TikTok: "+free.Count+" акк. · по очереди · пауза между стартами "
+                    +settings.TikTokUploadStaggerMinMinutes+"–"+settings.TikTokUploadStaggerMaxMinutes+" мин (ПК).");
 
                 var errors=new ConcurrentBag<string>();
-                using(var gate=new SemaphoreSlim(parallel,parallel)){
                 var tasks=free.Select(pack=>Task.Run(async()=>{
                     var row=pack.row;var a=pack.acc;var pid=(a.ProfileId??"").Trim();
-                    bool entered=false;
                     try{
-                        await gate.WaitAsync(ct).ConfigureAwait(false);entered=true;
-                        ct.ThrowIfCancellationRequested();
-                        Status(row,ChannelStatus.Uploading);
-                        var items=pack.items.Select(it=>new UploadItemJob{
-                            video=it.Video,
-                            caption=it.Caption,
-                            description=it.Caption
-                        }).ToArray();
-                        var job=new UploadJob{
-                            token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,expectedIp=a.ExpectedIp,
-                            items=items,skipQueueDelay=true,checkOnly=false,
-                            video=items[0].video
-                        };
-                        var result=await RunUploadWithRetry(job,a,row,pack.items,ct,token).ConfigureAwait(false);
-                        foreach(var it in pack.items)it.Published=true;
-                        a.Status=ChannelStatus.Published;
-                        Status(row,pack.items.Count>1?("Опубликовано "+pack.items.Count+" ✓"):(string.IsNullOrWhiteSpace(result.Url)?"Опубликовано ✓":"Опубликовано ✓ "+result.Url));
-                        if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(a.ProfileId,result.Ip);
-                        SafeSave();
+                        await launchGate.EnterAsync(ct).ConfigureAwait(false);
+                        try{
+                            ct.ThrowIfCancellationRequested();
+                            Status(row,ChannelStatus.Uploading);
+                            var items=pack.items.Select(it=>new UploadItemJob{
+                                video=it.Video,
+                                caption=it.Caption,
+                                description=it.Caption
+                            }).ToArray();
+                            var job=new UploadJob{
+                                token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,expectedIp=a.ExpectedIp,
+                                items=items,skipQueueDelay=true,checkOnly=false,
+                                video=items[0].video
+                            };
+                            var result=await RunUploadWithRetry(job,a,row,pack.items,ct,token).ConfigureAwait(false);
+                            foreach(var it in pack.items)it.Published=true;
+                            a.Status=ChannelStatus.Published;
+                            Status(row,pack.items.Count>1?("Опубликовано "+pack.items.Count+" ✓"):(string.IsNullOrWhiteSpace(result.Url)?"Опубликовано ✓":"Опубликовано ✓ "+result.Url));
+                            if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(a.ProfileId,result.Ip);
+                            SafeSave();
+                        }finally{launchGate.Exit();}
                     }catch(OperationCanceledException){Status(row,"Остановлено");}
                     catch(Exception e){
                         a.Status=ChannelStatus.Error;
                         string msg=e.Message+(e is UploadException ue&&ue.KeptOpen?" (профиль открыт)":"");
                         errors.Add(a.Name+": "+msg);Status(row,ChannelStatus.Error);
-                    }finally{if(entered)gate.Release();lock(uploadLock)busyProfiles.Remove(pid);}
+                    }finally{lock(uploadLock)busyProfiles.Remove(pid);}
                 })).ToArray();
 
                 await Task.WhenAll(tasks).ConfigureAwait(true);
-                }
                 if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"TikTok",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 else Write("["+MarketLabel(marketView)+"] загрузка TikTok завершена.");
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}

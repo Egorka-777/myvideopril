@@ -108,29 +108,67 @@ namespace VideoBatch {
         }
 
         Panel BuildTopBar() {
-            var bar = new Panel { Dock = DockStyle.Fill, BackColor = Theme.TopBar, Padding = new Padding(16, 10, 16, 10) };
-            pageTitleLabel = new Label { Text = "Главная", Font = Theme.FontPageTitle, ForeColor = Theme.TextPrimary, AutoSize = true, Location = new Point(0, 6) };
+            var bar = new TableLayoutPanel {
+                Dock = DockStyle.Fill,
+                BackColor = Theme.TopBar,
+                ColumnCount = 3,
+                RowCount = 1,
+                Padding = new Padding(16, 0, 16, 0)
+            };
+            bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            pageTitleLabel = new Label {
+                Text = "Главная",
+                Font = Theme.FontPageTitle,
+                ForeColor = Theme.TextPrimary,
+                AutoSize = true,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+
             globalSearch = Theme.MakeSearchBox();
             globalSearch.Width = 220;
+            globalSearch.Margin = new Padding(0, 10, 12, 10);
             globalSearch.TextChanged += (s, e) => ApplyGlobalSearch();
-            dolphinDot = new Panel { Width = 10, Height = 10, BackColor = Theme.TextMuted };
-            dolphinLabel = new Label { Text = "Dolphin", ForeColor = Theme.TextSecondary, AutoSize = true };
-            tasksLabel = new Label { Text = "Задач: 0", ForeColor = Theme.TextSecondary, AutoSize = true };
-            dolphinRefreshBtn = Theme.MakeButton("↻", ghost: true, action: async () => await CheckDolphinAsync(true));
-            settingsBtn = Theme.MakeButton("⚙", ghost: true, action: () => navigation.Navigate(NavSection.Settings));
-            menuToggleBtn = Theme.MakeButton("☰", ghost: true, action: ToggleSidebar);
-            var flow = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, WrapContents = false, BackColor = Theme.TopBar };
-            flow.Controls.Add(menuToggleBtn);
-            flow.Controls.Add(settingsBtn);
-            flow.Controls.Add(dolphinRefreshBtn);
-            flow.Controls.Add(tasksLabel);
-            var dolphinWrap = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Theme.TopBar };
-            dolphinWrap.Controls.Add(dolphinLabel);
-            dolphinWrap.Controls.Add(dolphinDot);
-            flow.Controls.Add(dolphinWrap);
-            flow.Controls.Add(globalSearch);
-            bar.Controls.Add(flow);
-            bar.Controls.Add(pageTitleLabel);
+
+            dolphinDot = new Panel { Width = 10, Height = 10, BackColor = Theme.TextMuted, Margin = new Padding(6, 0, 0, 0) };
+            dolphinLabel = new Label { Text = "Dolphin", ForeColor = Theme.TextSecondary, AutoSize = true, Margin = new Padding(0, 0, 0, 0) };
+            tasksLabel = new Label { Text = "Задач: 0", ForeColor = Theme.TextSecondary, AutoSize = true, Margin = new Padding(14, 0, 0, 0) };
+
+            var statusWrap = new FlowLayoutPanel {
+                AutoSize = true,
+                WrapContents = false,
+                BackColor = Theme.TopBar,
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                Margin = new Padding(0, 10, 0, 10)
+            };
+            statusWrap.Controls.Add(globalSearch);
+            statusWrap.Controls.Add(dolphinLabel);
+            statusWrap.Controls.Add(dolphinDot);
+            statusWrap.Controls.Add(tasksLabel);
+
+            dolphinRefreshBtn = Theme.MakeIconButton("↻", async () => await CheckDolphinAsync(true));
+            settingsBtn = Theme.MakeIconButton("⚙", () => navigation.Navigate(NavSection.Settings));
+            menuToggleBtn = Theme.MakeIconButton("☰", ToggleSidebar);
+            var actionsWrap = new FlowLayoutPanel {
+                AutoSize = true,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                BackColor = Theme.TopBar,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 10, 0, 10)
+            };
+            actionsWrap.Controls.Add(dolphinRefreshBtn);
+            actionsWrap.Controls.Add(settingsBtn);
+            actionsWrap.Controls.Add(menuToggleBtn);
+
+            bar.Controls.Add(pageTitleLabel, 0, 0);
+            bar.Controls.Add(statusWrap, 1, 0);
+            bar.Controls.Add(actionsWrap, 2, 0);
             return bar;
         }
 

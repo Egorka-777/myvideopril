@@ -71,11 +71,15 @@ namespace VideoBatch {
         public int HttpWorkerCustomCount=3;
         /// <summary>scheduled | immediate | private</summary>
         public string YouTubeHttpPublishMode="scheduled";
-        public string YouTubeHttpLongPublishMode="immediate";
+        public string YouTubeHttpLongPublishMode="scheduled";
         public string UploadStagingFolder=@"C:\VideoBatch\Upload";
         public List<YouTubeChannel> YouTubeChannels=new List<YouTubeChannel>();
         public string YouTubeSearchTitle="", YouTubeSearchUrl="", YouTubeSearchFilter="today";
         public string YouTubeMarketView="RU";
+        /// <summary>Активная вкладка Shorts/Long в workspace (не скрывает каналы).</summary>
+        public string YouTubeKindView="shorts";
+        public bool YouTubeLongScheduled20260923Migrated;
+        public bool YouTubeNetworkSchedule20260923Migrated;
         public string YouTubeSearchTitleRu="", YouTubeSearchUrlRu="", YouTubeSearchFilterRu="today";
         public string YouTubeSearchTitleEn="", YouTubeSearchUrlEn="", YouTubeSearchFilterEn="today";
         public string YouTubeSearchKeysRu="", YouTubeSearchFullTitleRu="";
@@ -94,15 +98,25 @@ namespace VideoBatch {
         public List<string> TikTokFullCaptionBankRu=new List<string>();
         public int TikTokCaptionCursorRu, TikTokCaptionCursorEn;
         public int TikTokMaxParallelUploads=1;
-        public int WatchMaxParallelProfiles=1;
+        public int TikTokUploadStaggerMinMinutes=2;
+        public int TikTokUploadStaggerMaxMinutes=20;
+        public int WatchMaxParallelProfiles=3;
+        /// <summary>Min pause between Dolphin profile start requests (ms).</summary>
+        public int ProfileLaunchStaggerMinMs=3000;
+        /// <summary>Max pause between Dolphin profile start requests (ms).</summary>
+        public int ProfileLaunchStaggerMaxMs=5000;
         public List<string> TikTokMusicRu=new List<string>(), TikTokMusicEn=new List<string>();
         /// <summary>Последний выбранный Profile ID (Dolphin) для быстрого «Добавить видео».</summary>
         public string LastSelectedYouTubeProfileIdRu="", LastSelectedYouTubeProfileIdEn="";
+        public string LastSelectedYouTubeChannelIdRu="", LastSelectedYouTubeChannelIdEn="";
         public string LastSelectedTikTokProfileIdRu="", LastSelectedTikTokProfileIdEn="";
         public bool KeepDolphinProfileOpenAfterUpload=true;
         /// <summary>random | period</summary>
-        public string YouTubeScheduleMode="random";
+        public string YouTubeScheduleMode="network";
         public int YouTubeScheduleMinMinutes=15, YouTubeScheduleMaxMinutes=20;
+        /// <summary>Длительность «круга» сети публикаций (мин), время ПК.</summary>
+        public int YouTubeScheduleNetworkPeriodMinutes=480;
+        public int YouTubeScheduleNetworkMinMinutes=3, YouTubeScheduleNetworkMaxMinutes=15;
         public bool YouTubeShortSchedule20260922Migrated;
         public int YouTubeScheduleLeadMinutes=30;
         public int YouTubeScheduleLongMinMinutes=1, YouTubeScheduleLongMaxMinutes=5;
@@ -166,7 +180,7 @@ namespace VideoBatch {
                 foreach(var ch in channels??Enumerable.Empty<YouTubeChannel>()){
                     if(ch==null)continue;
                     if(ch.Items==null)ch.Items=new List<YouTubeItem>();
-                    foreach(var it in ch.Items){
+                    foreach(var it in YouTubeMeshCatalog.CurrentBatchItems(ch)){
                         if(it==null||string.IsNullOrWhiteSpace(it.Title))continue;
                         if(string.IsNullOrWhiteSpace(it.PublishedVideoId)&&!string.IsNullOrWhiteSpace(it.PublishedUrl))
                             it.PublishedVideoId=ExtractYouTubeVideoId(it.PublishedUrl);
@@ -199,7 +213,22 @@ namespace VideoBatch {
             if(p.YouTubeSearchTitle==null)p.YouTubeSearchTitle="";
             if(p.YouTubeSearchUrl==null)p.YouTubeSearchUrl="";
             if(string.IsNullOrWhiteSpace(p.YouTubeMarketView)||(p.YouTubeMarketView!="RU"&&p.YouTubeMarketView!="EN"))p.YouTubeMarketView="RU";
-            if(string.IsNullOrWhiteSpace(p.YouTubeScheduleMode))p.YouTubeScheduleMode="random";
+            if(string.IsNullOrWhiteSpace(p.YouTubeKindView)||(p.YouTubeKindView!="shorts"&&p.YouTubeKindView!="long"))p.YouTubeKindView="shorts";
+            if(!p.YouTubeLongScheduled20260923Migrated){
+                if(string.Equals((p.YouTubeHttpLongPublishMode??"").Trim(),"immediate",StringComparison.OrdinalIgnoreCase))
+                    p.YouTubeHttpLongPublishMode="scheduled";
+                p.YouTubeLongScheduled20260923Migrated=true;
+            }
+            if(!p.YouTubeNetworkSchedule20260923Migrated){
+                p.YouTubeScheduleMode="network";
+                p.YouTubeNetworkSchedule20260923Migrated=true;
+            }
+            if(string.IsNullOrWhiteSpace(p.YouTubeScheduleMode))p.YouTubeScheduleMode="network";
+            if(p.YouTubeScheduleNetworkPeriodMinutes<60)p.YouTubeScheduleNetworkPeriodMinutes=480;
+            if(p.YouTubeScheduleNetworkPeriodMinutes>24*60)p.YouTubeScheduleNetworkPeriodMinutes=24*60;
+            if(p.YouTubeScheduleNetworkMinMinutes<1)p.YouTubeScheduleNetworkMinMinutes=3;
+            if(p.YouTubeScheduleNetworkMaxMinutes<p.YouTubeScheduleNetworkMinMinutes)p.YouTubeScheduleNetworkMaxMinutes=p.YouTubeScheduleNetworkMinMinutes;
+            if(p.YouTubeScheduleNetworkMaxMinutes>60)p.YouTubeScheduleNetworkMaxMinutes=60;
             // Старое значение по умолчанию 10–60 было чрезмерным для пачек Shorts.
             // Индивидуальные настройки сохраняются без изменения.
             if(!p.YouTubeShortSchedule20260922Migrated){
@@ -215,13 +244,21 @@ namespace VideoBatch {
             if(p.HttpWorkerCustomCount<1)p.HttpWorkerCustomCount=HttpWorkerSettings.DefaultWorkers;
             if(p.HttpWorkerCustomCount>HttpWorkerSettings.MaxCustomWorkers)p.HttpWorkerCustomCount=HttpWorkerSettings.MaxCustomWorkers;
             if(string.IsNullOrWhiteSpace(p.YouTubeHttpPublishMode))p.YouTubeHttpPublishMode="scheduled";
-            if(string.IsNullOrWhiteSpace(p.YouTubeHttpLongPublishMode))p.YouTubeHttpLongPublishMode="immediate";
+            if(string.IsNullOrWhiteSpace(p.YouTubeHttpLongPublishMode))p.YouTubeHttpLongPublishMode="scheduled";
             if(p.MaxParallelUploads<1)p.MaxParallelUploads=HttpWorkerSettings.DefaultWorkers;
             if(p.MaxParallelUploads>HttpWorkerSettings.MaxCustomWorkers)p.MaxParallelUploads=HttpWorkerSettings.MaxCustomWorkers;
             if(p.TikTokMaxParallelUploads<1)p.TikTokMaxParallelUploads=1;
             if(p.TikTokMaxParallelUploads>2)p.TikTokMaxParallelUploads=2;
+            if(p.TikTokUploadStaggerMinMinutes<1)p.TikTokUploadStaggerMinMinutes=2;
+            if(p.TikTokUploadStaggerMaxMinutes<p.TikTokUploadStaggerMinMinutes)p.TikTokUploadStaggerMaxMinutes=p.TikTokUploadStaggerMinMinutes;
+            if(p.TikTokUploadStaggerMaxMinutes>120)p.TikTokUploadStaggerMaxMinutes=120;
+            TikTokProfileSync.SyncFromYouTube(p, p.TikTokMarketView ?? "RU");
+            TikTokProfileSync.SyncFromYouTube(p, p.TikTokMarketView == "EN" ? "RU" : "EN");
             if(p.WatchMaxParallelProfiles<1)p.WatchMaxParallelProfiles=1;
-            if(p.WatchMaxParallelProfiles>2)p.WatchMaxParallelProfiles=2;
+            if(p.WatchMaxParallelProfiles>5)p.WatchMaxParallelProfiles=5;
+            if(p.ProfileLaunchStaggerMinMs<1000)p.ProfileLaunchStaggerMinMs=3000;
+            if(p.ProfileLaunchStaggerMaxMs<p.ProfileLaunchStaggerMinMs)p.ProfileLaunchStaggerMaxMs=p.ProfileLaunchStaggerMinMs+2000;
+            if(p.ProfileLaunchStaggerMaxMs>30000)p.ProfileLaunchStaggerMaxMs=30000;
             if(p.YouTubeSearchTitleRu==null)p.YouTubeSearchTitleRu="";
             if(p.YouTubeSearchUrlRu==null)p.YouTubeSearchUrlRu="";
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchFilterRu))p.YouTubeSearchFilterRu="today";
@@ -303,6 +340,7 @@ namespace VideoBatch {
                 p.YouTubeSearchUrlRu=p.YouTubeSearchUrl;
             foreach(var c in p.YouTubeChannels){
                 if(c==null)continue;
+                if(string.IsNullOrWhiteSpace(c.ChannelId))c.ChannelId=Guid.NewGuid().ToString("N");
                 if(string.IsNullOrWhiteSpace(c.Market)||(c.Market!="RU"&&c.Market!="EN"))c.Market="RU";
                 if(string.IsNullOrWhiteSpace(c.Kind)||(c.Kind!="long"&&c.Kind!="shorts"))c.Kind="long";
                 if(c.Items==null)c.Items=new List<YouTubeItem>();
@@ -399,10 +437,15 @@ namespace VideoBatch {
             foreach(var c in list){
                 if(c==null)continue;
                 if(c.Items==null)c.Items=new List<YouTubeItem>();
-                var existing=string.IsNullOrWhiteSpace(c.ProfileId)?null:result.FirstOrDefault(x=>
-                    string.Equals((x.Market??"RU"),(c.Market??"RU"),StringComparison.OrdinalIgnoreCase)
-                    && string.Equals((x.ProfileId??"").Trim(),(c.ProfileId??"").Trim(),StringComparison.OrdinalIgnoreCase)
-                    && string.Equals((x.Name??"").Trim(),(c.Name??"").Trim(),StringComparison.OrdinalIgnoreCase));
+                var existing=result.FirstOrDefault(x=>{
+                    if(x==null||c==null)return false;
+                    if(!string.IsNullOrWhiteSpace(c.ChannelId)&&!string.IsNullOrWhiteSpace(x.ChannelId)
+                        &&string.Equals(x.ChannelId.Trim(),c.ChannelId.Trim(),StringComparison.OrdinalIgnoreCase))return true;
+                    if(string.IsNullOrWhiteSpace(c.ProfileId))return false;
+                    return string.Equals((x.Market??"RU"),(c.Market??"RU"),StringComparison.OrdinalIgnoreCase)
+                        && string.Equals((x.ProfileId??"").Trim(),(c.ProfileId??"").Trim(),StringComparison.OrdinalIgnoreCase)
+                        && string.Equals((x.Name??"").Trim(),(c.Name??"").Trim(),StringComparison.OrdinalIgnoreCase);
+                });
                 if(existing==null){result.Add(c);continue;}
                 if(existing.Items==null)existing.Items=new List<YouTubeItem>();
                 foreach(var it in c.Items){

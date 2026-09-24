@@ -462,7 +462,7 @@ namespace VideoBatch {
 
             var longMode = Theme.MakeCombo(new[] { "immediate", "scheduled", "private" });
             longMode.SelectedItem = HttpWorkerSettings.ResolvePublishMode(settings, "long");
-            longMode.SelectedIndexChanged += (s, e) => { settings.YouTubeHttpLongPublishMode = longMode.SelectedItem?.ToString() ?? "immediate"; save(); };
+            longMode.SelectedIndexChanged += (s, e) => { settings.YouTubeHttpLongPublishMode = longMode.SelectedItem?.ToString() ?? "scheduled"; save(); };
             card.Controls.Add(Labeled("YouTube HTTP · Long", longMode));
 
             var shortsMin = Theme.MakeSearchBox();
@@ -494,10 +494,35 @@ namespace VideoBatch {
             };
             card.Controls.Add(Labeled("Запас до 1-й публикации, мин (≥20)", lead));
 
-            var schedMode = Theme.MakeCombo(new[] { "random", "period" });
-            schedMode.SelectedItem = settings.YouTubeScheduleMode ?? "random";
-            schedMode.SelectedIndexChanged += (s, e) => { settings.YouTubeScheduleMode = schedMode.SelectedItem?.ToString(); save(); };
+            var schedMode = Theme.MakeCombo(new[] { "network", "random", "period" });
+            schedMode.SelectedItem = string.IsNullOrWhiteSpace(settings.YouTubeScheduleMode) ? "network" : settings.YouTubeScheduleMode;
+            schedMode.SelectedIndexChanged += (s, e) => { settings.YouTubeScheduleMode = schedMode.SelectedItem?.ToString() ?? "network"; save(); };
             card.Controls.Add(Labeled("Режим расписания", schedMode));
+
+            var netPeriod = Theme.MakeSearchBox();
+            netPeriod.Text = settings.YouTubeScheduleNetworkPeriodMinutes.ToString(); netPeriod.Width = 80;
+            netPeriod.Leave += (s, e) => {
+                if (int.TryParse(netPeriod.Text, out var v) && v >= 60 && v <= 24 * 60) { settings.YouTubeScheduleNetworkPeriodMinutes = v; save(); }
+                netPeriod.Text = settings.YouTubeScheduleNetworkPeriodMinutes.ToString();
+            };
+            card.Controls.Add(Labeled("Сеть · круг активности, мин", netPeriod));
+
+            var netMin = Theme.MakeSearchBox();
+            netMin.Text = settings.YouTubeScheduleNetworkMinMinutes.ToString(); netMin.Width = 80;
+            var netMax = Theme.MakeSearchBox();
+            netMax.Text = settings.YouTubeScheduleNetworkMaxMinutes.ToString(); netMax.Width = 80;
+            netMin.Leave += (s, e) => {
+                if (int.TryParse(netMin.Text, out var v) && v >= 1 && v <= settings.YouTubeScheduleNetworkMaxMinutes) { settings.YouTubeScheduleNetworkMinMinutes = v; save(); }
+                netMin.Text = settings.YouTubeScheduleNetworkMinMinutes.ToString();
+            };
+            netMax.Leave += (s, e) => {
+                if (int.TryParse(netMax.Text, out var v) && v >= settings.YouTubeScheduleNetworkMinMinutes && v <= 60) { settings.YouTubeScheduleNetworkMaxMinutes = v; save(); }
+                netMax.Text = settings.YouTubeScheduleNetworkMaxMinutes.ToString();
+            };
+            card.Controls.Add(Labeled("Сеть · мин. интервал, мин", netMin));
+            card.Controls.Add(Labeled("Сеть · макс. интервал, мин", netMax));
+            card.Controls.Add(new Label { Text = "Режим network: все аккаунты в одной очереди, перемешаны, ~8 ч на ПК. Новый канал автоматически включается в пересчёт.",
+                ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0) });
 
             card.Controls.Add(new Label {
                 Text = "Каталог настроек: " + Store.Config + "\nStaging: " + settings.UploadStagingFolder + "\nДиагностика: " + System.IO.Path.Combine(Store.Root, "diagnostics"),

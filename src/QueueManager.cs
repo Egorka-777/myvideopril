@@ -135,7 +135,7 @@ namespace VideoBatch {
             Func<string,string,int,int,string,string,string> stageFile,
             Func<YouTubeChannel,YouTubeItem,int,int,string> plannedFileName,
             Func<string,int,int,string> cleanTitleForUpload,
-            Preferences schedulePrefs=null,bool studioSchedule=false){
+            Preferences schedulePrefs=null,bool studioSchedule=false,string effectiveKind=null){
             jobs=DeduplicateJobs(jobs);
             ValidateBeforeStart(jobs,plannedFileName);
             var grouped=new Dictionary<string,List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)>>(StringComparer.OrdinalIgnoreCase);
@@ -166,13 +166,14 @@ namespace VideoBatch {
                     planned=EnsureUniquePlannedName(seenStagedNames,planned,j.index);
                     string staged=stageFile(j.item.Video,g.pid,j.index,j.total,planned,uploadTitles[ti]);
                     if(!File.Exists(staged))throw new Exception(j.ch.Name+" ["+j.index+"/"+j.total+"]: staging не удался.");
+                    string itemKind=NormKind(string.IsNullOrWhiteSpace(effectiveKind)?j.ch.Kind:effectiveKind);
                     batch.Items.Add(new PreparedUploadItem{
                         Source=j.item,
                         Index=j.index,
                         Total=j.total,
                         StagedVideo=staged,
                         UploadTitle=uploadTitles[ti],
-                        Kind=j.ch.Kind
+                        Kind=itemKind
                     });
                 }
                 batches.Add(batch);
@@ -201,6 +202,10 @@ namespace VideoBatch {
             return ShuffleRng.Next(2,13)*1000;
         }
 
+        static string NormKind(string k){
+            k=(k??"").Trim().ToLowerInvariant();
+            return k=="shorts"||k=="short"?"shorts":"long";
+        }
         static string NormTitle(string title){
             if(string.IsNullOrWhiteSpace(title))return "";
             return System.Text.RegularExpressions.Regex.Replace(title.Trim(),@"\s*[·•]\s*\+\d+\s*$","").Trim();
