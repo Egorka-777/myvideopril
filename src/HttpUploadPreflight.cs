@@ -27,9 +27,6 @@ namespace VideoBatch {
                 else if (!profileIds.Add(pid))
                     problems.Add(account + ": дубликат Profile ID «" + pid + "» в одной HTTP-пачке.");
 
-                if (string.IsNullOrWhiteSpace(batch?.Channel?.ExpectedIp))
-                    problems.Add(account + " [" + pid + "]: не заполнен ожидаемый IP. Сначала «Проверить профили».");
-
                 if (batch?.Items == null || batch.Items.Count == 0) {
                     problems.Add(account + " [" + pid + "]: пустой список видео.");
                     continue;

@@ -114,7 +114,6 @@ namespace VideoBatch.TikTokHttpTest {
                 if (snapshot == null) throw new Exception("Снимок не загружен.");
                 var acc = account.SelectedItem as ImportedTikTokAccount;
                 if (acc == null) throw new Exception("Выберите один TikTok-аккаунт.");
-                if (string.IsNullOrWhiteSpace(acc.ExpectedIp)) throw new Exception("Нет сохранённого IP. Проверьте профиль в основном VideoBatch.");
                 if (!File.Exists(video.Text)) throw new Exception("Выберите видео.");
                 string cap = (caption.Text ?? "").Trim();
                 if (cap.Length < 1 || cap.Length > 2200) throw new Exception("Подпись 1–2200 символов.");

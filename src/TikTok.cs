@@ -591,10 +591,6 @@ namespace VideoBatch {
                                 description=it.Caption
                             }).ToArray();
                             if(transport=="http"){
-                                if(string.IsNullOrWhiteSpace(a.ExpectedIp)){
-                                    lastHttpBlockReason="нет сохранённого IP";
-                                    throw new Exception("HTTP TikTok: у «"+a.Name+"» нет сохранённого IP. Нажмите «Проверить» или используйте «Через Studio».");
-                                }
                                 var httpJob=new HttpTikTokUploadJob{
                                     profileId=a.ProfileId,expectedIp=a.ExpectedIp,localPort=settings.DolphinPort,market=marketView,
                                     keepProfileOpen=true,

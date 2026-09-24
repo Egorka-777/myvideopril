@@ -59,6 +59,21 @@ assert.strictEqual(httpMod.canSafeRetry("project_created"), false);
 assert.strictEqual(httpMod.canSafeRetry("preflight"), true);
 assert.strictEqual(httpMod.canSafeRetry("uploading"), false);
 
+const signedGet = httpMod.awsSigV4Headers({
+  method: "GET",
+  url: "https://www.tiktok.com/top/v1?Action=ApplyUploadInner&Version=2020-11-19",
+  body: "",
+  accessKeyId: "AKIA_TEST",
+  secretAccessKey: "secret",
+  sessionToken: "token",
+  region: "ap-singapore-1",
+  service: "vod"
+});
+assert.ok(!signedGet.Accept, "Accept must not be part of AWS signature headers");
+assert.match(signedGet.Authorization, /SignedHeaders=host;x-amz-date;x-amz-security-token/);
+assert.strictEqual(httpMod.vodRegionFromDc("useast2a"), "us-east-1");
+assert.strictEqual(httpMod.parseApplyUploadResult({ ok: true, json: { Result: { InnerUploadAddress: { UploadNodes: [{ Vid: "v1", UploadHost: "h", SessionKey: "sk", StoreInfos: [{ StoreUri: "u", Auth: "a" }] }] } } } }).videoId, "v1");
+
 // Unix schedule validation (via validateItem logic in file)
 assert.match(httpWorker, /scheduledUnixSeconds/);
 assert.match(httpWorker, /TIKTOK_SCHEDULE_MIN_SEC/);

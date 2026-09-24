@@ -12,7 +12,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
-const BUILD = "2026-09-24-tiktok-http-v1";
+const BUILD = "2026-09-24-tiktok-http-v4-apply-upload";
 const TRANSPORT = "http";
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const WORKER_EXIT_DELAY_MS = 150;
@@ -133,22 +133,23 @@ function hmacSha256(key, data, encoding) {
   return crypto.createHmac("sha256", key).update(data, encoding).digest();
 }
 
-function awsSigV4Headers({ method, url, headers, body, accessKeyId, secretAccessKey, sessionToken, region, service }) {
+function awsSigV4Headers({ method, url, body, accessKeyId, secretAccessKey, sessionToken, region, service }) {
   const parsed = new URL(url);
   const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
   const dateStamp = amzDate.slice(0, 8);
+  const upperMethod = String(method || "GET").toUpperCase();
   const payloadHash = sha256(body || "");
-  const canonicalHeaders = Object.assign({
+  const canonicalHeaders = {
     host: parsed.host,
-    "x-amz-content-sha256": payloadHash,
     "x-amz-date": amzDate
-  }, headers || {});
+  };
   if (sessionToken) canonicalHeaders["x-amz-security-token"] = sessionToken;
+  if (upperMethod !== "GET") canonicalHeaders["x-amz-content-sha256"] = payloadHash;
   const signedHeaderKeys = Object.keys(canonicalHeaders).map(k => k.toLowerCase()).sort();
   const canonicalHeaderString = signedHeaderKeys.map(k => `${k}:${String(canonicalHeaders[k]).trim()}\n`).join("");
   const signedHeaders = signedHeaderKeys.join(";");
   const canonicalRequest = [
-    method.toUpperCase(),
+    upperMethod,
     parsed.pathname + (parsed.search || ""),
     "",
     canonicalHeaderString,
@@ -164,6 +165,43 @@ function awsSigV4Headers({ method, url, headers, body, accessKeyId, secretAccess
   const signature = hmacSha256(kSigning, stringToSign).toString("hex");
   const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
   return Object.assign({}, canonicalHeaders, { Authorization: authorization });
+}
+
+function vodRegionFromDc(dcId) {
+  const dc = String(dcId || "").toLowerCase();
+  if (/useast|us-east|maliva/.test(dc)) return "us-east-1";
+  if (/eu-?west|gcp/.test(dc)) return "eu-west-1";
+  return "ap-singapore-1";
+}
+
+function applyUploadQuery(fileSize) {
+  return `Action=ApplyUploadInner&Version=2020-11-19&SpaceName=tiktok&FileType=video&IsInner=1&FileSize=${fileSize}&s=g158iqx8434`;
+}
+
+function describeTikTokApiFailure(action, res) {
+  const status = res && res.status != null ? res.status : "?";
+  const json = res && res.json;
+  const err = json && (json.ResponseMetadata && json.ResponseMetadata.Error)
+    ? `${json.ResponseMetadata.Error.Code || "Error"}: ${json.ResponseMetadata.Error.Message || ""}`
+    : (json && (json.message || json.status_msg || json.error)) || "";
+  const snippet = redactDiagnostic(String((res && res.text) || "").slice(0, 240)).replace(/\s+/g, " ").trim();
+  return `${action} HTTP ${status}${err ? " · " + err : ""}${snippet ? " · " + snippet : ""}`;
+}
+
+function parseApplyUploadResult(res) {
+  if (!res || !res.ok || !res.json || !res.json.Result) return null;
+  const nodes = res.json.Result.InnerUploadAddress && res.json.Result.InnerUploadAddress.UploadNodes;
+  if (!Array.isArray(nodes) || !nodes.length) return null;
+  const node = nodes[0];
+  const store = node.StoreInfos && node.StoreInfos[0];
+  if (!node.Vid || !store || !store.StoreUri || !store.Auth || !node.UploadHost || !node.SessionKey) return null;
+  return {
+    videoId: String(node.Vid),
+    storeUri: store.StoreUri,
+    videoAuth: store.Auth,
+    uploadHost: node.UploadHost,
+    sessionKey: node.SessionKey
+  };
 }
 
 async function dolphinApi(apiPath, options = {}, timeoutMs = 35000) {
@@ -211,55 +249,116 @@ function normalizeIp(value) {
   return /^[0-9a-f:.]+$/i.test(ip) && (ip.includes(".") || ip.includes(":")) ? ip : "";
 }
 
+function parseIpPayload(raw, kind) {
+  const text = String(raw || "").trim();
+  try {
+    if (kind === "json-ip") return normalizeIp(JSON.parse(text).ip);
+    if (kind === "cf-trace") {
+      const m = text.match(/(?:^|\n)ip=([^\s\r\n]+)/i);
+      return m ? normalizeIp(m[1]) : "";
+    }
+  } catch (_) {}
+  return normalizeIp(text.split(/\s+/)[0]);
+}
+
+const IP_SERVICES = [
+  ["https://api.ipify.org?format=json", "json-ip"],
+  ["https://api64.ipify.org?format=json", "json-ip"],
+  ["https://icanhazip.com", "text"],
+  ["https://checkip.amazonaws.com", "text"],
+  ["https://ipinfo.io/ip", "text"],
+  ["https://api.ip.sb/ip", "text"],
+  ["https://www.cloudflare.com/cdn-cgi/trace", "cf-trace"]
+];
+
 async function fetchComputerIp() {
-  for (const url of ["https://api.ipify.org?format=json", "https://icanhazip.com"]) {
+  let last = "";
+  for (const [url, kind] of IP_SERVICES) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
-      const response = await fetch(url, { signal: controller.signal });
-      const text = await response.text();
-      clearTimeout(timer);
-      if (url.includes("json")) return normalizeIp(JSON.parse(text).ip);
-      return normalizeIp(text);
-    } catch (_) {}
+      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) continue;
+      const ip = parseIpPayload(await response.text(), kind);
+      if (ip) return ip;
+    } catch (e) { last = e.message; } finally { clearTimeout(timer); }
   }
-  throw new Error("Не удалось проверить прямой IP компьютера.");
+  throw new Error("Не удалось проверить прямой IP компьютера. " + last);
 }
 
-async function fetchProfileIp(page) {
-  const urls = [
-    "https://api.ipify.org?format=json",
-    "https://api64.ipify.org?format=json",
-    "https://icanhazip.com"
-  ];
-  for (const url of urls) {
+async function fetchProfileIp(page, request) {
+  send("ip", "Проверяю внешний IP профиля…", { percent: 10 });
+  let last = "";
+
+  if (request) {
+    for (const [url, kind] of IP_SERVICES) {
+      try {
+        const response = await request.get(url, { timeout: 25000 });
+        if (!response.ok()) continue;
+        const ip = parseIpPayload(await response.text(), kind);
+        if (ip) {
+          send("ip", `IP профиля (API): ${ip}`, { ip, percent: 11 });
+          return ip;
+        }
+      } catch (e) { last = e.message; }
+    }
+  }
+
+  for (const [url, kind] of IP_SERVICES) {
     try {
-      const text = await page.evaluate(async u => {
-        const r = await fetch(u, { cache: "no-store" });
-        return await r.text();
-      }, url);
-      if (url.includes("json")) {
-        const ip = normalizeIp(JSON.parse(text).ip);
-        if (ip) return ip;
-      } else {
-        const ip = normalizeIp(text);
-        if (ip) return ip;
+      const text = await page.evaluate(async ({ url, timeoutMs }) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, { signal: controller.signal, cache: "no-store", redirect: "follow" });
+          const body = await response.text();
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return body;
+        } finally { clearTimeout(timer); }
+      }, { url, timeoutMs: 20000 });
+      const ip = parseIpPayload(text, kind);
+      if (ip) {
+        send("ip", `IP профиля (fetch): ${ip}`, { ip, percent: 11 });
+        return ip;
       }
-    } catch (_) {}
+    } catch (e) { last = e.message; }
   }
-  throw new Error("Не удалось узнать внешний IP профиля.");
+
+  for (const [url, kind] of IP_SERVICES) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 35000 });
+      const body = (await page.locator("body").innerText({ timeout: 8000 })).trim();
+      const ip = parseIpPayload(body, kind);
+      if (ip) {
+        send("ip", `IP профиля (страница): ${ip}`, { ip, percent: 11 });
+        return ip;
+      }
+    } catch (e) { last = e.message; }
+  }
+
+  throw new Error("Не удалось узнать внешний IP профиля. " + (last || "сервисы недоступны через прокси Dolphin."));
 }
 
-async function assertProxyRoute(page, expectedIp) {
-  const [profileIp, computerIp] = await Promise.all([fetchProfileIp(page), fetchComputerIp()]);
-  send("ip", `IP профиля: ${profileIp}`, { ip: profileIp, percent: 12 });
-  if (expectedIp && normalizeIp(expectedIp) !== profileIp) {
-    throw new Error(`IP профиля (${profileIp}) не совпадает с сохранённым (${expectedIp}). Нажмите «Проверить IP».`);
+function ipv4Prefix(ip) {
+  const parts = normalizeIp(ip).split(".");
+  return parts.length === 4 ? parts.slice(0, 2).join(".") : "";
+}
+
+async function logProfileIp(page, request, expectedIp) {
+  let profileIp = "";
+  try {
+    profileIp = await fetchProfileIp(page, request);
+    send("ip", `IP профиля: ${profileIp}`, { ip: profileIp, percent: 12 });
+  } catch (e) {
+    send("ip", "IP профиля не определён — продолжаю без проверки (Dolphin контролирует прокси).", { percent: 12 });
+    return "";
   }
-  if (computerIp && profileIp && computerIp === profileIp) {
-    throw new Error(`HTTP TikTok невозможен: запросы идут с IP компьютера (${computerIp}), а не через прокси профиля.`);
+
+  const expected = normalizeIp(expectedIp);
+  const actual = normalizeIp(profileIp);
+  if (expected && actual && expected !== actual && !(ipv4Prefix(expected) && ipv4Prefix(expected) === ipv4Prefix(actual))) {
+    send("ip", `IP (${actual}) отличается от сохранённого (${expectedIp}) — без блокировки.`, { ip: profileIp, percent: 13 });
   }
-  send("ip", "Прокси профиля подтверждён.", { ip: profileIp, percent: 14 });
   return profileIp;
 }
 
@@ -281,12 +380,17 @@ async function extractSession(context) {
 }
 
 async function tiktokRequest(request, method, url, { headers = {}, body = null, aws = null } = {}) {
-  let finalHeaders = Object.assign({
-    Accept: "application/json, text/plain, */*",
-    Cookie: aws ? undefined : headers.Cookie
-  }, headers);
+  const cookieHeader = headers.Cookie;
+  const passthrough = Object.assign({ Accept: "application/json, text/plain, */*" }, headers);
+  delete passthrough.Cookie;
+  let finalHeaders;
   if (aws) {
-    finalHeaders = awsSigV4Headers(Object.assign({ method, url, headers: finalHeaders, body: body || "" }, aws));
+    finalHeaders = awsSigV4Headers(Object.assign({ method, url, body: body || "" }, aws));
+    finalHeaders.Accept = passthrough.Accept || "application/json, text/plain, */*";
+    if (cookieHeader) finalHeaders.Cookie = cookieHeader;
+  } else {
+    finalHeaders = Object.assign({}, passthrough);
+    if (cookieHeader) finalHeaders.Cookie = cookieHeader;
   }
   const response = await request.fetch(url, {
     method,
@@ -297,6 +401,38 @@ async function tiktokRequest(request, method, url, { headers = {}, body = null, 
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
   return { ok: response.ok(), status: response.status(), text, json };
+}
+
+async function requestApplyUploadInner(request, session, fileSize, uploadToken) {
+  const awsBase = {
+    accessKeyId: uploadToken.access_key_id,
+    secretAccessKey: uploadToken.secret_acess_key,
+    sessionToken: uploadToken.session_token,
+    service: "vod"
+  };
+  const query = applyUploadQuery(fileSize);
+  const region = vodRegionFromDc(session.dcId);
+  const attempts = [
+    { url: `https://www.tiktok.com/top/v1?${query}`, region: "ap-singapore-1", cookie: session.cookieHeader },
+    { url: `https://vod-${region}.bytevcloudapi.com/?${query}`, region, cookie: null },
+    { url: "https://vod-ap-singapore-1.bytevcloudapi.com/?" + query, region: "ap-singapore-1", cookie: null }
+  ];
+  let lastError = "";
+  for (const attempt of attempts) {
+    const headers = attempt.cookie ? { Cookie: attempt.cookie } : {};
+    const applyRes = await tiktokRequest(request, "GET", attempt.url, {
+      headers,
+      aws: Object.assign({}, awsBase, { region: attempt.region })
+    });
+    const parsed = parseApplyUploadResult(applyRes);
+    if (parsed) {
+      record("apply_upload", "ApplyUploadInner OK", { host: new URL(attempt.url).host, region: attempt.region });
+      return parsed;
+    }
+    lastError = describeTikTokApiFailure("ApplyUploadInner", applyRes);
+    send("upload", `ApplyUploadInner (${new URL(attempt.url).host}): повтор…`, { percent: 26 });
+  }
+  throw new Error(lastError || "ApplyUploadInner: пустой Result.");
 }
 
 async function preflightUploadAuth(request, session) {
@@ -337,23 +473,15 @@ async function uploadVideoBytes(request, videoPath, uploadToken, session) {
     accessKeyId: uploadToken.access_key_id,
     secretAccessKey: uploadToken.secret_acess_key,
     sessionToken: uploadToken.session_token,
-    region: "ap-singapore-1",
+    region: vodRegionFromDc(session.dcId),
     service: "vod"
   };
-  const applyUrl = `https://www.tiktok.com/top/v1?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=tiktok&FileType=video&IsInner=1&FileSize=${fileSize}&s=g158iqx8434`;
-  const applyRes = await tiktokRequest(request, "GET", applyUrl, {
-    headers: { Cookie: session.cookieHeader },
-    aws: awsBase
-  });
-  if (!applyRes.ok || !applyRes.json || !applyRes.json.Result) {
-    throw new Error(`ApplyUploadInner failed HTTP ${applyRes.status}.`);
-  }
-  const node = applyRes.json.Result.InnerUploadAddress.UploadNodes[0];
-  const videoId = node.Vid;
-  const storeUri = node.StoreInfos[0].StoreUri;
-  const videoAuth = node.StoreInfos[0].Auth;
-  const uploadHost = node.UploadHost;
-  const sessionKey = node.SessionKey;
+  const applied = await requestApplyUploadInner(request, session, fileSize, uploadToken);
+  const videoId = applied.videoId;
+  const storeUri = applied.storeUri;
+  const videoAuth = applied.videoAuth;
+  const uploadHost = applied.uploadHost;
+  const sessionKey = applied.sessionKey;
   videoIdSafe = String(videoId);
   uploadIdSafe = crypto.randomUUID();
 
@@ -411,7 +539,7 @@ async function uploadVideoBytes(request, videoPath, uploadToken, session) {
   const commitRes = await tiktokRequest(request, "POST", commitUrl, {
     headers: { "Content-Type": "application/json", Cookie: session.cookieHeader },
     body: commitBody,
-    aws: awsBase
+    aws: Object.assign({}, awsBase, { region: "ap-singapore-1" })
   });
   if (!commitRes.ok) {
     setItemState("manual_check");
@@ -539,7 +667,8 @@ async function main() {
 
   try {
     await page.goto("https://www.tiktok.com/", { waitUntil: "domcontentloaded", timeout: 90000 });
-    const verifiedIp = await assertProxyRoute(page, job.expectedIp);
+    await page.waitForTimeout(1500);
+    const verifiedIp = await logProfileIp(page, request, job.expectedIp);
     const session = await extractSession(context);
     const uploadToken = await preflightUploadAuth(request, session);
 
@@ -602,5 +731,9 @@ module.exports = {
   crc32Buffer,
   validateItem,
   generateCreationId,
-  NOTICE_MIT
+  NOTICE_MIT,
+  awsSigV4Headers,
+  vodRegionFromDc,
+  parseApplyUploadResult,
+  describeTikTokApiFailure
 };

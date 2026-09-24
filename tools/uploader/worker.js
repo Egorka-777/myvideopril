@@ -1246,7 +1246,11 @@ function enrichWatchTarget(target, catalog) {
     seenKeys.add(key);
     merged.push(v);
   }
-  t.knownVideos = merged;
+  if (t.meshSingleLong) {
+    t.knownVideos = buildMeshCatalogPlan(merged, t.videoId);
+  } else {
+    t.knownVideos = merged;
+  }
   return t;
 }
 
@@ -1653,6 +1657,21 @@ function buildCatalogPlan(knownVideos, skipId, anchorTitle) {
   return catalog;
 }
 
+/** Сетка просмотра: только один длинный ролик на канал, без шортсов. */
+function buildMeshCatalogPlan(knownVideos, preferVideoId) {
+  const plan = buildCatalogPlan(knownVideos, "", "")
+    .filter(v => String(v.kind || "long").toLowerCase() !== "shorts");
+  if (!plan.length) return [];
+  const prefer = String(preferVideoId || "").trim();
+  if (prefer) {
+    const hit = plan.find(v => v.videoId === prefer);
+    if (hit) return [hit];
+  }
+  const withId = plan.filter(v => v.videoId);
+  if (withId.length) return [withId[withId.length - 1]];
+  return [plan[plan.length - 1]];
+}
+
 /** Шортс зацикливается — один проход, лайк, выход (не waitForVideoEnd). */
 async function watchShortOnce(page, ownerName) {
   await dismissYouTubeOverlays(page);
@@ -1829,10 +1848,10 @@ async function watchChannelMeshWithTimeout(page, target, filter, viewerProfileId
   return watchChannelMesh(page, target, filter, viewerProfileId, completed);
 }
 
-/** Канал из базы / по ID / по имени / поиск → сегодняшние видео и шортс. Свой канал — только лайки. */
+/** Сетка: один длинный ролик на канал по videoId, без вкладки Shorts. Свой канал — лайк. */
 async function watchChannelMesh(page, target, filter, viewerProfileId, completed) {
   const fullTitle = String(target.searchFullTitle || target.title || "").trim();
-  const videoId = String(target.videoId || extractVideoId(target.searchUrl || "")).trim();
+  let videoId = String(target.videoId || extractVideoId(target.searchUrl || "")).trim();
   const keys = parseKeywordList(target.searchKeys, target.title || fullTitle);
   const owner = String(target.ownerName || "").trim();
   const orientUrl = videoId ? ("https://www.youtube.com/watch?v=" + videoId) : (target.searchUrl || "");
@@ -1840,60 +1859,61 @@ async function watchChannelMesh(page, target, filter, viewerProfileId, completed
   const viewerPid = String(viewerProfileId || "").trim().toLowerCase();
   const isOwn = ownerPid && viewerPid && ownerPid === viewerPid;
 
-  let channelUrl = normalizeChannelUrl(target.channelUrl || "");
-  let skipId = videoId;
-  let anchorViews = 0;
+  const meshPlan = buildMeshCatalogPlan(
+    target.catalogVideos || target.knownVideos || [],
+    videoId
+  );
+  if (meshPlan.length && meshPlan[0].videoId) videoId = meshPlan[0].videoId;
 
-  if (channelUrl || owner) {
-    const resolved = await resolveChannelUrl(page, owner, channelUrl);
+  let channelUrl = normalizeChannelUrl(target.channelUrl || "");
+  if (channelUrl) sendMeshChannel(target, channelUrl);
+  else if (owner) {
+    const resolved = await resolveChannelUrl(page, owner, "");
     if (resolved) {
       channelUrl = resolved;
       send("youtube", (owner ? owner + ": " : "") + "канал подтверждён", { percent: 42 });
       sendMeshChannel(target, channelUrl);
-      // Канал открыт напрямую: якорный ролик ещё не просмотрен, поэтому его нельзя добавлять в skipId.
-      const extra = await watchTodayOnChannel(page, channelUrl, "", owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "", completed, ownerPid);
-      if (!isOwn && extra < 1) throw new Error("Канал открыт, но ни один ролик не был просмотрен.");
-      return extra;
     }
   }
 
-  if (videoId) {
-    send("youtube", (owner ? owner + ": " : "") + "открываю по ID из базы…", { percent: 44 });
+  if (isOwn) {
+    if (!videoId) throw new Error("Свой канал «" + owner + "»: нет videoId для лайка.");
+    send("youtube", (owner ? owner + ": " : "") + "свой канал — лайк…", { percent: 44 });
     await openVideoDirect(page, videoId, false);
-    if (isOwn) await quickLikeVideo(page);
-    else if (!completed || !completed.has(ownerPid + ":" + videoId)) { await waitForVideoEnd(page); if (completed) completed.add(ownerPid + ":" + videoId); }
-    anchorViews = 1;
-    channelUrl = normalizeChannelUrl(await extractChannelUrlFromPage(page));
-    sendMeshChannel(target, channelUrl);
-    if (channelUrl) {
-      const extra = await watchTodayOnChannel(page, channelUrl, videoId, owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "", completed, ownerPid);
-      return anchorViews + extra;
+    await quickLikeVideo(page);
+    return 1;
+  }
+
+  if (!videoId) {
+    if (!fullTitle && !keys.length) {
+      throw new Error("Нет данных для канала «" + owner + "» (videoId, заголовок или ключи).");
+    }
+    send("youtube", (owner ? owner + ": " : "") + "поиск длинного видео…", { percent: 48 });
+    await openFoundVideoMesh(page, target.title || fullTitle, orientUrl, {
+      searchKeys: target.searchKeys || keys.join("\n"),
+      searchFullTitle: fullTitle
+    });
+    videoId = extractVideoId(page.url()) || videoId;
+    if (!channelUrl) {
+      channelUrl = normalizeChannelUrl(await extractChannelUrlFromPage(page));
+      sendMeshChannel(target, channelUrl);
     }
   }
 
-  if (!fullTitle && !keys.length && !videoId) {
-    throw new Error("Нет данных для канала «" + owner + "» (ссылка, ID, имя, ключи).");
+  if (!videoId) throw new Error("Канал «" + owner + "»: не найден videoId длинного ролика.");
+
+  const checkpointKey = ownerPid + ":" + videoId;
+  if (completed && completed.has(checkpointKey)) {
+    send("youtube", (owner ? owner + ": " : "") + "ролик уже просмотрен в этом профиле — пропускаю.", { percent: 92 });
+    return 1;
   }
 
-  send("youtube", (owner ? owner + ": " : "") + (isOwn ? "свой канал — поиск и лайки…" : "поиск якорного видео…"), { percent: 48 });
-  await openFoundVideoMesh(page, target.title || fullTitle, orientUrl, {
-    searchKeys: target.searchKeys || keys.join("\n"),
-    searchFullTitle: fullTitle
-  });
-  if (isOwn) await quickLikeVideo(page);
-  else if (!completed || !completed.has(ownerPid + ":" + (videoId || extractVideoId(page.url())))) { await waitForVideoEnd(page); if (completed) completed.add(ownerPid + ":" + (videoId || extractVideoId(page.url()))); }
-  anchorViews = 1;
-
-  if (!channelUrl) channelUrl = normalizeChannelUrl(await extractChannelUrlFromPage(page));
-  sendMeshChannel(target, channelUrl);
-
-  let extra = 0;
-  if (channelUrl) {
-    extra = await watchTodayOnChannel(page, channelUrl, videoId || extractVideoId(page.url()), owner, isOwn, target.knownVideos || [], target.searchFullTitle || target.title || "", completed, ownerPid);
-  } else {
-    send("youtube", "Ссылку на канал не нашёл — только якорное видео.", { percent: 92 });
-  }
-  return anchorViews + extra;
+  send("youtube", (owner ? owner + ": " : "") + "открываю длинный ролик по ID…", { percent: 44 });
+  await openVideoDirect(page, videoId, false);
+  await waitForVideoEnd(page);
+  if (completed) completed.add(checkpointKey);
+  send("youtube", (owner ? owner + ": " : "") + "✓ длинный ролик просмотрен", { percent: 92 });
+  return 1;
 }
 
 async function skipAdIfPossible(page) {
@@ -3540,7 +3560,7 @@ async function main() {
         send("youtube", "→ Канал " + (i + 2) + "/" + targets.length + " · " + nextLabel + "…", {
           percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65)
         });
-        if (page && !page.isClosed()) await page.waitForTimeout(1200);
+        if (page && !page.isClosed()) await page.waitForTimeout(400);
       }
     }
     send("youtube", "Аккаунт завершил сетку (" + totalViews + " просмотров). Профиль Dolphin закрывается…", { percent: 99 });
@@ -3636,4 +3656,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan };
+module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan, buildMeshCatalogPlan };

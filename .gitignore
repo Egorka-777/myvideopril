@@ -2,6 +2,7 @@
 bin/
 obj/
 artifacts/
+release/
 tools/uploader/node.exe
 tools/uploader/ffmpeg.exe
 tools/uploader/ffprobe.exe

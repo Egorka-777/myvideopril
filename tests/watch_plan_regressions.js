@@ -22,17 +22,27 @@ assert.strictEqual(plan.filter(x => x.kind === "long").length, 5);
 assert.strictEqual(plan.filter(x => x.kind === "shorts").length, 5);
 assert.strictEqual(worker.buildCatalogPlan(plan, "long-0", "").length, 9);
 
+const meshPlan = worker.buildMeshCatalogPlan(fiveLong.concat(fiveShorts), "long-3");
+assert.strictEqual(meshPlan.length, 1);
+assert.strictEqual(meshPlan[0].videoId, "long-3");
+assert.strictEqual(meshPlan[0].kind, "long");
+
 const enriched = worker.enrichWatchTarget({
   ownerProfileId: "owner-1",
+  meshSingleLong: true,
+  videoId: "long-2",
   catalogVideos: fiveLong
 }, null);
-assert.strictEqual(enriched.knownVideos.length, 5, "job catalog must work even without disk catalog");
+assert.strictEqual(enriched.knownVideos.length, 1, "mesh must keep one long video");
+assert.strictEqual(enriched.knownVideos[0].videoId, "long-2");
 
 const root = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "tools", "uploader", "worker.js"), "utf8");
 const cs = fs.readFileSync(path.join(root, "src", "Uploader.cs"), "utf8");
 assert.doesNotMatch(source, /MESH_LONG_MAX|MESH_SHORTS_MAX/);
-assert.doesNotMatch(cs, /i\s*>\s*0\)kind\s*=\s*"shorts"/);
-assert.match(cs, /WatchMaxParallelProfiles/);
+assert.doesNotMatch(cs, /CollectMeshChannelsForMarket/);
+assert.match(cs, /CollectMeshLongChannels/);
+assert.match(cs, /meshSingleLong/);
+assert.match(source, /buildMeshCatalogPlan/);
 
 console.log("OK: watch_plan_regressions.js");

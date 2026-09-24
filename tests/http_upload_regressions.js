@@ -36,9 +36,13 @@ assert.strictEqual(worker.retryableDolphinStartError(new Error("HTTP 401")),fals
 
 worker.assertExpectedChannel("UC123456789","UC123456789");
 assert.throws(()=>worker.assertExpectedChannel("UCexpected","UCwrong"),/другой YouTube-канал/);
-assert.throws(()=>worker.assertProxy("1.2.3.4","9.9.9.9","9.9.9.9"),/Прокси не используется/);
-worker.assertProxy("1.2.3.4","1.2.8.9","9.9.9.9");
-assert.throws(()=>worker.assertProxy("1.2.3.4","5.6.7.8","9.9.9.9"),/IP профиля изменился/);
+const samePc = worker.recordProfileIp("1.2.3.4", "9.9.9.9", "9.9.9.9");
+assert.ok(samePc.warnings.some(w => /IP компьютера/.test(w)));
+const subnetOk = worker.recordProfileIp("1.2.3.4", "1.2.8.9", "9.9.9.9");
+assert.strictEqual(subnetOk.warnings.length, 0);
+const drift = worker.recordProfileIp("1.2.3.4", "5.6.7.8", "9.9.9.9");
+assert.ok(drift.warnings.some(w => /отличается/.test(w)));
+worker.assertProxy("1.2.3.4", "5.6.7.8", "9.9.9.9");
 
 const data=bootstrap,sessionToken="session",front="front",scotty="scotty",title="Тест | без цифр";
 const create=worker.makeCreateVideoBody(data,sessionToken,front,scotty,title);

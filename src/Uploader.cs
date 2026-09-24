@@ -65,6 +65,7 @@ namespace VideoBatch {
     [DataContract] public class WatchTargetJob {
         [DataMember]public string title,searchUrl,searchKeys,searchFullTitle,ownerName,videoId,channelUrl,ownerProfileId;
         [DataMember]public CatalogVideoJob[] catalogVideos;
+        [DataMember]public bool meshSingleLong;
     }
     [DataContract] public class UploadJob {
         [DataMember]public string token,profileId,expectedIp,video,title,thumbnail,searchUrl,searchFilter,searchKeys,searchFullTitle,scheduleDate,scheduleTime;
@@ -759,6 +760,19 @@ namespace VideoBatch {
             SyncPublishedMeta(pick);
             return pick;
         }
+        /// <summary>Последний опубликованный длинный ролик канала — одна цель сетки просмотра.</summary>
+        static YouTubeItem PickMeshAnchorVideo(YouTubeChannel ch){
+            if(ch==null||NormKind(ch.Kind)!="long")return null;
+            SyncChannelPrimary(ch);
+            var batch=YouTubeMeshCatalog.CurrentBatchItems(ch);
+            if(batch.Count==0)return null;
+            YouTubeItem pick=batch.LastOrDefault(it=>it!=null&&YouTubeMeshCatalog.ItemIsPublished(it)&&!string.IsNullOrWhiteSpace(it.PublishedVideoId));
+            if(pick==null)pick=batch.LastOrDefault(it=>it!=null&&YouTubeMeshCatalog.ItemIsPublished(it)&&!string.IsNullOrWhiteSpace(it.Title));
+            if(pick==null)pick=batch.LastOrDefault(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Title));
+            if(pick==null)return null;
+            SyncPublishedMeta(pick);
+            return pick;
+        }
         static readonly System.Text.RegularExpressions.Regex ChannelHandleRx=new System.Text.RegularExpressions.Regex(@"@([A-Za-z0-9._-]+)",System.Text.RegularExpressions.RegexOptions.Compiled);
         static string ExtractChannelHandle(string name){
             var m=ChannelHandleRx.Match(name??"");
@@ -778,31 +792,22 @@ namespace VideoBatch {
             string fromName=ChannelUrlFromHandle(ExtractChannelHandle(c.Name));
             if(!string.IsNullOrWhiteSpace(fromName))c.ChannelUrl=fromName;
         }
-        static CatalogVideoJob[] BuildCatalogVideos(YouTubeChannel ch){
-            SyncChannelPrimary(ch);
-            var batch=YouTubeMeshCatalog.CurrentBatchItems(ch);
-            if(batch.Count==0)return Array.Empty<CatalogVideoJob>();
-            string baseKind=string.IsNullOrWhiteSpace(ch.Kind)?"long":ch.Kind.Trim().ToLowerInvariant();
-            var list=new List<CatalogVideoJob>();
-            for(int i=0;i<batch.Count;i++){
-                var it=batch[i];
-                if(it==null||string.IsNullOrWhiteSpace(it.Title))continue;
-                SyncPublishedMeta(it);
-                string kind=baseKind;
-                string vid=it.PublishedVideoId??"";
-                string url=it.PublishedUrl??"";
-                if(string.IsNullOrWhiteSpace(url)&&!string.IsNullOrWhiteSpace(vid))url="https://www.youtube.com/watch?v="+vid;
-                list.Add(new CatalogVideoJob{
-                    title=ClampTitle(it.Title),
-                    videoId=vid,
-                    url=url,
-                    kind=kind
-                });
-            }
-            return list.ToArray();
+        static CatalogVideoJob[] BuildMeshCatalogSingle(YouTubeChannel ch){
+            var anchor=PickMeshAnchorVideo(ch);
+            if(anchor==null||string.IsNullOrWhiteSpace(anchor.Title))return Array.Empty<CatalogVideoJob>();
+            SyncPublishedMeta(anchor);
+            string vid=anchor.PublishedVideoId??"";
+            string url=anchor.PublishedUrl??"";
+            if(string.IsNullOrWhiteSpace(url)&&!string.IsNullOrWhiteSpace(vid))url="https://www.youtube.com/watch?v="+vid;
+            return new[]{new CatalogVideoJob{
+                title=ClampTitle(anchor.Title),
+                videoId=vid,
+                url=url,
+                kind="long"
+            }};
         }
         WatchTargetJob BuildMeshTarget(YouTubeChannel ch){
-            var anchor=PickAnchorVideo(ch);
+            var anchor=PickMeshAnchorVideo(ch);
             if(anchor==null||string.IsNullOrWhiteSpace(anchor.Title))return null;
             SyncPublishedMeta(anchor);
             SyncChannelUrlFromName(ch);
@@ -818,30 +823,22 @@ namespace VideoBatch {
                 channelUrl=ResolveChannelUrlFromGrid(ch),
                 ownerName=ch.Name??"",
                 ownerProfileId=(ch.ProfileId??"").Trim(),
-                catalogVideos=BuildCatalogVideos(ch)
+                catalogVideos=BuildMeshCatalogSingle(ch),
+                meshSingleLong=true
             };
         }
-        List<YouTubeChannel> CollectMeshChannels(IEnumerable<DataGridViewRow> rows){
+        /// <summary>Отмеченные длинные каналы — и зрители, и цели сетки (без шортсов).</summary>
+        List<YouTubeChannel> CollectMeshLongChannels(IEnumerable<DataGridViewRow> rows){
+            var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var list=new List<YouTubeChannel>();
             foreach(var row in rows){
                 var c=(YouTubeChannel)row.Tag;
                 if(c==null||!c.Enabled)continue;
-                SyncChannelPrimary(c);
-                if(PickAnchorVideo(c)==null)continue;
-                list.Add(c);
-            }
-            return list;
-        }
-        /// <summary>Все каналы рынка с контентом — цели сетки (не только отмеченные зрители).</summary>
-        List<YouTubeChannel> CollectMeshChannelsForMarket(){
-            var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var list=new List<YouTubeChannel>();
-            foreach(var c in settings.YouTubeChannels??new List<YouTubeChannel>()){
-                if(c==null||NormMarket(c.Market)!=marketView)continue;
+                if(NormKind(c.Kind)!="long")continue;
                 string pid=(c.ProfileId??"").Trim();
                 if(string.IsNullOrWhiteSpace(pid)||seen.Contains(pid))continue;
                 SyncChannelPrimary(c);
-                if(PickAnchorVideo(c)==null)continue;
+                if(PickMeshAnchorVideo(c)==null)continue;
                 seen.Add(pid);
                 list.Add(c);
             }
@@ -881,8 +878,13 @@ namespace VideoBatch {
             for(int i=0;i<videoCount;i++)result.Add(clean[i%clean.Count]);
             return result;
         }
+        static readonly System.Text.RegularExpressions.Regex LeadingTitleIndexRx=new System.Text.RegularExpressions.Regex(@"^\d+\.\s*",System.Text.RegularExpressions.RegexOptions.Compiled);
+        static string StripLeadingTitleIndex(string title){
+            return CleanTitle(LeadingTitleIndexRx.Replace(title??"","").Trim());
+        }
         static string RenameVideoFile(string path,string title,int index1Based,int total){
             if(string.IsNullOrWhiteSpace(path)||!File.Exists(path))return path;
+            title=StripLeadingTitleIndex(title);
             if(string.IsNullOrWhiteSpace(title))return path;
             string finalTitle=PackTitleWithIndex(title,index1Based,total);
             ValidateTitleLength(finalTitle,"Переименование");
@@ -1138,6 +1140,7 @@ namespace VideoBatch {
             string packKind=EffectiveKind(ch);
             List<string> titles;
             try{titles=PeekTitlesFromBank(packKind,paths.Length,m);}catch(Exception ex){throw;}
+            titles=ResolveDuplicateTitlesInBatch(titles,"«"+ch.Name+"»");
             Write("«"+ch.Name+"»: "+paths.Length+" видео — "+TitleCursorLabel(ch.Kind,m)+":");
             var items=new List<YouTubeItem>();
             int renamed=0;
@@ -1205,6 +1208,7 @@ namespace VideoBatch {
                         string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
                         List<string> titles;
                         try{titles=PeekTitlesFromBank(ch.Kind,paths.Count,m);}catch(Exception ex){Ui.Error(this,ex);return;}
+                        titles=ResolveDuplicateTitlesInBatch(titles,"«"+ch.Name+"»");
                         Write("«"+ch.Name+"»: "+paths.Count+" видео — "+TitleCursorLabel(ch.Kind,m)+":");
                         var items=new List<YouTubeItem>();
                         for(int i=0;i<paths.Count;i++){
@@ -1265,6 +1269,7 @@ namespace VideoBatch {
                 string m=NormMarket(baseCh.Market);
                 if(string.IsNullOrWhiteSpace(m))m=marketView;
                 try{titles=PeekTitlesFromBank("shorts",videoFiles.Length,m);}catch(Exception ex){Ui.Error(this,ex);return;}
+                titles=ResolveDuplicateTitlesInBatch(titles,"«"+baseCh.Name+"» шортс");
                 Write("«"+baseCh.Name+"» шортс — "+TitleCursorLabel("shorts",m)+":");
                 var items=new List<YouTubeItem>();
                 for(int i=0;i<videoFiles.Length;i++){
@@ -1538,22 +1543,24 @@ namespace VideoBatch {
                     }
                 }else rows=Selected();
                 if(rows.Count==0)throw new Exception("Отметьте аккаунты-зрители (галочка ✓) или выберите их в «Просмотры и поиск».");
-                var meshChannels=CollectMeshChannelsForMarket();
-                if(meshChannels.Count==0)throw new Exception("Нет каналов с заголовками. Сначала загрузите видео или назначьте заголовки.");
-                Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
-                if(meshChannels.Count<1)throw new Exception("Нет каналов для сетки.");
                 cancellation=new CancellationTokenSource();Busy(true);
                 token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 var unique=rows
                     .Where(r=>!string.IsNullOrWhiteSpace(((YouTubeChannel)r.Tag).ProfileId))
+                    .Where(r=>NormKind(((YouTubeChannel)r.Tag).Kind)=="long")
                     .GroupBy(r=>(((YouTubeChannel)r.Tag).ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase)
                     .Select(g=>g.First()).ToList();
-                if(unique.Count==0)throw new Exception("У отмеченных аккаунтов нет Profile ID.");
+                if(unique.Count==0)throw new Exception("Сетка просмотра: отметьте длинные каналы (шортс не участвуют).");
+                var meshChannels=CollectMeshLongChannels(unique);
+                Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
+                if(meshChannels.Count<2)throw new Exception("Нужно минимум 2 длинных канала с опубликованным длинным видео.");
+                int meshSkipped=unique.Count-meshChannels.Count;
+                if(meshSkipped>0)Write("Пропущено "+meshSkipped+" канал(ов) без опубликованного длинного видео.");
                 int marked=channelsFilter?.Count??rows.Count;
                 if(marked>unique.Count)
-                    Write("Отмечено "+marked+", уникальных профилей "+unique.Count+" (дубликаты Profile ID объединены).");
+                    Write("Отмечено "+marked+", уникальных длинных профилей "+unique.Count+" (шортс и дубликаты Profile ID исключены).");
                 var launchGate=ProfileLaunchGate.FromSettings(settings,Math.Min(unique.Count,5));
-                Write("["+MarketLabel(marketView)+"] сетка: "+unique.Count+" зрителей параллельно, "+meshChannels.Count+" каналов · старт с паузой "+settings.ProfileLaunchStaggerMinMs+"–"+settings.ProfileLaunchStaggerMaxMs+" мс.");
+                Write("["+MarketLabel(marketView)+"] сетка: "+unique.Count+" зрителей, "+meshChannels.Count+" каналов · по 1 длинному ролику · старт "+settings.ProfileLaunchStaggerMinMs+"–"+settings.ProfileLaunchStaggerMaxMs+" мс.");
                 var errors=new ConcurrentBag<string>();
                 var tasks=unique.Select(row=>Task.Run(async()=>{
                     var viewer=(YouTubeChannel)row.Tag;

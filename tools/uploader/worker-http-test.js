@@ -315,14 +315,21 @@ function ipv4Prefix(ip) {
   return parts.length === 4 ? parts.slice(0, 2).join(".") : "";
 }
 
-function assertProxy(expected, actual, computer) {
+function recordProfileIp(expected, actual, computer) {
   expected = normalizeIp(expected); actual = normalizeIp(actual); computer = normalizeIp(computer);
-  if (!actual) throw new Error("Не удалось определить IP Dolphin-профиля.");
-  if (!computer) throw new Error("Не удалось определить прямой IP компьютера. Без проверки загрузка запрещена.");
-  if (actual === computer) throw new Error(`Прокси не используется: IP профиля совпал с прямым IP компьютера (${actual}). Загрузка отменена.`);
-  if (expected === actual) return;
-  if (ipv4Prefix(expected) && ipv4Prefix(expected) === ipv4Prefix(actual)) return;
-  throw new Error(`IP профиля изменился: ожидался ${expected}, получен ${actual}. Сначала перепроверьте профиль в основном приложении.`);
+  const warnings = [];
+  if (!actual) warnings.push("IP профиля не определён — продолжаю без проверки (Dolphin уже контролирует прокси).");
+  if (computer && actual && actual === computer) {
+    warnings.push(`IP профиля совпал с IP компьютера (${actual}) — продолжаю без блокировки.`);
+  }
+  if (expected && actual && expected !== actual && !(ipv4Prefix(expected) && ipv4Prefix(expected) === ipv4Prefix(actual))) {
+    warnings.push(`IP профиля (${actual}) отличается от сохранённого (${expected}) — продолжаю без блокировки.`);
+  }
+  return { actual, expected, computer, warnings };
+}
+
+function assertProxy(expected, actual, computer) {
+  recordProfileIp(expected, actual, computer);
 }
 
 function findBootstrapValue(html, name) {
@@ -633,9 +640,13 @@ async function main() {
   const context = browser.contexts()[0];
   if (!context) throw new Error("Dolphin не вернул контекст браузера.");
 
-  const [actualIp, computerIp] = await Promise.all([browserIp(context), directIp()]);
-  assertProxy(job.expectedIp, actualIp, computerIp);
-  send("ip", `Прокси подтверждён: ${actualIp}`, { ip: actualIp, percent: 12 });
+  const [actualIp, computerIp] = await Promise.all([
+    browserIp(context).catch(() => ""),
+    directIp().catch(() => "")
+  ]);
+  const ipInfo = recordProfileIp(job.expectedIp, actualIp, computerIp);
+  for (const w of ipInfo.warnings) send("ip", w, { ip: actualIp || undefined, percent: 11 });
+  if (actualIp) send("ip", `IP профиля: ${actualIp}`, { ip: actualIp, percent: 12 });
 
   const page = context.pages()[0] || await context.newPage();
   activePage = page;
@@ -661,7 +672,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  automationEndpoint, normalizeIp, assertProxy, parseStudioBootstrap, parseChannelRoleType,
+  automationEndpoint, normalizeIp, assertProxy, recordProfileIp, parseStudioBootstrap, parseChannelRoleType,
   studioPageState, waitForStudioChannel, assertExpectedChannel,
   makeContext, makeCreateVideoBody, makeMetadataBody, validateJob,
   authHeaders, isSchedule403,

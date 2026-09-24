@@ -96,7 +96,6 @@ namespace VideoBatch.HttpTest {
                 if(snapshot==null)throw new Exception("Снимок настроек не загружен.");
                 var channel=account.SelectedItem as ImportedYouTubeChannel;
                 if(channel==null)throw new Exception("Выберите аккаунт.");
-                if(string.IsNullOrWhiteSpace(channel.ExpectedIp))throw new Exception("У аккаунта нет сохранённого IP. Сначала нажмите «Проверить профили» в обычном VideoBatch.");
                 if(!File.Exists(video.Text))throw new Exception("Выберите существующий видеофайл.");
                 string clean=(title.Text??"").Trim();
                 if(clean.Length<1||clean.Length>100||clean.Contains("<")||clean.Contains(">"))throw new Exception("Заголовок должен содержать 1–100 символов без < и >.");
@@ -113,7 +112,7 @@ namespace VideoBatch.HttpTest {
                 Directory.CreateDirectory(HttpTestPaths.Jobs);
                 string jobPath=Path.Combine(HttpTestPaths.Jobs,"http-"+Guid.NewGuid().ToString("N")+".json");
                 var dto=new HttpUploadJob{
-                    profileId=channel.ProfileId.Trim(),expectedIp=channel.ExpectedIp.Trim(),expectedChannelId=ExtractChannelId(channel.ChannelUrl),localPort=snapshot.Preferences.DolphinPort,
+                    profileId=channel.ProfileId.Trim(),expectedIp=(channel.ExpectedIp??"").Trim(),expectedChannelId=ExtractChannelId(channel.ChannelUrl),localPort=snapshot.Preferences.DolphinPort,
                     video=Path.GetFullPath(video.Text),title=clean,
                     scheduledUnixSeconds=new DateTimeOffset(schedule.Value).ToUnixTimeSeconds()
                 };
