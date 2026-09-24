@@ -25,8 +25,9 @@ namespace VideoBatch {
         const int COn=0,CName=1,CLang=2,CProfile=3,CIp=4,CVideo=5,CVideoPick=6,CCaption=7,CStatus=8,CRemove=9;
         static readonly string[] LangLabels=new[]{"RU","EN"};
         Preferences settings;DataGridView grid;RichTextBox log;
-        Button setup,add,importYt,files,captionsBtn,musicBtn,check,upload,stop,marketRu,marketEn;
-        Label marketHint,runHint;CancellationTokenSource cancellation;CancellationTokenSource uploadCts;
+        Button setup,add,importYt,files,captionsBtn,musicBtn,check,uploadHttp,uploadStudio,stop,marketRu,marketEn;
+        Label marketHint,runHint,modeHint;CancellationTokenSource cancellation;CancellationTokenSource uploadCts;
+        string lastHttpBlockReason="";
         int uploadsInFlight;readonly HashSet<string> busyProfiles=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string logFile;string marketView="RU";readonly object saveLock=new object();readonly object uploadLock=new object();
 
@@ -88,11 +89,15 @@ namespace VideoBatch {
             log=new RichTextBox{Dock=DockStyle.Fill,ReadOnly=true,BackColor=Color.White,BorderStyle=BorderStyle.None,Font=new Font("Consolas",9),DetectUrls=true};
             logs.Controls.Add(log,0,1);root.Controls.Add(logs,0,5);
 
-            var bottom=Ui.Flow();
-            upload=Ui.Button("Загрузить",null,true);upload.MinimumSize=new Size(180,42);upload.Click+=async(s,e)=>await UploadAll(null);
+            modeHint=new Label{AutoSize=true,Margin=new Padding(0,10,16,0),ForeColor=Ui.Muted,Text="Режим: HTTP (beta) · Studio резерв"};
+            var bottom=Ui.Flow();bottom.WrapContents=false;
+            uploadHttp=Ui.Button("Быстрая загрузка (HTTP beta)",null,true);uploadHttp.MinimumSize=new Size(240,42);
+            uploadHttp.Click+=async(s,e)=>await UploadAll(null,"http");
+            uploadStudio=Ui.Button("Через Studio",null,false);uploadStudio.MinimumSize=new Size(160,42);
+            uploadStudio.Click+=async(s,e)=>await UploadAll(null,"studio");
             stop=Ui.Button("Стоп",()=>{stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка…");});stop.Visible=false;
             var openLog=Ui.Button("Лог",()=>{try{if(File.Exists(logFile))Ui.Open(logFile);else throw new Exception("Лог ещё не создан.");}catch(Exception e){Ui.Error(this,e);}});
-            bottom.Controls.Add(upload);bottom.Controls.Add(stop);bottom.Controls.Add(openLog);root.Controls.Add(bottom,0,6);
+            bottom.Controls.Add(uploadHttp);bottom.Controls.Add(uploadStudio);bottom.Controls.Add(modeHint);bottom.Controls.Add(stop);bottom.Controls.Add(openLog);root.Controls.Add(bottom,0,6);
 
             LoadGrid();RefreshMarketUi();
             FormClosing+=(s,e)=>{SaveGrid();if(cancellation!=null||uploadsInFlight>0){e.Cancel=true;MessageBox.Show(this,"Сначала остановите операцию (Стоп).","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);}};
@@ -260,8 +265,16 @@ namespace VideoBatch {
             if(row!=null){grid.ClearSelection();row.Selected=true;grid.CurrentCell=row.Cells[CName];RememberSelectedAccount((TikTokAccount)row.Tag);}
         }
         public void ApplyNavigationContext(){SelectProfileById(NavigationContext.SelectedProfileId,NavigationContext.SelectedMarket);}
-        public Task RunUploadAsync()=>UploadAll(null);
-        public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter);
+        public Task RunUploadAsync()=>UploadAll(null,"http");
+        public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter,"http");
+        public Task RunUploadStudioAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter,"studio");
+        public Task RunUploadHttpAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter,"http");
+        void RefreshModeHint(string mode){
+            if(modeHint==null)return;
+            if(string.Equals(mode,"studio",StringComparison.OrdinalIgnoreCase))modeHint.Text="Режим: Studio";
+            else if(!string.IsNullOrWhiteSpace(lastHttpBlockReason))modeHint.Text="HTTP недоступен — "+lastHttpBlockReason;
+            else modeHint.Text="Режим: HTTP (beta)";
+        }
         public Task RunCheckProfilesAsync()=>CheckProfiles();
         public void RequestStopUpload(){stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
         public void AssignVideosToProfile(string profileId,string market,string[] files){
@@ -399,21 +412,21 @@ namespace VideoBatch {
             if(moved.Count>0)BeginInvoke(new Action(()=>{LoadGrid();Write("Аккаунты перенесены на другой рынок: "+moved.Count+".");}));
         }
         void Busy(bool value){
-            foreach(var b in new[]{setup,add,importYt,files,captionsBtn,musicBtn,check,upload,marketRu,marketEn})b.Enabled=!value;
+            foreach(var b in new[]{setup,add,importYt,files,captionsBtn,musicBtn,check,uploadHttp,uploadStudio,marketRu,marketEn})b.Enabled=!value;
             grid.Enabled=!value;
             stop.Visible=value||uploadsInFlight>0;stop.Enabled=value||uploadsInFlight>0;
             if(runHint!=null){runHint.Visible=value;runHint.Text=value?"Идёт проверка…":"";}
         }
         void UploadBusyStart(){
-            uploadsInFlight++;upload.Enabled=true;stop.Visible=true;stop.Enabled=true;
+            uploadsInFlight++;uploadHttp.Enabled=true;uploadStudio.Enabled=true;stop.Visible=true;stop.Enabled=true;
             check.Enabled=false;setup.Enabled=false;marketRu.Enabled=false;marketEn.Enabled=false;
             add.Enabled=true;importYt.Enabled=true;files.Enabled=true;captionsBtn.Enabled=true;musicBtn.Enabled=true;grid.Enabled=true;
-            if(runHint!=null){runHint.Visible=true;runHint.Text="Идёт загрузка ("+uploadsInFlight+"). Можно снова нажать «Загрузить» для другого аккаунта.";}
+            if(runHint!=null){runHint.Visible=true;runHint.Text="Идёт загрузка ("+uploadsInFlight+"). Можно снова нажать HTTP или Studio для другого аккаунта.";}
         }
         void UploadBusyEnd(){
             uploadsInFlight=Math.Max(0,uploadsInFlight-1);
-            if(uploadsInFlight>0){upload.Enabled=true;stop.Visible=true;stop.Enabled=true;return;}
-            upload.Enabled=true;check.Enabled=true;setup.Enabled=true;marketRu.Enabled=true;marketEn.Enabled=true;
+            if(uploadsInFlight>0){uploadHttp.Enabled=true;uploadStudio.Enabled=true;stop.Visible=true;stop.Enabled=true;return;}
+            uploadHttp.Enabled=true;uploadStudio.Enabled=true;check.Enabled=true;setup.Enabled=true;marketRu.Enabled=true;marketEn.Enabled=true;
             stop.Visible=cancellation!=null;stop.Enabled=cancellation!=null;
             if(runHint!=null){runHint.Visible=false;runHint.Text="";}
             lock(uploadLock){if(uploadCts!=null){try{uploadCts.Dispose();}catch{}uploadCts=null;}}
@@ -430,8 +443,9 @@ namespace VideoBatch {
             log.AppendText(line+Environment.NewLine);log.ScrollToCaret();
             try{Directory.CreateDirectory(Store.Root);if(string.IsNullOrWhiteSpace(logFile))logFile=Path.Combine(Store.Root,"tiktok-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".log");File.AppendAllText(logFile,line+Environment.NewLine,Encoding.UTF8);}catch{}
         }
-        void ValidateCommon(bool forUpload,IReadOnlyList<TikTokAccount> accountsFilter=null){
-            DolphinRunner.CheckFilesTikTok();
+        void ValidateCommon(bool forUpload,IReadOnlyList<TikTokAccount> accountsFilter=null,string transport="studio"){
+            if(string.Equals(transport,"http",StringComparison.OrdinalIgnoreCase))DolphinRunner.CheckFilesTikTokHttp();
+            else DolphinRunner.CheckFilesTikTok();
             if(string.IsNullOrWhiteSpace(WindowsSupport.Unprotect(settings.ProtectedDolphinToken)))throw new Exception("Шаг 1: укажите API-токен Dolphin.");
             var rows=forUpload?ResolveUploadRows(accountsFilter):Selected();
             if(rows.Count==0)throw new Exception(forUpload?"Отметьте галочкой ✓ аккаунты с видео и Profile ID. Ещё → «Из YouTube» подтянет ID.":"Отметьте аккаунты галочкой.");
@@ -504,12 +518,31 @@ namespace VideoBatch {
             }
             throw last??new Exception("Неизвестная ошибка загрузки TikTok.");
         }
-        async Task UploadAll(IReadOnlyList<TikTokAccount> accountsFilter){
+        async Task<HttpTikTokUploadRunResult> RunHttpUploadWithRetry(HttpTikTokUploadJob job,TikTokAccount acc,DataGridViewRow row,List<TikTokItem> items,CancellationToken ct,string token){
+            try{
+                return await DolphinRunner.RunTikTokHttp(job,token,m=>{
+                    if(!string.IsNullOrWhiteSpace(m.ip))PropagateIp(acc.ProfileId,m.ip);
+                    if(m.stage=="done_item"&&m.packIndex>0&&m.packIndex<=items.Count){
+                        items[m.packIndex-1].Published=true;
+                        SafeSave();
+                    }
+                    if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
+                },ct).ConfigureAwait(false);
+            }catch(UploadException e){
+                if(e.KeptOpen)throw;
+                throw;
+            }
+        }
+        async Task UploadAll(IReadOnlyList<TikTokAccount> accountsFilter,string transport){
+            transport=(transport??"http").Trim().ToLowerInvariant();
+            if(transport!="studio")transport="http";
+            RefreshModeHint(transport);
             if(cancellation!=null){MessageBox.Show(this,"Сначала дождитесь проверки или нажмите Стоп.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             string token="";bool uiStarted=false;
             try{
                 SyncFromYouTube();
-                SaveGrid();ValidateCommon(true,accountsFilter);
+                SaveGrid();ValidateCommon(true,accountsFilter,transport);
+                lastHttpBlockReason="";
                 var rows=ResolveUploadRows(accountsFilter);
                 Write("К загрузке TikTok: "+rows.Count+" акк.");
                 var packs=new List<(DataGridViewRow row,TikTokAccount acc,List<TikTokItem> items)>();
@@ -541,7 +574,7 @@ namespace VideoBatch {
                 int minMs=Math.Max(60000,settings.TikTokUploadStaggerMinMinutes*60000);
                 int maxMs=Math.Max(minMs,settings.TikTokUploadStaggerMaxMinutes*60000);
                 var launchGate=new ProfileLaunchGate(parallel,minMs,maxMs);
-                Write("["+MarketLabel(marketView)+"] TikTok: "+free.Count+" акк. · по очереди · пауза между стартами "
+                Write("["+MarketLabel(marketView)+"] TikTok "+(transport=="http"?"HTTP":"Studio")+": "+free.Count+" акк. · по очереди · пауза между стартами "
                     +settings.TikTokUploadStaggerMinMinutes+"–"+settings.TikTokUploadStaggerMaxMinutes+" мин (ПК).");
 
                 var errors=new ConcurrentBag<string>();
@@ -557,22 +590,47 @@ namespace VideoBatch {
                                 caption=it.Caption,
                                 description=it.Caption
                             }).ToArray();
-                            var job=new UploadJob{
-                                token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,expectedIp=a.ExpectedIp,
-                                items=items,skipQueueDelay=true,checkOnly=false,
-                                video=items[0].video
-                            };
-                            var result=await RunUploadWithRetry(job,a,row,pack.items,ct,token).ConfigureAwait(false);
-                            foreach(var it in pack.items)it.Published=true;
-                            a.Status=ChannelStatus.Published;
-                            Status(row,pack.items.Count>1?("Опубликовано "+pack.items.Count+" ✓"):(string.IsNullOrWhiteSpace(result.Url)?"Опубликовано ✓":"Опубликовано ✓ "+result.Url));
-                            if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(a.ProfileId,result.Ip);
-                            SafeSave();
+                            if(transport=="http"){
+                                if(string.IsNullOrWhiteSpace(a.ExpectedIp)){
+                                    lastHttpBlockReason="нет сохранённого IP";
+                                    throw new Exception("HTTP TikTok: у «"+a.Name+"» нет сохранённого IP. Нажмите «Проверить» или используйте «Через Studio».");
+                                }
+                                var httpJob=new HttpTikTokUploadJob{
+                                    profileId=a.ProfileId,expectedIp=a.ExpectedIp,localPort=settings.DolphinPort,market=marketView,
+                                    keepProfileOpen=true,
+                                    items=pack.items.Select((it,idx)=>new HttpTikTokItemJob{
+                                        localJobId=a.ProfileId+"-"+(idx+1),video=it.Video,caption=it.Caption,description=it.Caption,
+                                        publishMode="immediate",scheduledUnixSeconds=0,packIndex=idx+1
+                                    }).ToArray()
+                                };
+                                var httpResult=await RunHttpUploadWithRetry(httpJob,a,row,pack.items,ct,token).ConfigureAwait(false);
+                                foreach(var it in pack.items)it.Published=true;
+                                a.Status=ChannelStatus.Published;
+                                Status(row,pack.items.Count>1?("HTTP · опубликовано "+pack.items.Count+" ✓"):("HTTP · опубликовано ✓"));
+                                if(!string.IsNullOrWhiteSpace(httpResult.Ip))PropagateIp(a.ProfileId,httpResult.Ip);
+                                SafeSave();
+                            }else{
+                                var job=new UploadJob{
+                                    token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,expectedIp=a.ExpectedIp,
+                                    items=items,skipQueueDelay=true,checkOnly=false,
+                                    video=items[0].video
+                                };
+                                var result=await RunUploadWithRetry(job,a,row,pack.items,ct,token).ConfigureAwait(false);
+                                foreach(var it in pack.items)it.Published=true;
+                                a.Status=ChannelStatus.Published;
+                                Status(row,pack.items.Count>1?("Studio · опубликовано "+pack.items.Count+" ✓"):(string.IsNullOrWhiteSpace(result.Url)?"Studio · опубликовано ✓":"Studio · опубликовано ✓ "+result.Url));
+                                if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(a.ProfileId,result.Ip);
+                                SafeSave();
+                            }
                         }finally{launchGate.Exit();}
                     }catch(OperationCanceledException){Status(row,"Остановлено");}
                     catch(Exception e){
                         a.Status=ChannelStatus.Error;
                         string msg=e.Message+(e is UploadException ue&&ue.KeptOpen?" (профиль открыт)":"");
+                        if(transport=="http"&&!(e is UploadException ue2&&ue2.KeptOpen)){
+                            lastHttpBlockReason=msg.Length>80?msg.Substring(0,80)+"…":msg;
+                            RefreshModeHint("http");
+                        }
                         errors.Add(a.Name+": "+msg);Status(row,ChannelStatus.Error);
                     }finally{lock(uploadLock)busyProfiles.Remove(pid);}
                 })).ToArray();
@@ -581,7 +639,7 @@ namespace VideoBatch {
                 if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"TikTok",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 else Write("["+MarketLabel(marketView)+"] загрузка TikTok завершена.");
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}
-            finally{if(uiStarted)UploadBusyEnd();SaveGrid();RefreshMarketUi();}
+            finally{if(uiStarted)UploadBusyEnd();SaveGrid();RefreshMarketUi();RefreshModeHint(transport);}
         }
         void Finish(){if(cancellation!=null){cancellation.Dispose();cancellation=null;}Busy(false);SaveGrid();RefreshMarketUi();}
     }

@@ -9,7 +9,8 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { chromium } = require("playwright-core");
-const WORKER_BUILD = "2026-09-24-connect-open-profile-v1";
+const WORKER_BUILD = "2026-09-24-studio-modal-v1";
+const TRANSPORT = "studio";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -455,11 +456,105 @@ async function visible(locator, timeout = 1500) {
   try { await locator.first().waitFor({ state: "visible", timeout }); return true; } catch { return false; }
 }
 
+const BLOCKING_CONTENT_CHECK_PATTERNS = [
+  /Turn on automatic content checks\?/i,
+  /automatic content checks/i,
+  /Content check lite/i,
+  /автоматическ(?:ую|ой) проверк(?:у|и) контента/i,
+  /проверк(?:а|у) контента lite/i
+];
+
+const TIP_DIALOG_PATTERNS = [
+  /New editing features added/i,
+  /нов(?:ые|ых) функци(?:и|й) редактирования/i
+];
+
+function dialogTextMatches(text, patterns) {
+  const t = String(text || "");
+  return patterns.some(re => re.test(t));
+}
+
+async function waitDialogHidden(dialog, page, timeoutMs = 6000) {
+  try {
+    await dialog.waitFor({ state: "hidden", timeout: timeoutMs });
+  } catch (_) {
+    await page.waitForTimeout(400);
+    if (await dialog.isVisible({ timeout: 200 }).catch(() => false)) {
+      throw new Error("Диалог TikTok не исчез после закрытия.");
+    }
+  }
+}
+
+async function dismissTikTokBlockingDialogs(page, maxPasses = 4) {
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let dismissedAny = false;
+    const dialogs = page.locator('[role="dialog"]');
+    const count = Math.min(await dialogs.count().catch(() => 0), 8);
+    for (let i = 0; i < count; i++) {
+      const dialog = dialogs.nth(i);
+      if (!(await visible(dialog, 500))) continue;
+      const text = await dialog.innerText({ timeout: 2000 }).catch(() => "");
+      if (dialogTextMatches(text, BLOCKING_CONTENT_CHECK_PATTERNS)) {
+        send("tiktok", "Закрываю диалог проверки контента (Cancel)…", { percent: 26 });
+        const cancel = dialog.getByRole("button", { name: /^(Cancel|Отмена)$/i }).first();
+        if (await visible(cancel, 600)) {
+          await cancel.click({ timeout: 3000 });
+        } else {
+          const closeBtn = dialog.locator(
+            'button[aria-label*="Close" i], button[aria-label*="Закрыть" i], [data-e2e*="close" i], button[class*="close" i]'
+          ).first();
+          if (await visible(closeBtn, 600)) await closeBtn.click({ timeout: 3000 });
+          else continue;
+        }
+        dismissedAny = true;
+        await waitDialogHidden(dialog, page).catch(() => {});
+        continue;
+      }
+      if (dialogTextMatches(text, TIP_DIALOG_PATTERNS)) {
+        const gotIt = dialog.getByRole("button", { name: /^(Got it|Понятно|OK|Хорошо)$/i }).first();
+        if (await visible(gotIt, 600)) {
+          send("tiktok", "Закрываю подсказку TikTok Studio…", { percent: 26 });
+          await gotIt.click({ timeout: 3000 });
+          dismissedAny = true;
+          await waitDialogHidden(dialog, page).catch(() => {});
+        }
+      }
+    }
+    if (!dismissedAny) break;
+    await page.waitForTimeout(350);
+  }
+}
+
+async function collectVisibleDialogTexts(page) {
+  return page.evaluate(() => {
+    return Array.from(document.querySelectorAll('[role="dialog"]'))
+      .filter(el => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 8 && r.height > 8 && s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity || 1) > 0.05;
+      })
+      .map(el => (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 600))
+      .filter(Boolean);
+  }).catch(() => []);
+}
+
+async function isTikTokLoginPage(page) {
+  const url = String(page.url() || "");
+  if (/\/login|\/signup|passport|account\/login/i.test(url)) return true;
+  const state = await page.evaluate(() => ({
+    path: location.pathname || "",
+    text: (document.body && document.body.innerText || "").slice(0, 5000)
+  })).catch(() => ({ path: "", text: "" }));
+  if (/\/upload|tiktokstudio/i.test(state.path)) return false;
+  return /log in to tiktok|sign up|войдите|вход в аккаунт|log in or sign up/i.test(state.text);
+}
+
 async function dismissOverlays(page) {
+  await dismissTikTokBlockingDialogs(page);
   const labels = [
-    /Accept all/i, /Accept/i, /Allow all/i, /Got it/i, /I agree/i,
-    /Принять все/i, /Принять/i, /Разрешить/i, /Понятно/i, /Хорошо/i, /OK/i,
-    /Reject all/i, /Отклонить все/i, /Close/i, /Закрыть/i
+    /Accept all/i, /Accept/i, /Allow all/i, /I agree/i,
+    /Принять все/i, /Принять/i, /Разрешить/i,
+    /Reject all/i, /Отклонить все/i
   ];
   for (const re of labels) {
     try {
@@ -488,6 +583,7 @@ function normalizeCaption(value) {
 }
 
 async function fillCaption(page, caption) {
+  await dismissTikTokBlockingDialogs(page);
   const captionText = normalizeCaption(caption);
   if (!captionText) throw new Error("Пустая подпись TikTok.");
   if (captionText.length > 2200) throw new Error("Подпись TikTok длиннее 2200 символов.");
@@ -524,12 +620,29 @@ async function fillCaption(page, caption) {
       if (normalizeCaption(actual) === captionText) return;
     }
   }
+  const dialogs = await collectVisibleDialogTexts(page);
+  const pageUrl = page.url().split("?")[0];
+  const pageTitle = await page.title().catch(() => "");
+  record("caption_blocked", "Поле подписи недоступно", { pageUrl, pageTitle, dialogs });
+  const imagePath = diagnosticFile ? diagnosticFile.replace(/\.jsonl$/i, "-caption-blocked.png") : "";
+  if (imagePath) await page.screenshot({ path: imagePath, fullPage: false }).catch(() => {});
+  const blocking = dialogs.find(t => dialogTextMatches(t, BLOCKING_CONTENT_CHECK_PATTERNS));
+  if (blocking) {
+    throw new Error("Поле подписи TikTok недоступно. Страницу перекрывает диалог: " + blocking.slice(0, 120) + ". Профиль оставлен открытым.");
+  }
+  if (dialogs.length) {
+    throw new Error("Поле подписи TikTok недоступно. Страницу перекрывает диалог: " + dialogs[0].slice(0, 120) + ". Профиль оставлен открытым.");
+  }
+  if (await isTikTokLoginPage(page)) {
+    throw new Error("TikTok показывает страницу входа. Войдите в аккаунт в этом профиле Dolphin и повторите.");
+  }
   throw new Error(found
     ? "TikTok не подтвердил полную подпись в поле ввода. Публикация не начиналась; профиль оставлен открытым."
-    : "Не найдено поле подписи TikTok. Проверьте вход в аккаунт. Профиль оставлен открытым.");
+    : "Поле подписи TikTok недоступно. Проверьте открытый профиль Studio. Профиль оставлен открытым.");
 }
 
 async function clickPublishConfirmation(page) {
+  await dismissTikTokBlockingDialogs(page);
   const dialog = page.locator('[role="dialog"]');
   if (!(await visible(dialog, 1500))) return false;
   const names = [/^Confirm$/i, /^Post now$/i, /^Publish now$/i, /^Подтвердить$/i, /^Опубликовать сейчас$/i];
@@ -546,6 +659,7 @@ async function clickPublishConfirmation(page) {
 }
 
 async function publishAndConfirm(page) {
+  await dismissTikTokBlockingDialogs(page);
   let networkEvidence = "";
   const onResponse = async response => {
     try {
@@ -583,6 +697,7 @@ async function publishAndConfirm(page) {
 }
 
 async function clickPost(page) {
+  await dismissTikTokBlockingDialogs(page);
   const names = [
     /^Post$/i, /^Publish$/i, /^Post now$/i,
     /^Опубликовать$/i, /^Публикация$/i, /^Разместить$/i
@@ -618,6 +733,7 @@ async function waitUploadReady(page) {
   const deadline = Date.now() + 8 * 60 * 1000;
   let lastPct = 0;
   while (Date.now() < deadline) {
+    await dismissTikTokBlockingDialogs(page);
     await dismissOverlays(page);
     // кнопка Post активна?
     const canPost = await page.evaluate(() => {
@@ -663,26 +779,36 @@ async function uploadOne(page, item, index, total) {
   for (const u of urls) {
     try {
       await gotoStable(page, u, { waitUntil: "domcontentloaded", timeout: 90000 });
+      await dismissTikTokBlockingDialogs(page);
       await dismissOverlays(page);
+      await dismissTikTokBlockingDialogs(page);
       const input = await pickFileInput(page);
       if (input) {
         opened = true;
         await setInputFilesRobust(page, input, video);
+        await dismissTikTokBlockingDialogs(page);
         break;
       }
     } catch (_) {}
   }
-  if (!opened) throw new Error("Не найдена страница загрузки TikTok. Войдите в аккаунт в этом профиле Dolphin и повторите.");
+  if (!opened) {
+    if (await isTikTokLoginPage(page)) {
+      throw new Error("TikTok показывает страницу входа. Войдите в аккаунт в этом профиле Dolphin и повторите.");
+    }
+    throw new Error("Не найдена страница загрузки TikTok Studio. Войдите в аккаунт в этом профиле Dolphin и повторите.");
+  }
 
   send("tiktok", `Пачка ${index}/${total}: файл передан, заполняю подпись…`, {
     percent: Math.min(92, 30 + Math.round(index / Math.max(1, total) * 55))
   });
   await page.waitForTimeout(2000);
+  await dismissTikTokBlockingDialogs(page);
   await dismissOverlays(page);
   await fillCaption(page, caption);
   await waitUploadReady(page);
 
   send("tiktok", `Пачка ${index}/${total}: публикую…`, { percent: Math.min(95, 50 + Math.round(index / Math.max(1, total) * 45)) });
+  await dismissTikTokBlockingDialogs(page);
   const evidence = await publishAndConfirm(page);
   send("item_done", `TikTok подтвердил публикацию ${index}/${total}: ${evidence}.`, { packIndex: index, packTotal: total });
   send("tiktok", `Готово ${index}/${total}: ${evidence}.`, { percent: Math.min(98, 60 + Math.round(index / Math.max(1, total) * 38)) });
@@ -698,7 +824,7 @@ async function main() {
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
 
   if (!job.checkOnly && !job.skipQueueDelay) await waitBetweenProfiles();
-  send("start", `TikTok worker ${WORKER_BUILD}`, { percent: 1, diagnosticFile });
+  send("start", `TikTok Studio worker ${WORKER_BUILD}`, { percent: 1, diagnosticFile, transport: TRANSPORT });
   send("diagnostic", "Подробная диагностика: " + diagnosticFile, { percent: 1, diagnosticFile });
   const endpoint = await startOrConnectProfile();
   browser = await chromium.connectOverCDP(endpoint, { timeout: 60000 });
@@ -763,4 +889,13 @@ if (require.main === module) {
   });
 }
 
-module.exports = { normalizeCaption };
+module.exports = {
+  normalizeCaption,
+  dismissTikTokBlockingDialogs,
+  collectVisibleDialogTexts,
+  isTikTokLoginPage,
+  dialogTextMatches,
+  BLOCKING_CONTENT_CHECK_PATTERNS,
+  TIP_DIALOG_PATTERNS,
+  TRANSPORT
+};

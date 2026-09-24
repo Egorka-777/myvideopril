@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>VideoBatch.TikTokHttpTest</AssemblyName>
+    <RootNamespace>VideoBatch.TikTokHttpTest</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src\TikTokHttpTestProgram.cs" />
+    <Compile Include="src\TikTokHttpTestModels.cs" />
+    <Compile Include="src\TikTokHttpTestForm.cs" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Security" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+  </ItemGroup>
+</Project>

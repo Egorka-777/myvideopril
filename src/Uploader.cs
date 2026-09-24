@@ -88,13 +88,21 @@ namespace VideoBatch {
         public static string Node{get{return Path.Combine(Root,"node.exe");}}
         public static string Worker{get{return Path.Combine(Root,"worker.js");}}
         public static string WorkerTikTok{get{return Path.Combine(Root,"worker-tiktok.js");}}
+        public static string WorkerTikTokHttp{get{return Path.Combine(Root,"worker-tiktok-http.js");}}
         public static void CheckFiles(){if(!File.Exists(Node)||!File.Exists(Worker)||!Directory.Exists(Path.Combine(Root,"node_modules","playwright-core")))throw new Exception("Архив распакован не полностью: не найден модуль загрузки YouTube.");}
         public static void CheckFilesTikTok(){if(!File.Exists(Node)||!File.Exists(WorkerTikTok)||!Directory.Exists(Path.Combine(Root,"node_modules","playwright-core")))throw new Exception("Архив распакован не полностью: не найден модуль загрузки TikTok (worker-tiktok.js).");}
+        public static void CheckFilesTikTokHttp(){if(!File.Exists(Node)||!File.Exists(WorkerTikTokHttp)||!Directory.Exists(Path.Combine(Root,"node_modules","playwright-core")))throw new Exception("Архив распакован не полностью: не найден модуль HTTP-загрузки TikTok (worker-tiktok-http.js).");}
         public static Task<UploadRunResult> Run(UploadJob job,Action<UploadMessage> update,CancellationToken cancel){
             return RunWorker(Worker,job,update,cancel,"YouTube");
         }
         public static Task<UploadRunResult> RunTikTok(UploadJob job,Action<UploadMessage> update,CancellationToken cancel){
-            return RunWorker(WorkerTikTok,job,update,cancel,"TikTok");
+            return RunWorker(WorkerTikTok,job,update,cancel,"TikTok Studio");
+        }
+        public static Task<UploadRunResult> RunTikTokStudio(UploadJob job,Action<UploadMessage> update,CancellationToken cancel){
+            return RunWorker(WorkerTikTok,job,update,cancel,"TikTok Studio");
+        }
+        public static Task<HttpTikTokUploadRunResult> RunTikTokHttp(HttpTikTokUploadJob job,string token,Action<UploadMessage> update,CancellationToken cancel){
+            return HttpTikTokUploadRunner.Run(job,token,update,cancel);
         }
         static async Task<UploadRunResult> RunWorker(string workerPath,UploadJob job,Action<UploadMessage> update,CancellationToken cancel,string label) {
             if(string.Equals(workerPath,WorkerTikTok,StringComparison.OrdinalIgnoreCase))CheckFilesTikTok();else CheckFiles();

@@ -18,6 +18,7 @@ assert.match(tiktok, /TikTokCaptionTemplates\.Allocate/);
 assert.doesNotMatch(tiktok, /RemoveRange\(0,count\)/);
 assert.match(uploader, /async function fillCaption/);
 assert.match(uploader, /publishAndConfirm/);
+assert.match(uploader, /dismissTikTokBlockingDialogs/);
 assert.doesNotMatch(uploader, /async function fillTitleAndDescription/);
 
 console.log("OK: tiktok_caption_regressions.js");

@@ -12,7 +12,7 @@ try {
 
     $destTools = Join-Path $OutDir "tools\uploader"
     New-Item -ItemType Directory -Force -Path $destTools | Out-Null
-    foreach ($name in @("worker.js", "worker-http.js", "worker-http-test.js", "worker-tiktok.js")) {
+    foreach ($name in @("worker.js", "worker-http.js", "worker-http-test.js", "worker-tiktok.js", "worker-tiktok-http.js")) {
         $src = Join-Path $UploaderSrc $name
         if (Test-Path $src) { Copy-Item $src (Join-Path $destTools $name) -Force }
     }
