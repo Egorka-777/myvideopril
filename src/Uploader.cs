@@ -808,22 +808,23 @@ namespace VideoBatch {
         }
         WatchTargetJob BuildMeshTarget(YouTubeChannel ch){
             var anchor=PickMeshAnchorVideo(ch);
-            if(anchor==null||string.IsNullOrWhiteSpace(anchor.Title))return null;
-            SyncPublishedMeta(anchor);
             SyncChannelUrlFromName(ch);
-            string vid=anchor.PublishedVideoId??"";
-            string url=anchor.PublishedUrl??"";
+            if(anchor!=null)SyncPublishedMeta(anchor);
+            string channelUrl=ResolveChannelUrlFromGrid(ch);
+            if(string.IsNullOrWhiteSpace(channelUrl))return null;
+            string vid=anchor?.PublishedVideoId??"";
+            string url=anchor?.PublishedUrl??"";
             if(string.IsNullOrWhiteSpace(url)&&!string.IsNullOrWhiteSpace(vid))url="https://www.youtube.com/watch?v="+vid;
             return new WatchTargetJob{
-                title=ClampTitle(anchor.Title),
-                searchFullTitle=ClampTitle(anchor.Title),
-                searchKeys=SearchKeysFromTitle(anchor.Title),
+                title=ClampTitle(anchor?.Title??""),
+                searchFullTitle=ClampTitle(anchor?.Title??""),
+                searchKeys=anchor==null?"":SearchKeysFromTitle(anchor.Title),
                 searchUrl=url,
                 videoId=vid,
-                channelUrl=ResolveChannelUrlFromGrid(ch),
+                channelUrl=channelUrl,
                 ownerName=ch.Name??"",
                 ownerProfileId=(ch.ProfileId??"").Trim(),
-                catalogVideos=BuildMeshCatalogSingle(ch),
+                catalogVideos=anchor==null?Array.Empty<CatalogVideoJob>():BuildMeshCatalogSingle(ch),
                 meshSingleLong=true
             };
         }
@@ -838,7 +839,8 @@ namespace VideoBatch {
                 string pid=(c.ProfileId??"").Trim();
                 if(string.IsNullOrWhiteSpace(pid)||seen.Contains(pid))continue;
                 SyncChannelPrimary(c);
-                if(PickMeshAnchorVideo(c)==null)continue;
+                SyncChannelUrlFromName(c);
+                if(string.IsNullOrWhiteSpace(ResolveChannelUrlFromGrid(c)))continue;
                 seen.Add(pid);
                 list.Add(c);
             }
@@ -1553,14 +1555,14 @@ namespace VideoBatch {
                 if(unique.Count==0)throw new Exception("Сетка просмотра: отметьте длинные каналы (шортс не участвуют).");
                 var meshChannels=CollectMeshLongChannels(unique);
                 Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
-                if(meshChannels.Count<2)throw new Exception("Нужно минимум 2 длинных канала с опубликованным длинным видео.");
+                if(meshChannels.Count<2)throw new Exception("Нужно минимум 2 длинных канала с адресом YouTube.");
                 int meshSkipped=unique.Count-meshChannels.Count;
-                if(meshSkipped>0)Write("Пропущено "+meshSkipped+" канал(ов) без опубликованного длинного видео.");
+                if(meshSkipped>0)Write("Пропущено "+meshSkipped+" канал(ов) без адреса YouTube.");
                 int marked=channelsFilter?.Count??rows.Count;
                 if(marked>unique.Count)
                     Write("Отмечено "+marked+", уникальных длинных профилей "+unique.Count+" (шортс и дубликаты Profile ID исключены).");
-                var launchGate=ProfileLaunchGate.FromSettings(settings,Math.Min(unique.Count,5));
-                Write("["+MarketLabel(marketView)+"] сетка: "+unique.Count+" зрителей, "+meshChannels.Count+" каналов · по 1 длинному ролику · старт "+settings.ProfileLaunchStaggerMinMs+"–"+settings.ProfileLaunchStaggerMaxMs+" мс.");
+                var launchGate=ProfileLaunchGate.FromSettings(settings,1);
+                Write("["+MarketLabel(marketView)+"] сетка: "+unique.Count+" зрителей, "+meshChannels.Count+" каналов · по 1 длинному ролику · профили последовательно.");
                 var errors=new ConcurrentBag<string>();
                 var tasks=unique.Select(row=>Task.Run(async()=>{
                     var viewer=(YouTubeChannel)row.Tag;
@@ -1569,8 +1571,10 @@ namespace VideoBatch {
                         .Where(ch=>!string.Equals((ch.ProfileId??"").Trim(),viewerPid,StringComparison.OrdinalIgnoreCase))
                         .Select(BuildMeshTarget).Where(t=>t!=null).ToArray();
                     if(watchTargets.Length==0){Status(row,"Нечего смотреть");return;}
+                    bool entered=false;
                     try{
-                        await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
+                        await launchGate.EnterAsync(cancellation.Token).ConfigureAwait(false);
+                        entered=true;
                         cancellation.Token.ThrowIfCancellationRequested();
                         Status(row,"Сетка: "+watchTargets.Length+" каналов…");
                         await DolphinRunner.Run(new UploadJob{
@@ -1585,8 +1589,11 @@ namespace VideoBatch {
                         SafeSave();
                     }catch(OperationCanceledException){throw;}
                     catch(Exception e){errors.Add(viewer.Name+": "+e.Message);Status(row,"Ошибка сетки");}
+                    finally{if(entered)launchGate.Exit();}
                 })).ToArray();
-                try{await Task.WhenAll(tasks).ConfigureAwait(true);}catch(OperationCanceledException){Write("Сетка просмотра остановлена.");}
+                bool cancelled=false;
+                try{await Task.WhenAll(tasks).ConfigureAwait(true);}catch(OperationCanceledException){cancelled=true;Write("Сетка просмотра остановлена.");}
+                if(cancelled)return;
                 if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Сетка просмотр",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 else{Write("["+MarketLabel(marketView)+"] сетка просмотра завершена.");MessageBox.Show(this,"Все аккаунты просмотрели ролики друг друга.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);}
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}

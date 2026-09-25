@@ -1301,24 +1301,25 @@ async function findChannelByOwnerName(page, ownerName) {
 async function openVideoDirect(page, videoId, preferShorts) {
   const id = String(videoId || "").trim();
   if (!id) throw new Error("Пустой ID видео.");
+  // A long-video target must never silently fall back to the Shorts player.
   const urls = preferShorts
-    ? ["https://www.youtube.com/shorts/" + id, "https://www.youtube.com/watch?v=" + id]
-    : ["https://www.youtube.com/watch?v=" + id, "https://www.youtube.com/shorts/" + id];
+    ? ["https://www.youtube.com/shorts/" + id]
+    : ["https://www.youtube.com/watch?v=" + id];
   for (const u of urls) {
     await gotoStable(page, u, { waitUntil: "domcontentloaded", timeout: 60000 });
     await dismissYouTubeOverlays(page);
     await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 45000 }).catch(() => {});
-    if (extractVideoId(page.url())) {
+    if (extractVideoId(page.url()) === id &&
+        (preferShorts ? /\/shorts\//.test(page.url()) : /\/watch\?/.test(page.url()))) {
       for (let i = 0; i < 4; i++) {
         await ensureVideoPlaying(page);
         const st = await readPlaybackState(page);
-        if (!st.missing && (st.duration > 1 || st.current > 0.2 || !st.paused)) break;
+        if (!st.missing && (st.duration > 1 || st.current > 0.2)) return page.url().split("&")[0];
         await page.waitForTimeout(700);
       }
-      return page.url().split("&")[0];
     }
   }
-  throw new Error("Не удалось открыть видео по ID " + id);
+  throw new Error("Не удалось открыть и запустить " + (preferShorts ? "Shorts" : "длинное видео") + " по ID " + id + " (URL: " + page.url() + ").");
 }
 
 /** Сетка: поиск без фильтра «сегодня», мягче совпадение заголовка. */
@@ -1475,6 +1476,13 @@ function isTodayUploadMeta(text, maxHours) {
   return age <= limit;
 }
 
+/** Pick a recent item actually listed under Videos; catalog IDs alone can be stale or point to Shorts. */
+function pickRecentLongVideo(items) {
+  return (items || []).find(item => item && item.id &&
+    /[?&]v=/.test(item.href || "") && !/\/shorts\//.test(item.href || "") &&
+    isTodayUploadMeta(item.meta, 23.9)) || null;
+}
+
 /** Выйти из плеера watch/shorts на страницу канала (перед следующим каналом). */
 async function leaveVideoPlayer(page, channelUrl) {
   const root = normalizeChannelUrl(channelUrl);
@@ -1496,8 +1504,9 @@ async function openChannelTab(page, channelUrl, tab) {
     await clickByText(page, ["^New$", "^Новые$", "^Newest$"], 1000).catch(() => {});
     await page.waitForTimeout(500);
   } else {
-    await clickByText(page, ["Videos", "Видео"], 1200).catch(() => {});
-    await page.waitForTimeout(400);
+    // The tab URL is authoritative: a text click can hit a Shorts card or shelf.
+    if (!/\/videos(?:[/?#]|$)/.test(page.url()))
+      throw new Error("Не открылась вкладка «Видео»: " + page.url());
   }
   await page.locator("ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-video-renderer, ytd-reel-item-renderer, ytd-rich-grid-slim-media").first()
     .waitFor({ state: "attached", timeout: 20000 }).catch(() => {});
@@ -1564,6 +1573,7 @@ async function collectLinksOnChannelTab(page, baseUrl, tab, skipId, todayOnly, l
       const m = href.match(/(?:v=|shorts\/)([A-Za-z0-9_-]{11})/);
       const id = m ? m[1] : "";
       if (!id || seen.has(id) || id === skip) continue;
+      if (isShorts ? !/\/shorts\//.test(href) : !/[?&]v=/.test(href) || /\/shorts\//.test(href)) continue;
       const metaEl = row.querySelector("#metadata-line, ytd-video-meta-block, .inline-metadata-items, #metadata");
       const meta = (metaEl ? metaEl.innerText : "").replace(/\s+/g, " ").trim();
       if (todayOnly && !recentMeta(meta)) {
@@ -1850,11 +1860,8 @@ async function watchChannelMeshWithTimeout(page, target, filter, viewerProfileId
 
 /** Сетка: один длинный ролик на канал по videoId, без вкладки Shorts. Свой канал — лайк. */
 async function watchChannelMesh(page, target, filter, viewerProfileId, completed) {
-  const fullTitle = String(target.searchFullTitle || target.title || "").trim();
   let videoId = String(target.videoId || extractVideoId(target.searchUrl || "")).trim();
-  const keys = parseKeywordList(target.searchKeys, target.title || fullTitle);
   const owner = String(target.ownerName || "").trim();
-  const orientUrl = videoId ? ("https://www.youtube.com/watch?v=" + videoId) : (target.searchUrl || "");
   const ownerPid = String(target.ownerProfileId || "").trim().toLowerCase();
   const viewerPid = String(viewerProfileId || "").trim().toLowerCase();
   const isOwn = ownerPid && viewerPid && ownerPid === viewerPid;
@@ -1884,23 +1891,16 @@ async function watchChannelMesh(page, target, filter, viewerProfileId, completed
     return 1;
   }
 
-  if (!videoId) {
-    if (!fullTitle && !keys.length) {
-      throw new Error("Нет данных для канала «" + owner + "» (videoId, заголовок или ключи).");
-    }
-    send("youtube", (owner ? owner + ": " : "") + "поиск длинного видео…", { percent: 48 });
-    await openFoundVideoMesh(page, target.title || fullTitle, orientUrl, {
-      searchKeys: target.searchKeys || keys.join("\n"),
-      searchFullTitle: fullTitle
-    });
-    videoId = extractVideoId(page.url()) || videoId;
-    if (!channelUrl) {
-      channelUrl = normalizeChannelUrl(await extractChannelUrlFromPage(page));
-      sendMeshChannel(target, channelUrl);
-    }
+  if (!channelUrl) throw new Error("Канал «" + owner + "»: не удалось определить адрес канала для вкладки «Видео».");
+  send("youtube", (owner ? owner + ": " : "") + "открываю вкладку «Видео», ищу свежий длинный ролик…", { percent: 48 });
+  const listed = await collectLinksOnChannelTab(page, channelUrl, "/videos", "", false, 30);
+  const latest = pickRecentLongVideo(listed);
+  if (!latest) {
+    const sample = listed.slice(0, 3).map(x => x.id + " (" + (x.meta || "дата неизвестна") + ")").join(", ");
+    throw new Error("Канал «" + owner + "»: на вкладке «Видео» нет подтверждённого свежего длинного ролика" + (sample ? "; найдено: " + sample : "") + ".");
   }
-
-  if (!videoId) throw new Error("Канал «" + owner + "»: не найден videoId длинного ролика.");
+  videoId = latest.id;
+  send("youtube", (owner ? owner + ": " : "") + "выбран длинный ролик " + videoId + " (" + latest.meta + ")", { percent: 49 });
 
   const checkpointKey = ownerPid + ":" + videoId;
   if (completed && completed.has(checkpointKey)) {
@@ -1930,11 +1930,8 @@ async function skipAdIfPossible(page) {
 async function ensureVideoPlaying(page) {
   await dismissYouTubeOverlays(page);
   await skipAdIfPossible(page);
-  // Клик по плееру (часто нужно для старта автоплея)
-  const player = page.locator("#movie_player, .html5-video-player, ytd-player");
-  if (await visible(player, 1500)) {
-    await player.first().click({ position: { x: 40, y: 40 }, timeout: 2000 }).catch(() => {});
-  }
+  const state = await readPlaybackState(page);
+  if (!state.missing && !state.paused) return;
   const play = page.locator([
     "button.ytp-large-play-button",
     "button.ytp-play-button[aria-label*='Play' i]",
@@ -1944,7 +1941,6 @@ async function ensureVideoPlaying(page) {
     "button.ytp-play-button[title*='Смотр' i]"
   ].join(", "));
   if (await visible(play, 1200)) await play.first().click({ timeout: 2000 }).catch(() => {});
-  await page.keyboard.press("k").catch(() => {});
   await page.evaluate(() => {
     const v = document.querySelector("video.html5-main-video") || document.querySelector("#movie_player video") || document.querySelector("video");
     if (!v) return false;
@@ -1981,8 +1977,7 @@ function formatClock(seconds) {
 
 async function waitForVideoEnd(page) {
   if (/\/shorts\//.test(page.url())) {
-    await watchShortOnce(page, "");
-    return;
+    throw new Error("Открылась страница Shorts вместо длинного видео: " + page.url());
   }
   await dismissYouTubeOverlays(page);
   await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 90000 }).catch(() => {});
@@ -3656,4 +3651,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan, buildMeshCatalogPlan };
+module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan, buildMeshCatalogPlan, pickRecentLongVideo };
