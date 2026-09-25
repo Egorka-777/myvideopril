@@ -36,6 +36,18 @@ const enriched = worker.enrichWatchTarget({
 assert.strictEqual(enriched.knownVideos.length, 1, "mesh must keep one long video");
 assert.strictEqual(enriched.knownVideos[0].videoId, "long-2");
 
+const recent = worker.pickRecentLongVideo([
+  { id: "scheduled-short", href: "/shorts/scheduled-short", meta: "2 minutes ago" },
+  { id: "old-long", href: "/watch?v=old-long", meta: "2 days ago" },
+  { id: "today-long", href: "/watch?v=today-long", meta: "3 hours ago" },
+  { id: "other-long", href: "/watch?v=other-long", meta: "1 hour ago" }
+]);
+assert.strictEqual(recent.id, "today-long", "choose the first recent long video listed on the Videos tab");
+assert.strictEqual(worker.pickRecentLongVideo([
+  { id: "short", href: "/shorts/short", meta: "1 hour ago" },
+  { id: "unknown", href: "/watch?v=unknown", meta: "" }
+]), null, "never use Shorts or an undated video as evidence of today's long upload");
+
 const root = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "tools", "uploader", "worker.js"), "utf8");
 const cs = fs.readFileSync(path.join(root, "src", "Uploader.cs"), "utf8");
