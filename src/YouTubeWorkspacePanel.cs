@@ -159,6 +159,7 @@ namespace VideoBatch {
             grid.RowPostPaint += OnRowPostPaint;
             grid.SelectionChanged += (s, e) => RememberSelectedChannel();
             grid.MouseDown += GridMouseDown;
+            grid.CellDoubleClick += OnGridCellDoubleClick;
             grid.CurrentCellDirtyStateChanged += (s, e) => { if (grid.IsCurrentCellDirty) grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
             grid.CellValueChanged += (s, e) => { if (e.ColumnIndex >= 0 && grid.Columns[e.ColumnIndex].Name == "on") SyncEnabledFromGrid(); };
             body.Controls.Add(grid);
@@ -172,6 +173,7 @@ namespace VideoBatch {
             var bottom = Theme.MakeBottomBar(
                 (Theme.MakeButton("Быстрая загрузка", accent: true, action: async () => await RunUpload(true)), true),
                 (Theme.MakeButton("Через Studio", ghost: true, action: async () => await RunUpload(false)), false),
+                (Theme.MakeButton("Сетка просмотров", ghost: true, action: async () => await RunMesh()), false),
                 (stopBtn, false));
             root.Controls.Add(bottom, 0, 3);
 
@@ -196,6 +198,7 @@ namespace VideoBatch {
             menu.Items.Add("+ Канал", null, (s, e) => AddChannel());
             menu.Items.Add("Предпросмотр расписания", null, (s, e) => PreviewSchedule());
             menu.Items.Add("Проверить IP (выделенный канал)", null, (s, e) => { _ = RunCheck(); });
+            menu.Items.Add("Сетка просмотров (отмеченные ✓)", null, async (s, e) => await RunMesh());
             menu.Items.Add("Открыть лог", null, (s, e) => OpenLog());
             menu.Items.Add("Удалить видео с канала", null, (s, e) => RemoveSelectedVideos());
             var b = Theme.MakeButton("Ещё", ghost: true);
@@ -292,6 +295,18 @@ namespace VideoBatch {
         static string NormMarket(string m) { return (m ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU"; }
         static string NormKindView(string k) { return (k ?? "").Trim().ToLowerInvariant() == "long" ? "long" : "shorts"; }
         static bool IsShorts(string k) { return (k ?? "").Trim().ToLowerInvariant() != "long"; }
+        static bool IsLongKind(string k) {
+            k = (k ?? "").Trim().ToLowerInvariant();
+            return k != "shorts" && k != "short";
+        }
+        static bool IsShortsKind(string k) {
+            k = (k ?? "").Trim().ToLowerInvariant();
+            return k == "shorts" || k == "short";
+        }
+        static bool ChannelMatchesKindView(YouTubeChannel ch, string view) {
+            if (ch == null) return false;
+            return view == "long" ? IsLongKind(ch.Kind) : IsShortsKind(ch.Kind);
+        }
 
         string GuessDefaultKind() {
             int shorts = (settings.YouTubeChannels ?? new List<YouTubeChannel>()).Count(c => c != null && NormMarket(c.Market) == marketView && IsShorts(c.Kind));
@@ -462,8 +477,15 @@ namespace VideoBatch {
             ShowRowContextMenu(ch, row.Index, grid.PointToScreen(e.Location));
         }
 
+        void OnGridCellDoubleClick(object sender, DataGridViewCellEventArgs e) {
+            if (e.RowIndex < 0 || e.ColumnIndex != grid.Columns["account"].Index) return;
+            if (grid.Rows[e.RowIndex].Tag is YouTubeChannel ch) RenameChannel(ch, e.RowIndex);
+        }
+
         void ShowRowContextMenu(YouTubeChannel ch, int rowIndex, Point screen) {
             var menu = Theme.MakeContextMenu();
+            menu.Items.Add("Изменить название", null, (s, e) => RenameChannel(ch, rowIndex));
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Проверить IP", null, (s, e) => { _ = RunCheckChannels(new List<YouTubeChannel> { ch }); });
             menu.Items.Add("Добавить видео", null, (s, e) => AddVideosForChannel(ch));
             menu.Items.Add("Задать превью", null, (s, e) => PickThumbnail(rowIndex));
@@ -480,6 +502,44 @@ namespace VideoBatch {
             grid.Rows[rowIndex].Cells["on"].Value = !on;
             if (grid.Rows[rowIndex].Tag is YouTubeChannel ch) ch.Enabled = !on;
             try { Store.Save(settings); } catch { }
+        }
+
+        static void SyncChannelUrlFromName(YouTubeChannel ch) {
+            if (ch == null) return;
+            var m = System.Text.RegularExpressions.Regex.Match(ch.Name ?? "", @"@([A-Za-z0-9._-]+)");
+            if (m.Success) ch.ChannelUrl = "https://www.youtube.com/@" + m.Groups[1].Value;
+        }
+
+        void RenameChannel(YouTubeChannel ch, int rowIndex) {
+            if (ch == null || rowIndex < 0 || rowIndex >= grid.Rows.Count) return;
+            string current = ch.Name ?? "";
+            if (!ChannelRenameDialog.TryShow(FindForm(), current, out string next)) return;
+            next = (next ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(next) || string.Equals(next, current, StringComparison.OrdinalIgnoreCase)) return;
+            string kindKey = IsShorts(ch.Kind) ? "shorts" : "long";
+            bool duplicate = (settings.YouTubeChannels ?? new List<YouTubeChannel>()).Any(c =>
+                c != null && !ReferenceEquals(c, ch) &&
+                ChannelRowEquals(c, next, ch.ProfileId ?? "", ch.Market ?? marketView, kindKey));
+            if (duplicate) {
+                MessageBox.Show(this,
+                    "Канал с таким именем и Profile ID уже есть в списке.",
+                    "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            ch.Name = next;
+            SyncChannelUrlFromName(ch);
+            try {
+                Store.Save(settings);
+                backend.Reload();
+            } catch (Exception ex) {
+                MessageBox.Show(this, ex.Message, "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            grid.Rows[rowIndex].Cells["account"].Value = next;
+            grid.Rows[rowIndex].Cells["account"].ToolTipText = next + "\nProfile " + (ch.ProfileId ?? "");
+            grid.InvalidateRow(rowIndex);
+            AppendLog("Название: «" + current + "» → «" + next + "»" +
+                (string.IsNullOrWhiteSpace(ch.ChannelUrl) ? "" : " · " + ch.ChannelUrl));
         }
 
         async Task ResolveCountryAsync(string ip, YouTubeChannel channel) {
@@ -675,6 +735,22 @@ namespace VideoBatch {
             else settings.LastSelectedYouTubeChannelIdRu = ch.ChannelId.Trim();
         }
 
+        async Task RunMesh() {
+            var checkedChannels = GetCheckedChannels();
+            if (checkedChannels.Count == 0) {
+                MessageBox.Show(this,
+                    "Отметьте галочкой ✓ каналы, которые участвуют в сетке просмотров.",
+                    "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try {
+                SyncWorkspaceToBackend();
+                AppendLog("Сетка: " + checkedChannels.Count + " канал(ов) отмечено.");
+                await backend.RunMeshWatchAsync(checkedChannels);
+                RefreshGrid();
+            } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
+        }
+
         async Task RunUpload(bool http) {
             var checkedChannels = GetCheckedChannels();
             if (checkedChannels.Count == 0) {
@@ -747,6 +823,45 @@ namespace VideoBatch {
             if (InvokeRequired) { BeginInvoke(new Action<string>(AppendLog), line); return; }
             log.AppendText(line + Environment.NewLine);
             log.ScrollToCaret();
+        }
+    }
+
+    internal static class ChannelRenameDialog {
+        public static bool TryShow(IWin32Window owner, string currentName, out string newName) {
+            newName = "";
+            using (var dialog = new Form {
+                Text = "Изменить название канала",
+                Width = 480, Height = 248,
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false, MinimizeBox = false,
+                BackColor = Theme.Background, ForeColor = Theme.TextPrimary, Font = Theme.FontBody
+            }) {
+                var title = new Label {
+                    Text = "Название канала",
+                    Left = 20, Top = 16, Width = 420,
+                    ForeColor = Theme.TextPrimary, Font = Theme.FontBody
+                };
+                var nameBox = new TextBox { Left = 20, Top = 40, Width = 420, Text = currentName ?? "" };
+                var hint = new Label {
+                    Text = "Подсказка: добавьте @handle YouTube в конце, например:\nТорговец из Binodex @BaronFilm",
+                    Left = 20, Top = 72, Width = 420, Height = 44,
+                    ForeColor = Theme.TextMuted, Font = Theme.FontSmall
+                };
+                var ok = new Button { Text = "Сохранить", Left = 268, Top = 148, Width = 82, DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "Отмена", Left = 358, Top = 148, Width = 82, DialogResult = DialogResult.Cancel };
+                dialog.Controls.AddRange(new Control[] { title, nameBox, hint, ok, cancel });
+                dialog.AcceptButton = ok;
+                dialog.CancelButton = cancel;
+                ok.Click += (s, e) => {
+                    if (!string.IsNullOrWhiteSpace(nameBox.Text)) return;
+                    dialog.DialogResult = DialogResult.None;
+                    MessageBox.Show(dialog, "Укажите название канала.", "VideoBatch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                };
+                if (dialog.ShowDialog(owner) != DialogResult.OK) return false;
+                newName = nameBox.Text.Trim();
+                return true;
+            }
         }
     }
 

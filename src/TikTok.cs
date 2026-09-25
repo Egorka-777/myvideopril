@@ -22,6 +22,9 @@ namespace VideoBatch {
     }
 
     public class TikTokUploadWindow:Form {
+        /// <summary>Enable after successful live v5 HTTP test (single video + 2-video batch).</summary>
+        static readonly bool TikTokHttpMainEnabled=ResolveTikTokHttpMainEnabled();
+        static bool ResolveTikTokHttpMainEnabled(){return false;}
         const int COn=0,CName=1,CLang=2,CProfile=3,CIp=4,CVideo=5,CVideoPick=6,CCaption=7,CStatus=8,CRemove=9;
         static readonly string[] LangLabels=new[]{"RU","EN"};
         Preferences settings;DataGridView grid;RichTextBox log;
@@ -272,6 +275,7 @@ namespace VideoBatch {
         void RefreshModeHint(string mode){
             if(modeHint==null)return;
             if(string.Equals(mode,"studio",StringComparison.OrdinalIgnoreCase))modeHint.Text="Режим: Studio";
+            else if(!TikTokHttpMainEnabled)modeHint.Text="HTTP: сначала живой тест v5 EXE";
             else if(!string.IsNullOrWhiteSpace(lastHttpBlockReason))modeHint.Text="HTTP недоступен — "+lastHttpBlockReason;
             else modeHint.Text="Режим: HTTP (beta)";
         }
@@ -537,6 +541,16 @@ namespace VideoBatch {
             transport=(transport??"http").Trim().ToLowerInvariant();
             if(transport!="studio")transport="http";
             RefreshModeHint(transport);
+            if(transport=="http"&&!TikTokHttpMainEnabled){
+                lastHttpBlockReason="живой HTTP-тест v5 ещё не пройден";
+                RefreshModeHint("http");
+                MessageBox.Show(this,
+                    "HTTP-загрузка TikTok временно отключена до успешного живого теста.\n\n"+
+                    "Используйте изолированную сборку:\nartifacts\\tiktok-http-test-v5\\VideoBatch.TikTokHttpTest.exe\n\n"+
+                    "После одного успешного HTTP-ролика и пачки из двух роликов HTTP будет включён в основном приложении.",
+                    "TikTok HTTP",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                return;
+            }
             if(cancellation!=null){MessageBox.Show(this,"Сначала дождитесь проверки или нажмите Стоп.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             string token="";bool uiStarted=false;
             try{
@@ -591,12 +605,22 @@ namespace VideoBatch {
                                 description=it.Caption
                             }).ToArray();
                             if(transport=="http"){
+                                string schedPath=TikTokScheduleGenerator.StatePath(a.ProfileId,marketView);
+                                var localSlots=TikTokScheduleGenerator.GenerateLocalSlots(pack.items.Count,schedPath);
+                                if(pack.items.Count>1){
+                                    Write(a.Name+" · расписание TikTok HTTP: "+
+                                        string.Join(" · ",localSlots.Select(d=>d.ToString("dd.MM.yyyy HH:mm"))));
+                                }else if(localSlots.Count>0){
+                                    Write(a.Name+" · первая публикация: "+localSlots[0].ToString("dd.MM.yyyy HH:mm"));
+                                }
                                 var httpJob=new HttpTikTokUploadJob{
                                     profileId=a.ProfileId,expectedIp=a.ExpectedIp,localPort=settings.DolphinPort,market=marketView,
                                     keepProfileOpen=true,
                                     items=pack.items.Select((it,idx)=>new HttpTikTokItemJob{
                                         localJobId=a.ProfileId+"-"+(idx+1),video=it.Video,caption=it.Caption,description=it.Caption,
-                                        publishMode="immediate",scheduledUnixSeconds=0,packIndex=idx+1
+                                        publishMode=pack.items.Count>1?"scheduled":"scheduled",
+                                        scheduledUnixSeconds=idx<localSlots.Count?new DateTimeOffset(localSlots[idx]).ToUnixTimeSeconds():0,
+                                        packIndex=idx+1
                                     }).ToArray()
                                 };
                                 var httpResult=await RunHttpUploadWithRetry(httpJob,a,row,pack.items,ct,token).ConfigureAwait(false);

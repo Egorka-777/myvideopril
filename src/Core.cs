@@ -170,6 +170,10 @@ namespace VideoBatch {
             var m=System.Text.RegularExpressions.Regex.Match(url,@"(?:youtu\.be\/|v=|\/shorts\/|\/embed\/|\/live\/)([A-Za-z0-9_-]{11})");
             return m.Success?m.Groups[1].Value:"";
         }
+        public static bool IsValidYouTubeVideoId(string id){
+            id=(id??"").Trim();
+            return id.Length==11&&System.Text.RegularExpressions.Regex.IsMatch(id,@"^[A-Za-z0-9_-]{11}$");
+        }
         static string JsonQuote(string s){return "\""+(s??"").Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r","\\r").Replace("\n","\\n")+"\"";}
         /// <summary>База сетки: канал, profileId, заголовок, videoId, url — для просмотра друг другом.</summary>
         public static void SaveMeshCatalog(IEnumerable<YouTubeChannel> channels){
@@ -184,6 +188,7 @@ namespace VideoBatch {
                         if(it==null||string.IsNullOrWhiteSpace(it.Title))continue;
                         if(string.IsNullOrWhiteSpace(it.PublishedVideoId)&&!string.IsNullOrWhiteSpace(it.PublishedUrl))
                             it.PublishedVideoId=ExtractYouTubeVideoId(it.PublishedUrl);
+                        if(!IsValidYouTubeVideoId(it.PublishedVideoId))continue;
                         if(!first)sb.Append(",");
                         first=false;
                         sb.Append("{");

@@ -22,9 +22,12 @@ namespace VideoBatch.TikTokHttpTest {
         readonly ProgressBar progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
         readonly Button run = new Button { Text = "Запустить тест", AutoSize = true, Height = 38 };
         readonly Button cancel = new Button { Text = "Стоп", AutoSize = true, Height = 38, Enabled = false };
+        readonly Button copyJsonl = new Button { Text = "Копировать JSONL", AutoSize = true, Height = 38, Enabled = false };
+        readonly Label jsonlHint = new Label { AutoSize = true, ForeColor = Color.DarkSlateGray, MaximumSize = new Size(760, 0) };
         SettingsSnapshot snapshot;
         Process worker;
         CancellationTokenSource cancellation;
+        string lastDiagnosticFile = "";
 
         public TikTokHttpTestForm() {
             Text = "VideoBatch · TikTok HTTP/Studio · изолированный тест";
@@ -33,8 +36,8 @@ namespace VideoBatch.TikTokHttpTest {
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9.5f);
             Padding = new Padding(16);
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 10 };
-            for (int i = 0; i < 9; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 11 };
+            for (int i = 0; i < 10; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             Controls.Add(root);
 
@@ -59,11 +62,13 @@ namespace VideoBatch.TikTokHttpTest {
             var actions = new FlowLayoutPanel { AutoSize = true };
             actions.Controls.Add(run);
             actions.Controls.Add(cancel);
+            actions.Controls.Add(copyJsonl);
+            copyJsonl.Click += (s, e) => CopyJsonlPath();
             root.Controls.Add(actions, 0, 7);
-            root.Controls.Add(progress, 0, 8);
-            root.Controls.Add(log, 0, 9);
-
-            schedule.Value = DateTime.Now.AddHours(2);
+            root.Controls.Add(jsonlHint, 0, 8);
+            root.Controls.Add(progress, 0, 9);
+            root.Controls.Add(log, 0, 10);
+            schedule.Value = DateTime.Now.AddMinutes(20);
             schedule.MinDate = DateTime.Now.AddMinutes(20);
             useSchedule.CheckedChanged += (s, e) => schedule.Enabled = useSchedule.Checked;
             schedule.Enabled = false;
@@ -165,6 +170,19 @@ namespace VideoBatch.TikTokHttpTest {
             finally { SetBusy(false); cancellation?.Dispose(); cancellation = null; worker = null; }
         }
 
+        void CopyJsonlPath() {
+            if (string.IsNullOrWhiteSpace(lastDiagnosticFile)) {
+                MessageBox.Show(this, "JSONL ещё не создан — запустите тест.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try {
+                Clipboard.SetText(lastDiagnosticFile);
+                Append("JSONL путь скопирован: " + lastDiagnosticFile);
+            } catch (Exception error) {
+                MessageBox.Show(this, error.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         static string SerializeStudioJob(string profileId, string expectedIp, int localPort, string videoPath, string cap) {
             var sb = new StringBuilder();
             sb.Append("{\"profileId\":\"").Append(Escape(profileId)).Append("\"");
@@ -200,6 +218,11 @@ namespace VideoBatch.TikTokHttpTest {
                     try { using (var m = new MemoryStream(Encoding.UTF8.GetBytes(line))) msg = (WorkerMessage)serializer.ReadObject(m); } catch { }
                     if (msg == null) { Append(line); continue; }
                     Append((msg.stage ?? "log") + ": " + (msg.text ?? msg.error ?? ""));
+                    if (!string.IsNullOrWhiteSpace(msg.diagnosticFile)) {
+                        lastDiagnosticFile = msg.diagnosticFile;
+                        jsonlHint.Text = "JSONL: " + lastDiagnosticFile;
+                        copyJsonl.Enabled = true;
+                    }
                     progress.Value = (int)Math.Max(0, Math.Min(100, msg.percent));
                     if (msg.stage == "done" && msg.success) success = true;
                     if (msg.stage == "error" || msg.stage == "manual_check") reported = msg.error ?? msg.text ?? reported;
@@ -224,6 +247,7 @@ namespace VideoBatch.TikTokHttpTest {
             if (InvokeRequired) { BeginInvoke(new Action<bool>(SetBusy), busy); return; }
             run.Enabled = !busy; cancel.Enabled = busy; account.Enabled = !busy; video.Enabled = !busy; caption.Enabled = !busy;
             modeHttp.Enabled = !busy; modeStudio.Enabled = !busy; schedule.Enabled = !busy && useSchedule.Checked; useSchedule.Enabled = !busy;
+            if (!busy && string.IsNullOrWhiteSpace(lastDiagnosticFile)) copyJsonl.Enabled = false;
         }
 
         void CancelWorker() {

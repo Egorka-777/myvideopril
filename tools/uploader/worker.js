@@ -752,6 +752,10 @@ async function fillTitle(page, title) {
   throw new Error("Не найдено поле заголовка. Окно Dolphin оставлено открытым для проверки.");
 }
 
+function isValidYouTubeVideoId(id) {
+  return /^[A-Za-z0-9_-]{11}$/.test(String(id || "").trim());
+}
+
 function extractVideoId(value) {
   if (!value) return "";
   const text = String(value).trim();
@@ -1065,6 +1069,11 @@ function parseChannelHandle(name) {
   return m ? m[1] : "";
 }
 
+function handleFromChannelUrl(url) {
+  const m = String(url || "").match(/\/@([A-Za-z0-9._-]+)/i);
+  return m ? m[1] : "";
+}
+
 function channelUrlFromHandle(handle) {
   const h = String(handle || "").trim().replace(/^@+/, "");
   return h ? ("https://www.youtube.com/@" + h) : "";
@@ -1123,6 +1132,23 @@ async function readChannelPageName(page) {
 async function verifyChannelPageName(page, ownerName) {
   const name = await readChannelPageName(page);
   return channelNameScore(name, ownerName) >= 60;
+}
+
+/** Сетка: если в сетке задан @handle / channelUrl — доверяем URL, имя на YouTube может отличаться. */
+async function verifyMeshChannelPage(page, ownerName, channelUrl) {
+  const normTarget = normalizeChannelUrl(channelUrl || "");
+  const expectedHandle = (handleFromChannelUrl(normTarget) || parseChannelHandle(ownerName) || "").toLowerCase();
+  if (expectedHandle) {
+    const normCurrent = normalizeChannelUrl(page.url() || "");
+    const currentHandle = handleFromChannelUrl(normCurrent).toLowerCase();
+    const isChannelPage = await page.evaluate(() =>
+      !!document.querySelector("ytd-channel-name, ytd-c4-tabbed-header-renderer, #channel-name, yt-page-header-renderer")
+    ).catch(() => false);
+    const handleMatch = currentHandle === expectedHandle;
+    const urlMatch = normCurrent.toLowerCase().includes("/@" + expectedHandle);
+    if (isChannelPage && (handleMatch || urlMatch)) return true;
+  }
+  return verifyChannelPageName(page, ownerName);
 }
 
 async function resolveChannelUrl(page, ownerName, savedUrl) {
@@ -1200,15 +1226,72 @@ function loadMeshCatalog() {
 function enrichWatchTarget(target, catalog) {
   const t = Object.assign({}, target || {});
   const ownerPid = String(t.ownerProfileId || "").trim();
-  const ownerNorm = normalizeTitle(t.ownerName || t.channel || "");
   const catalogEntries = catalog && Array.isArray(catalog.videos) ? catalog.videos : [];
+
+  if (t.meshSingleLong) {
+    let videoId = String(t.videoId || extractVideoId(t.searchUrl || "")).trim();
+    if (!isValidYouTubeVideoId(videoId) && ownerPid) {
+      const hit = catalogEntries.find(v =>
+        v && String(v.profileId || "").trim() === ownerPid && isValidYouTubeVideoId(String(v.videoId || "").trim())
+      );
+      if (hit) {
+        videoId = String(hit.videoId).trim();
+        if (!String(t.searchUrl || "").trim() && hit.url) t.searchUrl = hit.url;
+      }
+    }
+    if (!isValidYouTubeVideoId(videoId)) {
+      const fromJobId = (Array.isArray(t.catalogVideos) ? t.catalogVideos : [])
+        .map(v => String(v.videoId || "").trim())
+        .find(isValidYouTubeVideoId);
+      if (fromJobId) videoId = fromJobId;
+    }
+    t.videoId = isValidYouTubeVideoId(videoId) ? videoId : "";
+
+    if (!String(t.channelUrl || "").trim()) {
+      const fromHandle = channelUrlFromHandle(parseChannelHandle(t.ownerName || ""));
+      if (fromHandle) t.channelUrl = fromHandle;
+    }
+    if (!String(t.channelUrl || "").trim() && ownerPid) {
+      const hit = catalogEntries.find(v =>
+        v && String(v.profileId || "").trim() === ownerPid && String(v.channelUrl || "").trim()
+      );
+      if (hit) t.channelUrl = String(hit.channelUrl).trim();
+    }
+    if (!String(t.channelUrl || "").trim() && ownerPid) {
+      t.channelUrl = loadCachedChannelUrl(ownerPid);
+    }
+
+    const fromJob = (Array.isArray(t.catalogVideos) ? t.catalogVideos : [])
+      .map(v => ({
+        videoId: String(v.videoId || "").trim(),
+        url: String(v.url || "").trim(),
+        title: String(v.title || "").trim(),
+        kind: String(v.kind || "long").trim()
+      }))
+      .filter(v => isValidYouTubeVideoId(v.videoId));
+    if (fromJob.length) {
+      t.knownVideos = buildMeshCatalogPlan(fromJob, t.videoId, "long", true);
+    } else if (isValidYouTubeVideoId(t.videoId)) {
+      t.knownVideos = buildMeshCatalogPlan([{
+        videoId: t.videoId,
+        url: String(t.searchUrl || "").trim(),
+        title: String(t.title || "").trim(),
+        kind: "long"
+      }], t.videoId, "long", true);
+    } else {
+      t.knownVideos = [];
+    }
+    return t;
+  }
+
+  const ownerNorm = normalizeTitle(t.ownerName || t.channel || "");
   const entries = catalogEntries.filter(v => {
     if (!v) return false;
     if (ownerPid && String(v.profileId || "").trim() === ownerPid) return true;
     return ownerNorm && normalizeTitle(v.channel || "") === ownerNorm;
   });
   if (!String(t.videoId || "").trim()) {
-    const withId = entries.filter(v => String(v.videoId || "").trim());
+    const withId = entries.filter(v => isValidYouTubeVideoId(String(v.videoId || "").trim()));
     const hit = withId.length ? withId[withId.length - 1] : null;
     if (hit) {
       t.videoId = String(hit.videoId).trim();
@@ -1246,11 +1329,7 @@ function enrichWatchTarget(target, catalog) {
     seenKeys.add(key);
     merged.push(v);
   }
-  if (t.meshSingleLong) {
-    t.knownVideos = buildMeshCatalogPlan(merged, t.videoId);
-  } else {
-    t.knownVideos = merged;
-  }
+  t.knownVideos = merged;
   return t;
 }
 
@@ -1319,6 +1398,22 @@ async function openVideoDirect(page, videoId, preferShorts) {
     }
   }
   throw new Error("Не удалось открыть видео по ID " + id);
+}
+
+async function assertMeshVideoOpen(page, videoId, owner) {
+  const want = String(videoId || "").trim();
+  await page.waitForTimeout(600);
+  const opened = extractVideoId(page.url());
+  if (opened && opened !== want) {
+    throw new Error("Канал «" + owner + "»: открылось другое видео (" + opened + " вместо " + want + ").");
+  }
+  const blocked = await page.evaluate(() => {
+    const text = String((document.body && document.body.innerText) || "").slice(0, 5000);
+    return /Video unavailable|Private video|This video is private|Sign in to confirm your age|Это видео недоступно|Видео недоступно|приватн|недоступно для просмотра/i.test(text);
+  }).catch(() => false);
+  if (blocked) {
+    throw new Error("Канал «" + owner + "»: видео " + want + " недоступно (private / удалено / возраст).");
+  }
 }
 
 /** Сетка: поиск без фильтра «сегодня», мягче совпадение заголовка. */
@@ -1657,19 +1752,32 @@ function buildCatalogPlan(knownVideos, skipId, anchorTitle) {
   return catalog;
 }
 
-/** Сетка просмотра: только один длинный ролик на канал, без шортсов. */
-function buildMeshCatalogPlan(knownVideos, preferVideoId) {
+/** Сетка: один ролик на канал, только с videoId. meshSingleLong = длинные (Videos + fallback). */
+function buildMeshCatalogPlan(knownVideos, preferVideoId, contentKind, meshSingleLong) {
+  const shorts = !meshSingleLong && String(contentKind || "").toLowerCase() === "shorts";
   const plan = buildCatalogPlan(knownVideos, "", "")
-    .filter(v => String(v.kind || "long").toLowerCase() !== "shorts");
+    .filter(v => {
+      if (!isValidYouTubeVideoId(v.videoId)) return false;
+      if (meshSingleLong || !shorts) return true;
+      return String(v.kind || "long").toLowerCase() === "shorts";
+    });
   if (!plan.length) return [];
   const prefer = String(preferVideoId || "").trim();
-  if (prefer) {
+  if (meshSingleLong) {
+    if (isValidYouTubeVideoId(prefer)) {
+      const idx = plan.findIndex(v => v.videoId === prefer);
+      if (idx > 0) {
+        const [hit] = plan.splice(idx, 1);
+        plan.unshift(hit);
+      }
+    }
+    return plan;
+  }
+  if (isValidYouTubeVideoId(prefer)) {
     const hit = plan.find(v => v.videoId === prefer);
     if (hit) return [hit];
   }
-  const withId = plan.filter(v => v.videoId);
-  if (withId.length) return [withId[withId.length - 1]];
-  return [plan[plan.length - 1]];
+  return plan;
 }
 
 /** Шортс зацикливается — один проход, лайк, выход (не waitForVideoEnd). */
@@ -1843,64 +1951,143 @@ function sendMeshChannel(target, channelUrl) {
   }
 }
 
+/** Сетка: сначала главная страница канала, затем ролик с вкладки (только публично видимые). */
+async function openMeshVideoViaChannel(page, target, videoIds, preferShorts) {
+  const owner = String(target.ownerName || "").trim();
+  const ownerPid = String(target.ownerProfileId || "").trim();
+  const ids = (Array.isArray(videoIds) ? videoIds : [videoIds])
+    .map(v => String(v || "").trim())
+    .filter(isValidYouTubeVideoId);
+  if (!ids.length) throw new Error("Канал «" + owner + "»: нет videoId для сетки.");
+
+  let channelUrl = normalizeChannelUrl(target.channelUrl || "");
+  if (!channelUrl && ownerPid) channelUrl = loadCachedChannelUrl(ownerPid);
+  if (!channelUrl) {
+    const resolved = await resolveChannelUrl(page, owner, "");
+    if (resolved) channelUrl = resolved;
+  }
+  if (!channelUrl) throw new Error("Канал «" + owner + "»: не удалось определить URL страницы канала.");
+
+  send("youtube", owner + ": открываю главную страницу канала…", { percent: 43 });
+  sendMeshChannel(target, channelUrl);
+  await gotoStable(page, channelUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await dismissYouTubeOverlays(page);
+  if (!(await verifyMeshChannelPage(page, owner, channelUrl))) {
+    const seen = await readChannelPageName(page);
+    const h = handleFromChannelUrl(channelUrl) || parseChannelHandle(owner);
+    throw new Error(
+      "Канал «" + owner + "» не подтверждён" +
+      (h ? " (@" + h + ")" : "") +
+      " (открыто: «" + seen.slice(0, 50) + "»)."
+    );
+  }
+  const handleNote = handleFromChannelUrl(channelUrl) || parseChannelHandle(owner);
+  send("youtube", owner + ": канал подтверждён" + (handleNote ? " @" + handleNote : ""), { percent: 44 });
+
+  const meshLong = !!target.meshSingleLong;
+  const tabPaths = preferShorts ? ["/shorts"] : (meshLong ? ["/videos", "/shorts"] : ["/videos"]);
+  const byId = new Map();
+  const videosTabLinks = [];
+  for (const tabPath of tabPaths) {
+    const tabName = tabPath === "/shorts" ? "shorts" : "videos";
+    await openChannelTab(page, channelUrl, tabName);
+    const links = await collectLinksOnChannelTab(page, channelUrl, tabPath, "", false, 30, {});
+    for (const link of links) {
+      if (!byId.has(link.id)) byId.set(link.id, link);
+      if (tabPath === "/videos") videosTabLinks.push(link);
+    }
+  }
+
+  for (const id of ids) {
+    const hit = byId.get(id);
+    if (!hit) continue;
+    const tabLabel = String(hit.href || "").includes("/shorts/") ? "Shorts" : "Видео";
+    send("youtube", owner + ": на вкладке «" + tabLabel + "» найден " + id + " — открываю…", { percent: 46 });
+    await openVideoFromChannelList(page, hit);
+    await assertMeshVideoOpen(page, id, owner);
+    return id;
+  }
+
+  for (const id of ids) {
+    send("youtube", owner + ": на вкладке нет " + id + " — пробую watch после проверки канала…", { percent: 47 });
+    try {
+      await openVideoDirect(page, id, preferShorts);
+      await assertMeshVideoOpen(page, id, owner);
+      return id;
+    } catch (_) {}
+  }
+
+  const tried = new Set(ids);
+  const publicFallback = (videosTabLinks.length ? videosTabLinks : [...byId.values()])
+    .filter(l => l && isValidYouTubeVideoId(l.id) && !tried.has(l.id))
+    .filter(l => !meshLong || !String(l.href || "").includes("/shorts/"));
+  for (const item of publicFallback) {
+    send("youtube", owner + ": каталог недоступен (отложено?) — открываю публичное видео канала " + item.id + "…", { percent: 47 });
+    try {
+      await openVideoFromChannelList(page, item);
+      await assertMeshVideoOpen(page, item.id, owner);
+      return item.id;
+    } catch (_) {
+      try {
+        await openVideoDirect(page, item.id, false);
+        await assertMeshVideoOpen(page, item.id, owner);
+        return item.id;
+      } catch (_) {}
+    }
+  }
+
+  throw new Error(
+    "Канал «" + owner + "»: ни одно видео сетки не доступно (" +
+    ids.slice(0, 3).join(", ") + (ids.length > 3 ? "…" : "") + "). Возможно private или отложено."
+  );
+}
+
 async function watchChannelMeshWithTimeout(page, target, filter, viewerProfileId, completed) {
   // Время канала зависит от суммы длительностей; каждый ролик контролируется отдельно.
   return watchChannelMesh(page, target, filter, viewerProfileId, completed);
 }
 
-/** Сетка: один длинный ролик на канал по videoId, без вкладки Shorts. Свой канал — лайк. */
+/** Сетка: страница канала → ролик с вкладки. Свой канал — лайк по прямой ссылке. */
 async function watchChannelMesh(page, target, filter, viewerProfileId, completed) {
-  const fullTitle = String(target.searchFullTitle || target.title || "").trim();
-  let videoId = String(target.videoId || extractVideoId(target.searchUrl || "")).trim();
-  const keys = parseKeywordList(target.searchKeys, target.title || fullTitle);
   const owner = String(target.ownerName || "").trim();
-  const orientUrl = videoId ? ("https://www.youtube.com/watch?v=" + videoId) : (target.searchUrl || "");
+  let videoId = String(target.videoId || extractVideoId(target.searchUrl || "")).trim();
   const ownerPid = String(target.ownerProfileId || "").trim().toLowerCase();
   const viewerPid = String(viewerProfileId || "").trim().toLowerCase();
   const isOwn = ownerPid && viewerPid && ownerPid === viewerPid;
+  const meshLong = !!target.meshSingleLong;
+  const preferShorts = !meshLong && String(target.contentKind || "").toLowerCase() === "shorts";
 
   const meshPlan = buildMeshCatalogPlan(
     target.catalogVideos || target.knownVideos || [],
-    videoId
+    videoId,
+    meshLong ? "long" : (target.contentKind || ""),
+    meshLong
   );
+  const catalogIds = meshPlan.map(v => v.videoId).filter(isValidYouTubeVideoId);
   if (meshPlan.length && meshPlan[0].videoId) videoId = meshPlan[0].videoId;
+  if (!catalogIds.length && isValidYouTubeVideoId(videoId)) catalogIds.push(videoId);
 
-  let channelUrl = normalizeChannelUrl(target.channelUrl || "");
-  if (channelUrl) sendMeshChannel(target, channelUrl);
-  else if (owner) {
-    const resolved = await resolveChannelUrl(page, owner, "");
-    if (resolved) {
-      channelUrl = resolved;
-      send("youtube", (owner ? owner + ": " : "") + "канал подтверждён", { percent: 42 });
-      sendMeshChannel(target, channelUrl);
-    }
+  if (!catalogIds.length) {
+    throw new Error(
+      "Канал «" + owner + "» (профиль " + (target.ownerProfileId || "?") + "): нет videoId — сетка не ищет видео по названию."
+    );
   }
 
+  send("youtube", (owner ? owner + ": " : "") + "сетка → [" + catalogIds.slice(0, 3).join(", ") + "] · зритель " + viewerPid, {
+    percent: 42,
+    videoId: catalogIds[0],
+    meshOwner: target.ownerProfileId || ""
+  });
+
   if (isOwn) {
-    if (!videoId) throw new Error("Свой канал «" + owner + "»: нет videoId для лайка.");
-    send("youtube", (owner ? owner + ": " : "") + "свой канал — лайк…", { percent: 44 });
-    await openVideoDirect(page, videoId, false);
+    send("youtube", (owner ? owner + ": " : "") + "свой канал — лайк на длинном ролике…", { percent: 44 });
+    await openVideoDirect(page, catalogIds[0], false);
+    await assertMeshVideoOpen(page, catalogIds[0], owner);
     await quickLikeVideo(page);
     return 1;
   }
 
-  if (!videoId) {
-    if (!fullTitle && !keys.length) {
-      throw new Error("Нет данных для канала «" + owner + "» (videoId, заголовок или ключи).");
-    }
-    send("youtube", (owner ? owner + ": " : "") + "поиск длинного видео…", { percent: 48 });
-    await openFoundVideoMesh(page, target.title || fullTitle, orientUrl, {
-      searchKeys: target.searchKeys || keys.join("\n"),
-      searchFullTitle: fullTitle
-    });
-    videoId = extractVideoId(page.url()) || videoId;
-    if (!channelUrl) {
-      channelUrl = normalizeChannelUrl(await extractChannelUrlFromPage(page));
-      sendMeshChannel(target, channelUrl);
-    }
-  }
-
-  if (!videoId) throw new Error("Канал «" + owner + "»: не найден videoId длинного ролика.");
+  videoId = await openMeshVideoViaChannel(page, target, catalogIds, preferShorts);
 
   const checkpointKey = ownerPid + ":" + videoId;
   if (completed && completed.has(checkpointKey)) {
@@ -1908,11 +2095,10 @@ async function watchChannelMesh(page, target, filter, viewerProfileId, completed
     return 1;
   }
 
-  send("youtube", (owner ? owner + ": " : "") + "открываю длинный ролик по ID…", { percent: 44 });
-  await openVideoDirect(page, videoId, false);
+  send("youtube", (owner ? owner + ": " : "") + "смотрю длинный ролик " + videoId + "…", { percent: 48 });
   await waitForVideoEnd(page);
   if (completed) completed.add(checkpointKey);
-  send("youtube", (owner ? owner + ": " : "") + "✓ длинный ролик просмотрен", { percent: 92 });
+  send("youtube", (owner ? owner + ": " : "") + "✓ ролик просмотрен", { percent: 92 });
   return 1;
 }
 

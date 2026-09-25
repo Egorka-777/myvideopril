@@ -30,4 +30,30 @@ assert.doesNotMatch(worker, /return Math\.max\(extra,\s*1\)/,
 assert.match(uploader, /result\.Success=msg\.success/,
   "The desktop app must honor the worker's success=false result.");
 
+assert.match(uploader, /ValidateCommon\(false,channelsFilter\)/,
+  "Mesh watch must validate passed channels, not hidden grid selection.");
+assert.match(uploader, /ValidateExternalChannels/,
+  "External channel list must bypass grid checkbox validation for mesh/check.");
+assert.match(uploader, /BuildMeshViewers/,
+  "Mesh must build viewer list from checked YouTube workspace channels.");
+assert.match(fs.readFileSync(path.join(root, "src", "YouTubeWorkspacePanel.cs"), "utf8"), /RunMesh/,
+  "Mesh must start from YouTube workspace panel.");
+
+assert.doesNotMatch(worker, /openFoundVideoMesh\(page, target\.title/,
+  "Mesh must not search by title when videoId is missing.");
+assert.match(worker, /assertMeshVideoOpen/,
+  "Mesh must verify the opened video is accessible.");
+assert.match(worker, /openMeshVideoViaChannel/,
+  "Mesh must open the channel page before playing a video.");
+assert.match(worker, /каталог недоступен \(отложено\?\)/,
+  "Mesh must fall back to any public video on the channel when catalog ids are scheduled.");
+assert.match(worker, /verifyMeshChannelPage/,
+  "Mesh must confirm channel by @handle when channelUrl is set.");
+assert.match(uploader, /IsValidYouTubeVideoId/,
+  "Mesh anchor must require a valid 11-char videoId.");
+assert.match(uploader, /contentKind="long"/,
+  "Mesh target must always use long content for meshSingleLong.");
+assert.match(uploader, /BuildMeshCatalogVideos/,
+  "Mesh must send all published videoIds, not only the last one.");
+
 console.log("watch regression checks passed");

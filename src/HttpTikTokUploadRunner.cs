@@ -32,8 +32,10 @@ namespace VideoBatch {
         public static string Worker => Path.Combine(DolphinRunner.Root, "worker-tiktok-http.js");
 
         public static void CheckFiles() {
-            if (!File.Exists(DolphinRunner.Node) || !File.Exists(Worker) || !Directory.Exists(Path.Combine(DolphinRunner.Root, "node_modules", "playwright-core")))
-                throw new Exception("Архив распакован не полностью: не найден модуль HTTP-загрузки TikTok (worker-tiktok-http.js).");
+            string sigV4 = Path.Combine(DolphinRunner.Root, "tiktok-aws-sigv4.js");
+            if (!File.Exists(DolphinRunner.Node) || !File.Exists(Worker) || !File.Exists(sigV4)
+                || !Directory.Exists(Path.Combine(DolphinRunner.Root, "node_modules", "playwright-core")))
+                throw new Exception("Архив распакован не полностью: не найден модуль HTTP-загрузки TikTok (worker-tiktok-http.js, tiktok-aws-sigv4.js).");
         }
 
         static byte[] SerializeJob(HttpTikTokUploadJob job) {
