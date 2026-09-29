@@ -1,7 +1,7 @@
 name: VideoBatch Windows regression
 on:
   push:
-    branches: [fix/tiktok-caption-watch-completeness-20260921]
+    branches: [fix/tiktok-caption-watch-completeness-20260921, fix/tiktok-evidence-20260929]
   pull_request:
     paths:
       - 'src/**'
