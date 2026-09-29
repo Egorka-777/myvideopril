@@ -22,9 +22,7 @@ namespace VideoBatch {
     }
 
     public class TikTokUploadWindow:Form {
-        /// <summary>Enable after successful live v5 HTTP test (single video + 2-video batch).</summary>
-        static readonly bool TikTokHttpMainEnabled=ResolveTikTokHttpMainEnabled();
-        static bool ResolveTikTokHttpMainEnabled(){return false;}
+        static readonly bool TikTokHttpMainEnabled=true;
         const int COn=0,CName=1,CLang=2,CProfile=3,CIp=4,CVideo=5,CVideoPick=6,CCaption=7,CStatus=8,CRemove=9;
         static readonly string[] LangLabels=new[]{"RU","EN"};
         Preferences settings;DataGridView grid;RichTextBox log;
@@ -360,6 +358,26 @@ namespace VideoBatch {
             SyncPrimary(a);
             return a.Items!=null&&a.Items.Any(it=>it!=null&&!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption));
         }
+        /// <summary>Resolve stale paths, copy to staging — same idea as YouTube QueueManager.Prepare.</summary>
+        void PrepareTikTokUploadFiles(TikTokAccount acc,List<TikTokItem> items){
+            if(acc==null||items==null||items.Count==0)return;
+            string stagingRoot=UploadStaging.Root(settings);
+            string pid=(acc.ProfileId??"").Trim();
+            string ctx=acc.Name??"TikTok";
+            for(int i=0;i<items.Count;i++){
+                var it=items[i];
+                if(it==null)continue;
+                string stored=(it.Video??"").Trim();
+                string resolved=UploadStaging.TryResolveVideo(stored,"tiktok",stagingRoot,pid);
+                if(string.IsNullOrWhiteSpace(resolved))
+                    throw new Exception(ctx+": файл не найден — "+stored+". Добавьте видео заново через «Добавить видео».");
+                string planned=UploadStaging.PlannedTikTokFileName(it.Caption,i+1,items.Count,resolved);
+                string staged=UploadStaging.StageVideo(stagingRoot,"tiktok",resolved,pid,i+1,items.Count,planned,it.Caption);
+                UploadStaging.ValidateReady(staged,ctx+" ["+(i+1)+"/"+items.Count+"]");
+                it.Video=staged;
+            }
+            SyncPrimary(acc);
+        }
         DataGridViewRow FindAccountRow(TikTokAccount account){
             if(account==null)return null;
             SaveGrid();
@@ -541,16 +559,6 @@ namespace VideoBatch {
             transport=(transport??"http").Trim().ToLowerInvariant();
             if(transport!="studio")transport="http";
             RefreshModeHint(transport);
-            if(transport=="http"&&!TikTokHttpMainEnabled){
-                lastHttpBlockReason="живой HTTP-тест v5 ещё не пройден";
-                RefreshModeHint("http");
-                MessageBox.Show(this,
-                    "HTTP-загрузка TikTok временно отключена до успешного живого теста.\n\n"+
-                    "Используйте изолированную сборку:\nartifacts\\tiktok-http-test-v5\\VideoBatch.TikTokHttpTest.exe\n\n"+
-                    "После одного успешного HTTP-ролика и пачки из двух роликов HTTP будет включён в основном приложении.",
-                    "TikTok HTTP",MessageBoxButtons.OK,MessageBoxIcon.Information);
-                return;
-            }
             if(cancellation!=null){MessageBox.Show(this,"Сначала дождитесь проверки или нажмите Стоп.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             string token="";bool uiStarted=false;
             try{
@@ -565,15 +573,16 @@ namespace VideoBatch {
                     var items=(a.Items??new List<TikTokItem>()).Where(it=>!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption)).ToList();
                     if(items.Count==0){Write(a.Name+": нет ожидающих публикации видео.");continue;}
                     foreach(var it in items){
-                        if(!File.Exists(it.Video))throw new Exception(a.Name+": файл не найден — "+it.Video);
                         it.Caption=(it.Caption??"").Trim();it.Description=it.Caption;
                         if(string.IsNullOrWhiteSpace(it.Caption))throw new Exception(a.Name+": пустая подпись.");
                         if(it.Caption.Length>2200)throw new Exception(a.Name+": подпись длиннее 2200 символов — сократите её в базе подписей.");
                     }
+                    PrepareTikTokUploadFiles(a,items);
                     packs.Add((row,a,items));
                     Status(row,ChannelStatus.Preparing);
                 }
                 if(packs.Count==0){Write("Нет ожидающих публикации видео.");return;}
+                SaveGrid();
                 List<(DataGridViewRow row,TikTokAccount acc,List<TikTokItem> items)> free;
                 lock(uploadLock){free=packs.Where(p=>!busyProfiles.Contains((p.acc.ProfileId??"").Trim())).ToList();}
                 if(free.Count==0){MessageBox.Show(this,"Выбранные аккаунты уже загружаются.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}

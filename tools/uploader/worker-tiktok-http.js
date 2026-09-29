@@ -17,7 +17,7 @@ const {
   EMPTY_PAYLOAD_HASH
 } = require("./tiktok-aws-sigv4.js");
 
-const BUILD = "2026-09-24-tiktok-http-v5";
+const BUILD = "2026-09-28-tiktok-http-v5.3";
 const TRANSPORT = "http";
 const CHUNK_SIZE = 2 * 1024 * 1024;
 const WORKER_EXIT_DELAY_MS = 150;
@@ -39,6 +39,7 @@ let job = null;
 let browser = null;
 let profileStarted = false;
 let activePage = null;
+let activeContext = null;
 let diagnosticFile = "";
 let itemState = "preflight";
 let bytesSent = 0;
@@ -199,47 +200,121 @@ async function fetchComputerIp() {
   }
 }
 
-async function readBrowserIp(page) {
-  const text = await page.evaluate(async (url) => {
-    const r = await fetch(url, { cache: "no-store", credentials: "omit" });
-    return r.text();
-  }, IPIFY);
-  return parseIpPayload(text, "json-ip");
+function isTikTokWebUrl(url) {
+  try {
+    const host = new URL(String(url)).hostname.toLowerCase();
+    return host === "www.tiktok.com" || host === "tiktok.com";
+  } catch (_) {
+    return false;
+  }
 }
 
-async function browserFetch(page, method, url, { headers = {}, body = null, bodyBase64 = null } = {}) {
-  const payload = {
-    method: String(method || "GET").toUpperCase(),
-    url,
-    headers: headers || {},
-    body: typeof body === "string" ? body : null,
-    bodyBase64: bodyBase64 || (Buffer.isBuffer(body) ? body.toString("base64") : null)
-  };
-  const result = await page.evaluate(async (p) => {
-    const init = { method: p.method, headers: p.headers, credentials: "include", cache: "no-store" };
-    if (p.bodyBase64 != null) {
-      const raw = atob(p.bodyBase64);
-      const arr = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-      init.body = arr;
-    } else if (p.body != null) init.body = p.body;
-    const response = await fetch(p.url, init);
-    const text = await response.text();
-    return {
-      ok: response.ok,
-      status: response.status,
-      text,
-      serverDate: response.headers.get("date") || ""
-    };
-  }, payload);
+function finalizeFetchResult(result) {
   let json = null;
   try { json = result.text ? JSON.parse(result.text) : null; } catch { json = null; }
   return Object.assign({}, result, { json });
 }
 
-async function readTransportIp(page) {
-  const res = await browserFetch(page, "GET", IPIFY);
-  return parseIpPayload(res.text, "json-ip");
+async function readBrowserIp(context) {
+  const response = await context.request.get(IPIFY, { timeout: 30000 });
+  if (!response.ok()) throw new Error(`ipify HTTP ${response.status()}`);
+  return parseIpPayload(await response.text(), "json-ip");
+}
+
+async function contextFetch(method, url, { headers = {}, body = null, bodyBase64 = null } = {}) {
+  if (!activeContext) throw new Error("HTTP transport недоступен: контекст браузера не инициализирован.");
+  let data = undefined;
+  if (bodyBase64 != null) data = Buffer.from(bodyBase64, "base64");
+  else if (Buffer.isBuffer(body)) data = body;
+  else if (typeof body === "string") data = body;
+  const response = await activeContext.request.fetch(String(url), {
+    method: String(method || "GET").toUpperCase(),
+    headers: headers || {},
+    data,
+    timeout: 120000,
+    failOnStatusCode: false
+  });
+  const text = await response.text();
+  const hdrs = response.headers();
+  return {
+    ok: response.ok(),
+    status: response.status(),
+    text,
+    serverDate: (hdrs && (hdrs.date || hdrs.Date)) || ""
+  };
+}
+
+async function pageFetch(page, method, url, opts = {}) {
+  const headers = opts.headers || {};
+  const body = opts.body != null ? opts.body : null;
+  const bodyBase64 = opts.bodyBase64 || (Buffer.isBuffer(body) ? body.toString("base64") : null);
+  const payload = {
+    method: String(method || "GET").toUpperCase(),
+    url,
+    headers,
+    body: typeof body === "string" ? body : null,
+    bodyBase64
+  };
+  const result = await page.evaluate(async (p) => {
+    try {
+      const init = { method: p.method, headers: p.headers, credentials: "include", cache: "no-store", mode: "cors" };
+      if (p.bodyBase64 != null) {
+        const raw = atob(p.bodyBase64);
+        const arr = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+        init.body = arr;
+      } else if (p.body != null) init.body = p.body;
+      const response = await fetch(p.url, init);
+      const text = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        text,
+        serverDate: response.headers.get("date") || ""
+      };
+    } catch (e) {
+      return { ok: false, status: 0, text: "", serverDate: "", error: String(e && e.message || e) };
+    }
+  }, payload);
+  if (result.error) {
+    const err = new Error(result.error);
+    err.pageFetchFailed = true;
+    throw err;
+  }
+  return result;
+}
+
+async function browserFetch(page, method, url, opts = {}) {
+  const target = String(url || "");
+  const external = !isTikTokWebUrl(target);
+  if (external && activeContext) return finalizeFetchResult(await contextFetch(method, target, opts));
+  try {
+    return finalizeFetchResult(await pageFetch(page, method, target, opts));
+  } catch (e) {
+    if (activeContext && (external || e.pageFetchFailed)) {
+      return finalizeFetchResult(await contextFetch(method, target, opts));
+    }
+    throw e;
+  }
+}
+
+async function readTransportIp(context, page) {
+  await page.goto("about:blank", { waitUntil: "commit", timeout: 15000 }).catch(() => {});
+  try {
+    const result = await page.evaluate(async (url) => {
+      try {
+        const response = await fetch(url, { cache: "no-store", credentials: "omit" });
+        const text = await response.text();
+        return { ok: response.ok, text, error: "" };
+      } catch (e) {
+        return { ok: false, text: "", error: String(e && e.message || e) };
+      }
+    }, IPIFY);
+    if (!result.error && result.text) return parseIpPayload(result.text, "json-ip");
+  } catch (_) {}
+  const response = await context.request.get(IPIFY, { timeout: 30000 });
+  if (!response.ok()) throw new Error(`HTTP transport IP: ipify HTTP ${response.status()}`);
+  return parseIpPayload(await response.text(), "json-ip");
 }
 
 function noteClockSkew(serverDateHdr) {
@@ -252,21 +327,37 @@ function noteClockSkew(serverDateHdr) {
   }
 }
 
-async function verifyProxyRoute(page) {
-  send("ip", "Проверяю browser IP…", { percent: 10 });
-  const browserIp = await readBrowserIp(page);
-  if (!browserIp) throw new Error("Не удалось определить browser IP через Dolphin.");
-  send("ip", `browser IP: ${browserIp}`, { browserIp, percent: 11 });
+async function verifyProxyRoute(context, page) {
+  // Прокси контролирует Dolphin — IP только в лог, без блокировки (как YouTube worker).
+  await page.goto("about:blank", { waitUntil: "commit", timeout: 15000 }).catch(() => {});
 
-  send("ip", "Проверяю HTTP transport IP…", { percent: 12 });
-  const transportIp = await readTransportIp(page);
-  if (!transportIp) throw new Error("Не удалось определить HTTP transport IP.");
-  send("ip", `HTTP transport IP: ${transportIp}`, { transportIp, percent: 13 });
-
-  if (browserIp !== transportIp) {
-    throw new Error("browser IP и HTTP transport IP не совпадают — остановка до preflight.");
+  let browserIp = "";
+  let transportIp = "";
+  try {
+    send("ip", "Проверяю browser IP…", { percent: 10 });
+    browserIp = await readBrowserIp(context);
+    if (browserIp) send("ip", `browser IP: ${browserIp}`, { browserIp, percent: 11 });
+  } catch (_) {
+    send("warning", "browser IP не определён — продолжаю (маршрут контролирует Dolphin).", { percent: 11 });
   }
-  send("ip", "IP совпадает", { percent: 14 });
+
+  try {
+    send("ip", "Проверяю HTTP transport IP…", { percent: 12 });
+    transportIp = await readTransportIp(context, page);
+    if (transportIp) send("ip", `HTTP transport IP: ${transportIp}`, { transportIp, percent: 13 });
+  } catch (_) {
+    send("warning", "HTTP transport IP не определён — продолжаю.", { percent: 13 });
+  }
+
+  if (browserIp && transportIp) {
+    if (browserIp === transportIp) {
+      send("ip", "IP совпадает", { browserIp, transportIp, percent: 14 });
+    } else {
+      send("warning",
+        `browser IP (${browserIp}) и transport IP (${transportIp}) различаются — продолжаю (Dolphin контролирует прокси).`,
+        { browserIp, transportIp, percent: 14 });
+    }
+  }
 
   const computerIp = await fetchComputerIp();
   if (computerIp) send("ip", `computer IP (Node): ${computerIp}`, { computerIp, percent: 15 });
@@ -547,12 +638,67 @@ async function uploadVideoBytes(page, session, videoPath, uploadToken, applied) 
   return { videoId, sessionKey };
 }
 
-async function publishPost(page, session, { creationId, projectId, videoId, caption, publishMode, scheduledUnixSeconds }) {
-  setItemState("publishing");
-  const scheduleOffset = publishMode === "scheduled" && scheduledUnixSeconds > 0
-    ? Math.max(TIKTOK_SCHEDULE_MIN_SEC, Math.min(TIKTOK_SCHEDULE_MAX_SEC, scheduledUnixSeconds - Math.floor(Date.now() / 1000)))
-    : 0;
+function parsePostResponse(res) {
+  let body = null;
+  try { body = res && res.text ? JSON.parse(res.text) : (res && res.json) || null; } catch { body = null; }
+  const statusCode = body && body.status_code != null ? Number(body.status_code) : null;
+  const statusMsg = body ? String(body.status_msg || body.message || "").trim() : "";
+  const respList = body && (body.single_post_resp_list || body.single_post_resp);
+  const respOk = Array.isArray(respList) && respList.some(r => {
+    if (!r) return false;
+    if (r.status_code === 0) return true;
+    return !!(r.publish_id || r.aweme_id || r.item_id || r.video_id);
+  });
+  return { body, statusCode, statusMsg, respOk, httpStatus: res && res.status != null ? res.status : 0 };
+}
 
+function isReviewPostMessage(statusMsg) {
+  return /review|moderation|only you|only me|private|провер|модера|только/i.test(String(statusMsg || ""));
+}
+
+function evaluatePostAcceptance(parsed, { projectId, creationId, videoId, listed }) {
+  if (parsed.httpStatus >= 200 && parsed.httpStatus < 300 && parsed.statusCode === 0) {
+    return { ok: true, mode: "status_code_0" };
+  }
+  if (parsed.respOk) return { ok: true, mode: "single_post_resp_list" };
+  if (listed) return { ok: true, mode: "project_list", review: isReviewPostMessage(parsed.statusMsg) };
+  if (parsed.statusCode === 0) return { ok: true, mode: "status_code_0" };
+  if (isReviewPostMessage(parsed.statusMsg)) return { ok: true, mode: "review_msg", review: true };
+  return {
+    ok: false,
+    reason: parsed.statusMsg || (parsed.statusCode != null ? `status_code ${parsed.statusCode}` : "пустой ответ post")
+  };
+}
+
+async function refreshSessionTokens(session, context) {
+  const cookies = await context.cookies(["https://www.tiktok.com", "https://tiktok.com"]);
+  const ms = cookies.find(c => c.name === "msToken");
+  if (ms && ms.value) session.msToken = ms.value;
+  session.cookieHeader = cookies.filter(c => /\.tiktok\.com$/i.test(c.domain)).map(c => `${c.name}=${c.value}`).join("; ");
+  return session;
+}
+
+async function fetchProjectList(page, session) {
+  return browserFetch(page, "GET", "https://www.tiktok.com/api/v1/web/project/list/?aid=1988", {
+    headers: { Cookie: session.cookieHeader }
+  });
+}
+
+function projectListContains(listJson, { projectId, creationId }) {
+  const infos = listJson && Array.isArray(listJson.infos) ? listJson.infos : [];
+  return infos.some(info => {
+    if (!info) return false;
+    if (projectId && String(info.project_id || info.projectID || "") === String(projectId)) return true;
+    if (creationId && String(info.creationID || info.creation_id || "") === String(creationId)) return true;
+    return false;
+  });
+}
+
+async function publishPost(page, session, context, { creationId, projectId, videoId, caption, publishMode, scheduledUnixSeconds }) {
+  setItemState("publishing");
+  await refreshSessionTokens(session, context);
+
+  const scheduled = publishMode === "scheduled" && scheduledUnixSeconds > 0;
   const payload = {
     post_common_info: { creation_id: creationId, enter_post_page_from: 1, post_type: 3 },
     feature_common_info_list: [{
@@ -562,6 +708,7 @@ async function publishPost(page, session, { creationId, projectId, videoId, capt
       tcm_params: "{\"commerce_toggle_info\":{}}",
       sound_exemption: 0,
       anchors: [],
+      content_check_id: "",
       vedit_common_info: { draft: "", video_id: videoId },
       privacy_setting_info: { visibility_type: 0, allow_duet: 1, allow_stitch: 1, allow_comment: 1 }
     }],
@@ -572,34 +719,49 @@ async function publishPost(page, session, { creationId, projectId, videoId, capt
       single_post_feature_info: { text: caption, text_extra: [], markup_text: caption, music_info: {}, poster_delay: 0 }
     }]
   };
-  if (scheduleOffset > 0) payload.feature_common_info_list[0].schedule_time = scheduleOffset + Math.floor(Date.now() / 1000);
+  if (scheduled) payload.feature_common_info_list[0].schedule_time = scheduledUnixSeconds;
 
   const msToken = session.msToken || "";
-  const postPath = `/tiktok/web/project/post/v1/?app_name=tiktok_web&channel=tiktok_web&device_platform=web&aid=1988&msToken=${encodeURIComponent(msToken)}`;
-
-  const postResult = await page.evaluate(async ({ postPath, payload }) => {
-    const response = await fetch("https://www.tiktok.com" + postPath, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(payload)
-    });
-    return { status: response.status, text: await response.text(), serverDate: response.headers.get("date") || "" };
-  }, { postPath, payload });
-
-  noteClockSkew(postResult.serverDate);
-  let body = null;
-  try { body = postResult.text ? JSON.parse(postResult.text) : null; } catch { body = null; }
-  if (postResult.status < 200 || postResult.status >= 300 || !body || body.status_code !== 0) {
-    setItemState("manual_check");
-    manualCheck("post не подтверждён сервером TikTok (HTTP " + postResult.status + ").", { projectId, videoId });
-    return null;
-  }
-  send("post", "post подтверждён.", { percent: 94, projectId, videoId });
-
-  const listRes = await browserFetch(page, "GET", "https://www.tiktok.com/api/v1/web/project/list/?aid=1988", {
-    headers: { Cookie: session.cookieHeader }
+  const postUrl = `https://www.tiktok.com/tiktok/web/project/post/v1/?app_name=tiktok_web&channel=tiktok_web&device_platform=web&aid=1988&msToken=${encodeURIComponent(msToken)}`;
+  const postRes = await browserFetch(page, "POST", postUrl, {
+    headers: { "Content-Type": "application/json", Cookie: session.cookieHeader },
+    body: JSON.stringify(payload)
   });
+  noteClockSkew(postRes.serverDate);
+  const parsed = parsePostResponse(postRes);
+  record("post", "project/post response", {
+    httpStatus: parsed.httpStatus,
+    statusCode: parsed.statusCode,
+    statusMsg: parsed.statusMsg,
+    respOk: parsed.respOk,
+    projectId,
+    videoId
+  });
+
+  let listed = false;
+  if (!(parsed.httpStatus >= 200 && parsed.httpStatus < 300 && parsed.statusCode === 0)) {
+    await page.waitForTimeout(1500).catch(() => {});
+    const listRes = await fetchProjectList(page, session);
+    listed = projectListContains(listRes.json, { projectId, creationId });
+  }
+
+  const verdict = evaluatePostAcceptance(parsed, { projectId, creationId, videoId, listed });
+  if (!verdict.ok) {
+    throw new Error(
+      `post отклонён TikTok: ${verdict.reason} (HTTP ${parsed.httpStatus}` +
+      (parsed.statusCode != null ? `, status_code ${parsed.statusCode}` : "") + ")."
+    );
+  }
+
+  if (verdict.review) {
+    send("post", "post принят — видео может быть на проверке (доступ «только я» до модерации).", {
+      percent: 94, projectId, videoId, statusCode: parsed.statusCode, statusMsg: parsed.statusMsg
+    });
+  } else {
+    send("post", "post подтверждён.", { percent: 94, projectId, videoId, acceptMode: verdict.mode });
+  }
+
+  const listRes = await fetchProjectList(page, session);
   if (listRes.ok && listRes.json && Array.isArray(listRes.json.infos)) {
     send("status", "status подтверждён.", { percent: 96, projectCount: listRes.json.infos.length });
   } else {
@@ -607,13 +769,13 @@ async function publishPost(page, session, { creationId, projectId, videoId, capt
   }
 
   setItemState("confirmed");
-  if (scheduleOffset > 0) {
+  if (scheduled) {
     const local = new Date(scheduledUnixSeconds * 1000);
     send("schedule", `Запланировано на ${local.toLocaleString()}`, { percent: 98, scheduledUnixSeconds });
   } else {
     send("done_item", "TikTok подтвердил публикацию.", { percent: 98, projectId, videoId });
   }
-  return { projectId, videoId, scheduled: scheduleOffset > 0 };
+  return { projectId, videoId, scheduled, review: !!verdict.review };
 }
 
 function validateItem(item, index) {
@@ -655,14 +817,15 @@ async function main() {
   browser = await chromium.connectOverCDP(endpoint, { timeout: 60000 });
   const context = browser.contexts()[0];
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
+  activeContext = context;
   const page = await context.newPage();
   activePage = page;
 
   try {
+    await verifyProxyRoute(context, page);
     await page.goto("https://www.tiktok.com/", { waitUntil: "domcontentloaded", timeout: 90000 });
     await page.waitForTimeout(1200);
 
-    await verifyProxyRoute(page);
     const session = await extractSession(context);
 
     let lastUrl = "";
@@ -674,9 +837,12 @@ async function main() {
       const { uploadToken, applied } = await runHttpPreflight(page, session, fileSize);
       const { creationId, projectId } = await createProject(page, session);
       await uploadVideoBytes(page, session, item.video, uploadToken, applied);
-      const pub = await publishPost(page, session, {
+      const pub = await publishPost(page, session, context, {
         creationId, projectId, videoId: videoIdSafe, caption: item.caption,
         publishMode: item.publishMode, scheduledUnixSeconds: item.scheduledUnixSeconds
+      });
+      send("done_item", `Пачка ${i + 1}/${items.length} завершена` + (pub.review ? " (на проверке TikTok)" : "") + ".", {
+        packIndex: i + 1, packTotal: items.length, percent: 98, projectId, videoId: videoIdSafe, review: !!pub.review
       });
       if (pub) lastUrl = pub.url || lastUrl;
       if (i < items.length - 1) setItemState("preflight");
@@ -748,5 +914,8 @@ module.exports = {
   verifyProxyRoute,
   browserFetch,
   readBrowserIp,
-  readTransportIp
+  readTransportIp,
+  parsePostResponse,
+  evaluatePostAcceptance,
+  projectListContains
 };

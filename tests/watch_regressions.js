@@ -55,5 +55,15 @@ assert.match(uploader, /contentKind="long"/,
   "Mesh target must always use long content for meshSingleLong.");
 assert.match(uploader, /BuildMeshCatalogVideos/,
   "Mesh must send all published videoIds, not only the last one.");
+assert.match(uploader, /MoveFileReplacing/,
+  "Video assign must rename files on disk instead of silently skipping failed moves.");
+assert.match(uploader, /ch\.Kind=packKind/,
+  "Assigning videos must sync channel kind with Long/Shorts workspace toggle.");
+assert.match(uploader, /meshBatchSize=3/,
+  "Mesh watch must run viewers in batches of 3 to limit Dolphin load.");
+assert.match(uploader, /meshBatchTotal/,
+  "Mesh watch must process sequential batches.");
+assert.match(uploader, /Сетка: пачка/,
+  "Mesh log must announce each batch.");
 
 console.log("watch regression checks passed");

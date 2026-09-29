@@ -690,46 +690,14 @@ namespace VideoBatch {
             string finalTitle=PackTitleWithIndex(title,index1Based,total);
             return FileNameFromTitle(finalTitle)+ext;
         }
-        static void ValidateFileReady(string path,string context){
-            if(string.IsNullOrWhiteSpace(path)||!File.Exists(path))throw new Exception(context+": файл не найден: "+path);
-            var fi=new FileInfo(path);
-            if(fi.Length<=0)throw new Exception(context+": файл пустой: "+Path.GetFileName(path));
-            if(path.Length>240)throw new Exception(context+": слишком длинный путь ("+path.Length+" симв.)");
-            try{using(new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){}}
-            catch(IOException ex){throw new Exception(context+": файл занят — "+Path.GetFileName(path)+" ("+ex.Message+")");}
-        }
-        static void EnsureUploadStagingDir(string folder){
-            if(string.IsNullOrWhiteSpace(folder))folder=@"C:\VideoBatch\Upload";
-            if(!Directory.Exists(folder))Directory.CreateDirectory(folder);
-        }
+        static void ValidateFileReady(string path,string context)=>UploadStaging.ValidateReady(path,context);
         string StageUploadFile(string sourcePath,string profileId,int index,int total,string plannedFileName,string uploadTitle){
-            string staging=string.IsNullOrWhiteSpace(settings.UploadStagingFolder)?@"C:\VideoBatch\Upload":settings.UploadStagingFolder.Trim();
-            EnsureUploadStagingDir(staging);
-            string profileDir=Path.Combine(staging,SanitizeDirName(profileId));
-            if(!Directory.Exists(profileDir))Directory.CreateDirectory(profileDir);
             string name=(plannedFileName??"").Trim();
             if(string.IsNullOrWhiteSpace(name)){
                 string ext=Path.GetExtension(sourcePath??"");if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
                 name=FileNameFromTitle(PackTitleWithIndex(uploadTitle??"",index,total))+ext;
             }
-            string dest=Path.Combine(profileDir,name);
-            if(File.Exists(dest)&&!string.Equals(Path.GetFullPath(sourcePath),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase)){
-                string ext=Path.GetExtension(name);
-                string stem=Path.GetFileNameWithoutExtension(name);
-                for(int n=2;n<100;n++){
-                    string alt=stem+" ("+n+")"+ext;
-                    string tryDest=Path.Combine(profileDir,alt);
-                    if(!File.Exists(tryDest)){dest=tryDest;break;}
-                }
-            }
-            if(!File.Exists(dest)||new FileInfo(sourcePath).LastWriteTimeUtc>new FileInfo(dest).LastWriteTimeUtc)
-                File.Copy(sourcePath,dest,true);
-            return dest;
-        }
-        static string SanitizeDirName(string name){
-            name=(name??"").Trim();
-            foreach(var ch in Path.GetInvalidFileNameChars())name=name.Replace(ch,'_');
-            return string.IsNullOrWhiteSpace(name)?"profile":name;
+            return UploadStaging.StageVideo(UploadStaging.Root(settings),"",sourcePath,profileId,index,total,name,uploadTitle);
         }
         /// <summary>Короткие ключи для поиска из заголовка (2 строки: 4 и 7 слов).</summary>
         static string SearchKeysFromTitle(string title){
@@ -925,6 +893,33 @@ namespace VideoBatch {
         static string StripLeadingTitleIndex(string title){
             return CleanTitle(LeadingTitleIndexRx.Replace(title??"","").Trim());
         }
+        static void ClearReadOnly(string filePath){
+            if(string.IsNullOrWhiteSpace(filePath)||!File.Exists(filePath))return;
+            var attr=File.GetAttributes(filePath);
+            if((attr&FileAttributes.ReadOnly)!=0)File.SetAttributes(filePath,attr&~FileAttributes.ReadOnly);
+        }
+        static string FitFilePathLength(string dir,string stem,string ext,int maxLen=259){
+            string dest=Path.Combine(dir,stem+ext);
+            while(dest.Length>maxLen&&stem.Length>8){
+                stem=stem.Substring(0,stem.Length-4).TrimEnd('.',' ');
+                dest=Path.Combine(dir,stem+ext);
+            }
+            return dest;
+        }
+        static string MoveFileReplacing(string source,string dest){
+            ClearReadOnly(source);
+            if(File.Exists(dest)){
+                ClearReadOnly(dest);
+                if(!string.Equals(Path.GetFullPath(source),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))
+                    File.Delete(dest);
+            }
+            try{File.Move(source,dest);return dest;}
+            catch(IOException){
+                File.Copy(source,dest,true);
+                File.Delete(source);
+                return dest;
+            }
+        }
         static string RenameVideoFile(string path,string title,int index1Based,int total){
             if(string.IsNullOrWhiteSpace(path)||!File.Exists(path))return path;
             title=StripLeadingTitleIndex(title);
@@ -933,20 +928,25 @@ namespace VideoBatch {
             ValidateTitleLength(finalTitle,"Переименование");
             string dir=Path.GetDirectoryName(path)??"";
             string ext=Path.GetExtension(path);
+            if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
             string stem=FileNameFromTitle(finalTitle);
-            string dest=Path.Combine(dir,stem+ext);
+            string dest=FitFilePathLength(dir,stem,ext);
             if(string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))return path;
-            if(File.Exists(dest)){
+            if(File.Exists(dest)&&!string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase)){
                 int n=2;
                 while(n<100){
                     string dupTitle=AppendDuplicateSuffix(finalTitle,n);
                     stem=FileNameFromTitle(dupTitle);
-                    dest=Path.Combine(dir,stem+ext);
-                    if(!File.Exists(dest))break;
+                    dest=FitFilePathLength(dir,stem,ext);
+                    if(!File.Exists(dest)||string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))break;
                     n++;
                 }
             }
-            try{File.Move(path,dest);return dest;}catch{return path;}
+            if(string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))return path;
+            try{return MoveFileReplacing(path,dest);}
+            catch(Exception ex){
+                throw new Exception("Не удалось переименовать «"+Path.GetFileName(path)+"» в «"+Path.GetFileName(dest)+"»: "+ex.Message);
+            }
         }
         void ClearThumbnail(YouTubeChannel c){
             if(c==null)return;
@@ -968,9 +968,10 @@ namespace VideoBatch {
         void CellClick(object sender,DataGridViewCellEventArgs e){if(e.RowIndex<0)return;var row=grid.Rows[e.RowIndex];var c=(YouTubeChannel)row.Tag;if(e.ColumnIndex==CVideoPick){var p=Ui.File(this,"Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все файлы|*.*");if(p!=null){if(c.Items==null||c.Items.Count==0)c.Items=new List<YouTubeItem>{new YouTubeItem()};else if(c.Items.Count>1&&MessageBox.Show(this,"В канале уже пачка из "+c.Items.Count+" видео. Заменить первым файлом?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
                 string title="";
                 string m=NormMarket(c.Market);
-                try{title=PeekTitlesFromBank(c.Kind,1,m)[0];}catch(Exception ex){Ui.Error(this,ex);return;}
+                string packKind=EffectiveKind(c);
+                try{title=PeekTitlesFromBank(packKind,1,m)[0];}catch(Exception ex){Ui.Error(this,ex);return;}
                 string path=RenameVideoFile(p,title,1,1);
-                c.Items=new List<YouTubeItem>{new YouTubeItem{Video=path,Title=PackTitleWithIndex(title,1,1),Thumbnail=c.Thumbnail??""}};SyncChannelPrimary(c);c.Enabled=true;row.Cells[COn].Value=true;AdvanceTitleCursor(c.Kind,1,m);Write(TitleCursorLabel(c.Kind,m));RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbPick){var p=Ui.File(this,"Изображение|*.jpg;*.jpeg;*.png;*.webp|Все файлы|*.*");if(p!=null){c.Thumbnail=p;if(c.Items!=null&&c.Items.Count>0)c.Items[0].Thumbnail=p;RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbClear){ClearThumbnail(c);SyncChannelPrimary(c);RefreshRowDisplay(row);}else if(e.ColumnIndex==CRemove){grid.Rows.RemoveAt(e.RowIndex);}SaveGrid();RefreshMarketUi();}
+                c.Items=new List<YouTubeItem>{new YouTubeItem{Video=path,Title=PackTitleWithIndex(title,1,1),Thumbnail=c.Thumbnail??""}};c.Kind=packKind;SyncChannelPrimary(c);c.Enabled=true;row.Cells[COn].Value=true;row.Cells[CKind].Value=KindLabel(packKind);AdvanceTitleCursor(packKind,1,m);Write(TitleCursorLabel(packKind,m));RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbPick){var p=Ui.File(this,"Изображение|*.jpg;*.jpeg;*.png;*.webp|Все файлы|*.*");if(p!=null){c.Thumbnail=p;if(c.Items!=null&&c.Items.Count>0)c.Items[0].Thumbnail=p;RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbClear){ClearThumbnail(c);SyncChannelPrimary(c);RefreshRowDisplay(row);}else if(e.ColumnIndex==CRemove){grid.Rows.RemoveAt(e.RowIndex);}SaveGrid();RefreshMarketUi();}
         List<string> TitleBankRef(string kind,string market=null){
             kind=NormKind(kind);bool en=NormMarket(market??marketView)=="EN";
             if(kind=="shorts")return en?settings.TitleBankShortsEn:settings.TitleBankShortsRu;
@@ -1101,9 +1102,8 @@ namespace VideoBatch {
         public void AssignVideosToChannel(YouTubeChannel channel,string[] files){
             if(channel==null||files==null||files.Length==0)return;
             SetMarketView(string.IsNullOrWhiteSpace(channel.Market)?marketView:channel.Market);
-            SaveGrid();
+            LoadGrid();
             var row=FindChannelRow(channel);
-            if(row==null){LoadGrid();row=FindChannelRow(channel);}
             if(row==null)throw new Exception("Канал не найден: «"+(channel.Name??"")+"» (Profile "+(channel.ProfileId??"")+")");
             AssignVideoPackToChannel((YouTubeChannel)row.Tag,row,files);
             SaveGrid();LoadGrid();
@@ -1184,7 +1184,7 @@ namespace VideoBatch {
             List<string> titles;
             try{titles=PeekTitlesFromBank(packKind,paths.Length,m);}catch(Exception ex){throw;}
             titles=ResolveDuplicateTitlesInBatch(titles,"«"+ch.Name+"»");
-            Write("«"+ch.Name+"»: "+paths.Length+" видео — "+TitleCursorLabel(ch.Kind,m)+":");
+            Write("«"+ch.Name+"»: "+paths.Length+" видео — "+TitleCursorLabel(packKind,m)+":");
             var items=new List<YouTubeItem>();
             int renamed=0;
             for(int i=0;i<paths.Length;i++){
@@ -1196,12 +1196,13 @@ namespace VideoBatch {
                 string path=paths[i];string before=path;
                 path=RenameVideoFile(path,baseTitle,i+1,paths.Length);
                 if(!string.Equals(before,path,StringComparison.OrdinalIgnoreCase))renamed++;
+                else if(!string.Equals(Path.GetFileName(before),Path.GetFileName(path),StringComparison.OrdinalIgnoreCase))renamed++;
                 items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=i==0?(ch.Thumbnail??""):""});
             }
             if(ch.Items!=null&&ch.Items.Count>0&&ch.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
                 if(MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+items.Count+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             }
-            ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Status=ChannelStatus.Ready;
+            ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;ch.Status=ChannelStatus.Ready;
             SyncChannelPrimary(ch);
             AdvanceTitleCursor(packKind,paths.Length,m);
             RefreshRowDisplay(row);
@@ -1250,9 +1251,10 @@ namespace VideoBatch {
                         var paths=g.Select(x=>x.Path).ToList();
                         string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
                         List<string> titles;
-                        try{titles=PeekTitlesFromBank(ch.Kind,paths.Count,m);}catch(Exception ex){Ui.Error(this,ex);return;}
+                        string packKind=EffectiveKind(ch);
+                        try{titles=PeekTitlesFromBank(packKind,paths.Count,m);}catch(Exception ex){Ui.Error(this,ex);return;}
                         titles=ResolveDuplicateTitlesInBatch(titles,"«"+ch.Name+"»");
-                        Write("«"+ch.Name+"»: "+paths.Count+" видео — "+TitleCursorLabel(ch.Kind,m)+":");
+                        Write("«"+ch.Name+"»: "+paths.Count+" видео — "+TitleCursorLabel(packKind,m)+":");
                         var items=new List<YouTubeItem>();
                         for(int i=0;i<paths.Count;i++){
                             string baseTitle=i<titles.Count?titles[i]:"";
@@ -1269,9 +1271,9 @@ namespace VideoBatch {
                         if(ch.Items!=null&&ch.Items.Count>0&&ch.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
                             if(MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+items.Count+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)continue;
                         }
-                        ch.Items=items;ch.Enabled=true;ch.Market=m;SyncChannelPrimary(ch);done+=items.Count;
-                        AdvanceTitleCursor(ch.Kind,paths.Count,m);
-                        cursorKinds.Add(m+"|"+NormKind(ch.Kind));
+                        ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;SyncChannelPrimary(ch);done+=items.Count;
+                        AdvanceTitleCursor(packKind,paths.Count,m);
+                        cursorKinds.Add(m+"|"+NormKind(packKind));
                     }
                     SaveGrid();LoadGrid();
                     foreach(DataGridViewRow row in grid.Rows){var c=(YouTubeChannel)row.Tag;if(c.Enabled)row.Cells[COn].Value=true;}
@@ -1618,35 +1620,44 @@ namespace VideoBatch {
                 int marked=channelsFilter?.Count??viewers.Count;
                 if(marked>viewers.Count)
                     Write("Отмечено "+marked+", уникальных профилей "+viewers.Count+" (дубликаты Profile ID исключены).");
-                var launchGate=ProfileLaunchGate.FromSettings(settings,Math.Min(viewers.Count,5));
-                Write("["+MarketLabel(marketView)+"] сетка: "+viewers.Count+" зрителей, "+meshChannels.Count+" каналов · старт "+settings.ProfileLaunchStaggerMinMs+"–"+settings.ProfileLaunchStaggerMaxMs+" мс.");
+                const int meshBatchSize=3;
+                int meshBatchTotal=(viewers.Count+meshBatchSize-1)/meshBatchSize;
+                Write("["+MarketLabel(marketView)+"] сетка: "+viewers.Count+" зрителей, "+meshChannels.Count+" каналов · пачки по "+meshBatchSize+" · старт "+settings.ProfileLaunchStaggerMinMs+"–"+settings.ProfileLaunchStaggerMaxMs+" мс.");
                 var errors=new ConcurrentBag<string>();
-                var tasks=viewers.Select(pair=>Task.Run(async()=>{
-                    var viewer=pair.ch;
-                    var row=pair.row;
-                    string viewerPid=(viewer.ProfileId??"").Trim();
-                    var watchTargets=meshChannels
-                        .Where(ch=>!string.Equals((ch.ProfileId??"").Trim(),viewerPid,StringComparison.OrdinalIgnoreCase))
-                        .Select(BuildMeshTarget).Where(t=>t!=null).ToArray();
-                    if(watchTargets.Length==0){MeshStatus(viewer,row,"Нечего смотреть");return;}
-                    try{
-                        await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
-                        cancellation.Token.ThrowIfCancellationRequested();
-                        MeshStatus(viewer,row,"Сетка: "+watchTargets.Length+" каналов…");
-                        await DolphinRunner.Run(new UploadJob{
-                            token=token,localPort=settings.DolphinPort,profileId=viewer.ProfileId,expectedIp=viewer.ExpectedIp,
-                            searchFilter="none",watchMesh=true,watchTargets=watchTargets,skipQueueDelay=true,checkOnly=false
-                        },m=>{
-                            if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(viewer,row,m.text);
-                            if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl)&&!string.IsNullOrWhiteSpace(m.meshOwner))
-                                PropagateChannelUrl(m.meshOwner,m.channelUrl.Trim());
-                        },cancellation.Token).ConfigureAwait(false);
-                        MeshStatus(viewer,row,"Сетка ✓ "+watchTargets.Length+" каналов");
-                        SafeSave();
-                    }catch(OperationCanceledException){throw;}
-                    catch(Exception e){errors.Add(viewer.Name+": "+e.Message);MeshStatus(viewer,row,"Ошибка сетки");}
-                })).ToArray();
-                try{await Task.WhenAll(tasks).ConfigureAwait(true);}catch(OperationCanceledException){Write("Сетка просмотра остановлена.");}
+                bool meshCancelled=false;
+                for(int batchStart=0;batchStart<viewers.Count&&!meshCancelled;batchStart+=meshBatchSize){
+                    var batch=viewers.Skip(batchStart).Take(meshBatchSize).ToList();
+                    int batchNum=batchStart/meshBatchSize+1;
+                    Write("Сетка: пачка "+batchNum+"/"+meshBatchTotal+" — "+string.Join(", ",batch.Select(v=>v.ch.Name??"?"))+".");
+                    var launchGate=ProfileLaunchGate.FromSettings(settings,batch.Count);
+                    var tasks=batch.Select(pair=>Task.Run(async()=>{
+                        var viewer=pair.ch;
+                        var row=pair.row;
+                        string viewerPid=(viewer.ProfileId??"").Trim();
+                        var watchTargets=meshChannels
+                            .Where(ch=>!string.Equals((ch.ProfileId??"").Trim(),viewerPid,StringComparison.OrdinalIgnoreCase))
+                            .Select(BuildMeshTarget).Where(t=>t!=null).ToArray();
+                        if(watchTargets.Length==0){MeshStatus(viewer,row,"Нечего смотреть");return;}
+                        try{
+                            await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
+                            cancellation.Token.ThrowIfCancellationRequested();
+                            MeshStatus(viewer,row,"Сетка: "+watchTargets.Length+" каналов…");
+                            await DolphinRunner.Run(new UploadJob{
+                                token=token,localPort=settings.DolphinPort,profileId=viewer.ProfileId,expectedIp=viewer.ExpectedIp,
+                                searchFilter="none",watchMesh=true,watchTargets=watchTargets,skipQueueDelay=true,checkOnly=false
+                            },m=>{
+                                if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(viewer,row,m.text);
+                                if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl)&&!string.IsNullOrWhiteSpace(m.meshOwner))
+                                    PropagateChannelUrl(m.meshOwner,m.channelUrl.Trim());
+                            },cancellation.Token).ConfigureAwait(false);
+                            MeshStatus(viewer,row,"Сетка ✓ "+watchTargets.Length+" каналов");
+                            SafeSave();
+                        }catch(OperationCanceledException){throw;}
+                        catch(Exception e){errors.Add(viewer.Name+": "+e.Message);MeshStatus(viewer,row,"Ошибка сетки");}
+                    })).ToArray();
+                    try{await Task.WhenAll(tasks).ConfigureAwait(true);}
+                    catch(OperationCanceledException){Write("Сетка просмотра остановлена.");meshCancelled=true;}
+                }
                 if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Сетка просмотр",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 else{Write("["+MarketLabel(marketView)+"] сетка просмотра завершена.");MessageBox.Show(this,"Все аккаунты просмотрели ролики друг друга.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);}
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}

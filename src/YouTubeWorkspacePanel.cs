@@ -657,6 +657,7 @@ namespace VideoBatch {
             using (var d = new OpenFileDialog { Multiselect = true, Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все|*.*" }) {
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
                 try {
+                    try { Store.Save(settings); } catch { }
                     SyncWorkspaceToBackend();
                     backend.SelectChannel(ch);
                     backend.AssignVideosToChannel(ch, d.FileNames);

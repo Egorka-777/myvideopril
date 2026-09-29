@@ -33,7 +33,7 @@ for (const forbidden of ["setInputFiles(", 'input[type="file"]', "fillCaption(",
   assert.doesNotMatch(httpCode, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 }
 assert.match(httpWorker, /const TRANSPORT = "http"/);
-assert.match(httpWorker, /2026-09-24-tiktok-http-v5/);
+assert.match(httpWorker, /2026-09-28-tiktok-http-v5\.3/);
 
 // No multi-region blind retries with one token
 assert.doesNotMatch(httpWorker, /vod-us-east/);
@@ -166,11 +166,37 @@ try {
 }
 assert.ok(!noResultErr || noResultErr);
 
-// IP mismatch must abort (structural)
-assert.match(httpWorker, /browser IP и HTTP transport IP не совпадают/);
+// IP is informational only — Dolphin controls proxy (same as YouTube worker)
+assert.doesNotMatch(httpWorker, /остановка до preflight/);
+assert.match(httpWorker, /Dolphin контролирует прокси/);
+assert.match(httpWorker, /без блокировки|продолжаю/);
+
+// Post: accept review/project-list fallbacks; do not abort batch via manualCheck on HTTP 200
+assert.match(httpWorker, /parsePostResponse/);
+assert.match(httpWorker, /content_check_id/);
+assert.match(httpWorker, /browserFetch\(page, "POST", postUrl/);
+assert.match(httpWorker, /на проверке/);
+assert.doesNotMatch(httpWorker, /manualCheck\("post не подтверждён/);
+
+const postReview = httpMod.evaluatePostAcceptance(
+  { httpStatus: 200, statusCode: 8, statusMsg: "Under review", respOk: false },
+  { projectId: "1", creationId: "abc", videoId: "v", listed: true }
+);
+assert.strictEqual(postReview.ok, true);
+assert.strictEqual(postReview.mode, "project_list");
+
+const postHardFail = httpMod.evaluatePostAcceptance(
+  { httpStatus: 200, statusCode: 5, statusMsg: "Invalid parameters", respOk: false },
+  { projectId: "1", creationId: "abc", videoId: "v", listed: false }
+);
+assert.strictEqual(postHardFail.ok, false);
 assert.match(httpWorker, /browserFetch/);
 assert.match(httpWorker, /readBrowserIp/);
 assert.match(httpWorker, /readTransportIp/);
+assert.match(httpWorker, /about:blank/);
+assert.match(httpWorker, /context\.request/);
+assert.match(httpWorker, /HTTP transport IP: ipify HTTP/);
+assert.match(httpWorker, /isTikTokWebUrl/);
 
 // Fresh token before Apply (not reused across regions)
 assert.match(httpWorker, /fetchUploadToken/);
@@ -182,8 +208,9 @@ assert.match(scheduleCs, /MinLeadSeconds = 900/);
 assert.match(scheduleCs, /MinGapSeconds = 180/);
 assert.match(scheduleCs, /MaxGapSeconds = 900/);
 
-// C# HTTP blocked until live test
-assert.match(tiktokCs, /TikTokHttpMainEnabled/);
+// C# HTTP enabled in main app (no test-exe gate)
+assert.match(tiktokCs, /TikTokHttpMainEnabled\s*=\s*true/);
+assert.doesNotMatch(tiktokCs, /HTTP-загрузка TikTok временно отключена/);
 
 // Runner checks sigv4 module
 assert.match(httpRunnerCs, /tiktok-aws-sigv4\.js/);
