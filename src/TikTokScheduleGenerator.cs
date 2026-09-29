@@ -14,11 +14,11 @@ namespace VideoBatch {
         [DataMember] public int VideoCount;
     }
 
-    /// <summary>TikTok HTTP batch schedule: first slot ≥ now+15min, then +3..15 min random gaps.</summary>
+    /// <summary>TikTok HTTP batch schedule: first slot ≥ now+15min, then +10..30 min random gaps.</summary>
     public static class TikTokScheduleGenerator {
         public const int MinLeadSeconds = 900;
-        public const int MinGapSeconds = 180;
-        public const int MaxGapSeconds = 900;
+        public const int MinGapSeconds = 600;
+        public const int MaxGapSeconds = 1800;
         static readonly Random Rng = new Random();
 
         public static string StatePath(string profileId, string market) {
@@ -39,12 +39,14 @@ namespace VideoBatch {
                     var loaded = LoadState(statePath);
                     if (loaded != null && loaded.UnixSlots != null && loaded.UnixSlots.Count == count) {
                         var slots = loaded.UnixSlots.Select(x => DateTimeOffset.FromUnixTimeSeconds(x).LocalDateTime).ToList();
-                        if (slots[0] >= DateTime.Now.AddSeconds(MinLeadSeconds - 30)) return slots;
+                        bool validGaps=slots.Zip(slots.Skip(1),(a,b)=>(b-a).TotalSeconds)
+                            .All(g=>g>=MinGapSeconds&&g<=MaxGapSeconds);
+                        if (validGaps && slots[0] >= DateTime.Now.AddSeconds(MinLeadSeconds)) return slots;
                     }
                 } catch { }
             }
             var result = new List<DateTime>();
-            DateTime cursor = DateTime.Now.AddSeconds(MinLeadSeconds + Rng.Next(0, 60));
+            DateTime cursor = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()+MinLeadSeconds+Rng.Next(1,60)).LocalDateTime;
             result.Add(cursor);
             for (int i = 1; i < count; i++) {
                 cursor = cursor.AddSeconds(Rng.Next(MinGapSeconds, MaxGapSeconds + 1));

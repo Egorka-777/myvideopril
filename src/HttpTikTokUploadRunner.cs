@@ -75,9 +75,15 @@ namespace VideoBatch {
                     string line;
                     while ((line = await process.StandardOutput.ReadLineAsync().ConfigureAwait(false)) != null) {
                         if (string.IsNullOrWhiteSpace(line)) continue;
+                        UploadMessage msg;
                         try {
                             using (var m = new MemoryStream(Encoding.UTF8.GetBytes(line))) {
-                                var msg = (UploadMessage)messageSerializer.ReadObject(m);
+                                msg = (UploadMessage)messageSerializer.ReadObject(m);
+                            }
+                        } catch (SerializationException) {
+                            update?.Invoke(new UploadMessage { stage = "log", text = "Нечитаемое сообщение HTTP worker." });
+                            continue;
+                        }
                                 update?.Invoke(msg);
                                 if (!string.IsNullOrWhiteSpace(msg.stage)) result.LastStage = msg.stage;
                                 if (msg.ip != null) result.Ip = msg.ip;
@@ -98,10 +104,6 @@ namespace VideoBatch {
                                     result.KeptOpen = msg.keptOpen;
                                     result.Success = false;
                                 }
-                            }
-                        } catch {
-                            update?.Invoke(new UploadMessage { stage = "log", text = line });
-                        }
                     }
                     await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
                     cancel.ThrowIfCancellationRequested();
@@ -111,7 +113,7 @@ namespace VideoBatch {
                     }
                     if (process.ExitCode != 0 && !result.Success && string.IsNullOrWhiteSpace(result.Error))
                         result.Error = string.IsNullOrWhiteSpace(err) ? "HTTP TikTok worker завершился с ошибкой." : err.Trim();
-                    if (!result.Success)
+                    if (!result.Success || result.ManualCheck || process.ExitCode != 0 || !string.IsNullOrWhiteSpace(result.Error))
                         throw new UploadException(string.IsNullOrWhiteSpace(result.Error) ? "HTTP TikTok не подтвердил загрузку." : result.Error, result.KeptOpen);
                     return result;
                 }

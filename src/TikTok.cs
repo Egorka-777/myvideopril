@@ -13,6 +13,9 @@ namespace VideoBatch {
     public class TikTokItem {
         public string Video="",Title="",Description="",Caption=""; // Title/Description остаются для старых settings.xml
         public bool Published;
+        // HTTP acknowledgement is not evidence of a visible or scheduled post.
+        public bool HttpSubmitted, HttpNeedsReview;
+        public string LocalJobId="", HttpVideoId="";
     }
     public class TikTokAccount {
         public bool Enabled=true;
@@ -78,6 +81,20 @@ namespace VideoBatch {
                 "«⋯» — распределить видео по нескольким аккаунтам.",
                 "TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information));
             tools.Controls.Add(setup);tools.Controls.Add(add);tools.Controls.Add(importYt);tools.Controls.Add(files);tools.Controls.Add(captionsBtn);tools.Controls.Add(musicBtn);tools.Controls.Add(check);tools.Controls.Add(help);
+            tools.Controls.Add(Ui.Button("Сверить HTTP",()=>{
+                if(uploadsInFlight>0||cancellation!=null)return;
+                var account=grid.CurrentRow?.Tag as TikTokAccount;
+                if(account==null)return;
+                foreach(var item in account.Items.Where(it=>it.HttpNeedsReview||it.HttpSubmitted)){
+                    var answer=MessageBox.Show(this,"Проверьте именно этот ролик в Studio, включая запланированные и проверку:\n"+
+                        Path.GetFileName(item.Video)+"\nUpload video ID: "+item.HttpVideoId+
+                        "\nДа — ролик найден, больше не отправлять.\nНет — результат пока неизвестен.\nОтмена — закончить сверку.",
+                        "Сверка HTTP",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);
+                    if(answer==DialogResult.Cancel)break;
+                    if(answer==DialogResult.Yes){item.Published=true;item.HttpNeedsReview=false;item.HttpSubmitted=false;SafeSave();}
+                }
+                Write("Сверка закончена. Неизвестные попытки не отправляются повторно. Повтор разрешайте только после проверки отсутствия ролика.");
+            }));
             root.Controls.Add(tools,0,3);
 
             grid=new DataGridView{Dock=DockStyle.Fill,BackgroundColor=Color.White,BorderStyle=BorderStyle.None,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,RowHeadersVisible=false,AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.None,SelectionMode=DataGridViewSelectionMode.FullRowSelect};
@@ -356,7 +373,7 @@ namespace VideoBatch {
         static bool AccountReadyForUpload(TikTokAccount a){
             if(a==null||string.IsNullOrWhiteSpace(a.ProfileId))return false;
             SyncPrimary(a);
-            return a.Items!=null&&a.Items.Any(it=>it!=null&&!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption));
+            return a.Items!=null&&a.Items.Any(it=>it!=null&&!it.Published&&!it.HttpSubmitted&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption));
         }
         /// <summary>Resolve stale paths, copy to staging — same idea as YouTube QueueManager.Prepare.</summary>
         void PrepareTikTokUploadFiles(TikTokAccount acc,List<TikTokItem> items){
@@ -544,9 +561,17 @@ namespace VideoBatch {
             try{
                 return await DolphinRunner.RunTikTokHttp(job,token,m=>{
                     if(!string.IsNullOrWhiteSpace(m.ip))PropagateIp(acc.ProfileId,m.ip);
+                    if(m.stage=="batch"&&m.packIndex>0&&m.packIndex<=items.Count){
+                        items[m.packIndex-1].HttpNeedsReview=true;
+                        lock(saveLock)Store.Save(settings); // Do not swallow a persistence failure.
+                    }
                     if(m.stage=="done_item"&&m.packIndex>0&&m.packIndex<=items.Count){
-                        items[m.packIndex-1].Published=true;
-                        SafeSave();
+                        var item=items[m.packIndex-1];
+                        if(m.localJobId!=item.LocalJobId)throw new Exception("TikTok: результат не соответствует заданию.");
+                        item.HttpSubmitted=true;
+                        item.HttpNeedsReview=false;
+                        item.HttpVideoId=m.videoId??"";
+                        lock(saveLock)Store.Save(settings);
                     }
                     if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
                 },ct).ConfigureAwait(false);
@@ -570,9 +595,12 @@ namespace VideoBatch {
                 var packs=new List<(DataGridViewRow row,TikTokAccount acc,List<TikTokItem> items)>();
                 foreach(var row in rows){
                     var a=(TikTokAccount)row.Tag;SyncPrimary(a);
-                    var items=(a.Items??new List<TikTokItem>()).Where(it=>!it.Published&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption)).ToList();
+                    if((a.Items??new List<TikTokItem>()).Any(it=>it.HttpNeedsReview))
+                        throw new Exception(a.Name+": предыдущая HTTP-попытка требует сверки в Studio. Повтор заблокирован во избежание дублей.");
+                    var items=(a.Items??new List<TikTokItem>()).Where(it=>!it.Published&&!it.HttpSubmitted&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption)).ToList();
                     if(items.Count==0){Write(a.Name+": нет ожидающих публикации видео.");continue;}
                     foreach(var it in items){
+                        if(string.IsNullOrWhiteSpace(it.LocalJobId))it.LocalJobId=Guid.NewGuid().ToString("N");
                         it.Caption=(it.Caption??"").Trim();it.Description=it.Caption;
                         if(string.IsNullOrWhiteSpace(it.Caption))throw new Exception(a.Name+": пустая подпись.");
                         if(it.Caption.Length>2200)throw new Exception(a.Name+": подпись длиннее 2200 символов — сократите её в базе подписей.");
@@ -614,7 +642,7 @@ namespace VideoBatch {
                                 description=it.Caption
                             }).ToArray();
                             if(transport=="http"){
-                                string schedPath=TikTokScheduleGenerator.StatePath(a.ProfileId,marketView);
+                                string schedPath=TikTokScheduleGenerator.StatePath(a.ProfileId+"-"+pack.items[0].LocalJobId,marketView);
                                 var localSlots=TikTokScheduleGenerator.GenerateLocalSlots(pack.items.Count,schedPath);
                                 if(pack.items.Count>1){
                                     Write(a.Name+" · расписание TikTok HTTP: "+
@@ -626,16 +654,17 @@ namespace VideoBatch {
                                     profileId=a.ProfileId,expectedIp=a.ExpectedIp,localPort=settings.DolphinPort,market=marketView,
                                     keepProfileOpen=true,
                                     items=pack.items.Select((it,idx)=>new HttpTikTokItemJob{
-                                        localJobId=a.ProfileId+"-"+(idx+1),video=it.Video,caption=it.Caption,description=it.Caption,
+                                        localJobId=it.LocalJobId,video=it.Video,caption=it.Caption,description=it.Caption,
                                         publishMode=pack.items.Count>1?"scheduled":"scheduled",
                                         scheduledUnixSeconds=idx<localSlots.Count?new DateTimeOffset(localSlots[idx]).ToUnixTimeSeconds():0,
                                         packIndex=idx+1
                                     }).ToArray()
                                 };
                                 var httpResult=await RunHttpUploadWithRetry(httpJob,a,row,pack.items,ct,token).ConfigureAwait(false);
-                                foreach(var it in pack.items)it.Published=true;
-                                a.Status=ChannelStatus.Published;
-                                Status(row,pack.items.Count>1?("HTTP · опубликовано "+pack.items.Count+" ✓"):("HTTP · опубликовано ✓"));
+                                int accepted=pack.items.Count(it=>it.HttpSubmitted);
+                                if(accepted!=pack.items.Count)throw new Exception("HTTP: принято "+accepted+"/"+pack.items.Count+"; неполный результат worker.");
+                                a.Status="HTTP · принято "+accepted+"/"+pack.items.Count+" · проверьте Studio";
+                                Status(row,a.Status);
                                 if(!string.IsNullOrWhiteSpace(httpResult.Ip))PropagateIp(a.ProfileId,httpResult.Ip);
                                 SafeSave();
                             }else{
@@ -645,7 +674,7 @@ namespace VideoBatch {
                                     video=items[0].video
                                 };
                                 var result=await RunUploadWithRetry(job,a,row,pack.items,ct,token).ConfigureAwait(false);
-                                foreach(var it in pack.items)it.Published=true;
+                                if(pack.items.Any(it=>!it.Published))throw new Exception("Studio: нет подтверждения для каждого ролика пачки.");
                                 a.Status=ChannelStatus.Published;
                                 Status(row,pack.items.Count>1?("Studio · опубликовано "+pack.items.Count+" ✓"):(string.IsNullOrWhiteSpace(result.Url)?"Studio · опубликовано ✓":"Studio · опубликовано ✓ "+result.Url));
                                 if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(a.ProfileId,result.Ip);

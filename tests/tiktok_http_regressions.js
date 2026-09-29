@@ -33,7 +33,7 @@ for (const forbidden of ["setInputFiles(", 'input[type="file"]', "fillCaption(",
   assert.doesNotMatch(httpCode, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 }
 assert.match(httpWorker, /const TRANSPORT = "http"/);
-assert.match(httpWorker, /2026-09-28-tiktok-http-v5\.3/);
+assert.match(httpWorker, /2026-09-29-tiktok-http-v5\.4-evidence/);
 
 // No multi-region blind retries with one token
 assert.doesNotMatch(httpWorker, /vod-us-east/);
@@ -182,8 +182,7 @@ const postReview = httpMod.evaluatePostAcceptance(
   { httpStatus: 200, statusCode: 8, statusMsg: "Under review", respOk: false },
   { projectId: "1", creationId: "abc", videoId: "v", listed: true }
 );
-assert.strictEqual(postReview.ok, true);
-assert.strictEqual(postReview.mode, "project_list");
+assert.strictEqual(postReview.ok, false, "draft/review text must not override an API error");
 
 const postHardFail = httpMod.evaluatePostAcceptance(
   { httpStatus: 200, statusCode: 5, statusMsg: "Invalid parameters", respOk: false },
@@ -195,7 +194,7 @@ assert.match(httpWorker, /readBrowserIp/);
 assert.match(httpWorker, /readTransportIp/);
 assert.match(httpWorker, /about:blank/);
 assert.match(httpWorker, /context\.request/);
-assert.match(httpWorker, /HTTP transport IP: ipify HTTP/);
+assert.match(httpWorker, /Маршрут HTTP не подтверждён/);
 assert.match(httpWorker, /isTikTokWebUrl/);
 
 // Fresh token before Apply (not reused across regions)
@@ -205,8 +204,8 @@ assert.match(httpWorker, /uploadTokenMeta/);
 // Schedule constants in worker + C#
 assert.match(httpWorker, /TIKTOK_SCHEDULE_MIN_SEC = 900/);
 assert.match(scheduleCs, /MinLeadSeconds = 900/);
-assert.match(scheduleCs, /MinGapSeconds = 180/);
-assert.match(scheduleCs, /MaxGapSeconds = 900/);
+assert.match(scheduleCs, /MinGapSeconds = 600/);
+assert.match(scheduleCs, /MaxGapSeconds = 1800/);
 
 // C# HTTP enabled in main app (no test-exe gate)
 assert.match(tiktokCs, /TikTokHttpMainEnabled\s*=\s*true/);

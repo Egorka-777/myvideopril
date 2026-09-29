@@ -3,8 +3,8 @@
 const assert = require("assert");
 
 const MIN_LEAD = 900;
-const MIN_GAP = 180;
-const MAX_GAP = 900;
+const MIN_GAP = 600;
+const MAX_GAP = 1800;
 
 function generateUnixSlots(count, rng) {
   const slots = [];

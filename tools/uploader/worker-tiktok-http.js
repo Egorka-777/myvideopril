@@ -2,7 +2,7 @@
 
 /**
  * VideoBatch · TikTok HTTP uploader v5.
- * All TikTok API traffic via page.evaluate(fetch) in Dolphin browser context.
+ * Web API uses browser fetch; binary upload uses a separately verified request transport.
  */
 
 const fs = require("fs");
@@ -17,7 +17,7 @@ const {
   EMPTY_PAYLOAD_HASH
 } = require("./tiktok-aws-sigv4.js");
 
-const BUILD = "2026-09-28-tiktok-http-v5.3";
+const BUILD = "2026-09-29-tiktok-http-v5.4-evidence";
 const TRANSPORT = "http";
 const CHUNK_SIZE = 2 * 1024 * 1024;
 const WORKER_EXIT_DELAY_MS = 150;
@@ -215,7 +215,7 @@ function finalizeFetchResult(result) {
   return Object.assign({}, result, { json });
 }
 
-async function readBrowserIp(context) {
+async function readTransportIp(context) {
   const response = await context.request.get(IPIFY, { timeout: 30000 });
   if (!response.ok()) throw new Error(`ipify HTTP ${response.status()}`);
   return parseIpPayload(await response.text(), "json-ip");
@@ -288,17 +288,11 @@ async function browserFetch(page, method, url, opts = {}) {
   const target = String(url || "");
   const external = !isTikTokWebUrl(target);
   if (external && activeContext) return finalizeFetchResult(await contextFetch(method, target, opts));
-  try {
-    return finalizeFetchResult(await pageFetch(page, method, target, opts));
-  } catch (e) {
-    if (activeContext && (external || e.pageFetchFailed)) {
-      return finalizeFetchResult(await contextFetch(method, target, opts));
-    }
-    throw e;
-  }
+  // A failed browser fetch may have reached the server. Never replay a POST.
+  return finalizeFetchResult(await pageFetch(page, method, target, opts));
 }
 
-async function readTransportIp(context, page) {
+async function readBrowserIp(context, page) {
   await page.goto("about:blank", { waitUntil: "commit", timeout: 15000 }).catch(() => {});
   try {
     const result = await page.evaluate(async (url) => {
@@ -312,9 +306,7 @@ async function readTransportIp(context, page) {
     }, IPIFY);
     if (!result.error && result.text) return parseIpPayload(result.text, "json-ip");
   } catch (_) {}
-  const response = await context.request.get(IPIFY, { timeout: 30000 });
-  if (!response.ok()) throw new Error(`HTTP transport IP: ipify HTTP ${response.status()}`);
-  return parseIpPayload(await response.text(), "json-ip");
+  throw new Error("Browser IP не подтверждён браузерным запросом.");
 }
 
 function noteClockSkew(serverDateHdr) {
@@ -328,14 +320,14 @@ function noteClockSkew(serverDateHdr) {
 }
 
 async function verifyProxyRoute(context, page) {
-  // Прокси контролирует Dolphin — IP только в лог, без блокировки (как YouTube worker).
+  // CDP's APIRequestContext must not be assumed to inherit Dolphin's proxy.
   await page.goto("about:blank", { waitUntil: "commit", timeout: 15000 }).catch(() => {});
 
   let browserIp = "";
   let transportIp = "";
   try {
     send("ip", "Проверяю browser IP…", { percent: 10 });
-    browserIp = await readBrowserIp(context);
+    browserIp = await readBrowserIp(context, page);
     if (browserIp) send("ip", `browser IP: ${browserIp}`, { browserIp, percent: 11 });
   } catch (_) {
     send("warning", "browser IP не определён — продолжаю (маршрут контролирует Dolphin).", { percent: 11 });
@@ -359,7 +351,10 @@ async function verifyProxyRoute(context, page) {
     }
   }
 
-  const computerIp = await fetchComputerIp();
+  if (!browserIp || !transportIp || browserIp !== transportIp) {
+    throw new Error("Маршрут HTTP не подтверждён: browser IP и transport IP должны совпадать. Загрузка не начата; проверьте прокси/VPN. Совпадение IP — проверка выхода, не гарантия маршрута всех адресов.");
+  }
+  const computerIp = "";
   if (computerIp) send("ip", `computer IP (Node): ${computerIp}`, { computerIp, percent: 15 });
 
   routeContext = { browserIp, transportIp, computerIp };
@@ -641,29 +636,30 @@ async function uploadVideoBytes(page, session, videoPath, uploadToken, applied) 
 function parsePostResponse(res) {
   let body = null;
   try { body = res && res.text ? JSON.parse(res.text) : (res && res.json) || null; } catch { body = null; }
-  const statusCode = body && body.status_code != null ? Number(body.status_code) : null;
-  const statusMsg = body ? String(body.status_msg || body.message || "").trim() : "";
+  const rawCode = body && body.status_code;
+  const statusCode = typeof rawCode === "number" ? rawCode :
+    (typeof rawCode === "string" && /^-?\d+$/.test(rawCode) ? Number(rawCode) : null);
+  const statusMsg = body ? redactDiagnostic(String(body.status_msg || body.message || "").trim()).slice(0, 1000) : "";
   const respList = body && (body.single_post_resp_list || body.single_post_resp);
   const respOk = Array.isArray(respList) && respList.some(r => {
     if (!r) return false;
-    if (r.status_code === 0) return true;
-    return !!(r.publish_id || r.aweme_id || r.item_id || r.video_id);
+    if (r.status_code != null && Number(r.status_code) !== 0) return false;
+    return !!(r.publish_id || r.aweme_id || r.item_id);
   });
-  return { body, statusCode, statusMsg, respOk, httpStatus: res && res.status != null ? res.status : 0 };
+  const itemError = Array.isArray(respList) && respList.some(r => r && r.status_code != null && Number(r.status_code) !== 0);
+  return { body, statusCode, statusMsg, respOk, itemError, httpStatus: res && res.status != null ? res.status : 0 };
 }
 
 function isReviewPostMessage(statusMsg) {
   return /review|moderation|only you|only me|private|провер|модера|только/i.test(String(statusMsg || ""));
 }
 
-function evaluatePostAcceptance(parsed, { projectId, creationId, videoId, listed }) {
-  if (parsed.httpStatus >= 200 && parsed.httpStatus < 300 && parsed.statusCode === 0) {
+function evaluatePostAcceptance(parsed) {
+  if (parsed.httpStatus >= 200 && parsed.httpStatus < 300 && !parsed.itemError && parsed.statusCode === 0) {
     return { ok: true, mode: "status_code_0" };
   }
-  if (parsed.respOk) return { ok: true, mode: "single_post_resp_list" };
-  if (listed) return { ok: true, mode: "project_list", review: isReviewPostMessage(parsed.statusMsg) };
-  if (parsed.statusCode === 0) return { ok: true, mode: "status_code_0" };
-  if (isReviewPostMessage(parsed.statusMsg)) return { ok: true, mode: "review_msg", review: true };
+  if (parsed.httpStatus >= 200 && parsed.httpStatus < 300 && parsed.statusCode == null && !parsed.itemError && parsed.respOk)
+    return { ok: true, mode: "single_post_resp_list" };
   return {
     ok: false,
     reason: parsed.statusMsg || (parsed.statusCode != null ? `status_code ${parsed.statusCode}` : "пустой ответ post")
@@ -738,14 +734,7 @@ async function publishPost(page, session, context, { creationId, projectId, vide
     videoId
   });
 
-  let listed = false;
-  if (!(parsed.httpStatus >= 200 && parsed.httpStatus < 300 && parsed.statusCode === 0)) {
-    await page.waitForTimeout(1500).catch(() => {});
-    const listRes = await fetchProjectList(page, session);
-    listed = projectListContains(listRes.json, { projectId, creationId });
-  }
-
-  const verdict = evaluatePostAcceptance(parsed, { projectId, creationId, videoId, listed });
+  const verdict = evaluatePostAcceptance(parsed);
   if (!verdict.ok) {
     throw new Error(
       `post отклонён TikTok: ${verdict.reason} (HTTP ${parsed.httpStatus}` +
@@ -758,22 +747,15 @@ async function publishPost(page, session, context, { creationId, projectId, vide
       percent: 94, projectId, videoId, statusCode: parsed.statusCode, statusMsg: parsed.statusMsg
     });
   } else {
-    send("post", "post подтверждён.", { percent: 94, projectId, videoId, acceptMode: verdict.mode });
+    send("post", "Запрос post принят. Наличие публикации и расписание в Studio ещё не проверены.", { percent: 94, projectId, videoId, acceptMode: verdict.mode });
   }
 
-  const listRes = await fetchProjectList(page, session);
-  if (listRes.ok && listRes.json && Array.isArray(listRes.json.infos)) {
-    send("status", "status подтверждён.", { percent: 96, projectCount: listRes.json.infos.length });
-  } else {
-    send("status", "status: project list недоступен, post уже подтверждён.", { percent: 96 });
-  }
+  // Project existence only proves a draft exists, not publication or scheduling.
 
   setItemState("confirmed");
   if (scheduled) {
     const local = new Date(scheduledUnixSeconds * 1000);
-    send("schedule", `Запланировано на ${local.toLocaleString()}`, { percent: 98, scheduledUnixSeconds });
-  } else {
-    send("done_item", "TikTok подтвердил публикацию.", { percent: 98, projectId, videoId });
+    send("schedule", `Запрошено расписание ${local.toLocaleString()}; проверьте время в Studio.`, { percent: 98, scheduledUnixSeconds });
   }
   return { projectId, videoId, scheduled, review: !!verdict.review };
 }
@@ -831,7 +813,10 @@ async function main() {
     let lastUrl = "";
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      send("batch", `Пачка ${i + 1}/${items.length}: HTTP-загрузка…`, { packIndex: i + 1, packTotal: items.length, percent: 25 });
+      projectIdSafe = uploadIdSafe = videoIdSafe = "";
+      bytesSent = 0;
+      setItemState("preflight");
+      send("batch", `Пачка ${i + 1}/${items.length}: HTTP-загрузка…`, { localJobId: item.localJobId, packIndex: i + 1, packTotal: items.length, percent: 25 });
 
       const fileSize = fs.statSync(item.video).size;
       const { uploadToken, applied } = await runHttpPreflight(page, session, fileSize);
@@ -842,7 +827,7 @@ async function main() {
         publishMode: item.publishMode, scheduledUnixSeconds: item.scheduledUnixSeconds
       });
       send("done_item", `Пачка ${i + 1}/${items.length} завершена` + (pub.review ? " (на проверке TikTok)" : "") + ".", {
-        packIndex: i + 1, packTotal: items.length, percent: 98, projectId, videoId: videoIdSafe, review: !!pub.review
+        localJobId: item.localJobId, packIndex: i + 1, packTotal: items.length, percent: 98, projectId, videoId: videoIdSafe, review: !!pub.review
       });
       if (pub) lastUrl = pub.url || lastUrl;
       if (i < items.length - 1) setItemState("preflight");
@@ -869,7 +854,7 @@ async function main() {
     });
     finishProcess(0);
   } catch (e) {
-    if (itemState === "uploading" || itemState === "uploaded" || itemState === "committed") {
+    if (itemState === "uploading" || itemState === "uploaded" || itemState === "committed" || itemState === "publishing") {
       manualCheck((e && e.message) || String(e), { projectId: projectIdSafe, uploadId: uploadIdSafe, diag: e.diag || null });
       return;
     }
