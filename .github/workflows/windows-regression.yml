@@ -29,6 +29,13 @@ jobs:
             node $_.FullName
             if ($LASTEXITCODE -ne 0) { throw "Failed: $($_.Name)" }
           }
+      - name: Native calendar browser regression
+        shell: pwsh
+        run: |
+          npx --prefix tools/uploader playwright-core install chromium
+          if ($LASTEXITCODE -ne 0) { throw "Browser installation failed" }
+          node tests/browser/native_calendar.js
+          if ($LASTEXITCODE -ne 0) { throw "Native calendar test failed" }
       - name: Compile desktop application
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
       - name: C# self tests

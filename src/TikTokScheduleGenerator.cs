@@ -77,16 +77,16 @@ namespace VideoBatch {
                 .ToList();
         }
 
-        // Native web controls commonly expose minutes. Use whole-minute gaps;
+        // Native calendar minute options use a five-minute grid;
         // HTTP slots remain randomized to the second.
         public static List<long> GenerateStudioUnixSlots(int count) {
             var slots=new List<long>();
             if(count<=0)return slots;
-            long cursor=((MinFirstUnixUtc()+59)/60)*60;
+            long cursor=((DateTimeOffset.UtcNow.ToUnixTimeSeconds()+1200+299)/300)*300;
             lock(Rng){
-                cursor+=Rng.Next(0,2)*60;
+                cursor+=Rng.Next(0,2)*300;
                 slots.Add(cursor);
-                for(int i=1;i<count;i++){cursor+=Rng.Next(5,16)*60;slots.Add(cursor);}
+                for(int i=1;i<count;i++){cursor+=Rng.Next(1,4)*300;slots.Add(cursor);}
             }
             return slots;
         }
@@ -111,7 +111,7 @@ namespace VideoBatch {
             string tmp = Path.Combine(Path.GetTempPath(), "vb-tiktok-sched-" + Guid.NewGuid().ToString("N") + ".json");
             try {
                 var studio=GenerateStudioUnixSlots(20);
-                if(studio.Count!=20||studio.Any(t=>t%60!=0))return false;
+                if(studio.Count!=20||studio.Any(t=>t%300!=0))return false;
                 for(int i=1;i<studio.Count;i++)if(studio[i]-studio[i-1]<300||studio[i]-studio[i-1]>900)return false;
                 var slots = GenerateLocalSlots(20, tmp, forceRecalculate: true);
                 if (slots.Count != 20) return false;

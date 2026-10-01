@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 
 namespace VideoBatch {
@@ -115,20 +116,34 @@ namespace VideoBatch {
                 name = safeTitle + ext;
             }
 
+            ValidateReady(sourcePath, "Подготовка видео");
             string dest = Path.Combine(profileDir, name);
-            if (File.Exists(dest) && !PathsEqual(sourcePath, dest)) {
+            if (PathsEqual(sourcePath, dest)) return dest;
+            if (File.Exists(dest)) {
+                if (SameFileContents(sourcePath, dest)) return dest;
                 string ext = Path.GetExtension(name);
                 string stem = Path.GetFileNameWithoutExtension(name);
+                bool available = false;
                 for (int n = 2; n < 100; n++) {
-                    string alt = stem + " (" + n + ")" + ext;
-                    string tryDest = Path.Combine(profileDir, alt);
-                    if (!File.Exists(tryDest)) { dest = tryDest; break; }
+                    string tryDest = Path.Combine(profileDir, stem + " (" + n + ")" + ext);
+                    if (File.Exists(tryDest)) {
+                        if (SameFileContents(sourcePath, tryDest)) return tryDest;
+                        continue;
+                    }
+                    dest = tryDest; available = true; break;
                 }
+                if (!available) throw new IOException("Заняты все имена подготовленного видео: " + name);
             }
-
-            if (!File.Exists(dest) || new FileInfo(sourcePath).LastWriteTimeUtc > new FileInfo(dest).LastWriteTimeUtc)
-                File.Copy(sourcePath, dest, true);
+            File.Copy(sourcePath, dest, false);
             return dest;
+        }
+
+        static bool SameFileContents(string a, string b) {
+            if (new FileInfo(a).Length != new FileInfo(b).Length) return false;
+            using (var hash = SHA256.Create())
+            using (var left = File.OpenRead(a))
+            using (var right = File.OpenRead(b))
+                return hash.ComputeHash(left).SequenceEqual(hash.ComputeHash(right));
         }
 
         public static string PlannedTikTokFileName(string caption, int index1Based, int total, string sourcePath) {
@@ -174,6 +189,12 @@ namespace VideoBatch {
 
                 string again = StageVideo(tmp, "tiktok", src, "pid1", 1, 1, "test.mp4", "caption");
                 if (!string.Equals(staged, again, StringComparison.OrdinalIgnoreCase)) return false;
+                File.WriteAllBytes(src, new byte[] { 5, 6, 7, 8 });
+                string changed = StageVideo(tmp, "tiktok", src, "pid1", 1, 1, "test.mp4", "caption");
+                if (string.Equals(staged, changed, StringComparison.OrdinalIgnoreCase)) return false;
+                if (!File.ReadAllBytes(staged).SequenceEqual(new byte[] { 1, 2, 3, 4 })) return false;
+                if (!File.ReadAllBytes(changed).SequenceEqual(new byte[] { 5, 6, 7, 8 })) return false;
+                if (StageVideo(tmp, "tiktok", src, "pid1", 1, 1, "test.mp4", "caption") != changed) return false;
                 return true;
             } catch {
                 return false;
@@ -183,3 +204,4 @@ namespace VideoBatch {
         }
     }
 }
+

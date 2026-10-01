@@ -677,20 +677,23 @@ async function waitPersistenceAck(localJobId) {
 }
 
 async function publishAndConfirm(page, item, index, total) {
-  const { postEvidence, confirmStudioRow } = require("./tiktok-studio-evidence.js");
+  const { postEvidence, confirmStudioRow, jsonShape } = require("./tiktok-studio-evidence.js");
   await dismissTikTokBlockingDialogs(page);
   let nativeResult = null, nativeError = null;
   const pending = new Set();
   const onResponse = response => {
     const req = response.request();
     const u = new URL(response.url());
-    if (u.hostname !== "www.tiktok.com" || req.method() !== "POST" || !/\/project\/post\/v1\/?$/.test(u.pathname)) return;
+    if (!/(^|\.)tiktok\.com$/.test(u.hostname) || req.method() !== "POST" || !/\/(post|publish)(\/|$)/.test(u.pathname)) return;
     const task = (async () => {
       try {
         const body = await response.json();
         const requestBody = req.postDataJSON();
         record("native_post", "Ответ native Studio", { httpStatus:response.status(), statusCode:body.status_code,
-          responseKeys:Object.keys(body), requestKeys:Object.keys(requestBody || {}) });
+          endpoint:u.pathname, responseShape:jsonShape(body), requestShape:jsonShape(requestBody) });
+        if(!/\/project\/post\/v1\/?$/.test(u.pathname)) {
+          nativeError=new Error("Структура нового native post сохранена в диагностике. Проверьте запись Studio перед повтором.");return;
+        }
         nativeResult = postEvidence(response.status(), body, requestBody, item);
       }catch(e){nativeError=e;}
     })();
