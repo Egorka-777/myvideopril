@@ -14,13 +14,13 @@ namespace VideoBatch {
         [DataMember] public int VideoCount;
     }
 
-    /// <summary>TikTok HTTP batch schedule: first slot ≥ now+15min, then +10..30 min random gaps.</summary>
+    /// <summary>TikTok HTTP batch schedule: first slot ≥ now+15min, then +5..15 min random gaps.</summary>
     public static class TikTokScheduleGenerator {
         public const int MinLeadSeconds = 900;
         /// <summary>Extra lead so C# slots stay valid after UI delay and worker unix check.</summary>
         public const int ScheduleBufferSeconds = 60;
-        public const int MinGapSeconds = 600;
-        public const int MaxGapSeconds = 1800;
+        public const int MinGapSeconds = 300;
+        public const int MaxGapSeconds = 900;
         static readonly Random Rng = new Random();
 
         static long MinFirstUnixUtc() {
@@ -77,6 +77,20 @@ namespace VideoBatch {
                 .ToList();
         }
 
+        // Native web controls commonly expose minutes. Use whole-minute gaps;
+        // HTTP slots remain randomized to the second.
+        public static List<long> GenerateStudioUnixSlots(int count) {
+            var slots=new List<long>();
+            if(count<=0)return slots;
+            long cursor=((MinFirstUnixUtc()+59)/60)*60;
+            lock(Rng){
+                cursor+=Rng.Next(0,2)*60;
+                slots.Add(cursor);
+                for(int i=1;i<count;i++){cursor+=Rng.Next(5,16)*60;slots.Add(cursor);}
+            }
+            return slots;
+        }
+
         static TikTokScheduleState LoadState(string path) {
             using (var fs = File.OpenRead(path))
                 return (TikTokScheduleState)new DataContractJsonSerializer(typeof(TikTokScheduleState)).ReadObject(fs);
@@ -96,6 +110,9 @@ namespace VideoBatch {
         public static bool RunSelfTests() {
             string tmp = Path.Combine(Path.GetTempPath(), "vb-tiktok-sched-" + Guid.NewGuid().ToString("N") + ".json");
             try {
+                var studio=GenerateStudioUnixSlots(20);
+                if(studio.Count!=20||studio.Any(t=>t%60!=0))return false;
+                for(int i=1;i<studio.Count;i++)if(studio[i]-studio[i-1]<300||studio[i]-studio[i-1]>900)return false;
                 var slots = GenerateLocalSlots(20, tmp, forceRecalculate: true);
                 if (slots.Count != 20) return false;
                 if (slots[0] < DateTime.Now.AddSeconds(MinLeadSeconds + ScheduleBufferSeconds - 5)) return false;
@@ -116,3 +133,4 @@ namespace VideoBatch {
         }
     }
 }
+

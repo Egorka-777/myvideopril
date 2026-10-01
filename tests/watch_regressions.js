@@ -77,10 +77,10 @@ assert.match(uploader, /MoveFileReplacing/,
   "Video assign must rename files on disk instead of silently skipping failed moves.");
 assert.match(uploader, /ch\.Kind=packKind/,
   "Assigning videos must sync channel kind with Long/Shorts workspace toggle.");
-assert.match(uploader, /WatchMaxParallelProfiles/,
-  "Mesh batch size must come from WatchMaxParallelProfiles setting.");
-assert.match(uploader, /meshBatchSize=Math\.Max\(1,Math\.Min\(5,settings\.WatchMaxParallelProfiles\)\)/,
-  "Mesh batch size must be clamped 1–5 from settings.");
+assert.match(uploader, /const int batchSize=5/,
+  "Navigation-only batches must contain at most five profiles.");
+assert.match(uploader, /StopProfileRequired/,
+  "A batch must require Dolphin stop acknowledgement before advancing.");
 assert.match(worker, /findWatchLinkOnVideosTab/,
   "Mesh long watch must scan Videos tab for catalog videoId.");
 assert.doesNotMatch(worker, /meshLong \? \[\"\/videos\", \"\/shorts\"\]/,
@@ -91,9 +91,8 @@ assert.match(worker, /MESH_MIN_LONG_SECONDS/,
   "Mesh long must reject videos shorter than minimum duration.");
 assert.match(uploader, /MeshBatchItems/,
   "Mesh must use last published batch even when local video files still exist.");
-assert.match(uploader, /meshBatchTotal/,
-  "Mesh watch must process sequential batches.");
-assert.match(uploader, /Сетка: пачка/,
-  "Mesh log must announce each batch.");
-
+assert.match(uploader, /await Task.WhenAll\(tasks\)/,
+  "All current batch tasks must finish before the next starts.");
+assert.match(uploader, /openTodayOnly=true/,
+  "Navigation-only request must not enable watchMesh or watchDirectLinks.");
 console.log("watch regression checks passed");

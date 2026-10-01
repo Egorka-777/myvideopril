@@ -212,7 +212,8 @@ const postHardFail = httpMod.evaluatePostAcceptance(
 assert.strictEqual(postHardFail.ok, false);
 
 const signMod = require("../tools/uploader/tiktok-post-sign.js");
-assert.ok(fs.existsSync(path.join(root, "tools", "uploader", "tiktok-sign", "webmssdk.js")));
+// Session-dependent SDK is deliberately excluded from git; missing module must fail preflight.
+assert.match(httpRunnerCs, /webmssdk\.js/);
 assert.ok(fs.existsSync(path.join(root, "tools", "uploader", "tiktok-sign", "xbogus.js")));
 const offset = signMod.computeScheduleOffset("scheduled", Math.floor(Date.now() / 1000) + 1200, 900, 864000);
 assert.strictEqual(offset, 1200);
@@ -246,8 +247,8 @@ assert.match(httpWorker, /uploadTokenMeta/);
 // Schedule constants in worker + C#
 assert.match(httpWorker, /TIKTOK_SCHEDULE_MIN_SEC = 900/);
 assert.match(scheduleCs, /MinLeadSeconds = 900/);
-assert.match(scheduleCs, /MinGapSeconds = 600/);
-assert.match(scheduleCs, /MaxGapSeconds = 1800/);
+assert.match(scheduleCs, /MinGapSeconds = 300/);
+assert.match(scheduleCs, /MaxGapSeconds = 900/);
 
 // C# HTTP enabled in main app (no test-exe gate)
 assert.match(tiktokCs, /TikTokHttpMainEnabled\s*=\s*true/);
@@ -268,3 +269,4 @@ assert.match(sigv4Src, /canonicalQuery = buildCanonicalQueryString/);
 assert.doesNotMatch(sigv4Src, /pathname \+ search/i);
 
 console.log("OK: tiktok_http_regressions.js");
+

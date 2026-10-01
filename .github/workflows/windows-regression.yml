@@ -31,3 +31,22 @@ jobs:
           }
       - name: Compile desktop application
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: C# self tests
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path ./bin/Release/net48/VideoBatch.exe).Path)
+          $tests = $asm.GetType('VideoBatch.HttpRegressionSelfTests')
+          $ok = $tests.GetMethod('RunAll').Invoke($null, $null)
+          if (!$ok) { throw 'C# self tests returned false' }
+      - name: Upload compiled desktop and source workers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-20261001-with-workers
+          path: |
+            bin/Release/net48/VideoBatch.exe
+            bin/Release/net48/VideoBatch.exe.config
+            tools/uploader/*.js
+            tools/uploader/package*.json
+            tools/uploader/tiktok-sign/*.js
+            docs/ROLLOUT_20261001_RU.md
+            scripts/Build-Desktop-20261001.ps1

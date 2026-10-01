@@ -3,8 +3,8 @@
 const assert = require("assert");
 
 const MIN_LEAD = 900;
-const MIN_GAP = 600;
-const MAX_GAP = 1800;
+const MIN_GAP = 300;
+const MAX_GAP = 900;
 
 function generateUnixSlots(count, rng) {
   const slots = [];
@@ -46,3 +46,4 @@ const backUnix = Math.floor(local.getTime() / 1000);
 assert.ok(Math.abs(backUnix - slots[0]) <= 1, "unix timestamp must match local PC time");
 
 console.log("OK: tiktok_schedule_regressions.js");
+
