@@ -33,6 +33,8 @@ namespace VideoBatch {
 
         public static void CheckFiles() {
             string sigV4 = Path.Combine(DolphinRunner.Root, "tiktok-aws-sigv4.js");
+            if(!File.Exists(Path.Combine(DolphinRunner.Root,"tiktok-sign","webmssdk.js")))
+                throw new Exception("HTTP beta недоступен: отсутствует локальный webmssdk.js. Используйте «Запланировать через Studio». Не копируйте cookies или SDK из чужой сессии.");
             if (!File.Exists(DolphinRunner.Node) || !File.Exists(Worker) || !File.Exists(sigV4)
                 || !Directory.Exists(Path.Combine(DolphinRunner.Root, "node_modules", "playwright-core")))
                 throw new Exception("Архив распакован не полностью: не найден модуль HTTP-загрузки TikTok (worker-tiktok-http.js, tiktok-aws-sigv4.js).");
@@ -124,3 +126,4 @@ namespace VideoBatch {
         }
     }
 }
+

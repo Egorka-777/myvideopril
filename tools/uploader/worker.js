@@ -3749,6 +3749,19 @@ async function main() {
     if (ip) send("ip", `IP профиля: ${ip}`, { ip, percent: 20 });
   } catch (_) {}
 
+  if (job.openTodayOnly) {
+    const { openToday } = require("./youtube-open-today.js");
+    send("start", "YouTube navigation 2026-10-01");
+    const url = await openToday(page, job, (stage, text) => send(stage, text));
+    await page.close();
+    await browser.close();
+    browser = null;
+    finished = true;
+    // C# owns profile shutdown and will not advance batches without an acknowledgement.
+    send("done", "Сегодняшнее видео открыто · пауза.", { success: true, url, percent: 100 });
+    return;
+  }
+
   if (job.checkOnly) {
     await page.close().catch(() => {});
     await browser.close().catch(() => {});
@@ -4011,6 +4024,11 @@ if (require.main === module) {
   process.on("SIGINT", async () => { await stopProfile(); process.exit(130); });
   process.on("SIGTERM", async () => { await stopProfile(); process.exit(143); });
   main().catch(async e => {
+    if (job && job.openTodayOnly) {
+      if (browser) await browser.close().catch(() => {});
+      fail(e, { keptOpen: profileStarted });
+      return; // C# is responsible for required stop, including cancellation.
+    }
     // При ошибке после открытия YouTube профиль оставляем открытым: пользователь
     // видит точное место сбоя и может проверить результат без повторной публикации.
     if (!youtubeOpened && browser) await browser.close().catch(() => {});
@@ -4024,3 +4042,4 @@ module.exports = {
   setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan,
   buildMeshCatalogPlan, findWatchLinkOnVideosTab, openMeshLongFromVideosTab, MESH_MIN_LONG_SECONDS
 };
+

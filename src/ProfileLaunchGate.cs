@@ -35,8 +35,9 @@ namespace VideoBatch {
                 var startAt = waitMs > 0 ? now.AddMilliseconds(waitMs) : now;
                 _nextStartUtc = startAt.AddMilliseconds(gap);
             }
-            if (waitMs > 0)
-                await Task.Delay(waitMs, ct).ConfigureAwait(false);
+            try {
+                if (waitMs > 0) await Task.Delay(waitMs, ct).ConfigureAwait(false);
+            } catch { _running.Release(); throw; }
         }
 
         /// <summary>Staggered gap between profile starts, then releases the slot (for long parallel jobs like mesh watch).</summary>
@@ -50,3 +51,4 @@ namespace VideoBatch {
         }
     }
 }
+

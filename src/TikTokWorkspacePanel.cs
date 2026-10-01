@@ -98,6 +98,10 @@ namespace VideoBatch {
 
                 ("Проверить IP", () => { _ = RunCheck(); }),
 
+                ("Сверить загрузку", () => {
+                    try { SyncWorkspaceToBackend(); backend.ReconcileUploads(GetCheckedAccounts()); RefreshGrid(skipSync:true); }
+                    catch(Exception ex) { AppendLog("ОШИБКА: "+ex.Message); }
+                }),
                 ("Открыть лог", OpenLog)));
 
             headerBar.Controls.Add(marketHint, 0, 0);
@@ -216,13 +220,13 @@ namespace VideoBatch {
 
             stopBtn.ForeColor = Theme.Warning;
 
-            modeHint = new Label { AutoSize = true, ForeColor = Theme.TextMuted, Text = "Режим: HTTP (beta) · Studio резерв", Margin = new Padding(8, 10, 8, 0) };
+            modeHint = new Label { AutoSize = true, ForeColor = Theme.TextMuted, Text = "Режим: Studio · HTTP экспериментальный", Margin = new Padding(8, 10, 8, 0) };
 
             var bottom = Theme.MakeBottomBar(
 
-                (Theme.MakeButton("Быстрая загрузка (HTTP beta)", accent: true, action: async () => await RunUpload("http")), true),
+                (Theme.MakeButton("Запланировать через Studio", accent: true, action: async () => await RunUpload("studio")), true),
 
-                (Theme.MakeButton("Через Studio", accent: false, action: async () => await RunUpload("studio")), false),
+                (Theme.MakeButton("Быстрая загрузка (HTTP beta)", accent: false, action: async () => await RunUpload("http")), false),
 
                 (stopBtn, false));
 
@@ -665,5 +669,6 @@ namespace VideoBatch {
     }
 
 }
+
 
 

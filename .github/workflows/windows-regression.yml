@@ -7,6 +7,8 @@ on:
       - 'src/**'
       - 'tools/uploader/**'
       - 'tests/**'
+      - 'scripts/Build-Desktop-20261001.ps1'
+      - 'docs/ROLLOUT_20261001_RU.md'
       - 'VideoBatch.csproj'
       - '.github/workflows/windows-regression.yml'
 jobs:
@@ -29,5 +31,49 @@ jobs:
             node $_.FullName
             if ($LASTEXITCODE -ne 0) { throw "Failed: $($_.Name)" }
           }
+      - name: Native calendar browser regression
+        shell: pwsh
+        run: |
+          npx --prefix tools/uploader playwright-core install chromium
+          if ($LASTEXITCODE -ne 0) { throw "Browser installation failed" }
+          node tests/browser/native_calendar.js
+          if ($LASTEXITCODE -ne 0) { throw "Native calendar test failed" }
+          node tests/browser/youtube_navigation.js
+          if ($LASTEXITCODE -ne 0) { throw "YouTube navigation browser test failed" }
       - name: Compile desktop application
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: C# self tests
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path ./bin/Release/net48/VideoBatch.exe).Path)
+          $cases = @(
+            @{Type='HttpUploadRunner';Method='RunParallelSerializationSelfTest';Args=@(10)},
+            @{Type='ScheduleGenerator';Method='RunSelfTests';Args=@()},
+            @{Type='TikTokScheduleGenerator';Method='RunSelfTests';Args=@()},
+            @{Type='TikTokCaptionTemplates';Method='RunSelfTests';Args=@()},
+            @{Type='UploadStaging';Method='RunSelfTests';Args=@()},
+            @{Type='HttpRegressionSelfTests';Method='RunLog160617Scenario';Args=@()},
+            @{Type='TaskQueueWriter';Method='RunConcurrentWriteSelfTest';Args=@(40,25)},
+            @{Type='HttpRegressionSelfTests';Method='RunWorkerPoolScenario';Args=@()}
+          )
+          $failed=@()
+          foreach($case in $cases) {
+            try {
+              $ok=$asm.GetType('VideoBatch.'+$case.Type).GetMethod($case.Method).Invoke($null,[object[]]$case.Args)
+              Write-Host "$($case.Type).$($case.Method): $ok"
+              if(!$ok){$failed+=($case.Type+'.'+$case.Method)}
+            } catch { Write-Host $_; $failed+=($case.Type+'.'+$case.Method) }
+          }
+          if($failed.Count){throw ('C# self tests failed: '+($failed -join ', '))}
+      - name: Upload compiled desktop and source workers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-20261001-with-workers
+          path: |
+            bin/Release/net48/VideoBatch.exe
+            bin/Release/net48/VideoBatch.exe.config
+            tools/uploader/*.js
+            tools/uploader/package*.json
+            tools/uploader/tiktok-sign/*.js
+            docs/ROLLOUT_20261001_RU.md
+            scripts/Build-Desktop-20261001.ps1

@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { chromium } = require("playwright-core");
-const WORKER_BUILD = "2026-09-24-studio-modal-v1";
+const WORKER_BUILD = "2026-10-01-studio-schedule-evidence-v2";
 const TRANSPORT = "studio";
 
 const jobPath = process.argv[2];
@@ -599,6 +599,8 @@ async function fillCaption(page, caption) {
     'div[role="textbox"]'
   ];
   let found = false;
+  const deadline = Date.now()+60000;
+  while(Date.now()<deadline){
   for (const selector of selectors) {
     const boxes = page.locator(selector);
     const n = Math.min(3, await boxes.count().catch(() => 0));
@@ -619,6 +621,9 @@ async function fillCaption(page, caption) {
       const actual = await box.evaluate(el => el.value != null ? el.value : (el.innerText || el.textContent || "")).catch(() => "");
       if (normalizeCaption(actual) === captionText) return;
     }
+  }
+  await page.waitForTimeout(500);
+  await dismissTikTokBlockingDialogs(page);
   }
   const dialogs = await collectVisibleDialogTexts(page);
   const pageUrl = page.url().split("?")[0];
@@ -645,7 +650,7 @@ async function clickPublishConfirmation(page) {
   await dismissTikTokBlockingDialogs(page);
   const dialog = page.locator('[role="dialog"]');
   if (!(await visible(dialog, 1500))) return false;
-  const names = [/^Confirm$/i, /^Post now$/i, /^Publish now$/i, /^Подтвердить$/i, /^Опубликовать сейчас$/i];
+  const names = [/^Confirm$/i, /^Post now$/i, /^Publish now$/i, /^Подтвердить$/i, /^Опубликовать сейчас$/i, /^Schedule$/i, /^Запланировать$/i];
   for (const name of names) {
     const btn = dialog.getByRole("button", { name });
     if (await visible(btn, 600)) {
@@ -658,48 +663,74 @@ async function clickPublishConfirmation(page) {
   return false;
 }
 
-async function publishAndConfirm(page) {
+async function waitPersistenceAck(localJobId) {
+  if (!localJobId) throw new Error("Нет localJobId; post не отправлялся.");
+  const readline = require("readline");
+  const reader = readline.createInterface({input:process.stdin});
+  try {
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("EXE не подтвердил сохранение состояния. Post не отправлялся.")),15000);
+      reader.once("line",line=>{clearTimeout(timer);line==="ack:"+localJobId?resolve():reject(new Error("Неверное подтверждение задания."));});
+      reader.once("close",()=>{clearTimeout(timer);reject(new Error("EXE закрыл канал подтверждения. Post не отправлялся."));});
+    });
+  }finally{reader.close();}
+}
+
+async function publishAndConfirm(page, item, index, total) {
+  const { postEvidence, confirmStudioRow, jsonShape } = require("./tiktok-studio-evidence.js");
   await dismissTikTokBlockingDialogs(page);
-  let networkEvidence = "";
-  const onResponse = async response => {
-    try {
-      const req = response.request();
-      const url = response.url();
-      if (req.method() !== "POST" || !/(publish|post|commit|create)/i.test(url) || /upload/i.test(url)) return;
-      if (response.status() < 200 || response.status() >= 300) return;
-      const body = (await response.text().catch(() => "")).slice(0, 12000);
-      if (/(item_id|video_id|post_id|aweme_id)/i.test(body)) {
-        networkEvidence = `HTTP ${response.status()} ${new URL(url).pathname}`;
-      }
-    } catch (_) {}
+  let nativeResult = null, nativeError = null;
+  const pending = new Set();
+  const onResponse = response => {
+    const req = response.request();
+    const u = new URL(response.url());
+    if (!/(^|\.)tiktok\.com$/.test(u.hostname) || req.method() !== "POST" || !/\/(post|publish)(\/|$)/.test(u.pathname)) return;
+    const task = (async () => {
+      try {
+        const body = await response.json();
+        const requestBody = req.postDataJSON();
+        record("native_post", "Ответ native Studio", { httpStatus:response.status(), statusCode:body.status_code,
+          endpoint:u.pathname, responseShape:jsonShape(body), requestShape:jsonShape(requestBody) });
+        if(!/\/project\/post\/v1\/?$/.test(u.pathname)) {
+          nativeError=new Error("Структура нового native post сохранена в диагностике. Проверьте запись Studio перед повтором.");return;
+        }
+        nativeResult = postEvidence(response.status(), body, requestBody, item);
+      }catch(e){nativeError=e;}
+    })();
+    pending.add(task);task.finally(()=>pending.delete(task));
   };
   page.on("response", onResponse);
   try {
+    // Persist uncertain state BEFORE a click that may create an external post.
+    send("item_submitting", "Отправляю native post; повтор до сверки заблокирован.",
+      { packIndex:index, packTotal:total, localJobId:item.localJobId });
+    await waitPersistenceAck(item.localJobId);
     const posted = await clickPost(page);
     if (!posted) throw new Error("Не нажалась кнопка публикации. Профиль оставлен открытым.");
-    await page.waitForTimeout(900);
-    await clickPublishConfirmation(page).catch(() => false);
     const deadline = Date.now() + 120000;
+    let confirmationClicked = false;
     while (Date.now() < deadline) {
-      if (networkEvidence) return networkEvidence;
-      const state = await page.evaluate(() => ({
-        url: location.href,
-        text: (document.body && document.body.innerText || "").slice(0, 30000)
-      })).catch(() => ({ url: "", text: "" }));
-      if (/\/(content|posts?|manage)(\/|\?|$)/i.test(state.url) && !/\/upload/i.test(state.url)) return "страница публикаций";
-      if (/(successfully posted|post published|успешно опубликован|видео опубликовано)/i.test(state.text)) return "подтверждение TikTok Studio";
-      await page.waitForTimeout(1500);
+      if(nativeError)throw nativeError;
+      if(nativeResult){
+        send("item_accepted", "Native post принят; проверяю точную запись в Studio.",
+          {packIndex:index,packTotal:total,localJobId:item.localJobId,videoId:nativeResult.id});
+        await confirmStudioRow(page,nativeResult,item);
+        return nativeResult;
+      }
+      if(!confirmationClicked)confirmationClicked=await clickPublishConfirmation(page);
+      await page.waitForTimeout(500);
     }
-    throw new Error("Кнопка публикации нажата, но TikTok не подтвердил результат за 2 минуты. Автоповтор запрещён, чтобы не создать дубль; проверьте открытый профиль.");
-  } finally {
-    page.off("response", onResponse);
+    throw new Error("Нет подтверждения native post за 2 минуты. Автоповтор запрещён; проверьте Studio.");
+  }finally{
+    page.off("response",onResponse);
+    await Promise.allSettled([...pending]);
   }
 }
 
 async function clickPost(page) {
   await dismissTikTokBlockingDialogs(page);
   const names = [
-    /^Post$/i, /^Publish$/i, /^Post now$/i,
+    /^Post$/i, /^Publish$/i, /^Post now$/i, /^Schedule$/i, /^Запланировать$/i,
     /^Опубликовать$/i, /^Публикация$/i, /^Разместить$/i
   ];
   for (const re of names) {
@@ -718,7 +749,7 @@ async function clickPost(page) {
     const buttons = Array.from(document.querySelectorAll("button"));
     const hit = buttons.find(b => {
       const t = (b.innerText || b.textContent || "").trim();
-      return /^(Post|Publish|Post now|Опубликовать|Публикация|Разместить)$/i.test(t)
+      return /^(Post|Publish|Post now|Schedule|Запланировать|Опубликовать|Публикация|Разместить)$/i.test(t)
         && !b.disabled
         && b.getAttribute("aria-disabled") !== "true";
     });
@@ -740,11 +771,12 @@ async function waitUploadReady(page) {
       const buttons = Array.from(document.querySelectorAll("button"));
       return buttons.some(b => {
         const t = (b.innerText || b.textContent || "").trim();
-        if (!/^(Post|Publish|Post now|Опубликовать|Публикация|Разместить)$/i.test(t)) return false;
+        if (!/^(Post|Publish|Post now|Schedule|Запланировать|Опубликовать|Публикация|Разместить)$/i.test(t)) return false;
         return !b.disabled && b.getAttribute("aria-disabled") !== "true";
       });
     }).catch(() => false);
-    if (canPost) return;
+    const editor = page.locator('[contenteditable="true"], textarea[placeholder*="caption" i], textarea[placeholder*="Describe" i]').first();
+    if (canPost && await editor.isVisible().catch(()=>false)) return;
 
     const progress = await page.evaluate(() => {
       const body = document.body ? document.body.innerText : "";
@@ -785,8 +817,6 @@ async function uploadOne(page, item, index, total) {
       const input = await pickFileInput(page);
       if (input) {
         opened = true;
-        await setInputFilesRobust(page, input, video);
-        await dismissTikTokBlockingDialogs(page);
         break;
       }
     } catch (_) {}
@@ -798,20 +828,27 @@ async function uploadOne(page, item, index, total) {
     throw new Error("Не найдена страница загрузки TikTok Studio. Войдите в аккаунт в этом профиле Dolphin и повторите.");
   }
 
+  const input = await pickFileInput(page);
+  if (!input) throw new Error("Input файла исчез до передачи.");
+  await setInputFilesRobust(page, input, video);
   send("tiktok", `Пачка ${index}/${total}: файл передан, заполняю подпись…`, {
     percent: Math.min(92, 30 + Math.round(index / Math.max(1, total) * 55))
   });
-  await page.waitForTimeout(2000);
-  await dismissTikTokBlockingDialogs(page);
-  await dismissOverlays(page);
-  await fillCaption(page, caption);
   await waitUploadReady(page);
+  await fillCaption(page, caption);
+  const {setNativeSchedule} = require("./tiktok-studio-evidence.js");
+  const schedule = await setNativeSchedule(page,item);
+  if(schedule)record("native_schedule","Дата/время прочитаны обратно из полей",schedule);
+  // A stale first slot is moved together with the remaining batch by C# before startup.
+  // If it expires during this upload, stop instead of silently changing the slot.
+  await fillCaption(page, caption);
 
   send("tiktok", `Пачка ${index}/${total}: публикую…`, { percent: Math.min(95, 50 + Math.round(index / Math.max(1, total) * 45)) });
   await dismissTikTokBlockingDialogs(page);
-  const evidence = await publishAndConfirm(page);
-  send("item_done", `TikTok подтвердил публикацию ${index}/${total}: ${evidence}.`, { packIndex: index, packTotal: total });
-  send("tiktok", `Готово ${index}/${total}: ${evidence}.`, { percent: Math.min(98, 60 + Math.round(index / Math.max(1, total) * 38)) });
+  const evidence = await publishAndConfirm(page,item,index,total);
+  send("item_done", `Studio: запись ${index}/${total} подтверждена (${evidence.id}).`,
+    { packIndex: index, packTotal: total, localJobId:item.localJobId, videoId:evidence.id });
+  send("tiktok", `Готово ${index}/${total}: запись Studio подтверждена.`, { percent: Math.min(98, 60 + Math.round(index / Math.max(1, total) * 38)) });
   return page.url();
 }
 
@@ -880,7 +917,13 @@ if (require.main === module) {
     if (activePage && !activePage.isClosed() && diagnosticFile) {
       const imagePath = diagnosticFile.replace(/\.jsonl$/i, "-error.png");
       await activePage.screenshot({ path: imagePath, fullPage: false }).catch(() => {});
-      record("screenshot", "Снимок окна при ошибке", { imagePath, pageUrl: activePage.url().split("?")[0] });
+      const controls=await activePage.locator("input, button, [role=radio], [role=switch], [role=checkbox]").evaluateAll(els=>els.map(el=>({
+        tag:el.tagName,type:el.getAttribute("type"),role:el.getAttribute("role"),
+        label:el.getAttribute("aria-label"),placeholder:el.getAttribute("placeholder"),
+        text:el.tagName==="BUTTON"?(el.innerText||"").slice(0,100):"",readOnly:!!el.readOnly,
+        disabled:!!el.disabled
+      }))).catch(()=>[]);
+      record("screenshot", "Снимок окна при ошибке", { imagePath, pageUrl: activePage.url().split("?")[0],controls });
       send("tiktok", "Снимок окна при ошибке: " + imagePath, { diagnosticFile });
     }
     if (!tiktokOpened && browser) await browser.close().catch(() => {});
@@ -899,3 +942,4 @@ module.exports = {
   TIP_DIALOG_PATTERNS,
   TRANSPORT
 };
+
