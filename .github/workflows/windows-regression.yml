@@ -35,9 +35,25 @@ jobs:
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path ./bin/Release/net48/VideoBatch.exe).Path)
-          $tests = $asm.GetType('VideoBatch.HttpRegressionSelfTests')
-          $ok = $tests.GetMethod('RunAll').Invoke($null, $null)
-          if (!$ok) { throw 'C# self tests returned false' }
+          $cases = @(
+            @{Type='HttpUploadRunner';Method='RunParallelSerializationSelfTest';Args=@(10)},
+            @{Type='ScheduleGenerator';Method='RunSelfTests';Args=@()},
+            @{Type='TikTokScheduleGenerator';Method='RunSelfTests';Args=@()},
+            @{Type='TikTokCaptionTemplates';Method='RunSelfTests';Args=@()},
+            @{Type='UploadStaging';Method='RunSelfTests';Args=@()},
+            @{Type='HttpRegressionSelfTests';Method='RunLog160617Scenario';Args=@()},
+            @{Type='TaskQueueWriter';Method='RunConcurrentWriteSelfTest';Args=@(40,25)},
+            @{Type='HttpRegressionSelfTests';Method='RunWorkerPoolScenario';Args=@()}
+          )
+          $failed=@()
+          foreach($case in $cases) {
+            try {
+              $ok=$asm.GetType('VideoBatch.'+$case.Type).GetMethod($case.Method).Invoke($null,[object[]]$case.Args)
+              Write-Host "$($case.Type).$($case.Method): $ok"
+              if(!$ok){$failed+=($case.Type+'.'+$case.Method)}
+            } catch { Write-Host $_; $failed+=($case.Type+'.'+$case.Method) }
+          }
+          if($failed.Count){throw ('C# self tests failed: '+($failed -join ', '))}
       - name: Upload compiled desktop and source workers
         uses: actions/upload-artifact@v4
         with:
