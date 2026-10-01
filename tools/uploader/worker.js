@@ -3752,13 +3752,16 @@ async function main() {
   if (job.openTodayOnly) {
     const { openToday } = require("./youtube-open-today.js");
     send("start", "YouTube navigation 2026-10-01");
-    const url = await openToday(page, job, (stage, text) => send(stage, text));
-    await page.close();
-    await browser.close();
+    youtubeOpened = true;
+    const url = await openToday(page, Object.assign({}, job, { pauseAfterOpen: false }), (stage, text) => send(stage, text));
+    send("youtube", "Видео открыто. Смотрю (лайк в конце окна)…", { percent: 82 });
+    await waitForVideoEnd(page);
+    await page.close().catch(() => {});
+    await browser.close().catch(() => {});
     browser = null;
     finished = true;
     // C# owns profile shutdown and will not advance batches without an acknowledgement.
-    send("done", "Сегодняшнее видео открыто · пауза.", { success: true, url, percent: 100 });
+    send("done", "Видео досмотрено, лайк поставлен.", { success: true, url, percent: 100 });
     return;
   }
 

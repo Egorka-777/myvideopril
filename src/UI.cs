@@ -35,7 +35,7 @@ namespace VideoBatch {
         public List<string> Paths;public double VolumeDb;public string Market="RU";
         NumericUpDown volume;ListBox list;Button ru,en;Label hint;bool background;
         List<string> pathsRu,pathsEn;
-        public MusicDialog(List<string> ruPaths,List<string> enPaths,string market,bool background=false,double db=-7.5):base(background?"Фоновая музыка":"Музыка",560){
+        public MusicDialog(List<string> ruPaths,List<string> enPaths,string market,bool background=false,double db=-12.5):base(background?"Фоновая музыка":"Музыка",560){
             this.background=background;VolumeDb=db;Market=(market??"RU").ToUpperInvariant()=="EN"?"EN":"RU";
             pathsRu=new List<string>(ruPaths??new List<string>());pathsEn=new List<string>(enPaths??new List<string>());
             ClientSize=new Size(610,560);

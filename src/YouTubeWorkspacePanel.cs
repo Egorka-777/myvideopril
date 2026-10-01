@@ -175,6 +175,7 @@ namespace VideoBatch {
                 (Theme.MakeButton("Быстрая загрузка", accent: true, action: async () => await RunUpload(true)), true),
                 (Theme.MakeButton("Через Studio", ghost: true, action: async () => await RunUpload(false)), false),
                 (Theme.MakeButton("Смотреть ссылки", ghost: true, action: async () => await RunLinkWatch()), false),
+                (Theme.MakeButton("Смотреть RU", ghost: true, action: async () => await RunRuLinkWatch()), false),
                 (stopBtn, false));
             root.Controls.Add(bottom, 0, 3);
 
@@ -200,6 +201,7 @@ namespace VideoBatch {
             menu.Items.Add("Предпросмотр расписания", null, (s, e) => PreviewSchedule());
             menu.Items.Add("Проверить IP (выделенный канал)", null, (s, e) => { _ = RunCheck(); });
             menu.Items.Add("Смотреть ссылки (отмеченные ✓)", null, async (s, e) => await RunLinkWatch());
+            menu.Items.Add("Смотреть RU (отмеченные ✓)", null, async (s, e) => await RunRuLinkWatch());
             menu.Items.Add("Открыть лог", null, (s, e) => OpenLog());
             menu.Items.Add("Удалить видео с канала", null, (s, e) => RemoveSelectedVideos());
             var b = Theme.MakeButton("Ещё", ghost: true);
@@ -508,7 +510,7 @@ namespace VideoBatch {
         static void SyncChannelUrlFromName(YouTubeChannel ch) {
             if (ch == null) return;
             var m = System.Text.RegularExpressions.Regex.Match(ch.Name ?? "", @"@([A-Za-z0-9._-]+)");
-            if (m.Success && string.IsNullOrWhiteSpace(ch.ChannelUrl)) ch.ChannelUrl = "https://www.youtube.com/@" + m.Groups[1].Value;
+            if (m.Success && string.IsNullOrWhiteSpace(ch.ChannelUrl)) ch.ChannelUrl = "https://www.youtube.com/@" + m.Groups[1].Value + "/videos";
         }
 
         void RenameChannel(YouTubeChannel ch, int rowIndex) {
@@ -737,16 +739,84 @@ namespace VideoBatch {
             else settings.LastSelectedYouTubeChannelIdRu = ch.ChannelId.Trim();
         }
 
+        void SyncChannelLinksFromGrid() {
+            foreach (DataGridViewRow row in grid.Rows) {
+                if (!(row.Tag is YouTubeChannel ch)) continue;
+                string value = Convert.ToString(row.Cells["url"].Value ?? "").Trim();
+                if (value.Length > 0) ch.ChannelUrl = Store.NormalizeChannelVideosUrl(value);
+                else SyncChannelUrlFromName(ch);
+            }
+            try { Store.Save(settings); } catch { }
+        }
+
+        Dictionary<string, string> CollectChannelUrlHints() {
+            var hints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (DataGridViewRow row in grid.Rows) {
+                if (!(row.Tag is YouTubeChannel ch)) continue;
+                string pid = (ch.ProfileId ?? "").Trim();
+                if (pid.Length == 0) continue;
+                string value = Convert.ToString(row.Cells["url"].Value ?? "").Trim();
+                if (value.Length > 0) hints[pid] = Store.NormalizeChannelVideosUrl(value);
+            }
+            return hints;
+        }
+
+        List<YouTubeChannel> GetCheckedChannelsForMarket(string market) {
+            market = NormMarket(market);
+            if (NormMarket(marketView) == market) return GetCheckedChannels();
+            return (settings.YouTubeChannels ?? new List<YouTubeChannel>())
+                .Where(ch => ch != null && ch.Enabled && NormMarket(ch.Market) == market && !string.IsNullOrWhiteSpace(ch.ProfileId))
+                .ToList();
+        }
+
+        Dictionary<string, string> CollectChannelUrlHintsForMarket(string market) {
+            market = NormMarket(market);
+            if (NormMarket(marketView) == market) return CollectChannelUrlHints();
+            var hints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var ch in settings.YouTubeChannels ?? new List<YouTubeChannel>()) {
+                if (ch == null || NormMarket(ch.Market) != market) continue;
+                string pid = (ch.ProfileId ?? "").Trim();
+                if (pid.Length == 0) continue;
+                string url = (ch.ChannelUrl ?? "").Trim();
+                if (url.Length == 0) url = Store.NormalizeChannelVideosUrl(Store.ResolveYouTubeChannelUrl("", ch.Name, null));
+                if (url.Length > 0) hints[pid] = Store.NormalizeChannelVideosUrl(url);
+            }
+            return hints;
+        }
+
         async Task RunLinkWatch() {
             grid.EndEdit();
-            var channels=GetCheckedChannels();
-            if(channels.Count==0){MessageBox.Show(this,"Отметьте галочкой ✓ нужные профили.","YouTube");return;}
-            try{
+            SyncChannelLinksFromGrid();
+            var channels = GetCheckedChannels();
+            if (channels.Count == 0) { MessageBox.Show(this, "Отметьте галочкой ✓ нужные профили.", "YouTube"); return; }
+            var urlHints = CollectChannelUrlHints();
+            try {
                 SyncWorkspaceToBackend();
-                AppendLog("Открываю ссылки: "+channels.Count+" профилей · пачки по 5.");
-                await backend.RunMeshWatchAsync(channels);
+                AppendLog("[" + marketView + "] сетка: " + channels.Count + " аккаунт(ов) · чужие каналы через вкладку «Видео».");
+                await backend.RunMeshWatchAsync(channels, urlHints, marketView);
                 RefreshGrid();
-            }catch(Exception ex){AppendLog("ОШИБКА: "+ex.Message);}
+            } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
+        }
+
+        async Task RunRuLinkWatch() {
+            grid.EndEdit();
+            SyncChannelLinksFromGrid();
+            try { Store.Save(settings); } catch { }
+            var channels = GetCheckedChannelsForMarket("RU");
+            if (channels.Count == 0) {
+                MessageBox.Show(this,
+                    "Отметьте галочкой ✓ RU-аккаунты на вкладке RU.\n\n" +
+                    "Кнопка «Смотреть RU» запускает просмотр с RU-вкладки даже если сейчас открыт EN.",
+                    "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var urlHints = CollectChannelUrlHintsForMarket("RU");
+            try {
+                SyncWorkspaceToBackend();
+                AppendLog("[RU] сетка: " + channels.Count + " аккаунт(ов) · чужие RU-каналы через вкладку «Видео».");
+                await backend.RunRuMeshWatchAsync(channels, urlHints);
+                RefreshGrid();
+            } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
         }
 
         void SaveChannelLink(object sender, DataGridViewCellEventArgs e) {
@@ -756,12 +826,10 @@ namespace VideoBatch {
             string previous=ch.ChannelUrl;
             string value=Convert.ToString(row.Cells["url"].Value??"").Trim();
             try{
-                Uri u;
-                if(value.Length>0&&(!Uri.TryCreate(value,UriKind.Absolute,out u)||u.Scheme!="https"||
-                    !(u.Host=="youtube.com"||u.Host=="www.youtube.com")||
-                    !System.Text.RegularExpressions.Regex.IsMatch(u.AbsolutePath,@"^/(@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)(/videos)?/?$")))
+                if(value.Length>0&&!Store.IsValidYouTubeChannelUrl(value))
                     throw new Exception("Вставьте ссылку канала, например https://www.youtube.com/@traderprdp/videos.");
-                ch.ChannelUrl=value;row.Cells["url"].ToolTipText=value;
+                value=Store.NormalizeChannelVideosUrl(value);
+                ch.ChannelUrl=value;row.Cells["url"].Value=value;row.Cells["url"].ToolTipText=value;
                 Store.Save(settings);
             }catch(Exception ex){ch.ChannelUrl=previous;row.Cells["url"].Value=previous;AppendLog("ОШИБКА: "+ex.Message);}
         }

@@ -14,8 +14,20 @@ namespace VideoBatch {
             if (!TikTokCaptionTemplates.RunSelfTests()) return false;
             if (!UploadStaging.RunSelfTests()) return false;
             if (!RunLog160617Scenario()) return false;
+            if (!RunYouTubeChannelUrlSelfTest()) return false;
             if (!TaskQueueWriter.RunConcurrentWriteSelfTest(40, 25)) return false;
             return RunWorkerPoolScenario();
+        }
+
+        public static bool RunYouTubeChannelUrlSelfTest() {
+            const string good = "https://www.youtube.com/@OMONXONFAN55/videos";
+            const string broken = "https://www.youtube.com@OMONXONFAN55/videos";
+            if (!Store.IsValidYouTubeChannelUrl(good)) return false;
+            if (!Store.IsValidYouTubeChannelUrl(broken)) return false;
+            if (Store.ResolveYouTubeChannelUrl(broken, "OMONXONFAN @OMONXONFAN55", good) != good) return false;
+            if (Store.ResolveYouTubeChannelUrl("", "OMONXONFAN @OMONXONFAN55", null) != good) return false;
+            if (Store.ResolveYouTubeChannelUrl(broken, "OMONXONFAN @OMONXONFAN55", null) != good) return false;
+            return true;
         }
 
         public static bool RunLog160617Scenario() {

@@ -554,7 +554,7 @@ namespace VideoBatch {
             var bottom=Ui.Flow();
             uploadHttp=Ui.Button("Быстрая загрузка",null,true);uploadHttp.MinimumSize=new Size(180,42);uploadHttp.BackColor=Theme.Accent;uploadHttp.ForeColor=Color.White;uploadHttp.FlatAppearance.BorderSize=0;uploadHttp.Click+=async(s,e)=>await UploadAllHttp();
             upload=Ui.Button("Через Studio",null);upload.MinimumSize=new Size(150,42);upload.Click+=async(s,e)=>await UploadAll();
-            meshWatch=Ui.Button("Смотреть ссылки",null);meshWatch.Visible=false;meshWatch.Click+=async(s,e)=>await CrossWatchMesh(null);
+            meshWatch=Ui.Button("Смотреть ссылки",null);meshWatch.Visible=false;meshWatch.Click+=async(s,e)=>await CrossWatchMesh(null,null,null);
             applyThumb=Ui.Button("Превью шортс",null);applyThumb.Visible=false;applyThumb.Click+=async(s,e)=>await ApplyShortsThumbFrames();
             stop=Ui.Button("Стоп",()=>{stop.Enabled=false;httpUploadPool?.Stop();if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");});stop.Visible=false;
             removeQueue=Ui.Button("Удалить из очереди",()=>RemoveSelectedFromQueue());
@@ -810,13 +810,19 @@ namespace VideoBatch {
         }
         static string ChannelUrlFromHandle(string handle){
             handle=(handle??"").Trim().TrimStart('@');
-            return string.IsNullOrWhiteSpace(handle)?"":"https://www.youtube.com/@"+handle;
+            return string.IsNullOrWhiteSpace(handle)?"":"https://www.youtube.com/@"+handle+"/videos";
         }
-        static string ResolveChannelUrlFromGrid(YouTubeChannel ch){
+        static string ResolveChannelUrlFromGrid(YouTubeChannel ch,string gridUrlHint=null){
             if(ch==null)return "";
-            if(!string.IsNullOrWhiteSpace(ch.ChannelUrl))return ch.ChannelUrl.Trim();
-            return ChannelUrlFromHandle(ExtractChannelHandle(ch.Name));
+            return Store.ResolveYouTubeChannelUrl(ch.ChannelUrl,ch.Name,gridUrlHint);
         }
+        string GridUrlHint(YouTubeChannel ch){
+            if(ch==null||string.IsNullOrWhiteSpace(ch.ProfileId))return null;
+            string pid=ch.ProfileId.Trim();
+            if(channelUrlHints!=null&&channelUrlHints.TryGetValue(pid,out var hint)&&!string.IsNullOrWhiteSpace(hint))return hint;
+            return null;
+        }
+        Dictionary<string,string> channelUrlHints;
         static void SyncChannelUrlFromName(YouTubeChannel c){
             if(c==null)return;
             string fromName=ChannelUrlFromHandle(ExtractChannelHandle(c.Name));
@@ -1090,7 +1096,7 @@ namespace VideoBatch {
             checkItem.Click+=async(s,e)=>{await CheckProfiles();};
             menu.Items.Add(checkItem);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Смотреть ссылки",null,async(s,e)=>await CrossWatchMesh(null));
+            menu.Items.Add("Смотреть ссылки",null,async(s,e)=>await CrossWatchMesh(null,null,null));
             menu.Items.Add("Превью Shorts",null,async(s,e)=>await ApplyShortsThumbFrames());
             menu.Show(moreBtn,new Point(0,moreBtn.Height));
         }
@@ -1162,8 +1168,10 @@ namespace VideoBatch {
         public Task RunStudioUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>UploadAll(channels);
         public Task RunCheckProfilesAsync()=>CheckProfiles(null);
         public Task RunCheckProfilesAsync(IReadOnlyList<YouTubeChannel> channels)=>CheckProfiles(channels);
-        public Task RunMeshWatchAsync()=>CrossWatchMesh(null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>CrossWatchMesh(channels);
+        public Task RunMeshWatchAsync()=>CrossWatchMesh(null,null,null);
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>CrossWatchMesh(channels,null,null);
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId)=>CrossWatchMesh(channels,channelUrlsByProfileId,null);
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string market)=>CrossWatchMesh(channels,channelUrlsByProfileId,market);
         public Task RunLinksWatchAsync(string linksText)=>CrossWatchLinks(null,linksText);
         public Task RunLinksWatchAsync(IReadOnlyList<YouTubeChannel> channels,string linksText)=>CrossWatchLinks(channels,linksText);
         public Task RunYouTubeSearchAsync()=>SearchOnYouTube();
@@ -1669,61 +1677,101 @@ namespace VideoBatch {
                 PropagateIp(g.Key,ip);
             }
         }
-        async Task CrossWatchMesh(IReadOnlyList<YouTubeChannel> channelsFilter){
+        async Task CrossWatchMesh(IReadOnlyList<YouTubeChannel> channelsFilter,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string marketOverride){
             if(cancellation!=null)return;
-            if(uploadsInFlight>0){MessageBox.Show(this,"Дождитесь завершения загрузки.","VideoBatch");return;}
+            if(uploadsInFlight>0){MessageBox.Show(this,"Дождитесь завершения загрузки или нажмите Стоп.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
+            string token="";
             try{
-                SaveGrid();SaveSearchFields();ValidateCommon(false,channelsFilter);
-                var source=channelsFilter??Selected().Select(r=>(YouTubeChannel)r.Tag).ToList();
-                var viewers=BuildMeshViewers(source);
+                string market=NormMarket(string.IsNullOrWhiteSpace(marketOverride)?marketView:marketOverride);
+                channelUrlHints=channelUrlsByProfileId==null?null:channelUrlsByProfileId.ToDictionary(kv=>kv.Key,kv=>kv.Value,StringComparer.OrdinalIgnoreCase);
+                if(channelsFilter==null||channelsFilter.Count==0){SaveGrid();SaveSearchFields();}
+                ValidateCommon(false,channelsFilter);
+                List<(YouTubeChannel ch,DataGridViewRow row)> viewers;
+                if(channelsFilter!=null&&channelsFilter.Count>0){
+                    var filtered=channelsFilter.Where(ch=>ch!=null&&NormMarket(ch.Market)==market).ToList();
+                    if(filtered.Count==0)throw new Exception("Отметьте галочкой ✓ аккаунты рынка «"+MarketLabel(market)+"» для просмотра.");
+                    viewers=BuildMeshViewers(filtered);
+                }else{
+                    var rows=Selected();
+                    if(rows.Count==0)throw new Exception("Отметьте аккаунты-зрители (галочка ✓).");
+                    viewers=rows
+                        .Where(r=>{
+                            var ch=(YouTubeChannel)r.Tag;
+                            return ch!=null&&NormMarket(ch.Market)==market&&!string.IsNullOrWhiteSpace(ch.ProfileId);
+                        })
+                        .GroupBy(r=>(((YouTubeChannel)r.Tag).ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase)
+                        .Select(g=>(((YouTubeChannel)g.First().Tag),g.First()))
+                        .ToList();
+                    if(viewers.Count==0)throw new Exception("Отметьте галочкой ✓ каналы для сетки просмотров («"+MarketLabel(market)+"»).");
+                }
                 foreach(var pair in viewers){
-                    Uri u;
-                    if(!Uri.TryCreate(pair.ch.ChannelUrl,UriKind.Absolute,out u)||u.Scheme!="https"||
-                        !(u.Host=="www.youtube.com"||u.Host=="youtube.com"))
-                        throw new Exception(pair.ch.Name+": укажите ссылку своего канала в поле канала YouTube.");
+                    SyncChannelUrlFromName(pair.ch);
+                    string channelUrl=ResolveChannelUrlFromGrid(pair.ch,GridUrlHint(pair.ch));
+                    pair.ch.ChannelUrl=channelUrl;
+                    if(!Store.IsValidYouTubeChannelUrl(channelUrl))
+                        throw new Exception(pair.ch.Name+": укажите ссылку канала в колонке «Ссылка» (https://www.youtube.com/@handle/videos) или добавьте @handle в имя канала.");
                 }
                 cancellation=new CancellationTokenSource();Busy(true);
-                var ct=cancellation.Token;
-                var token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
-                await DolphinRunner.EnsureApiAvailableAsync(token,settings.DolphinPort,ct);
-                const int batchSize=5;
-                int opened=0;
+                token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
+                var viewerChannels=viewers.Select(v=>v.ch).ToList();
+                var meshChannels=CollectMeshLongChannels(viewerChannels);
+                Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
+                if(meshChannels.Count<2)throw new Exception("Нужно минимум 2 отмеченных канала с Published URL (точный videoId 11 символов). Сетка открывает ролик с вкладки «Видео» канала.");
+                int meshSkipped=viewers.Count-meshChannels.Count;
+                if(meshSkipped>0)Write("Пропущено "+meshSkipped+" канал(ов) без Published URL / videoId.");
+                int marked=channelsFilter?.Count??viewers.Count;
+                if(marked>viewers.Count)
+                    Write("Отмечено "+marked+", уникальных профилей "+viewers.Count+" (дубликаты Profile ID исключены).");
+                int meshBatchSize=Math.Max(1,Math.Min(5,settings.WatchMaxParallelProfiles));
+                int meshBatchTotal=(viewers.Count+meshBatchSize-1)/meshBatchSize;
+                int channelsPerViewer=Math.Max(0,meshChannels.Count-1);
+                Write("["+MarketLabel(market)+"] сетка: "+viewers.Count+" зрителей, "+meshChannels.Count+" каналов · каждый смотрит "+channelsPerViewer+" чужих · пачки по "+meshBatchSize+" · старт "+settings.ProfileLaunchStaggerMinMs+"–"+settings.ProfileLaunchStaggerMaxMs+" мс.");
                 var errors=new ConcurrentBag<string>();
-                Write("Открытие ссылок: "+viewers.Count+" профилей · пачки по 5.");
-                for(int start=0;start<viewers.Count;start+=batchSize){
-                    ct.ThrowIfCancellationRequested();
-                    var batch=viewers.Skip(start).Take(batchSize).ToList();
-                    var gate=ProfileLaunchGate.FromSettings(settings,batch.Count);
-                    var closeErrors=new ConcurrentBag<string>();
-                    Write("Пачка "+(start/batchSize+1)+": "+batch.Count+" профилей.");
+                int meshViewersOk=0;
+                bool meshCancelled=false;
+                for(int batchStart=0;batchStart<viewers.Count&&!meshCancelled;batchStart+=meshBatchSize){
+                    var batch=viewers.Skip(batchStart).Take(meshBatchSize).ToList();
+                    int batchNum=batchStart/meshBatchSize+1;
+                    Write("["+MarketLabel(market)+"] пачка "+batchNum+"/"+meshBatchTotal+" — "+string.Join(", ",batch.Select(v=>v.ch.Name??"?"))+".");
+                    var launchGate=ProfileLaunchGate.FromSettings(settings,batch.Count);
                     var tasks=batch.Select(pair=>Task.Run(async()=>{
-                        bool launched=false;
+                        var viewer=pair.ch;
+                        var row=pair.row;
+                        string viewerPid=(viewer.ProfileId??"").Trim();
+                        var watchTargets=meshChannels
+                            .Where(ch=>!string.Equals((ch.ProfileId??"").Trim(),viewerPid,StringComparison.OrdinalIgnoreCase))
+                            .Select(BuildMeshTarget).Where(t=>t!=null).ToArray();
+                        if(watchTargets.Length==0){MeshStatus(viewer,row,"Нечего смотреть");return;}
                         try{
-                            await gate.WaitStaggeredStartAsync(ct).ConfigureAwait(false);
-                            ct.ThrowIfCancellationRequested();
-                            launched=true;
+                            await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
+                            cancellation.Token.ThrowIfCancellationRequested();
+                            MeshStatus(viewer,row,"Сетка: "+watchTargets.Length+" каналов…");
                             await DolphinRunner.Run(new UploadJob{
-                                token=token,localPort=settings.DolphinPort,profileId=pair.ch.ProfileId,
-                                channelUrl=pair.ch.ChannelUrl,todayDate=DateTime.Now.ToString("yyyy-MM-dd"),
-                                openTodayOnly=true,skipQueueDelay=true
-                            },m=>{if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(pair.ch,pair.row,m.text);},ct).ConfigureAwait(false);
-                            Interlocked.Increment(ref opened);
-                            MeshStatus(pair.ch,pair.row,"Сегодняшнее видео открыто · пауза");
+                                token=token,localPort=settings.DolphinPort,profileId=viewer.ProfileId,expectedIp=viewer.ExpectedIp,
+                                searchFilter="none",watchMesh=true,watchTargets=watchTargets,skipQueueDelay=true,checkOnly=false
+                            },m=>{
+                                if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(viewer,row,m.text);
+                                if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl)&&!string.IsNullOrWhiteSpace(m.meshOwner))
+                                    PropagateChannelUrl(m.meshOwner,m.channelUrl.Trim());
+                            },cancellation.Token).ConfigureAwait(false);
+                            MeshStatus(viewer,row,"Сетка ✓ "+watchTargets.Length+" каналов");
+                            Interlocked.Increment(ref meshViewersOk);
+                            SafeSave();
                         }catch(OperationCanceledException){throw;}
-                        catch(Exception e){errors.Add(pair.ch.Name+": "+e.Message);MeshStatus(pair.ch,pair.row,"Ошибка открытия: "+e.Message);}
-                        finally{
-                            if(launched)try{await DolphinRunner.StopProfileRequired(token,settings.DolphinPort,pair.ch.ProfileId).ConfigureAwait(false);}
-                            catch(Exception e){closeErrors.Add(e.Message);Write("ОШИБКА ЗАКРЫТИЯ: "+e.Message);}
-                        }
+                        catch(Exception e){errors.Add(viewer.Name+": "+e.Message);MeshStatus(viewer,row,"Ошибка сетки");}
                     })).ToArray();
-                    await Task.WhenAll(tasks);
-                    if(closeErrors.Count>0)throw new Exception(string.Join(Environment.NewLine,closeErrors));
-                    Write("Пачка завершена; Dolphin подтвердил закрытие профилей.");
+                    try{await Task.WhenAll(tasks).ConfigureAwait(true);}
+                    catch(OperationCanceledException){Write("["+MarketLabel(market)+"] сетка просмотра остановлена.");meshCancelled=true;}
                 }
-                Write("Открыто "+opened+"/"+viewers.Count+" · ошибок "+errors.Count+".");
-                if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Открытие видео",MessageBoxButtons.OK,MessageBoxIcon.Warning);
-            }catch(OperationCanceledException){Write("Открытие остановлено; активная пачка закрыта либо ошибка закрытия записана.");}
-            catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}
+                if(errors.Count>0){
+                    Write("["+MarketLabel(market)+"] сетка: "+meshViewersOk+"/"+viewers.Count+" зрителей успешно, ошибок "+errors.Count+".");
+                    MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Сетка просмотр",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                }else{
+                    Write("["+MarketLabel(market)+"] сетка завершена: "+meshViewersOk+"/"+viewers.Count+" зрителей · по "+channelsPerViewer+" каналов каждый.");
+                    MessageBox.Show(this,meshViewersOk+" аккаунтов просмотрели по "+channelsPerViewer+" чужих каналов.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                }
+            }catch(OperationCanceledException){Write("Сетка просмотра остановлена.");}
+            catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{channelUrlHints=null;Finish();}
         }
         async Task CrossWatchLinks(IReadOnlyList<YouTubeChannel> channelsFilter,string linksText){
             if(cancellation!=null)return;

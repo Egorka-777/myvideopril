@@ -35,6 +35,9 @@ namespace VideoBatch {
         public Task RunCheckProfilesAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels) { return Window.RunCheckProfilesAsync(channels); }
         public Task RunMeshWatchAsync() { return Window.RunMeshWatchAsync(); }
         public Task RunMeshWatchAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels) { return Window.RunMeshWatchAsync(channels); }
+        public Task RunMeshWatchAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels, System.Collections.Generic.IReadOnlyDictionary<string, string> channelUrlsByProfileId) { return Window.RunMeshWatchAsync(channels, channelUrlsByProfileId); }
+        public Task RunMeshWatchAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels, System.Collections.Generic.IReadOnlyDictionary<string, string> channelUrlsByProfileId, string market) { return Window.RunMeshWatchAsync(channels, channelUrlsByProfileId, market); }
+        public Task RunRuMeshWatchAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels, System.Collections.Generic.IReadOnlyDictionary<string, string> channelUrlsByProfileId) { return Window.RunMeshWatchAsync(channels, channelUrlsByProfileId, "RU"); }
         public Task RunLinksWatchAsync(string linksText) { return Window.RunLinksWatchAsync(linksText); }
         public Task RunLinksWatchAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels, string linksText) { return Window.RunLinksWatchAsync(channels, linksText); }
         public Task RunSearchAsync() { return Window.RunYouTubeSearchAsync(); }

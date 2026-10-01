@@ -49,13 +49,13 @@ namespace VideoBatch {
     }
     public class ShortSettings {
         public Range Crop=new Range(.3,1.5), Gray=new Range(0,5), Brightness=new Range(-2,2), Contrast=new Range(98,102), Crf=new Range(20,23);
-        public string Format="mp4", Fps="source", Resolution="source"; public double Volume=100; public bool Loop=true, TechnicalVariants=true;
+        public string Format="mp4", Fps="source", Resolution="source"; public double Volume=56; public bool Loop=true, TechnicalVariants=true;
         public void Validate(){ Crop.Validate(0,15,"Обрезка");Gray.Validate(0,100,"Обесцвечивание");Brightness.Validate(-10,10,"Яркость");Contrast.Validate(80,120,"Контраст");Crf.Validate(16,30,"Сжатие");Profile.Check(Volume,0,150,"Громкость");new Profile{Format=Format,Fps=Fps,Resolution=Resolution}.Validate(); }
     }
     public class Binding { public string Video="",Audio="";public int Slot=1; }
     public class Preferences {
         public bool Shorts=true; public int ShortCount=10,VideoCount=5;
-        public int SettingsVersion=0;public bool AutoProfiles=true;public double BackgroundDb=-7.5;
+        public int SettingsVersion=0;public bool AutoProfiles=true;public double BackgroundDb=-12.5;
         public List<string> BackgroundMusic=new List<string>();
         public List<string> BackgroundMusicRu=new List<string>(), BackgroundMusicEn=new List<string>();
         public string Output=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch");
@@ -176,6 +176,42 @@ namespace VideoBatch {
         public static bool IsValidYouTubeVideoId(string id){
             id=(id??"").Trim();
             return id.Length==11&&System.Text.RegularExpressions.Regex.IsMatch(id,@"^[A-Za-z0-9_-]{11}$");
+        }
+        /// <summary>Канал для «Смотреть ссылки»: всегда вкладка /videos.</summary>
+        public static string NormalizeChannelVideosUrl(string url){
+            url=(url??"").Trim();
+            if(string.IsNullOrWhiteSpace(url))return "";
+            // Старый баг давал youtube.com@handle без слэша перед @.
+            url=Regex.Replace(url,@"^(https://(?:www\.)?youtube\.com)@([^/?#]+)",@"$1/@$2",RegexOptions.IgnoreCase);
+            if(!Uri.TryCreate(url,UriKind.Absolute,out var u)||u.Scheme!="https")return url;
+            if(u.Host!="youtube.com"&&u.Host!="www.youtube.com")return url;
+            string path=(u.AbsolutePath??"").TrimEnd('/');
+            if(string.IsNullOrWhiteSpace(path))return url;
+            if(path.EndsWith("/videos",StringComparison.OrdinalIgnoreCase))
+                return "https://www.youtube.com"+path;
+            var m=Regex.Match(path,@"^/(@[^/]+)$",RegexOptions.IgnoreCase);
+            if(m.Success)return "https://www.youtube.com/"+m.Groups[1].Value.TrimStart('/')+"/videos";
+            m=Regex.Match(path,@"^/(channel|c|user)/([^/]+)$",RegexOptions.IgnoreCase);
+            if(m.Success)return "https://www.youtube.com/"+m.Groups[1].Value+"/"+m.Groups[2].Value+"/videos";
+            return url;
+        }
+        public static bool IsValidYouTubeChannelUrl(string url){
+            url=NormalizeChannelVideosUrl(url);
+            if(string.IsNullOrWhiteSpace(url))return false;
+            return Regex.IsMatch(url,@"^https://(?:www\.)?youtube\.com/(@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)/videos/?$",RegexOptions.IgnoreCase);
+        }
+        /// <summary>Ссылка канала: явная из UI/настроек, иначе @handle из имени.</summary>
+        public static string ResolveYouTubeChannelUrl(string channelUrl,string channelName=null,string gridUrlHint=null){
+            string fromName="";
+            if(!string.IsNullOrWhiteSpace(channelName)){
+                var hm=Regex.Match(channelName,@"@([A-Za-z0-9._-]+)");
+                if(hm.Success)fromName=NormalizeChannelVideosUrl("https://www.youtube.com/@"+hm.Groups[1].Value);
+            }
+            foreach(var candidate in new[]{gridUrlHint,channelUrl,fromName}){
+                string normalized=NormalizeChannelVideosUrl(candidate??"");
+                if(IsValidYouTubeChannelUrl(normalized))return normalized;
+            }
+            return NormalizeChannelVideosUrl(channelUrl??"");
         }
         static string JsonQuote(string s){return "\""+(s??"").Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r","\\r").Replace("\n","\\n")+"\"";}
         /// <summary>База сетки: канал, profileId, заголовок, videoId, url — для просмотра друг другом.</summary>
@@ -370,6 +406,11 @@ namespace VideoBatch {
                         it.PublishedVideoId=Store.ExtractYouTubeVideoId(it.PublishedUrl);
                 }
                 if(c.ChannelUrl==null)c.ChannelUrl="";
+                c.ChannelUrl=NormalizeChannelVideosUrl(c.ChannelUrl);
+                if(string.IsNullOrWhiteSpace(c.ChannelUrl)){
+                    var hm=Regex.Match(c.Name??"",@"@([A-Za-z0-9._-]+)");
+                    if(hm.Success)c.ChannelUrl=NormalizeChannelVideosUrl("https://www.youtube.com/@"+hm.Groups[1].Value);
+                }
                 if(c.Items.Count>0){c.Video=c.Items[0].Video??"";c.Title=c.Items[0].Title??"";c.Thumbnail=c.Items[0].Thumbnail??"";}
                 else c.Title=CleanStoredTitle(c.Title);
             }
@@ -385,6 +426,9 @@ namespace VideoBatch {
             // Текущие (старые) треки считаем русскими, если раздельные списки ещё пустые.
             if(p.MusicRu.Count==0&&p.MusicEn.Count==0&&p.Music.Count>0)p.MusicRu=new List<string>(p.Music);
             if(p.BackgroundMusicRu.Count==0&&p.BackgroundMusicEn.Count==0&&p.BackgroundMusic.Count>0)p.BackgroundMusicRu=new List<string>(p.BackgroundMusic);
+            RepairPathList(p.MusicRu);RepairPathList(p.MusicEn);RepairPathList(p.BackgroundMusicRu);RepairPathList(p.BackgroundMusicEn);
+            if(p.TikTokMusicRu!=null)RepairPathList(p.TikTokMusicRu);if(p.TikTokMusicEn!=null)RepairPathList(p.TikTokMusicEn);
+            if(p.Narrations!=null)foreach(var n in p.Narrations)if(n!=null)n.Audio=TryRepairStoredPath(n.Audio);
             // Обратная совместимость: Music / BackgroundMusic = активный рынок.
             p.Music=new List<string>(p.MusicMarketView=="EN"?p.MusicEn:p.MusicRu);
             p.BackgroundMusic=new List<string>(p.MusicMarketView=="EN"?p.BackgroundMusicEn:p.BackgroundMusicRu);
@@ -393,6 +437,18 @@ namespace VideoBatch {
             foreach(var x in p.Profiles)x.Validate();p.Ranges.Validate();Profile.Check(p.BackgroundDb,-60,-.1,"Громкость фона, дБ");
         }
         public static List<YouTubeChannel> NormalizeChannels(List<YouTubeChannel> list){return MergeYouTubeChannels(list);}
+        static void RepairPathList(List<string> paths){if(paths==null)return;for(int i=0;i<paths.Count;i++)paths[i]=TryRepairStoredPath(paths[i]);}
+        /// <summary>UTF-8 пути иногда ломаются при ручном редактировании settings.xml (кракозябры вместо кириллицы).</summary>
+        public static string TryRepairStoredPath(string path){
+            if(string.IsNullOrWhiteSpace(path)||File.Exists(path))return path??"";
+            foreach(var encoding in new[]{1252,28591}){
+                try{
+                    string repaired=Encoding.UTF8.GetString(Encoding.GetEncoding(encoding).GetBytes(path));
+                    if(!string.Equals(repaired,path,StringComparison.Ordinal)&&File.Exists(repaired))return repaired;
+                }catch(ArgumentException){}
+            }
+            return path;
+        }
         /// <summary>Сводка пачки « · +N» раньше попадала в Title из ячейки таблицы.</summary>
         public static string CleanStoredTitle(string title){
             string t=(title??"").Trim();
@@ -502,7 +558,7 @@ namespace VideoBatch {
     public class BatchResult {public List<string> Outputs=new List<string>(),Errors=new List<string>();public bool Cancelled;}
     public class BatchJob {
         public List<string> Inputs=new List<string>(),Music=new List<string>(); public List<Binding> Narrations=new List<Binding>();
-        public double BackgroundDb=-7.5;
+        public double BackgroundDb=-12.5;
         public bool Shorts; public int Count=5;public string Output,FFmpeg,FFprobe;public Profile[] Profiles=Profile.Defaults(); public ShortSettings Ranges=new ShortSettings();
     }
     public static class Core {
@@ -614,7 +670,7 @@ namespace VideoBatch {
                 if(job.Inputs.Count==0)throw new Exception("Добавьте видео.");if(job.Count<1||job.Count>10)throw new Exception("Неверное количество вариантов.");
                 Directory.CreateDirectory(job.Output);var tracks=new List<Track>();
                 if(job.Shorts)job.Ranges.Validate();else{if(job.Profiles==null||job.Profiles.Length<job.Count)throw new Exception("Недостаточно настроек вариантов.");Profile.Check(job.BackgroundDb,-60,-.1,"Громкость фона, дБ");}
-                foreach(string path in job.Music.Distinct(StringComparer.OrdinalIgnoreCase)){progress.Report(new Update("Читаю музыку…",0));tracks.Add(new Track{Path=path,Duration=AudioDuration(await Probe(job.FFprobe,path,ct).ConfigureAwait(false))});}
+                foreach(string path in job.Music.Distinct(StringComparer.OrdinalIgnoreCase)){string musicPath=Store.TryRepairStoredPath(path);if(!File.Exists(musicPath))throw new Exception("Не найден файл музыки: "+Path.GetFileName(musicPath));progress.Report(new Update("Читаю музыку…",0));tracks.Add(new Track{Path=musicPath,Duration=AudioDuration(await Probe(job.FFprobe,musicPath,ct).ConfigureAwait(false))});}
                 if(job.Shorts&&tracks.Count==0)throw new Exception("Добавьте музыку.");
                 foreach(string input in job.Inputs) {
                     ct.ThrowIfCancellationRequested();Media media;List<Profile> profiles;
@@ -632,7 +688,7 @@ namespace VideoBatch {
                             string name=Path.GetFileNameWithoutExtension(input);if(name.Length>60)name=name.Substring(0,60);
                             string filename=name+"_v"+profile.Slot+"_"+Guid.NewGuid().ToString("N").Substring(0,8)+"."+profile.Format;
                             string dest=Path.Combine(job.Output,filename);partial=Path.Combine(job.Output,".processing_"+filename);
-                            var binding=job.Narrations.FirstOrDefault(b=>b.Video==input&&b.Slot==profile.Slot);string narration=binding==null?"":binding.Audio;
+                            var binding=job.Narrations.FirstOrDefault(b=>b.Video==input&&b.Slot==profile.Slot);string narration=binding==null?"":Store.TryRepairStoredPath(binding.Audio);
                             if(!profile.Short&&narration!=""&&!File.Exists(narration))throw new Exception("Не найдена назначенная озвучка.");
                             string label="Файл "+(done+1)+" из "+total+" · "+Path.GetFileName(input);int baseDone=done;double duration=media.Duration/profile.Speed;
                             progress.Report(new Update(label,100.0*done/total));

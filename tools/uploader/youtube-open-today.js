@@ -63,7 +63,7 @@ async function pauseVideoPage(page) {
 async function openToday(page, options, report = () => {}) {
   const url = channelVideosUrl(options.channelUrl);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(options.todayDate || "")) throw new Error("Не задана календарная дата ПК.");
-  await pauseVideoPage(page);
+  if (options.pauseAfterOpen !== false) await pauseVideoPage(page);
   report("open_channel", url);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForFunction(() => document.querySelector('ytd-rich-grid-renderer, ytd-browse') && window.ytInitialData,
@@ -95,7 +95,7 @@ async function openToday(page, options, report = () => {}) {
   await page.goto(watchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForFunction(id => window.ytInitialPlayerResponse?.videoDetails?.videoId === id,
     selected, { timeout: 30000 });
-  report("opened", watchUrl + " · пауза");
+  report("opened", watchUrl + (options.pauseAfterOpen !== false ? " · пауза" : ""));
   return watchUrl;
 }
 

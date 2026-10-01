@@ -7,6 +7,8 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const worker = fs.readFileSync(path.join(root, "tools", "uploader", "worker.js"), "utf8");
 const uploader = fs.readFileSync(path.join(root, "src", "Uploader.cs"), "utf8");
+const backend = fs.readFileSync(path.join(root, "src", "YouTubeBackend.cs"), "utf8");
+const workspace = fs.readFileSync(path.join(root, "src", "YouTubeWorkspacePanel.cs"), "utf8");
 
 assert.match(worker, /restartAlreadyRunningProfile\(\)/,
   "An already-running Dolphin profile must be restarted when no automation endpoint is available.");
@@ -36,7 +38,7 @@ assert.match(uploader, /ValidateExternalChannels/,
   "External channel list must bypass grid checkbox validation for mesh/check.");
 assert.match(uploader, /BuildMeshViewers/,
   "Mesh must build viewer list from checked YouTube workspace channels.");
-assert.match(fs.readFileSync(path.join(root, "src", "YouTubeWorkspacePanel.cs"), "utf8"), /RunLinkWatch/,
+assert.match(workspace, /RunLinkWatch/,
   "Direct link watch must start from YouTube workspace panel.");
 assert.match(worker, /job\.watchDirectLinks/,
   "Worker must support direct link watch mode.");
@@ -77,10 +79,14 @@ assert.match(uploader, /MoveFileReplacing/,
   "Video assign must rename files on disk instead of silently skipping failed moves.");
 assert.match(uploader, /ch\.Kind=packKind/,
   "Assigning videos must sync channel kind with Long/Shorts workspace toggle.");
-assert.match(uploader, /const int batchSize=5/,
-  "Navigation-only batches must contain at most five profiles.");
-assert.match(uploader, /StopProfileRequired/,
-  "A batch must require Dolphin stop acknowledgement before advancing.");
+assert.match(uploader, /Math\.Max\(1,Math\.Min\(5,settings\.WatchMaxParallelProfiles\)\)/,
+  "Cross-watch batches must respect WatchMaxParallelProfiles up to five.");
+assert.match(uploader, /CollectMeshLongChannels/,
+  "Cross-watch mesh must collect published channels from checked accounts.");
+assert.match(uploader, /BuildMeshTarget/,
+  "Cross-watch must build per-channel mesh targets with catalog videoIds.");
+assert.match(uploader, /watchMesh=true,watchTargets=watchTargets/,
+  "Cross-watch must open videos via channel Videos tab, not direct watch URLs.");
 assert.match(worker, /findWatchLinkOnVideosTab/,
   "Mesh long watch must scan Videos tab for catalog videoId.");
 assert.doesNotMatch(worker, /meshLong \? \[\"\/videos\", \"\/shorts\"\]/,
@@ -93,6 +99,8 @@ assert.match(uploader, /MeshBatchItems/,
   "Mesh must use last published batch even when local video files still exist.");
 assert.match(uploader, /await Task.WhenAll\(tasks\)/,
   "All current batch tasks must finish before the next starts.");
-assert.match(uploader, /openTodayOnly=true/,
-  "Navigation-only request must not enable watchMesh or watchDirectLinks.");
+assert.match(backend, /RunRuMeshWatchAsync/,
+  "YouTube backend must expose dedicated RU cross-watch entry point.");
+assert.match(workspace, /RunRuLinkWatch/,
+  "YouTube workspace must expose dedicated RU cross-watch button.");
 console.log("watch regression checks passed");

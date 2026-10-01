@@ -17,6 +17,7 @@ namespace VideoBatch {
   }
   static void Write(string path,BatchResult result){using(var f=File.Create(path))new DataContractJsonSerializer(typeof(BatchResult)).WriteObject(f,result);}
   public static bool SettingsRoundTrip(string root){Store.Root=root;var p=new Preferences();p.Music.Add("x.wav");p.ProtectedKey="encrypted-placeholder";p.Ranges.Volume=80.5;Store.Save(p);var loaded=Store.Load();return loaded.Ranges.Volume==80.5&&loaded.Music.Count==1&&loaded.Profiles.Length==5&&loaded.ProtectedKey==p.ProtectedKey&&Store.Clone(loaded).ShortCount==10;}
+  public static bool PathRepairRoundTrip(){string good="\u0421\u0421\u042b\u041b\u041a\u0410.mp3";string broken=Encoding.UTF8.GetString(Encoding.GetEncoding(1252).GetBytes(good));return Store.TryRepairStoredPath(broken)==good&&Store.TryRepairStoredPath(good)==good;}
   class SyncProgress:IProgress<Update>{Action<Update> handler;public SyncProgress(Action<Update> action){handler=action;}public void Report(Update u){handler(u);}}
  }
 }
