@@ -49,7 +49,7 @@ async function pauseVideoPage(page) {
     const request = route.request();
     const host = new URL(request.url()).hostname;
     if (request.resourceType() === "media" || /(^|\.)googlevideo\.com$/.test(host)) return route.abort();
-    return route.continue();
+    return route.fallback();
   });
   await page.addInitScript(() => {
     const pause = el => { el.autoplay = false; el.muted = true; el.pause(); };
