@@ -13,6 +13,7 @@ namespace VideoBatch {
         readonly NavigationService navigation;
         readonly DataGridView grid;
         readonly RichTextBox log;
+        readonly TextBox meshLinksBox;
         readonly ComboBox statusFilter;
         readonly TextBox accountSearch;
         readonly Label marketHint;
@@ -39,7 +40,7 @@ namespace VideoBatch {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = Theme.Background };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 118));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 200));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
@@ -166,14 +167,31 @@ namespace VideoBatch {
             root.Controls.Add(body, 0, 1);
 
             log = Theme.MakeLogBox();
-            root.Controls.Add(Theme.MakeLogSection(log), 0, 2);
+            var linksAndLog = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, BackColor = Theme.Background };
+            linksAndLog.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
+            linksAndLog.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            meshLinksBox = Theme.MakeSearchBox();
+            meshLinksBox.Multiline = true;
+            meshLinksBox.ScrollBars = ScrollBars.Vertical;
+            meshLinksBox.Dock = DockStyle.Fill;
+            meshLinksBox.Font = new Font("Consolas", 9f);
+            meshLinksBox.Text = LoadMeshLinksText();
+            var linksWrap = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card, Padding = new Padding(12, 8, 12, 8), Margin = new Padding(0, 8, 0, 0) };
+            linksWrap.Controls.Add(meshLinksBox);
+            linksWrap.Controls.Add(new Label {
+                Text = "Ссылки для просмотра (по одной на строку · все отмеченные ✓ аккаунты смотрят по очереди)",
+                Dock = DockStyle.Top, Height = 22, ForeColor = Theme.TextMuted, Font = Theme.FontSmall
+            });
+            linksAndLog.Controls.Add(linksWrap, 0, 0);
+            linksAndLog.Controls.Add(Theme.MakeLogSection(log), 0, 1);
+            root.Controls.Add(linksAndLog, 0, 2);
 
             var stopBtn = Theme.MakeButton("Стоп", ghost: true, action: () => backend.Stop());
             stopBtn.ForeColor = Theme.Warning;
             var bottom = Theme.MakeBottomBar(
                 (Theme.MakeButton("Быстрая загрузка", accent: true, action: async () => await RunUpload(true)), true),
                 (Theme.MakeButton("Через Studio", ghost: true, action: async () => await RunUpload(false)), false),
-                (Theme.MakeButton("Сетка просмотров", ghost: true, action: async () => await RunMesh()), false),
+                (Theme.MakeButton("Смотреть ссылки", ghost: true, action: async () => await RunLinkWatch()), false),
                 (stopBtn, false));
             root.Controls.Add(bottom, 0, 3);
 
@@ -198,7 +216,7 @@ namespace VideoBatch {
             menu.Items.Add("+ Канал", null, (s, e) => AddChannel());
             menu.Items.Add("Предпросмотр расписания", null, (s, e) => PreviewSchedule());
             menu.Items.Add("Проверить IP (выделенный канал)", null, (s, e) => { _ = RunCheck(); });
-            menu.Items.Add("Сетка просмотров (отмеченные ✓)", null, async (s, e) => await RunMesh());
+            menu.Items.Add("Смотреть ссылки (отмеченные ✓)", null, async (s, e) => await RunLinkWatch());
             menu.Items.Add("Открыть лог", null, (s, e) => OpenLog());
             menu.Items.Add("Удалить видео с канала", null, (s, e) => RemoveSelectedVideos());
             var b = Theme.MakeButton("Ещё", ghost: true);
@@ -342,9 +360,23 @@ namespace VideoBatch {
             }
         }
 
+        string LoadMeshLinksText() {
+            return marketView == "EN" ? settings.YouTubeMeshLinksEn ?? "" : settings.YouTubeMeshLinksRu ?? "";
+        }
+
+        void SaveMeshLinksFields() {
+            if (meshLinksBox == null) return;
+            string text = meshLinksBox.Text ?? "";
+            if (marketView == "EN") settings.YouTubeMeshLinksEn = text;
+            else settings.YouTubeMeshLinksRu = text;
+            try { Store.Save(settings); } catch { }
+        }
+
         void SwitchMarket(string m) {
+            SaveMeshLinksFields();
             marketView = NormMarket(m);
             settings.YouTubeMarketView = marketView;
+            if (meshLinksBox != null) meshLinksBox.Text = LoadMeshLinksText();
             kindView = NormKindView(settings.YouTubeKindView);
             if (string.IsNullOrWhiteSpace(settings.YouTubeKindView)) kindView = GuessDefaultKind();
             StyleHeroToggle(kindShorts, kindView == "shorts");
@@ -431,7 +463,7 @@ namespace VideoBatch {
                 SyncPrimary(ch);
                 int files = ch.Items?.Count(i => !string.IsNullOrWhiteSpace(i.Video)) ?? (string.IsNullOrWhiteSpace(ch.Video) ? 0 : 1);
                 string title = files > 0 ? Clean(ch.Items[0].Title) : Clean(ch.Title);
-                string url = ch.Items?.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.PublishedUrl))?.PublishedUrl ?? "";
+                string url = ch.Items?.LastOrDefault(i => !string.IsNullOrWhiteSpace(i.PublishedUrl))?.PublishedUrl ?? "";
                 string thumb = ch.Items?.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.Thumbnail))?.Thumbnail ?? ch.Thumbnail ?? "";
                 string filesLabel = files > 1 ? files + " видео" : (files == 1 ? "1 видео" : "—");
                 int ri = grid.Rows.Add(ch.Enabled, LoadThumbImage(thumb, ch.Name), "Задать", "×", ch.Name, "—",
@@ -736,18 +768,26 @@ namespace VideoBatch {
             else settings.LastSelectedYouTubeChannelIdRu = ch.ChannelId.Trim();
         }
 
-        async Task RunMesh() {
+        async Task RunLinkWatch() {
             var checkedChannels = GetCheckedChannels();
             if (checkedChannels.Count == 0) {
                 MessageBox.Show(this,
-                    "Отметьте галочкой ✓ каналы, которые участвуют в сетке просмотров.",
+                    "Отметьте галочкой ✓ аккаунты, которые будут смотреть ссылки.",
+                    "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            SaveMeshLinksFields();
+            string links = (meshLinksBox?.Text ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(links)) {
+                MessageBox.Show(this,
+                    "Вставьте ссылки YouTube в поле «Ссылки для просмотра» (по одной на строку).",
                     "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             try {
                 SyncWorkspaceToBackend();
-                AppendLog("Сетка: " + checkedChannels.Count + " канал(ов) отмечено.");
-                await backend.RunMeshWatchAsync(checkedChannels);
+                AppendLog("Ссылки: " + checkedChannels.Count + " аккаунт(ов) · открытые профили Dolphin не закрываются.");
+                await backend.RunLinksWatchAsync(checkedChannels, links);
                 RefreshGrid();
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
         }

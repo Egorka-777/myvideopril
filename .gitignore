@@ -18,6 +18,9 @@ tools/uploader/node_modules/
 # Runtime / local data (never commit secrets)
 *.log
 settings.xml
+.env
+.env.*
+tools/uploader/tiktok-sign/webmssdk.js
 youtube-schedule.json
 youtube-queue-delay.json
 VideoBatch_NEW.exe

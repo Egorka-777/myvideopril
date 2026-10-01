@@ -33,7 +33,7 @@ for (const forbidden of ["setInputFiles(", 'input[type="file"]', "fillCaption(",
   assert.doesNotMatch(httpCode, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 }
 assert.match(httpWorker, /const TRANSPORT = "http"/);
-assert.match(httpWorker, /2026-09-29-tiktok-http-v5\.4-evidence/);
+assert.match(httpWorker, /2026-09-30-tiktok-http-v5\.14-sign-post-url/);
 
 // No multi-region blind retries with one token
 assert.doesNotMatch(httpWorker, /vod-us-east/);
@@ -166,36 +166,78 @@ try {
 }
 assert.ok(!noResultErr || noResultErr);
 
-// IP is informational only — Dolphin controls proxy (same as YouTube worker)
-assert.doesNotMatch(httpWorker, /остановка до preflight/);
-assert.match(httpWorker, /Dolphin контролирует прокси/);
-assert.match(httpWorker, /без блокировки|продолжаю/);
+// Dolphin CDP: profile browser proxy is authoritative; transport IP is diagnostic-only (no block)
+assert.match(httpWorker, /readProfileIp/);
+assert.match(httpWorker, /profile browser proxy/);
+assert.match(httpWorker, /expectedIp/);
+assert.match(httpWorker, /evaluateProfileIp/);
+assert.match(httpWorker, /ipv4Prefix/);
+assert.match(httpWorker, /browserFetch\(page, "POST", partUrl/);
+assert.doesNotMatch(httpWorker, /ensureCdnOrigin/);
+assert.doesNotMatch(httpWorker, /page\.goto\(`https:\/\/\$\{host\}\/\`/);
+assert.doesNotMatch(httpWorker, /не совпадает с ожидаемым/);
+assert.match(httpWorker, /contextFetch/);
+assert.match(httpWorker, /isTikTokWebUrl/);
+assert.match(httpWorker, /CORS/);
 
-// Post: accept review/project-list fallbacks; do not abort batch via manualCheck on HTTP 200
+// Post: signed URL + strict acceptance (no project_list fallback)
 assert.match(httpWorker, /parsePostResponse/);
-assert.match(httpWorker, /content_check_id/);
-assert.match(httpWorker, /browserFetch\(page, "POST", postUrl/);
+assert.match(httpWorker, /tiktok-post-sign\.js/);
+assert.match(httpWorker, /signPostQuery/);
+const signSrc = fs.readFileSync(path.join(root, "tools", "uploader", "tiktok-post-sign.js"), "utf8");
+assert.match(signSrc, /acquireSignPage/);
+assert.match(signSrc, /about:blank/);
+assert.match(httpWorker, /signPostQuery\(page, session\.msToken \|\| "", context\)/);
+assert.match(httpWorker, /buildSignedPostUrl/);
+assert.match(httpWorker, /post_sign/);
+assert.match(httpWorker, /contextFetch\("POST", postUrl/);
+assert.match(httpWorker, /buildPostRequestHeaders/);
+assert.match(signSrc, /buildSignLink/);
+assert.match(signSrc, /tiktok\/web\/project\/post\/v1/);
+assert.doesNotMatch(signSrc, /api\/v1\/web\/project\/post/);
+assert.doesNotMatch(signSrc, /content_check_id/);
+assert.doesNotMatch(signSrc, /verifyFp/);
 assert.match(httpWorker, /на проверке/);
+assert.doesNotMatch(httpWorker, /acceptMode.*project_list/);
 assert.doesNotMatch(httpWorker, /manualCheck\("post не подтверждён/);
 
 const postReview = httpMod.evaluatePostAcceptance(
-  { httpStatus: 200, statusCode: 8, statusMsg: "Under review", respOk: false },
-  { projectId: "1", creationId: "abc", videoId: "v", listed: true }
+  { httpStatus: 200, statusCode: 8, statusMsg: "Under review", respOk: false, itemError: false }
 );
-assert.strictEqual(postReview.ok, false, "draft/review text must not override an API error");
+assert.strictEqual(postReview.ok, false, "review status_code must not pass without status_code 0");
 
 const postHardFail = httpMod.evaluatePostAcceptance(
-  { httpStatus: 200, statusCode: 5, statusMsg: "Invalid parameters", respOk: false },
-  { projectId: "1", creationId: "abc", videoId: "v", listed: false }
+  { httpStatus: 200, statusCode: 5, statusMsg: "Invalid parameters", respOk: false, itemError: false }
 );
 assert.strictEqual(postHardFail.ok, false);
+
+const signMod = require("../tools/uploader/tiktok-post-sign.js");
+assert.ok(fs.existsSync(path.join(root, "tools", "uploader", "tiktok-sign", "webmssdk.js")));
+assert.ok(fs.existsSync(path.join(root, "tools", "uploader", "tiktok-sign", "xbogus.js")));
+const offset = signMod.computeScheduleOffset("scheduled", Math.floor(Date.now() / 1000) + 1200, 900, 864000);
+assert.strictEqual(offset, 1200);
+const schedAt = Math.floor(Date.now() / 1000) + 1200;
+const payload = signMod.buildPostPayload({
+  creationId: "abc", videoId: "vid", caption: "hi", publishMode: "scheduled", scheduledUnixSeconds: schedAt,
+  minSec: 900, maxSec: 864000
+});
+assert.ok(payload.single_post_req_list[0].video_id === "vid");
+assert.strictEqual(payload.feature_common_info_list[0].schedule_time, schedAt);
+assert.strictEqual(payload.feature_common_info_list[0].content_check_id, undefined);
+const signLink = signMod.buildSignLink("token123");
+assert.ok(signLink.startsWith("https://www.tiktok.com/tiktok/web/project/post/v1/?"));
+assert.ok(signLink.includes("msToken=token123"));
 assert.match(httpWorker, /browserFetch/);
 assert.match(httpWorker, /readBrowserIp/);
 assert.match(httpWorker, /readTransportIp/);
 assert.match(httpWorker, /about:blank/);
-assert.match(httpWorker, /context\.request/);
-assert.match(httpWorker, /Маршрут HTTP не подтверждён/);
-assert.match(httpWorker, /isTikTokWebUrl/);
+assert.match(httpWorker, /credentials: "omit"/);
+assert.match(httpWorker, /profile browser proxy/);
+assert.match(scheduleCs, /ScheduleBufferSeconds = 60/);
+const minAt = Math.floor(Date.now() / 1000) + 900;
+assert.doesNotThrow(() => httpMod.validateItem({
+  video: __filename, caption: "x", publishMode: "scheduled", scheduledUnixSeconds: minAt
+}, 1));
 
 // Fresh token before Apply (not reused across regions)
 assert.match(httpWorker, /fetchUploadToken/);

@@ -26,7 +26,7 @@ namespace VideoBatch {
             Controls.Add(root);
 
             root.Controls.Add(new Label {
-                Text = "Поиск канала на YouTube. Сетка просмотров — в разделе YouTube: формат Long → отметьте каналы ✓ → «Сетка просмотров».",
+                Text = "Поиск канала на YouTube. Просмотр по ссылкам — в разделе YouTube: вставьте ссылки → отметьте аккаунты ✓ → «Смотреть ссылки».",
                 ForeColor = Theme.TextSecondary,
                 AutoSize = true,
                 MaximumSize = new Size(900, 0),

@@ -17,9 +17,24 @@ namespace VideoBatch {
     /// <summary>TikTok HTTP batch schedule: first slot ≥ now+15min, then +10..30 min random gaps.</summary>
     public static class TikTokScheduleGenerator {
         public const int MinLeadSeconds = 900;
+        /// <summary>Extra lead so C# slots stay valid after UI delay and worker unix check.</summary>
+        public const int ScheduleBufferSeconds = 60;
         public const int MinGapSeconds = 600;
         public const int MaxGapSeconds = 1800;
         static readonly Random Rng = new Random();
+
+        static long MinFirstUnixUtc() {
+            return DateTimeOffset.UtcNow.ToUnixTimeSeconds() + MinLeadSeconds + ScheduleBufferSeconds;
+        }
+
+        static bool CachedSlotsValid(TikTokScheduleState loaded, int count) {
+            if (loaded == null || loaded.UnixSlots == null || loaded.UnixSlots.Count != count) return false;
+            long minFirst = MinFirstUnixUtc();
+            if (loaded.UnixSlots[0] < minFirst) return false;
+            var slots = loaded.UnixSlots.Select(x => DateTimeOffset.FromUnixTimeSeconds(x).LocalDateTime).ToList();
+            return slots.Zip(slots.Skip(1), (a, b) => (b - a).TotalSeconds)
+                .All(g => g >= MinGapSeconds && g <= MaxGapSeconds);
+        }
 
         public static string StatePath(string profileId, string market) {
             string safe = (profileId ?? "unknown").Trim();
@@ -37,16 +52,16 @@ namespace VideoBatch {
             if (!forceRecalculate && File.Exists(statePath)) {
                 try {
                     var loaded = LoadState(statePath);
-                    if (loaded != null && loaded.UnixSlots != null && loaded.UnixSlots.Count == count) {
-                        var slots = loaded.UnixSlots.Select(x => DateTimeOffset.FromUnixTimeSeconds(x).LocalDateTime).ToList();
-                        bool validGaps=slots.Zip(slots.Skip(1),(a,b)=>(b-a).TotalSeconds)
-                            .All(g=>g>=MinGapSeconds&&g<=MaxGapSeconds);
-                        if (validGaps && slots[0] >= DateTime.Now.AddSeconds(MinLeadSeconds)) return slots;
+                    if (CachedSlotsValid(loaded, count)) {
+                        return loaded.UnixSlots
+                            .Select(x => DateTimeOffset.FromUnixTimeSeconds(x).LocalDateTime)
+                            .ToList();
                     }
                 } catch { }
             }
             var result = new List<DateTime>();
-            DateTime cursor = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()+MinLeadSeconds+Rng.Next(1,60)).LocalDateTime;
+            long firstUnix = MinFirstUnixUtc() + Rng.Next(0, 59);
+            DateTime cursor = DateTimeOffset.FromUnixTimeSeconds(firstUnix).LocalDateTime;
             result.Add(cursor);
             for (int i = 1; i < count; i++) {
                 cursor = cursor.AddSeconds(Rng.Next(MinGapSeconds, MaxGapSeconds + 1));
@@ -83,7 +98,7 @@ namespace VideoBatch {
             try {
                 var slots = GenerateLocalSlots(20, tmp, forceRecalculate: true);
                 if (slots.Count != 20) return false;
-                if (slots[0] < DateTime.Now.AddSeconds(MinLeadSeconds - 5)) return false;
+                if (slots[0] < DateTime.Now.AddSeconds(MinLeadSeconds + ScheduleBufferSeconds - 5)) return false;
                 for (int i = 1; i < slots.Count; i++) {
                     var gap = (slots[i] - slots[i - 1]).TotalSeconds;
                     if (gap < MinGapSeconds || gap > MaxGapSeconds) return false;

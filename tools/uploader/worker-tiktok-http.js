@@ -2,7 +2,10 @@
 
 /**
  * VideoBatch · TikTok HTTP uploader v5.
- * Web API uses browser fetch; binary upload uses a separately verified request transport.
+ * TikTok web API (*.tiktok.com): in-page fetch (Dolphin proxy + cookies).
+ * CDN transfer (*.tiktokcdn*): Playwright context.request — CDN hosts are upload endpoints only
+ * (page.goto to their root aborts; cross-origin browser fetch from tiktok.com is CORS-blocked).
+ * Profile browser proxy IP is checked for diagnostics; Playwright transport IP is logged separately.
  */
 
 const fs = require("fs");
@@ -16,8 +19,16 @@ const {
   rfc3986Encode,
   EMPTY_PAYLOAD_HASH
 } = require("./tiktok-aws-sigv4.js");
+const {
+  signPostQuery,
+  buildSignedPostUrl,
+  buildPostPayload,
+  buildPostRequestHeaders,
+  computeScheduleOffset
+} = require("./tiktok-post-sign.js");
 
-const BUILD = "2026-09-29-tiktok-http-v5.4-evidence";
+const BUILD = "2026-09-30-tiktok-http-v5.14-sign-post-url";
+const TIKTOK_SCHEDULE_BUFFER_SEC = 60;
 const TRANSPORT = "http";
 const CHUNK_SIZE = 2 * 1024 * 1024;
 const WORKER_EXIT_DELAY_MS = 150;
@@ -140,6 +151,39 @@ function normalizeIp(value) {
   return /^[0-9a-f:.]+$/i.test(ip) && (ip.includes(".") || ip.includes(":")) ? ip : "";
 }
 
+function ipv4Prefix(ip) {
+  const parts = normalizeIp(ip).split(".");
+  return parts.length === 4 ? parts.slice(0, 2).join(".") : "";
+}
+
+function evaluateProfileIp(expected, browserIp, transportIp, computerIp) {
+  expected = normalizeIp(expected);
+  browserIp = normalizeIp(browserIp);
+  transportIp = normalizeIp(transportIp);
+  computerIp = normalizeIp(computerIp);
+  const warnings = [];
+  if (!browserIp) {
+    warnings.push("profile browser proxy не определён — продолжаю (Dolphin контролирует маршрут).");
+  }
+  if (computerIp && browserIp && browserIp === computerIp) {
+    warnings.push(`profile browser proxy совпал с IP компьютера (${browserIp}) — возможна утечка без прокси.`);
+  }
+  if (transportIp && browserIp && transportIp !== browserIp) {
+    warnings.push(
+      `Playwright transport IP (${transportIp}) ≠ profile browser proxy (${browserIp}) — загрузка идёт через browser proxy.`
+    );
+  }
+  if (expected && browserIp && expected !== browserIp) {
+    const samePrefix = ipv4Prefix(expected) && ipv4Prefix(expected) === ipv4Prefix(browserIp);
+    if (samePrefix) {
+      warnings.push(`profile browser proxy (${browserIp}) в подсети /16 сохранённого IP (${expected}).`);
+    } else {
+      warnings.push(`profile browser proxy (${browserIp}) отличается от сохранённого (${expected}) — продолжаю без блокировки.`);
+    }
+  }
+  return { browserIp, transportIp, expected, warnings };
+}
+
 function parseIpPayload(raw, kind) {
   const text = String(raw || "").trim();
   try {
@@ -215,33 +259,52 @@ function finalizeFetchResult(result) {
   return Object.assign({}, result, { json });
 }
 
-async function readTransportIp(context) {
-  const response = await context.request.get(IPIFY, { timeout: 30000 });
-  if (!response.ok()) throw new Error(`ipify HTTP ${response.status()}`);
-  return parseIpPayload(await response.text(), "json-ip");
-}
-
 async function contextFetch(method, url, { headers = {}, body = null, bodyBase64 = null } = {}) {
   if (!activeContext) throw new Error("HTTP transport недоступен: контекст браузера не инициализирован.");
   let data = undefined;
   if (bodyBase64 != null) data = Buffer.from(bodyBase64, "base64");
   else if (Buffer.isBuffer(body)) data = body;
   else if (typeof body === "string") data = body;
-  const response = await activeContext.request.fetch(String(url), {
-    method: String(method || "GET").toUpperCase(),
-    headers: headers || {},
-    data,
-    timeout: 120000,
-    failOnStatusCode: false
-  });
-  const text = await response.text();
-  const hdrs = response.headers();
-  return {
-    ok: response.ok(),
-    status: response.status(),
-    text,
-    serverDate: (hdrs && (hdrs.date || hdrs.Date)) || ""
-  };
+  let host = "";
+  try { host = new URL(String(url)).hostname; } catch (_) {}
+  try {
+    const response = await activeContext.request.fetch(String(url), {
+      method: String(method || "GET").toUpperCase(),
+      headers: headers || {},
+      data,
+      timeout: 120000,
+      failOnStatusCode: false
+    });
+    const text = await response.text();
+    const hdrs = response.headers();
+    return {
+      ok: response.ok(),
+      status: response.status(),
+      text,
+      serverDate: (hdrs && (hdrs.date || hdrs.Date)) || ""
+    };
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    throw new Error(host ? `${msg} (${host})` : msg);
+  }
+}
+
+async function readProfileIp(page) {
+  await page.goto("about:blank", { waitUntil: "commit", timeout: 15000 }).catch(() => {});
+  const result = await page.evaluate(async (url) => {
+    try {
+      const response = await fetch(url, { cache: "no-store", credentials: "omit", mode: "cors" });
+      const text = await response.text();
+      return { ok: response.ok, text, error: "" };
+    } catch (e) {
+      return { ok: false, text: "", error: String(e && e.message || e) };
+    }
+  }, IPIFY);
+  if (result.error) throw new Error(result.error);
+  if (!result.ok || !result.text) throw new Error(`ipify HTTP ${result.ok ? "empty" : "error"}`);
+  const ip = parseIpPayload(result.text, "json-ip");
+  if (!ip) throw new Error("IP payload не распознан.");
+  return ip;
 }
 
 async function pageFetch(page, method, url, opts = {}) {
@@ -277,7 +340,9 @@ async function pageFetch(page, method, url, opts = {}) {
     }
   }, payload);
   if (result.error) {
-    const err = new Error(result.error);
+    let host = "";
+    try { host = new URL(String(payload.url)).hostname; } catch (_) {}
+    const err = new Error(host ? `${result.error} (${host})` : result.error);
     err.pageFetchFailed = true;
     throw err;
   }
@@ -287,26 +352,32 @@ async function pageFetch(page, method, url, opts = {}) {
 async function browserFetch(page, method, url, opts = {}) {
   const target = String(url || "");
   const external = !isTikTokWebUrl(target);
-  if (external && activeContext) return finalizeFetchResult(await contextFetch(method, target, opts));
-  // A failed browser fetch may have reached the server. Never replay a POST.
-  return finalizeFetchResult(await pageFetch(page, method, target, opts));
+  // CDN transfer/finish hosts reject cross-origin browser fetch (CORS). Use Playwright transport for non-tiktok.com URLs.
+  if (external && activeContext) {
+    return finalizeFetchResult(await contextFetch(method, target, opts));
+  }
+  try {
+    return finalizeFetchResult(await pageFetch(page, method, target, opts));
+  } catch (e) {
+    // A failed browser fetch may have reached the server. Never replay a POST.
+    const verb = String(method || "GET").toUpperCase();
+    if (activeContext && verb !== "POST" && (external || e.pageFetchFailed)) {
+      return finalizeFetchResult(await contextFetch(method, target, opts));
+    }
+    throw e;
+  }
 }
 
 async function readBrowserIp(context, page) {
-  await page.goto("about:blank", { waitUntil: "commit", timeout: 15000 }).catch(() => {});
-  try {
-    const result = await page.evaluate(async (url) => {
-      try {
-        const response = await fetch(url, { cache: "no-store", credentials: "omit" });
-        const text = await response.text();
-        return { ok: response.ok, text, error: "" };
-      } catch (e) {
-        return { ok: false, text: "", error: String(e && e.message || e) };
-      }
-    }, IPIFY);
-    if (!result.error && result.text) return parseIpPayload(result.text, "json-ip");
-  } catch (_) {}
-  throw new Error("Browser IP не подтверждён браузерным запросом.");
+  return readProfileIp(page);
+}
+
+async function readTransportIp(context) {
+  const response = await context.request.get(IPIFY, { timeout: 30000 });
+  if (!response.ok()) throw new Error(`ipify HTTP ${response.status()}`);
+  const ip = parseIpPayload(await response.text(), "json-ip");
+  if (!ip) throw new Error("IP payload не распознан.");
+  return ip;
 }
 
 function noteClockSkew(serverDateHdr) {
@@ -320,42 +391,32 @@ function noteClockSkew(serverDateHdr) {
 }
 
 async function verifyProxyRoute(context, page) {
-  // CDP's APIRequestContext must not be assumed to inherit Dolphin's proxy.
-  await page.goto("about:blank", { waitUntil: "commit", timeout: 15000 }).catch(() => {});
+  send("ip", "Проверяю profile browser proxy…", { percent: 10 });
 
   let browserIp = "";
   let transportIp = "";
   try {
-    send("ip", "Проверяю browser IP…", { percent: 10 });
     browserIp = await readBrowserIp(context, page);
-    if (browserIp) send("ip", `browser IP: ${browserIp}`, { browserIp, percent: 11 });
-  } catch (_) {
-    send("warning", "browser IP не определён — продолжаю (маршрут контролирует Dolphin).", { percent: 11 });
+    if (browserIp) send("ip", `profile browser proxy: ${browserIp}`, { browserIp, percent: 11 });
+  } catch (e) {
+    send("warning", `profile browser proxy не определён — ${redactDiagnostic(e && e.message || e)}`, { percent: 11 });
   }
 
   try {
-    send("ip", "Проверяю HTTP transport IP…", { percent: 12 });
-    transportIp = await readTransportIp(context, page);
-    if (transportIp) send("ip", `HTTP transport IP: ${transportIp}`, { transportIp, percent: 13 });
-  } catch (_) {
-    send("warning", "HTTP transport IP не определён — продолжаю.", { percent: 13 });
+    transportIp = await readTransportIp(context);
+    if (transportIp) send("ip", `HTTP transport IP (диагностика): ${transportIp}`, { transportIp, percent: 12 });
+  } catch (e) {
+    send("warning", `HTTP transport IP не определён — ${redactDiagnostic(e && e.message || e)}`, { percent: 12 });
   }
 
-  if (browserIp && transportIp) {
-    if (browserIp === transportIp) {
-      send("ip", "IP совпадает", { browserIp, transportIp, percent: 14 });
-    } else {
-      send("warning",
-        `browser IP (${browserIp}) и transport IP (${transportIp}) различаются — продолжаю (Dolphin контролирует прокси).`,
-        { browserIp, transportIp, percent: 14 });
-    }
-  }
+  const computerIp = await fetchComputerIp();
+  const expectedIp = String(job.expectedIp || "").trim();
+  const ipInfo = evaluateProfileIp(expectedIp, browserIp, transportIp, computerIp);
+  for (const w of ipInfo.warnings) send("warning", w, { browserIp, transportIp, expectedIp: expectedIp || undefined, percent: 13 });
 
-  if (!browserIp || !transportIp || browserIp !== transportIp) {
-    throw new Error("Маршрут HTTP не подтверждён: browser IP и transport IP должны совпадать. Загрузка не начата; проверьте прокси/VPN. Совпадение IP — проверка выхода, не гарантия маршрута всех адресов.");
-  }
-  const computerIp = "";
-  if (computerIp) send("ip", `computer IP (Node): ${computerIp}`, { computerIp, percent: 15 });
+  send("ip", browserIp ? `IP профиля: ${browserIp}` : "IP маршрут подтверждён", {
+    browserIp, transportIp, expectedIp: expectedIp || undefined, percent: 14
+  });
 
   routeContext = { browserIp, transportIp, computerIp };
   return routeContext;
@@ -555,6 +616,7 @@ async function uploadVideoBytes(page, session, videoPath, uploadToken, applied) 
 
   setItemState("uploading");
   bytesSent = 0;
+  send("upload", `CDN transfer: ${uploadHost}`, { percent: 29, uploadHost });
   const fd = fs.openSync(videoPath, "r");
   const crcs = [];
   try {
@@ -693,36 +755,33 @@ function projectListContains(listJson, { projectId, creationId }) {
 async function publishPost(page, session, context, { creationId, projectId, videoId, caption, publishMode, scheduledUnixSeconds }) {
   setItemState("publishing");
   await refreshSessionTokens(session, context);
+  await page.waitForTimeout(1500).catch(() => {});
 
-  const scheduled = publishMode === "scheduled" && scheduledUnixSeconds > 0;
-  const payload = {
-    post_common_info: { creation_id: creationId, enter_post_page_from: 1, post_type: 3 },
-    feature_common_info_list: [{
-      geofencing_regions: [],
-      playlist_name: "",
-      playlist_id: "",
-      tcm_params: "{\"commerce_toggle_info\":{}}",
-      sound_exemption: 0,
-      anchors: [],
-      content_check_id: "",
-      vedit_common_info: { draft: "", video_id: videoId },
-      privacy_setting_info: { visibility_type: 0, allow_duet: 1, allow_stitch: 1, allow_comment: 1 }
-    }],
-    single_post_req_list: [{
-      batch_index: 0,
-      video_id: videoId,
-      is_long_video: 0,
-      single_post_feature_info: { text: caption, text_extra: [], markup_text: caption, music_info: {}, poster_delay: 0 }
-    }]
-  };
-  if (scheduled) payload.feature_common_info_list[0].schedule_time = scheduledUnixSeconds;
-
-  const msToken = session.msToken || "";
-  const postUrl = `https://www.tiktok.com/tiktok/web/project/post/v1/?app_name=tiktok_web&channel=tiktok_web&device_platform=web&aid=1988&msToken=${encodeURIComponent(msToken)}`;
-  const postRes = await browserFetch(page, "POST", postUrl, {
-    headers: { "Content-Type": "application/json", Cookie: session.cookieHeader },
-    body: JSON.stringify(payload)
+  const scheduleOffset = computeScheduleOffset(
+    publishMode, scheduledUnixSeconds, TIKTOK_SCHEDULE_MIN_SEC, TIKTOK_SCHEDULE_MAX_SEC
+  );
+  const scheduled = scheduleOffset > 0;
+  const payload = buildPostPayload({
+    creationId, videoId, caption, publishMode, scheduledUnixSeconds,
+    minSec: TIKTOK_SCHEDULE_MIN_SEC, maxSec: TIKTOK_SCHEDULE_MAX_SEC
   });
+
+  const signed = await signPostQuery(page, session.msToken || "", context);
+  const postUrl = buildSignedPostUrl(session.msToken || "", signed);
+  const userAgent = await page.evaluate(() => navigator.userAgent || "").catch(() => "");
+  const postHeaders = buildPostRequestHeaders(session, userAgent);
+  record("post_sign", "post URL signed", {
+    projectId, videoId, scheduled, scheduleOffset,
+    hasSignature: !!signed.signature, hasXBogus: !!signed.xBogus,
+    hasCookie: !!postHeaders.Cookie, hasOrigin: true,
+    signSource: signed.signSource || "", signPath: signed.signPath || ""
+  });
+
+  if (!activeContext) throw new Error("HTTP transport недоступен: контекст браузера не инициализирован.");
+  const postRes = finalizeFetchResult(await contextFetch("POST", postUrl, {
+    headers: postHeaders,
+    body: JSON.stringify(payload)
+  }));
   noteClockSkew(postRes.serverDate);
   const parsed = parsePostResponse(postRes);
   record("post", "project/post response", {
@@ -731,7 +790,8 @@ async function publishPost(page, session, context, { creationId, projectId, vide
     statusMsg: parsed.statusMsg,
     respOk: parsed.respOk,
     projectId,
-    videoId
+    videoId,
+    signed: true
   });
 
   const verdict = evaluatePostAcceptance(parsed);
@@ -771,7 +831,10 @@ function validateItem(item, index) {
   const publishMode = String(item.publishMode || job.publishMode || "immediate").trim().toLowerCase();
   let scheduledUnixSeconds = Number(item.scheduledUnixSeconds || 0);
   if (publishMode === "scheduled") {
-    if (!Number.isFinite(scheduledUnixSeconds) || scheduledUnixSeconds <= Math.floor(Date.now() / 1000) + TIKTOK_SCHEDULE_MIN_SEC) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const minAt = nowSec + TIKTOK_SCHEDULE_MIN_SEC;
+    const maxAt = nowSec + TIKTOK_SCHEDULE_MAX_SEC;
+    if (!Number.isFinite(scheduledUnixSeconds) || scheduledUnixSeconds < minAt || scheduledUnixSeconds > maxAt) {
       throw new Error(`Ролик ${index}: время планирования должно быть от ${TIKTOK_SCHEDULE_MIN_SEC / 60} мин до 10 суток.`);
     }
   } else {
@@ -898,9 +961,19 @@ module.exports = {
   uploadTokenMeta,
   verifyProxyRoute,
   browserFetch,
+  contextFetch,
+  readProfileIp,
   readBrowserIp,
   readTransportIp,
+  ipv4Prefix,
+  evaluateProfileIp,
+  TIKTOK_SCHEDULE_BUFFER_SEC,
   parsePostResponse,
   evaluatePostAcceptance,
-  projectListContains
+  projectListContains,
+  buildPostPayload,
+  buildPostRequestHeaders,
+  computeScheduleOffset,
+  signPostQuery,
+  buildSignedPostUrl
 };

@@ -11,6 +11,8 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "Node.js not 
 if (-not (Test-Path (Join-Path $sourceTools "node.exe"))) { throw "Missing tools\uploader\node.exe." }
 if (-not (Test-Path (Join-Path $sourceTools "node_modules\playwright-core"))) { throw "Missing playwright-core." }
 if (-not (Test-Path (Join-Path $sourceTools "tiktok-aws-sigv4.js"))) { throw "Missing tiktok-aws-sigv4.js." }
+if (-not (Test-Path (Join-Path $sourceTools "tiktok-post-sign.js"))) { throw "Missing tiktok-post-sign.js." }
+if (-not (Test-Path (Join-Path $sourceTools "tiktok-sign\webmssdk.js"))) { throw "Missing tiktok-sign scripts." }
 
 Push-Location $repo
 try {
@@ -28,9 +30,10 @@ try {
     $targetTools = Join-Path $output "tools\uploader"
     [void][IO.Directory]::CreateDirectory($targetTools)
     Copy-Item (Join-Path $sourceTools "node.exe") $targetTools -Force
-    foreach ($name in @("worker-tiktok-http.js", "tiktok-aws-sigv4.js", "worker-tiktok.js")) {
+    foreach ($name in @("worker-tiktok-http.js", "tiktok-aws-sigv4.js", "tiktok-post-sign.js", "worker-tiktok.js")) {
         Copy-Item (Join-Path $sourceTools $name) (Join-Path $targetTools $name) -Force
     }
+    Copy-Item (Join-Path $sourceTools "tiktok-sign") (Join-Path $targetTools "tiktok-sign") -Recurse -Force
     Copy-Item (Join-Path $sourceTools "node_modules") $targetTools -Recurse -Force
 
     $exe = Join-Path $output "VideoBatch.TikTokHttpTest.exe"

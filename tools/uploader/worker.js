@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-09-24-connect-open-profile-v1";
+const WORKER_BUILD = "2026-09-30-direct-links-watch-v1";
 
 const jobPath = process.argv[2];
 let job = null;
@@ -1377,28 +1377,47 @@ async function findChannelByOwnerName(page, ownerName) {
   return "";
 }
 
-async function openVideoDirect(page, videoId, preferShorts) {
+async function readVideoPageBlocked(page) {
+  return page.evaluate(() => {
+    const text = String((document.body && document.body.innerText) || "").slice(0, 5000);
+    return /Video unavailable|Private video|This video is private|Sign in to confirm your age|Это видео недоступно|Видео недоступно|приватн|недоступно для просмотра/i.test(text);
+  }).catch(() => false);
+}
+
+async function openVideoDirect(page, videoId, preferShorts, options) {
   const id = String(videoId || "").trim();
   if (!id) throw new Error("Пустой ID видео.");
+  const fastMesh = !!(options && options.fastMesh);
+  const longOnly = !!(options && (options.longOnly || (fastMesh && !preferShorts)));
+  const pageTimeout = fastMesh ? 22000 : 60000;
+  const selectorTimeout = fastMesh ? 5000 : 45000;
   const urls = preferShorts
     ? ["https://www.youtube.com/shorts/" + id, "https://www.youtube.com/watch?v=" + id]
+    : longOnly
+    ? ["https://www.youtube.com/watch?v=" + id]
     : ["https://www.youtube.com/watch?v=" + id, "https://www.youtube.com/shorts/" + id];
   for (const u of urls) {
-    await gotoStable(page, u, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await gotoStable(page, u, { waitUntil: "domcontentloaded", timeout: pageTimeout });
     await dismissYouTubeOverlays(page);
-    await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 45000 }).catch(() => {});
+    const opened = extractVideoId(page.url());
+    if (!opened) continue;
+    if (await readVideoPageBlocked(page)) continue;
+    await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: selectorTimeout }).catch(() => {});
+    if (await readVideoPageBlocked(page)) continue;
     if (extractVideoId(page.url())) {
       for (let i = 0; i < 4; i++) {
         await ensureVideoPlaying(page);
         const st = await readPlaybackState(page);
         if (!st.missing && (st.duration > 1 || st.current > 0.2 || !st.paused)) break;
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(fastMesh ? 400 : 700);
       }
       return page.url().split("&")[0];
     }
   }
   throw new Error("Не удалось открыть видео по ID " + id);
 }
+
+const MESH_MIN_LONG_SECONDS = 60;
 
 async function assertMeshVideoOpen(page, videoId, owner) {
   const want = String(videoId || "").trim();
@@ -1407,13 +1426,71 @@ async function assertMeshVideoOpen(page, videoId, owner) {
   if (opened && opened !== want) {
     throw new Error("Канал «" + owner + "»: открылось другое видео (" + opened + " вместо " + want + ").");
   }
-  const blocked = await page.evaluate(() => {
-    const text = String((document.body && document.body.innerText) || "").slice(0, 5000);
-    return /Video unavailable|Private video|This video is private|Sign in to confirm your age|Это видео недоступно|Видео недоступно|приватн|недоступно для просмотра/i.test(text);
-  }).catch(() => false);
-  if (blocked) {
+  if (await readVideoPageBlocked(page)) {
     throw new Error("Канал «" + owner + "»: видео " + want + " недоступно (private / удалено / возраст).");
   }
+}
+
+/** Сетка long: только /watch?v=, не Shorts-плеер и не короткий ролик. */
+async function assertMeshLongVideoOpen(page, videoId, owner) {
+  await assertMeshVideoOpen(page, videoId, owner);
+  const url = String(page.url() || "");
+  if (/\/shorts\//.test(url)) {
+    throw new Error("Канал «" + owner + "»: открылся Shorts-плеер вместо длинного видео " + videoId + ".");
+  }
+  let duration = 0;
+  for (let i = 0; i < 12; i++) {
+    await ensureVideoPlaying(page);
+    const st = await readPlaybackState(page);
+    if (!st.missing && isFinite(st.duration) && st.duration > 1) {
+      duration = st.duration;
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+  if (duration > 1 && duration < MESH_MIN_LONG_SECONDS) {
+    throw new Error(
+      "Канал «" + owner + "»: ролик " + videoId + " длится " + formatClock(duration) +
+      " — это Shorts, нужно длинное видео с вкладки «Видео»."
+    );
+  }
+}
+
+/** Ищет ролик только среди ссылок /watch?v= на вкладке «Видео» (со скроллом). */
+async function findWatchLinkOnVideosTab(page, channelUrl, videoId, maxScrolls) {
+  const id = String(videoId || "").trim();
+  if (!isValidYouTubeVideoId(id)) return null;
+  const root = normalizeChannelUrl(channelUrl);
+  if (!root) return null;
+  const scrolls = Number.isFinite(maxScrolls) ? maxScrolls : 24;
+  await openChannelTab(page, root, "videos");
+  for (let s = 0; s <= scrolls; s++) {
+    const link = await page.evaluate((wantId) => {
+      const anchors = Array.from(document.querySelectorAll("a[href*='/watch?v=']"));
+      for (const a of anchors) {
+        const href = a.getAttribute("href") || "";
+        if (!href || href.includes("/shorts/")) continue;
+        const m = href.match(/[?&]v=([A-Za-z0-9_-]{11})/);
+        if (m && m[1] === wantId) return { href, id: m[1] };
+      }
+      return null;
+    }, id).catch(() => null);
+    if (link) return link;
+    await page.mouse.wheel(0, 1800).catch(() => {});
+    await page.waitForTimeout(280);
+  }
+  return null;
+}
+
+/** Сетка long: открыть ролик кликом по карточке на вкладке «Видео», не прямой URL. */
+async function openMeshLongFromVideosTab(page, channelUrl, videoId, owner, label) {
+  const id = String(videoId || "").trim();
+  let link = await findWatchLinkOnVideosTab(page, channelUrl, id);
+  if (!link) throw new Error("Канал «" + owner + "»: " + id + " не найден на вкладке «Видео».");
+  send("youtube", owner + ": " + (label || "на «Видео»") + " " + id + " — открываю кликом с вкладки…", { percent: 46 });
+  await openVideoFromChannelList(page, link);
+  await assertMeshLongVideoOpen(page, id, owner);
+  return id;
 }
 
 /** Сетка: поиск без фильтра «сегодня», мягче совпадение заголовка. */
@@ -1656,6 +1733,7 @@ async function collectLinksOnChannelTab(page, baseUrl, tab, skipId, todayOnly, l
       const a = row.querySelector("a#video-title-link, a#video-title, a[href*='/watch?v='], a[href*='/shorts/']");
       if (!a) continue;
       const href = a.getAttribute("href") || "";
+      if (!isShorts && !href.includes("/watch?v=")) continue;
       const m = href.match(/(?:v=|shorts\/)([A-Za-z0-9_-]{11})/);
       const id = m ? m[1] : "";
       if (!id || seen.has(id) || id === skip) continue;
@@ -1700,14 +1778,18 @@ async function readWatchPageUploadMeta(page) {
 
 async function openVideoFromChannelList(page, item) {
   const id = item.id || "";
-  const clicked = await page.evaluate((videoId) => {
-    const anchors = Array.from(document.querySelectorAll("a[href*='/watch'], a[href*='/shorts/']"));
-    const hit = anchors.find(a => (a.getAttribute("href") || "").includes(videoId));
+  const preferWatch = !String(item.href || "").includes("/shorts/");
+  const clicked = await page.evaluate(({ videoId, preferWatch }) => {
+    const anchors = Array.from(document.querySelectorAll("a[href*='/watch?v='], a[href*='/shorts/']"));
+    const hits = anchors.filter(a => (a.getAttribute("href") || "").includes(videoId));
+    const hit = preferWatch
+      ? hits.find(a => (a.getAttribute("href") || "").includes("/watch?v=") && !(a.getAttribute("href") || "").includes("/shorts/"))
+      : hits.find(a => (a.getAttribute("href") || "").includes("/shorts/")) || hits[0];
     if (!hit) return false;
     hit.scrollIntoView({ block: "center", inline: "nearest" });
     hit.click();
     return true;
-  }, id).catch(() => false);
+  }, { videoId: id, preferWatch }).catch(() => false);
   if (!clicked) throw new Error("Не удалось открыть ролик на странице канала.");
   await page.waitForURL(/\/(watch|shorts)\//, { timeout: 20000 }).catch(() => {});
   await dismissYouTubeOverlays(page);
@@ -1985,54 +2067,67 @@ async function openMeshVideoViaChannel(page, target, videoIds, preferShorts) {
   send("youtube", owner + ": канал подтверждён" + (handleNote ? " @" + handleNote : ""), { percent: 44 });
 
   const meshLong = !!target.meshSingleLong;
-  const tabPaths = preferShorts ? ["/shorts"] : (meshLong ? ["/videos", "/shorts"] : ["/videos"]);
-  const byId = new Map();
-  const videosTabLinks = [];
-  for (const tabPath of tabPaths) {
-    const tabName = tabPath === "/shorts" ? "shorts" : "videos";
-    await openChannelTab(page, channelUrl, tabName);
-    const links = await collectLinksOnChannelTab(page, channelUrl, tabPath, "", false, 30, {});
-    for (const link of links) {
-      if (!byId.has(link.id)) byId.set(link.id, link);
-      if (tabPath === "/videos") videosTabLinks.push(link);
+
+  if (meshLong) {
+    send("youtube", owner + ": вкладка «Видео» — ищу ролик из каталога (только клик с вкладки)…", { percent: 45 });
+    for (const id of ids) {
+      try {
+        return await openMeshLongFromVideosTab(page, channelUrl, id, owner, "каталог");
+      } catch (e) {
+        const msg = String(e && e.message ? e.message : e);
+        if (!/не найден на вкладке|Shorts|длится/i.test(msg)) throw e;
+      }
     }
-  }
+  } else {
+    const tabPaths = preferShorts ? ["/shorts"] : ["/videos"];
+    const byId = new Map();
+    const videosTabLinks = [];
+    for (const tabPath of tabPaths) {
+      const tabName = tabPath === "/shorts" ? "shorts" : "videos";
+      await openChannelTab(page, channelUrl, tabName);
+      const links = await collectLinksOnChannelTab(page, channelUrl, tabPath, "", false, 30, {});
+      for (const link of links) {
+        if (!byId.has(link.id)) byId.set(link.id, link);
+        if (tabPath === "/videos") videosTabLinks.push(link);
+      }
+    }
 
-  for (const id of ids) {
-    const hit = byId.get(id);
-    if (!hit) continue;
-    const tabLabel = String(hit.href || "").includes("/shorts/") ? "Shorts" : "Видео";
-    send("youtube", owner + ": на вкладке «" + tabLabel + "» найден " + id + " — открываю…", { percent: 46 });
-    await openVideoFromChannelList(page, hit);
-    await assertMeshVideoOpen(page, id, owner);
-    return id;
-  }
-
-  for (const id of ids) {
-    send("youtube", owner + ": на вкладке нет " + id + " — пробую watch после проверки канала…", { percent: 47 });
-    try {
-      await openVideoDirect(page, id, preferShorts);
+    for (const id of ids) {
+      const hit = byId.get(id);
+      if (!hit) continue;
+      const tabLabel = String(hit.href || "").includes("/shorts/") ? "Shorts" : "Видео";
+      send("youtube", owner + ": на вкладке «" + tabLabel + "» найден " + id + " — открываю…", { percent: 46 });
+      await openVideoFromChannelList(page, hit);
       await assertMeshVideoOpen(page, id, owner);
       return id;
-    } catch (_) {}
-  }
+    }
 
-  const tried = new Set(ids);
-  const publicFallback = (videosTabLinks.length ? videosTabLinks : [...byId.values()])
-    .filter(l => l && isValidYouTubeVideoId(l.id) && !tried.has(l.id))
-    .filter(l => !meshLong || !String(l.href || "").includes("/shorts/"));
-  for (const item of publicFallback) {
-    send("youtube", owner + ": каталог недоступен (отложено?) — открываю публичное видео канала " + item.id + "…", { percent: 47 });
-    try {
-      await openVideoFromChannelList(page, item);
-      await assertMeshVideoOpen(page, item.id, owner);
-      return item.id;
-    } catch (_) {
+    for (const id of ids) {
+      send("youtube", owner + ": на вкладке нет " + id + " — пробую watch после проверки канала…", { percent: 47 });
       try {
-        await openVideoDirect(page, item.id, false);
+        await openVideoDirect(page, id, preferShorts);
+        await assertMeshVideoOpen(page, id, owner);
+        return id;
+      } catch (_) {}
+    }
+
+    const tried = new Set(ids);
+    const publicFallback = (videosTabLinks.length ? videosTabLinks : [...byId.values()])
+      .filter(l => l && isValidYouTubeVideoId(l.id) && !tried.has(l.id));
+    for (const item of publicFallback) {
+      send("youtube", owner + ": каталог недоступен (отложено?) — открываю публичное видео канала " + item.id + "…", { percent: 47 });
+      try {
+        await openVideoFromChannelList(page, item);
         await assertMeshVideoOpen(page, item.id, owner);
         return item.id;
-      } catch (_) {}
+      } catch (_) {
+        try {
+          send("youtube", owner + ": запасное публичное " + item.id + " — открываю через watch…", { percent: 47 });
+          await openVideoDirect(page, item.id, preferShorts);
+          await assertMeshVideoOpen(page, item.id, owner);
+          return item.id;
+        } catch (_) {}
+      }
     }
   }
 
@@ -2081,8 +2176,13 @@ async function watchChannelMesh(page, target, filter, viewerProfileId, completed
 
   if (isOwn) {
     send("youtube", (owner ? owner + ": " : "") + "свой канал — лайк на длинном ролике…", { percent: 44 });
-    await openVideoDirect(page, catalogIds[0], false);
-    await assertMeshVideoOpen(page, catalogIds[0], owner);
+    const ownUrl = normalizeChannelUrl(target.channelUrl || "");
+    if (meshLong && ownUrl) {
+      await openMeshLongFromVideosTab(page, ownUrl, catalogIds[0], owner, "свой канал");
+    } else {
+      await openVideoDirect(page, catalogIds[0], false, { longOnly: true });
+      await assertMeshVideoOpen(page, catalogIds[0], owner);
+    }
     await quickLikeVideo(page);
     return 1;
   }
@@ -2096,7 +2196,7 @@ async function watchChannelMesh(page, target, filter, viewerProfileId, completed
   }
 
   send("youtube", (owner ? owner + ": " : "") + "смотрю длинный ролик " + videoId + "…", { percent: 48 });
-  await waitForVideoEnd(page);
+  await waitForVideoEnd(page, { meshLong: meshLong });
   if (completed) completed.add(checkpointKey);
   send("youtube", (owner ? owner + ": " : "") + "✓ ролик просмотрен", { percent: 92 });
   return 1;
@@ -2165,10 +2265,15 @@ function formatClock(seconds) {
   return m + ":" + String(s).padStart(2, "0");
 }
 
-async function waitForVideoEnd(page) {
+async function waitForVideoEnd(page, opts) {
+  const meshLong = !!(opts && opts.meshLong);
   if (/\/shorts\//.test(page.url())) {
-    await watchShortOnce(page, "");
-    return;
+    if (meshLong) {
+      throw new Error("Длинный ролик открыт в Shorts-плеере — нужен клик с вкладки «Видео» канала.");
+    } else {
+      await watchShortOnce(page, "");
+      return;
+    }
   }
   await dismissYouTubeOverlays(page);
   await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 90000 }).catch(() => {});
@@ -2211,6 +2316,11 @@ async function waitForVideoEnd(page) {
     }
   }
   if (!(duration > 1)) throw new Error("Видео открылось, но воспроизведение не стартовало (нет длительности). Профиль оставлен открытым — нажмите Play вручную.");
+  if (meshLong && duration < MESH_MIN_LONG_SECONDS) {
+    throw new Error(
+      "Сетка: ролик длится " + formatClock(duration) + " — это Shorts. Нужно длинное видео с вкладки «Видео» канала."
+    );
+  }
 
   // Лайк в случайный момент в последние 30 секунд (или раньше, если ролик короче)
   const likeWindow = Math.min(30, Math.max(1, Math.floor(duration - 0.5)));
@@ -3623,7 +3733,7 @@ async function main() {
   if (!job.token || !job.profileId) throw new Error("Укажите токен Dolphin и ID профиля.");
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
 
-  if (!job.searchOnly && !job.watchMesh && !job.skipQueueDelay) await waitBetweenProfiles();
+  if (!job.searchOnly && !job.watchMesh && !job.watchDirectLinks && !job.skipQueueDelay) await waitBetweenProfiles();
   let endpoint = await startOrConnectProfile();
   browser = await connectBrowser(endpoint);
   let context = browser.contexts()[0];
@@ -3646,6 +3756,73 @@ async function main() {
     await stopProfile();
     finished = true;
     send("done", "Профиль Dolphin доступен.", { success: true, ip: verifiedIp, percent: 100 });
+    return;
+  }
+
+  if (job.watchDirectLinks) {
+    const targets = Array.isArray(job.watchTargets) ? job.watchTargets : [];
+    if (!targets.length) throw new Error("Нет ссылок для просмотра.");
+    const keepOpen = job.keepProfileOpen !== false;
+    youtubeOpened = true;
+    send("youtube", "Просмотр ссылок: " + targets.length + " ролик(ов) по очереди…", { percent: 25 });
+    let watched = 0;
+    let failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i] || {};
+      const url = String(t.searchUrl || "").trim();
+      const videoId = String(t.videoId || extractVideoId(url)).trim();
+      if (!videoId) {
+        failed++;
+        send("youtube", "Пропуск строки " + (i + 1) + ": нет videoId.", { percent: 25 + Math.round((i / Math.max(1, targets.length)) * 65) });
+        continue;
+      }
+      const preferShorts = /\/shorts\//i.test(url) || String(t.contentKind || "").toLowerCase() === "shorts";
+      send("youtube", "Ссылка " + (i + 1) + "/" + targets.length + " · " + videoId + "…", {
+        percent: 25 + Math.round((i / Math.max(1, targets.length)) * 65),
+        videoId
+      });
+      try {
+        const opened = await openVideoDirect(page, videoId, preferShorts);
+        send("youtube", "Видео открыто. Смотрю…", { percent: 25 + Math.round(((i + 0.4) / Math.max(1, targets.length)) * 65), url: opened, videoId });
+        await waitForVideoEnd(page);
+        watched++;
+        send("youtube", "✓ Ссылка " + (i + 1) + "/" + targets.length + " · " + videoId, {
+          percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65),
+          url: opened,
+          videoId
+        });
+      } catch (e) {
+        failed++;
+        const msg = e instanceof Error ? e.message : String(e);
+        send("youtube", "Ошибка ссылки " + (i + 1) + " · " + videoId + ": " + msg, {
+          percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65)
+        });
+      }
+      if (i < targets.length - 1 && page && !page.isClosed()) await page.waitForTimeout(400);
+    }
+    if (keepOpen) {
+      if (page && !page.isClosed()) await page.close().catch(() => {});
+      send("youtube", "Профиль оставлен открытым (" + watched + " из " + targets.length + " ссылок).", { percent: 99 });
+      finished = true;
+      const summary = "Ссылки: " + watched + "/" + targets.length + " ролик(ов)";
+      if (failed) {
+        fail(summary + " (" + failed + " пропущено).", { keptOpen: true, ip: verifiedIp, percent: 100 });
+        return;
+      }
+      send("done", summary + ".", { success: true, keptOpen: true, ip: verifiedIp, percent: 100 });
+      return;
+    }
+    await browser.close().catch(() => {});
+    browser = null;
+    await stopProfile();
+    await pauseAfterWatch();
+    finished = true;
+    const summary = "Ссылки: " + watched + "/" + targets.length + " ролик(ов)";
+    if (failed) {
+      fail(summary + " (" + failed + " пропущено).", { keptOpen: false, ip: verifiedIp, percent: 100 });
+      return;
+    }
+    send("done", summary + ".", { success: true, keptOpen: false, ip: verifiedIp, percent: 100 });
     return;
   }
 
@@ -3842,4 +4019,8 @@ if (require.main === module) {
   });
 }
 
-module.exports = { automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles, setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan, buildMeshCatalogPlan };
+module.exports = {
+  automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles,
+  setSchedule, publish, waitEnabled, watchShortOnce, waitForVideoEnd, enrichWatchTarget, buildCatalogPlan,
+  buildMeshCatalogPlan, findWatchLinkOnVideosTab, openMeshLongFromVideosTab, MESH_MIN_LONG_SECONDS
+};

@@ -567,7 +567,12 @@ namespace VideoBatch {
                     }
                     if(m.stage=="done_item"&&m.packIndex>0&&m.packIndex<=items.Count){
                         var item=items[m.packIndex-1];
-                        if(m.localJobId!=item.LocalJobId)throw new Exception("TikTok: результат не соответствует заданию.");
+                        string msgJobId=(m.localJobId??"").Trim();
+                        string itemJobId=(item.LocalJobId??"").Trim();
+                        if(!string.IsNullOrEmpty(msgJobId)&&!string.IsNullOrEmpty(itemJobId)&&!string.Equals(msgJobId,itemJobId,StringComparison.Ordinal))
+                            throw new Exception("TikTok: результат не соответствует заданию (localJobId).");
+                        if(string.IsNullOrEmpty(msgJobId)&&!string.IsNullOrEmpty(itemJobId))
+                            Write(acc.Name+": worker без localJobId — обновите tools/uploader/worker-tiktok-http.js (v5.4-evidence).");
                         item.HttpSubmitted=true;
                         item.HttpNeedsReview=false;
                         item.HttpVideoId=m.videoId??"";

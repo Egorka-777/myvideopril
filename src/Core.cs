@@ -84,6 +84,8 @@ namespace VideoBatch {
         public string YouTubeSearchTitleEn="", YouTubeSearchUrlEn="", YouTubeSearchFilterEn="today";
         public string YouTubeSearchKeysRu="", YouTubeSearchFullTitleRu="";
         public string YouTubeSearchKeysEn="", YouTubeSearchFullTitleEn="";
+        /// <summary>Пачка ссылок для просмотра (YouTube workspace, по одной на строку).</summary>
+        public string YouTubeMeshLinksRu="", YouTubeMeshLinksEn="";
         // Базы заголовков: один раз заполняете, дальше приложение само берёт нужное число (база не съедается).
         public List<string> TitleBankLongRu=new List<string>(), TitleBankLongEn=new List<string>();
         public List<string> TitleBankShortsRu=new List<string>(), TitleBankShortsEn=new List<string>();
@@ -100,7 +102,8 @@ namespace VideoBatch {
         public int TikTokMaxParallelUploads=1;
         public int TikTokUploadStaggerMinMinutes=2;
         public int TikTokUploadStaggerMaxMinutes=20;
-        public int WatchMaxParallelProfiles=3;
+        public int WatchMaxParallelProfiles=4;
+        public bool MeshParallelProfilesMigrated20260929;
         /// <summary>Min pause between Dolphin profile start requests (ms).</summary>
         public int ProfileLaunchStaggerMinMs=3000;
         /// <summary>Max pause between Dolphin profile start requests (ms).</summary>
@@ -184,7 +187,7 @@ namespace VideoBatch {
                 foreach(var ch in channels??Enumerable.Empty<YouTubeChannel>()){
                     if(ch==null)continue;
                     if(ch.Items==null)ch.Items=new List<YouTubeItem>();
-                    foreach(var it in YouTubeMeshCatalog.CurrentBatchItems(ch)){
+                    foreach(var it in YouTubeMeshCatalog.MeshBatchItems(ch)){
                         if(it==null||string.IsNullOrWhiteSpace(it.Title))continue;
                         if(string.IsNullOrWhiteSpace(it.PublishedVideoId)&&!string.IsNullOrWhiteSpace(it.PublishedUrl))
                             it.PublishedVideoId=ExtractYouTubeVideoId(it.PublishedUrl);
@@ -259,6 +262,10 @@ namespace VideoBatch {
             if(p.TikTokUploadStaggerMaxMinutes>120)p.TikTokUploadStaggerMaxMinutes=120;
             TikTokProfileSync.SyncFromYouTube(p, p.TikTokMarketView ?? "RU");
             TikTokProfileSync.SyncFromYouTube(p, p.TikTokMarketView == "EN" ? "RU" : "EN");
+            if(!p.MeshParallelProfilesMigrated20260929){
+                if(p.WatchMaxParallelProfiles<=1)p.WatchMaxParallelProfiles=4;
+                p.MeshParallelProfilesMigrated20260929=true;
+            }
             if(p.WatchMaxParallelProfiles<1)p.WatchMaxParallelProfiles=1;
             if(p.WatchMaxParallelProfiles>5)p.WatchMaxParallelProfiles=5;
             if(p.ProfileLaunchStaggerMinMs<1000)p.ProfileLaunchStaggerMinMs=3000;
@@ -274,6 +281,8 @@ namespace VideoBatch {
             if(p.YouTubeSearchFullTitleRu==null)p.YouTubeSearchFullTitleRu="";
             if(p.YouTubeSearchKeysEn==null)p.YouTubeSearchKeysEn="";
             if(p.YouTubeSearchFullTitleEn==null)p.YouTubeSearchFullTitleEn="";
+            if(p.YouTubeMeshLinksRu==null)p.YouTubeMeshLinksRu="";
+            if(p.YouTubeMeshLinksEn==null)p.YouTubeMeshLinksEn="";
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchKeysRu)&&!string.IsNullOrWhiteSpace(p.YouTubeSearchTitleRu))
                 p.YouTubeSearchKeysRu=p.YouTubeSearchTitleRu;
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchKeysEn)&&!string.IsNullOrWhiteSpace(p.YouTubeSearchTitleEn))
