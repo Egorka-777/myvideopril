@@ -15,7 +15,8 @@ const channels={en:{id:'ENTODAY0001',owner:'UC-en',date:'2026-10-01',label:'Vide
       const name=/^\/@(en|ru|old)\/videos$/.exec(u.pathname)?.[1];
       if(name) {
         const ch=channels[name];
-        return route.fulfill({contentType:'text/html',body:`<script>var ytInitialData={metadata:{channelMetadataRenderer:{externalId:'${ch.owner}'}}};</script><ytd-browse>${ch.label}<ytd-rich-grid-renderer><ytd-rich-shelf-renderer><a href="/shorts/SHORTS00001">Shorts</a><a href="/watch?v=SHORTS00001">Shorts watch</a></ytd-rich-shelf-renderer><ytd-rich-grid-media><a href="/watch?v=${ch.id}">Today</a></ytd-rich-grid-media></ytd-rich-grid-renderer></ytd-browse>`});
+        const initialData={metadata:{channelMetadataRenderer:{externalId:ch.owner}},contents:{twoColumnBrowseResultsRenderer:{tabs:[{tabRenderer:{selected:true,content:{richGridRenderer:{contents:[{richShelfRenderer:{contents:[{videoRenderer:{videoId:'SHORTS00001'}}]}},{richItemRenderer:{content:{lockupViewModel:{contentType:'LOCKUP_CONTENT_TYPE_VIDEO',contentId:ch.id}}}}]}}}}]}}};
+        return route.fulfill({contentType:'text/html',body:`<script>var ytInitialData=${JSON.stringify(name==='ru'?initialData:{metadata:initialData.metadata})};</script><ytd-browse>${ch.label}<ytd-rich-grid-renderer><ytd-rich-shelf-renderer><a href="/shorts/SHORTS00001">Shorts</a><a href="/watch?v=SHORTS00001">Shorts watch</a></ytd-rich-shelf-renderer>${name==='ru'?'<yt-lockup-view-model>':'<ytd-rich-grid-media>'}<a href="/watch?v=${ch.id}">Today</a>${name==='ru'?'</yt-lockup-view-model>':'</ytd-rich-grid-media>'}</ytd-rich-grid-renderer></ytd-browse>`});
       }
       if(u.pathname==='/watch') {
         const id=u.searchParams.get('v'),ch=Object.values(channels).find(c=>c.id===id);

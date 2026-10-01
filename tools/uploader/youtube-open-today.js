@@ -51,6 +51,22 @@ function classifyVideo(player, id, channelId, today, pcUtcOffsetMinutes) {
 }
 
 const pausedPages = new WeakSet();
+function ordinaryVideoIds(data) {
+  const tabs = data?.contents?.twoColumnBrowseResultsRenderer?.tabs || [];
+  const tab = tabs.map(t => t.tabRenderer).find(t => t?.selected);
+  const ids = [];
+  function visit(node) {
+    if (!node || typeof node !== "object") return;
+    if (node.richShelfRenderer || node.reelShelfRenderer || node.shortsLockupViewModel) return;
+    const id = node.videoRenderer?.videoId ||
+      (node.lockupViewModel?.contentType === "LOCKUP_CONTENT_TYPE_VIDEO" ? node.lockupViewModel.contentId : "");
+    if (/^[a-zA-Z0-9_-]{11}$/.test(id || "")) { ids.push(id); return; }
+    for (const value of Object.values(node)) visit(value);
+  }
+  visit(tab?.content);
+  return [...new Set(ids)].slice(0, 20);
+}
+
 async function pauseVideoPage(page) {
   if (pausedPages.has(page)) return;
   await page.route("**/*", route => {
@@ -98,7 +114,9 @@ async function openToday(page, options, report = () => {}) {
   const channelId = await page.evaluate(() => window.ytInitialData?.metadata?.channelMetadataRenderer?.externalId || "");
   if (!channelId) throw new Error("YouTube не подтвердил ID открытого канала.");
   await page.locator('a[href*="/watch?v="]').first().waitFor({ state: "attached", timeout: timeout(15000) }).catch(() => {});
-  const ids = await page.evaluate(() => [...new Set(Array.from(document.querySelectorAll('ytd-rich-grid-media a[href*="/watch?v="], ytd-grid-video-renderer a[href*="/watch?v="]'))
+  const initialData = await page.evaluate(() => window.ytInitialData);
+  let ids = ordinaryVideoIds(initialData);
+  if (!ids.length) ids = await page.evaluate(() => [...new Set(Array.from(document.querySelectorAll('ytd-rich-grid-media a[href*="/watch?v="], ytd-grid-video-renderer a[href*="/watch?v="]'))
     .map(a => new URL(a.href).searchParams.get("v")).filter(id => /^[a-zA-Z0-9_-]{11}$/.test(id || "")))].slice(0, 20));
   if (!ids.length) throw new Error("На вкладке «Видео» нет доступных роликов либо изменился интерфейс YouTube.");
   let selected = null;
@@ -178,4 +196,4 @@ async function openChannelsPaused(page, targets, options, report=()=>{}) {
   return {opened,lastUrl};
 }
 
-module.exports = { channelVideosUrl, extractAssignedJson, classifyVideo, pauseVideoPage, pauseCurrentVideo, openToday, openChannelsPaused };
+module.exports = { channelVideosUrl, extractAssignedJson, classifyVideo, ordinaryVideoIds, pauseVideoPage, pauseCurrentVideo, openToday, openChannelsPaused };

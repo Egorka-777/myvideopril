@@ -1,7 +1,16 @@
 "use strict";
 const assert = require("assert");
-const {channelVideosUrl, extractAssignedJson, classifyVideo, openToday} = require("../tools/uploader/youtube-open-today.js");
+const {channelVideosUrl, extractAssignedJson, classifyVideo, ordinaryVideoIds, openToday} = require("../tools/uploader/youtube-open-today.js");
 const id="abcdefghijk", other="lmnopqrstuv", today="2026-10-01";
+assert.deepEqual(ordinaryVideoIds({contents:{twoColumnBrowseResultsRenderer:{tabs:[
+  {tabRenderer:{selected:false,content:{videoRenderer:{videoId:other}}}},
+  {tabRenderer:{selected:true,content:{richGridRenderer:{contents:[
+    {richShelfRenderer:{contents:[{videoRenderer:{videoId:other}}]}},
+    {richItemRenderer:{content:{lockupViewModel:{contentType:'LOCKUP_CONTENT_TYPE_PLAYLIST',contentId:other}}}},
+    {richItemRenderer:{content:{lockupViewModel:{contentType:'LOCKUP_CONTENT_TYPE_VIDEO',contentId:id}}}},
+    {richItemRenderer:{content:{videoRenderer:{videoId:id}}}}
+  ]}}}}
+]}}}),[id]);
 function player(date, changes={}) {
   return {videoDetails:{videoId:id,channelId:"UCowner",...changes},playabilityStatus:{status:"OK"},
     microformat:{playerMicroformatRenderer:{publishDate:date}}};

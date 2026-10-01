@@ -3093,7 +3093,7 @@ async function main() {
   await page.bringToFront().catch(() => {});
   // IP не блокируем: прокси уже в Dolphin. Только пишем в лог, если удалось узнать.
   let verifiedIp = "";
-  try {
+  if (!job.openTodayOnly && !job.watchMesh) try {
     const ip = await publicIp(page);
     verifiedIp = ip || "";
     if (ip) send("ip", `IP профиля: ${ip}`, { ip, percent: 20 });
@@ -3292,5 +3292,4 @@ module.exports = {
   setSchedule, publish, waitEnabled, enrichWatchTarget, buildCatalogPlan,
   buildMeshCatalogPlan, findWatchLinkOnVideosTab, openMeshLongFromVideosTab
 };
-
 

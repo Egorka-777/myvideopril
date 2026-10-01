@@ -28,6 +28,7 @@ assert.doesNotMatch(mesh,/PublishedUrl|BuildMeshCatalogVideos|SaveMeshCatalog/,'
 assert.match(mesh,/await Task.WhenAll\(tasks\)/);
 assert.match(mesh,/finally[\s\S]*?StopProfileRequired/,'Close profiles on success, failure and cancellation');
 assert.match(mesh,/if\(closeErrors.Count>0\)throw/,'Unconfirmed close must block the next batch');
+assert.match(worker,/if \(!job\.openTodayOnly && !job\.watchMesh\) try/,'Navigation must not wait for external IP services');
 assert.match(worker,/openChannelsPaused\(page, targets, navigationJob/);
 assert.match(worker,/job.openTodayOnly \|\| job.watchMesh/,'C# alone owns closure of navigation profiles');
 assert.doesNotMatch(worker,/waitForVideoEnd|watchShortOnce|likeCurrentVideo|quickLikeVideo|isVideoLiked|ensureVideoPlaying/,'Remove playback and like implementations');
