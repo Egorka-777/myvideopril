@@ -39,6 +39,7 @@ try {
         }
     }
     Copy-Item (Join-Path $Root "docs\ROLLOUT_20261001_RU.md") $OutputDirectory
+    Copy-Item (Join-Path $Root "docs\YOUTUBE_PAUSED_GRID_20261001_RU.md") $OutputDirectory
     git rev-parse HEAD | Set-Content (Join-Path $OutputDirectory "SOURCE_COMMIT.txt")
     Get-ChildItem $OutputDirectory -Recurse -File | ForEach-Object {
         $hash=Get-FileHash $_.FullName -Algorithm SHA256

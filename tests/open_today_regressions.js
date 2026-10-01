@@ -16,6 +16,8 @@ for(const date of ["2026-09-30","2026-10-02",""])
 assert.equal(classifyVideo(player(today,{channelId:"UCstranger"}),id,"UCowner",today).eligible,false);
 assert.equal(classifyVideo(player(today,{isLiveContent:true}),id,"UCowner",today).eligible,false);
 assert.equal(classifyVideo(player(today),other,"UCowner",today).eligible,false);
+assert.equal(classifyVideo(player("2026-09-30T23:30:00Z"),id,"UCowner",today,420).eligible,true);
+assert.equal(classifyVideo(player("2026-10-01T23:30:00Z"),id,"UCowner",today,420).eligible,false);
 const obj={text:'braces } and escaped " quote',nested:{value:1}};
 assert.deepEqual(extractAssignedJson("var ytInitialPlayerResponse = "+JSON.stringify(obj)+"; trailing", "ytInitialPlayerResponse"),obj);
 assert.equal(extractAssignedJson("ytInitialPlayerResponse = {broken};","ytInitialPlayerResponse"),null);
@@ -24,10 +26,14 @@ assert.equal(extractAssignedJson("ytInitialPlayerResponse = {broken};","ytInitia
 async function run(dates) {
   const visited=[], events=[]; let metadataIndex=0, evalIndex=0;
   const page={route:async()=>{},addInitScript:async()=>{},goto:async url=>visited.push(url),
-    waitForFunction:async()=>{},locator:()=>({first:()=>({waitFor:async()=>{}})}),
-    evaluate:async()=>{
-      if(evalIndex++===0)return "UCowner";
-      if(evalIndex===2)return [id,other];
+    url:()=>visited.at(-1), isClosed:()=>false,waitForFunction:async()=>{},waitForSelector:async()=>{},
+    locator:()=>({first:()=>({waitFor:async()=>{}})}),
+    evaluate:async(fn,arg)=>{
+      const source=fn.toString();
+      if(source.includes("ytInitialData"))return "UCowner";
+      if(source.includes("new Set"))return [id,other];
+      if(source.includes("ytd-reel-video-renderer"))return false;
+      if(source.includes("querySelectorAll"))return;
       const p=player(dates[metadataIndex],{videoId:metadataIndex++===0?id:other});
       return "var ytInitialPlayerResponse = "+JSON.stringify(p)+";";
     }};

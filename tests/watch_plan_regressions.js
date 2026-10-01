@@ -84,8 +84,9 @@ const source = fs.readFileSync(path.join(root, "tools", "uploader", "worker.js")
 const cs = fs.readFileSync(path.join(root, "src", "Uploader.cs"), "utf8");
 assert.doesNotMatch(source, /MESH_LONG_MAX|MESH_SHORTS_MAX/);
 assert.doesNotMatch(cs, /CollectMeshChannelsForMarket/);
-assert.match(cs, /CollectMeshLongChannels/);
+assert.match(cs, /BuildMeshViewers/);
 assert.match(cs, /meshSingleLong/);
 assert.match(source, /buildMeshCatalogPlan/);
 
 console.log("OK: watch_plan_regressions.js");
+

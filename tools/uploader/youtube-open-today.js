@@ -31,7 +31,7 @@ function extractAssignedJson(html, name) {
   return null;
 }
 
-function classifyVideo(player, id, channelId, today) {
+function classifyVideo(player, id, channelId, today, pcUtcOffsetMinutes) {
   const details = player && player.videoDetails;
   const meta = player && player.microformat && player.microformat.playerMicroformatRenderer;
   if (!details || !meta || details.videoId !== id || !channelId || details.channelId !== channelId)
@@ -39,12 +39,20 @@ function classifyVideo(player, id, channelId, today) {
   if (player.playabilityStatus?.status !== "OK" || details.isLiveContent || meta.liveBroadcastDetails)
     return { eligible: false, reason: "not_public_long_video" };
   // Relative labels such as '23 hours ago' do not establish a calendar date.
-  const date = String(meta.publishDate || "").slice(0, 10);
+  const published=String(meta.publishDate||"");
+  let date=published.slice(0,10);
+  if (/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(published) && Number.isFinite(pcUtcOffsetMinutes)) {
+    const timestamp=Date.parse(published);
+    if(!Number.isFinite(timestamp))return {eligible:false,reason:"date_unknown"};
+    date=new Date(timestamp+pcUtcOffsetMinutes*60000).toISOString().slice(0,10);
+  }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { eligible: false, reason: "date_unknown" };
   return { eligible: date === today, reason: date === today ? "today" : "other_date", date, id };
 }
 
+const pausedPages = new WeakSet();
 async function pauseVideoPage(page) {
+  if (pausedPages.has(page)) return;
   await page.route("**/*", route => {
     const request = route.request();
     const host = new URL(request.url()).hostname;
@@ -58,33 +66,52 @@ async function pauseVideoPage(page) {
     const observer = new MutationObserver(() => document.querySelectorAll("video,audio").forEach(pause));
     observer.observe(document, { childList: true, subtree: true });
   });
+  pausedPages.add(page);
+}
+
+async function pauseCurrentVideo(page, budgetMs=25000) {
+  const deadline=Date.now()+budgetMs;
+  await page.waitForSelector("video", {timeout:Math.min(15000,budgetMs)});
+  await page.evaluate(() => document.querySelectorAll("video,audio").forEach(v => {
+    v.autoplay=false; v.muted=true; v.pause();
+  }));
+  await page.waitForFunction(() => {
+    const videos=[...document.querySelectorAll("video")];
+    return videos.length>0 && videos.every(v=>v.paused && !v.autoplay);
+  }, null, {timeout:Math.max(1,Math.min(10000,deadline-Date.now()))});
 }
 
 async function openToday(page, options, report = () => {}) {
   const url = channelVideosUrl(options.channelUrl);
+  const deadline=Date.now()+90000;
+  const timeout=max=>{
+    const remaining=deadline-Date.now();
+    if(remaining<=0)throw new Error("Не удалось открыть канал и подтвердить видео за 90 секунд.");
+    return Math.min(max,remaining);
+  };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(options.todayDate || "")) throw new Error("Не задана календарная дата ПК.");
-  if (options.pauseAfterOpen !== false) await pauseVideoPage(page);
+  await pauseVideoPage(page);
   report("open_channel", url);
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeout(60000) });
   await page.waitForFunction(() => document.querySelector('ytd-rich-grid-renderer, ytd-browse') && window.ytInitialData,
-    null, { timeout: 30000 });
+    null, { timeout: timeout(30000) });
   const channelId = await page.evaluate(() => window.ytInitialData?.metadata?.channelMetadataRenderer?.externalId || "");
   if (!channelId) throw new Error("YouTube не подтвердил ID открытого канала.");
-  await page.locator('a[href*="/watch?v="]').first().waitFor({ state: "attached", timeout: 15000 }).catch(() => {});
-  const ids = await page.evaluate(() => [...new Set(Array.from(document.querySelectorAll('ytd-rich-grid-renderer a[href*="/watch?v="], ytd-grid-video-renderer a[href*="/watch?v="]'))
+  await page.locator('a[href*="/watch?v="]').first().waitFor({ state: "attached", timeout: timeout(15000) }).catch(() => {});
+  const ids = await page.evaluate(() => [...new Set(Array.from(document.querySelectorAll('ytd-rich-grid-media a[href*="/watch?v="], ytd-grid-video-renderer a[href*="/watch?v="]'))
     .map(a => new URL(a.href).searchParams.get("v")).filter(id => /^[a-zA-Z0-9_-]{11}$/.test(id || "")))].slice(0, 20));
   if (!ids.length) throw new Error("На вкладке «Видео» нет доступных роликов либо изменился интерфейс YouTube.");
   let selected = null;
   for (const id of ids) {
-    const html = await page.evaluate(async id => {
-      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
+    const html = await page.evaluate(async ({id,fetchTimeout}) => {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), fetchTimeout);
       try {
         const response = await fetch("/watch?v=" + id, { credentials: "include", signal: controller.signal });
         if (!response.ok) throw new Error("HTTP " + response.status);
         return await response.text();
       } finally { clearTimeout(timer); }
-    }, id);
-    const verdict = classifyVideo(extractAssignedJson(html, "ytInitialPlayerResponse"), id, channelId, options.todayDate);
+    }, {id,fetchTimeout:timeout(15000)});
+    const verdict = classifyVideo(extractAssignedJson(html, "ytInitialPlayerResponse"), id, channelId, options.todayDate, options.pcUtcOffsetMinutes);
     report("video_date", id + ": " + verdict.reason + (verdict.date ? " " + verdict.date : ""));
     if (verdict.eligible) { selected = id; break; } // Videos tab is newest first.
     if (verdict.reason === "date_unknown" || verdict.reason === "metadata_or_owner")
@@ -92,11 +119,63 @@ async function openToday(page, options, report = () => {}) {
   }
   if (!selected) throw new Error("Нет подтверждённого видео за " + options.todayDate + " среди последних 20 роликов. Старое видео не открывается.");
   const watchUrl = "https://www.youtube.com/watch?v=" + selected;
-  await page.goto(watchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.goto(watchUrl, { waitUntil: "domcontentloaded", timeout: timeout(60000) });
   await page.waitForFunction(id => window.ytInitialPlayerResponse?.videoDetails?.videoId === id,
-    selected, { timeout: 30000 });
-  report("opened", watchUrl + (options.pauseAfterOpen !== false ? " · пауза" : ""));
+    selected, { timeout: timeout(30000) });
+  if (new URL(page.url()).pathname !== "/watch" ||
+      await page.evaluate(() => !!document.querySelector("ytd-reel-video-renderer")))
+    throw new Error("YouTube открыл Shorts вместо обычного видео.");
+  await pauseCurrentVideo(page,timeout(25000));
+  report("opened", watchUrl + " · пауза");
   return watchUrl;
 }
 
-module.exports = { channelVideosUrl, extractAssignedJson, classifyVideo, pauseVideoPage, openToday };
+async function captureNavigationFailure(page, target, error, directory, report) {
+  if (!directory || page.isClosed()) return;
+  const fs=require("fs"), path=require("path");
+  fs.mkdirSync(directory,{recursive:true});
+  const owner=String(target.ownerProfileId||"channel").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,40);
+  const file=path.join(directory,"youtube-navigation-"+Date.now()+"-"+process.pid+"-"+owner);
+  const state=await page.evaluate(()=>({
+    channelId:window.ytInitialData?.metadata?.channelMetadataRenderer?.externalId||"",
+    playerId:window.ytInitialPlayerResponse?.videoDetails?.videoId||"",
+    richGrids:document.querySelectorAll("ytd-rich-grid-renderer").length,
+    ordinaryCards:document.querySelectorAll("ytd-rich-grid-media, ytd-grid-video-renderer").length,
+    shortsPlayer:!!document.querySelector("ytd-reel-video-renderer"),
+    videos:[...document.querySelectorAll("video")].map(v=>({paused:v.paused,autoplay:v.autoplay})),
+    candidateIds:[...new Set([...document.querySelectorAll('ytd-rich-grid-media a[href*="/watch?v="],ytd-grid-video-renderer a[href*="/watch?v="]')].map(a=>new URL(a.href).searchParams.get("v")))].slice(0,20)
+  })).catch(()=>({unavailable:true}));
+  const url=new URL(page.url());
+  fs.writeFileSync(file+".json",JSON.stringify({at:new Date().toISOString(),error:String(error.message),
+    page:url.origin+url.pathname,videoId:url.searchParams.get("v")||"",state},null,2));
+  await page.screenshot({path:file+".png",fullPage:false,timeout:5000}).catch(()=>{});
+  report("diagnostic","Диагностика страницы: "+file+".json / .png");
+}
+
+async function openChannelsPaused(page, targets, options, report=()=>{}) {
+  if (!Array.isArray(targets) || !targets.length) throw new Error("Нет ссылок каналов.");
+  let opened=0, lastUrl="";
+  const errors=[];
+  for(let i=0;i<targets.length;i++) {
+    const target=targets[i];
+    const label=String(target.ownerName||target.channelUrl||"Канал");
+    report("channel", "Канал "+(i+1)+"/"+targets.length+" · "+label);
+    try {
+      const channelUrl=channelVideosUrl(target.channelUrl);
+      lastUrl=await openToday(page,{...options,channelUrl},(stage,text)=>report(stage,label+": "+text));
+      opened++;
+      report("mesh", "✓ "+label+" · пауза", {channelUrl,meshOwner:target.ownerProfileId,url:lastUrl});
+    } catch(e) {
+      const reason=label+": "+e.message;
+      errors.push(reason);report("channel_error",reason);
+      try {await captureNavigationFailure(page,target,e,options.diagnosticsDirectory,report);}
+      catch(diagnosticError){report("diagnostic","Не сохранена диагностика: "+diagnosticError.message);}
+      if(page.isClosed())break;
+    }
+  }
+  report("summary", "Открыто на паузе: "+opened+"/"+targets.length+" · ошибок: "+errors.length);
+  if(errors.length)throw new Error("Открыто "+opened+"/"+targets.length+". "+errors.join("; "));
+  return {opened,lastUrl};
+}
+
+module.exports = { channelVideosUrl, extractAssignedJson, classifyVideo, pauseVideoPage, pauseCurrentVideo, openToday, openChannelsPaused };

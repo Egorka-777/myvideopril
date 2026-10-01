@@ -15,7 +15,7 @@ function player(id,date) {
       const u=new URL(route.request().url());
       if(/googlevideo/.test(u.hostname)){mediaReached=true;return route.abort();}
       if(u.pathname==='/@owned/videos') {
-        return route.fulfill({contentType:'text/html',body:`<script>window.ytInitialData={metadata:{channelMetadataRenderer:{externalId:'UC-owned'}}};</script><ytd-browse><ytd-rich-grid-renderer>${ids.map(id=>`<a href="/watch?v=${id}">${id}</a>`).join('')}</ytd-rich-grid-renderer></ytd-browse>`});
+        return route.fulfill({contentType:'text/html',body:`<script>window.ytInitialData={metadata:{channelMetadataRenderer:{externalId:'UC-owned'}}};</script><ytd-browse><ytd-rich-grid-renderer>${ids.map(id=>`<ytd-rich-grid-media><a href="/watch?v=${id}">${id}</a></ytd-rich-grid-media>`).join('')}</ytd-rich-grid-renderer></ytd-browse>`});
       }
       if(u.pathname==='/watch') {
         const id=u.searchParams.get('v');
@@ -24,7 +24,7 @@ function player(id,date) {
       return route.fulfill({status:404,body:''});
     });
     const page=await context.newPage();
-    assert.equal(await openToday(page,{channelUrl:'https://www.youtube.com/@owned/videos',todayDate:'2026-10-01'}),'https://www.youtube.com/watch?v='+ids[1]);
+    assert.equal(await openToday(page,{channelUrl:'https://www.youtube.com/@owned/videos',todayDate:'2026-10-01',pauseAfterOpen:false}),'https://www.youtube.com/watch?v='+ids[1]);
     const state=await page.locator('video').evaluate(v=>({paused:v.paused,autoplay:v.autoplay}));
     assert.deepEqual(state,{paused:true,autoplay:false});
     assert.equal(mediaReached,false,'media must not reach the transport');

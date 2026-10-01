@@ -792,7 +792,7 @@ namespace VideoBatch {
             var urlHints = CollectChannelUrlHints();
             try {
                 SyncWorkspaceToBackend();
-                AppendLog("[" + marketView + "] сетка: " + channels.Count + " аккаунт(ов) · чужие каналы через вкладку «Видео».");
+                AppendLog("[" + marketView + "] сетка: " + channels.Count + " аккаунт(ов) · ссылки каналов → сегодняшние видео на паузе.");
                 await backend.RunMeshWatchAsync(channels, urlHints, marketView);
                 RefreshGrid();
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
@@ -806,14 +806,14 @@ namespace VideoBatch {
             if (channels.Count == 0) {
                 MessageBox.Show(this,
                     "Отметьте галочкой ✓ RU-аккаунты на вкладке RU.\n\n" +
-                    "Кнопка «Смотреть RU» запускает просмотр с RU-вкладки даже если сейчас открыт EN.",
+                    "Кнопка «Смотреть RU» открывает видео аккаунтами RU-вкладки даже если сейчас открыт EN.",
                     "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             var urlHints = CollectChannelUrlHintsForMarket("RU");
             try {
                 SyncWorkspaceToBackend();
-                AppendLog("[RU] сетка: " + channels.Count + " аккаунт(ов) · чужие RU-каналы через вкладку «Видео».");
+                AppendLog("[RU] сетка: " + channels.Count + " аккаунт(ов) · ссылки RU-каналов → сегодняшние видео на паузе.");
                 await backend.RunRuMeshWatchAsync(channels, urlHints);
                 RefreshGrid();
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
@@ -977,4 +977,5 @@ namespace VideoBatch {
         }
     }
 }
+
 
