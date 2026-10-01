@@ -7,6 +7,8 @@ on:
       - 'src/**'
       - 'tools/uploader/**'
       - 'tests/**'
+      - 'scripts/Build-Desktop-20261001.ps1'
+      - 'docs/ROLLOUT_20261001_RU.md'
       - 'VideoBatch.csproj'
       - '.github/workflows/windows-regression.yml'
 jobs:

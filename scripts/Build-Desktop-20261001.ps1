@@ -20,6 +20,9 @@ try {
     }
     dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon= -o $OutputDirectory
     if ($LASTEXITCODE -ne 0) { throw "Build failed" }
+    $asm = [Reflection.Assembly]::LoadFrom((Join-Path $OutputDirectory "VideoBatch.exe"))
+    $selfTests = $asm.GetType('VideoBatch.HttpRegressionSelfTests').GetMethod('RunAll')
+    if (!$selfTests.Invoke($null, @())) { throw "C# self tests failed; kit must not be launched" }
     $tools = Join-Path $OutputDirectory "tools"
     $uploader = Join-Path $tools "uploader"
     New-Item -ItemType Directory -Force -Path $uploader | Out-Null
