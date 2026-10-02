@@ -31,8 +31,8 @@ assert.match(mesh,/if\(closeErrors.Count>0\)throw/,'Unconfirmed close must block
 assert.match(worker,/if \(!job\.openTodayOnly && !job\.watchMesh\) try/,'Navigation must not wait for external IP services');
 assert.match(worker,/openChannelsPaused\(page, targets, navigationJob/);
 assert.match(worker,/job.openTodayOnly \|\| job.watchMesh/,'C# alone owns closure of navigation profiles');
-assert.doesNotMatch(worker,/waitForVideoEnd|watchShortOnce|likeCurrentVideo|quickLikeVideo|isVideoLiked|ensureVideoPlaying/,'Remove playback and like implementations');
-assert.doesNotMatch(navigation,/pauseAfterOpen/,'Pause has no off switch');
+assert.doesNotMatch(worker,/waitForVideoEnd|watchShortOnce|likeCurrentVideo|quickLikeVideo|isVideoLiked|ensureVideoPlaying/,'Legacy routines must stay absent');
+assert.doesNotMatch(navigation,/pauseAfterOpen/,'Navigation options must match the supported contract');
 assert.match(navigation,/resourceType\(\) === "media"/);
 assert.match(navigation,/pauseCurrentVideo\(page[,)]/);
-console.log('OK: watch_regressions.js (paused navigation, selection, closure and no engagement routines)');
+console.log('OK: watch_regressions.js (navigation, selection and closure)');
