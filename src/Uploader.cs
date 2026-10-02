@@ -1776,7 +1776,7 @@ namespace VideoBatch {
                     MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Просмотр ссылок",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 }else{
                     Write("["+MarketLabel(marketView)+"] просмотр ссылок завершён: "+viewersOk+"/"+viewers.Count+" аккаунтов · "+watchTargets.Length+" ролик(ов) каждый.");
-                    MessageBox.Show(this,viewersOk+" аккаунт(ов) открыли на паузе "+watchTargets.Length+" ссылок.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                    MessageBox.Show(this,viewersOk+" аккаунт(ов) досмотрели "+watchTargets.Length+" ссылок.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);
                 }
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}
         }
@@ -1801,7 +1801,7 @@ namespace VideoBatch {
                         cancellation.Token.ThrowIfCancellationRequested();
                         Status(row,"Поиск видео…");
                         var result=await DolphinRunner.Run(new UploadJob{token=token,localPort=settings.DolphinPort,profileId=c.ProfileId,expectedIp=c.ExpectedIp,title=keys,searchKeys=keys,searchFullTitle=fullTitle,searchUrl=link,searchFilter=filter,checkOnly=false,searchOnly=true,skipQueueDelay=true},m=>{if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);},cancellation.Token).ConfigureAwait(false);
-                        Status(row,string.IsNullOrWhiteSpace(result.Url)?"Открыто · пауза ✓":"Открыто · пауза ✓ "+result.Url);SafeSave();
+                        Status(row,string.IsNullOrWhiteSpace(result.Url)?"Досмотрено ✓":"Досмотрено ✓ "+result.Url);SafeSave();
                     }catch(OperationCanceledException){throw;}
                     catch(Exception e){errors.Add(c.Name+": "+e.Message);Status(row,"Ошибка поиска");}
                 })).ToArray();

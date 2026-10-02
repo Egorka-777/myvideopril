@@ -49,7 +49,6 @@ function classifyVideo(player, id, channelId, today, pcUtcOffsetMinutes) {
   return { eligible: date === today, reason: date === today ? "today" : "other_date", date, id };
 }
 
-const pausedPages = new WeakSet();
 function ordinaryVideoIds(data) {
   const tabs = data?.contents?.twoColumnBrowseResultsRenderer?.tabs || [];
   const tab = tabs.map(t => t.tabRenderer).find(t => t?.selected);
@@ -66,37 +65,7 @@ function ordinaryVideoIds(data) {
   return [...new Set(ids)].slice(0, 20);
 }
 
-async function pauseVideoPage(page) {
-  if (pausedPages.has(page)) return;
-  await page.route("**/*", route => {
-    const request = route.request();
-    const host = new URL(request.url()).hostname;
-    if (request.resourceType() === "media" || /(^|\.)googlevideo\.com$/.test(host)) return route.abort();
-    return route.fallback();
-  });
-  await page.addInitScript(() => {
-    const pause = el => { el.autoplay = false; el.muted = true; el.pause(); };
-    HTMLMediaElement.prototype.play = function () { pause(this); return Promise.resolve(); };
-    document.addEventListener("play", event => { if (event.target instanceof HTMLMediaElement) pause(event.target); }, true);
-    const observer = new MutationObserver(() => document.querySelectorAll("video,audio").forEach(pause));
-    observer.observe(document, { childList: true, subtree: true });
-  });
-  pausedPages.add(page);
-}
-
-async function pauseCurrentVideo(page, budgetMs = 25000) {
-  const deadline = Date.now() + budgetMs;
-  await page.waitForSelector("video", { timeout: Math.min(15000, budgetMs) });
-  await page.evaluate(() => document.querySelectorAll("video,audio").forEach(v => {
-    v.autoplay = false; v.muted = true; v.pause();
-  }));
-  await page.waitForFunction(() => {
-    const videos = [...document.querySelectorAll("video")];
-    return videos.length > 0 && videos.every(v => v.paused && !v.autoplay);
-  }, null, { timeout: Math.max(1, Math.min(10000, deadline - Date.now())) });
-}
-
-/** Навигация: вкладка «Видео» → сегодняшний ролик (без паузы). */
+/** Навигация: вкладка «Видео» → сегодняшний ролик. */
 async function navigateTodayVideo(page, options, report = () => {}) {
   const url = channelVideosUrl(options.channelUrl);
   const deadline = Date.now() + 90000;
@@ -147,11 +116,7 @@ async function navigateTodayVideo(page, options, report = () => {}) {
 }
 
 async function openToday(page, options, report = () => {}) {
-  await pauseVideoPage(page);
-  const watchUrl = await navigateTodayVideo(page, options, report);
-  await pauseCurrentVideo(page, 25000);
-  report("opened", watchUrl + " · пауза");
-  return watchUrl;
+  return navigateTodayVideo(page, options, report);
 }
 
 async function captureNavigationFailure(page, target, error, directory, report) {
@@ -189,7 +154,7 @@ async function openChannelsWatch(page, targets, options, report = () => {}, play
       const channelUrl = channelVideosUrl(target.channelUrl);
       lastUrl = await navigateTodayVideo(page, { ...options, channelUrl }, (stage, text) => report(stage, label + ": " + text));
       report("youtube", label + ": видео открыто. Смотрю…");
-      await playback.waitForVideoEnd(page, {}, (text) => report("youtube", label + ": " + text));
+      await playback.waitForVideoEnd(page, {}, (stage, text) => report(stage || "youtube", label + ": " + text));
       opened++;
       report("mesh", "✓ " + label + " · досмотрено", { channelUrl, meshOwner: target.ownerProfileId, url: lastUrl });
     } catch (e) {
@@ -205,36 +170,7 @@ async function openChannelsWatch(page, targets, options, report = () => {}, play
   return { opened, lastUrl };
 }
 
-/** @deprecated Используйте openChannelsWatch — оставлено для совместимости тестов паузы. */
-async function openChannelsPaused(page, targets, options, report = () => {}) {
-  if (!Array.isArray(targets) || !targets.length) throw new Error("Нет ссылок каналов.");
-  let opened = 0, lastUrl = "";
-  const errors = [];
-  for (let i = 0; i < targets.length; i++) {
-    const target = targets[i];
-    const label = String(target.ownerName || target.channelUrl || "Канал");
-    report("channel", "Канал " + (i + 1) + "/" + targets.length + " · " + label);
-    try {
-      const channelUrl = channelVideosUrl(target.channelUrl);
-      await pauseVideoPage(page);
-      lastUrl = await openToday(page, { ...options, channelUrl }, (stage, text) => report(stage, label + ": " + text));
-      opened++;
-      report("mesh", "✓ " + label + " · пауза", { channelUrl, meshOwner: target.ownerProfileId, url: lastUrl });
-    } catch (e) {
-      const reason = label + ": " + e.message;
-      errors.push(reason); report("channel_error", reason);
-      try { await captureNavigationFailure(page, target, e, options.diagnosticsDirectory, report); }
-      catch (diagnosticError) { report("diagnostic", "Не сохранена диагностика: " + diagnosticError.message); }
-      if (page.isClosed()) break;
-    }
-  }
-  report("summary", "Открыто на паузе: " + opened + "/" + targets.length + " · ошибок: " + errors.length);
-  if (errors.length) throw new Error("Открыто " + opened + "/" + targets.length + ". " + errors.join("; "));
-  return { opened, lastUrl };
-}
-
 module.exports = {
   channelVideosUrl, extractAssignedJson, classifyVideo, ordinaryVideoIds,
-  pauseVideoPage, pauseCurrentVideo, navigateTodayVideo,
-  openToday, openChannelsWatch, openChannelsPaused
+  navigateTodayVideo, openToday, openChannelsWatch
 };

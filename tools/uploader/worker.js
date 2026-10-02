@@ -1006,7 +1006,6 @@ async function openVideoFromMatch(page, match, targetId) {
     throw new Error("Открылся другой ролик (ID=" + openedId + "), нужен " + targetId + ". Профиль оставлен открытым.");
   }
   await dismissYouTubeOverlays(page);
-  await pauseCurrentVideo(page);
   const finalUrl = page.url().split("&")[0];
   return finalUrl || watch.split("&")[0];
 }
@@ -1405,7 +1404,6 @@ async function openVideoDirect(page, videoId, preferShorts, options) {
     await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: selectorTimeout }).catch(() => {});
     if (await readVideoPageBlocked(page)) continue;
     if (extractVideoId(page.url())) {
-      await pauseCurrentVideo(page);
       return page.url().split("&")[0];
     }
   }
@@ -1761,7 +1759,6 @@ async function openVideoFromChannelList(page, item) {
   if (!clicked) throw new Error("Не удалось открыть ролик на странице канала.");
   await page.waitForURL(/\/(?:watch(?:[?]|$)|shorts\/)/, { timeout: 20000 }).catch(() => {});
   await dismissYouTubeOverlays(page);
-  await pauseCurrentVideo(page);
 }
 
 function titleMatchesCatalog(videoTitle, catalogTitle) {
@@ -1828,10 +1825,6 @@ function sendMeshChannel(target, channelUrl) {
   if (channelUrl && target && target.ownerProfileId) {
     send("mesh", "Канал: " + channelUrl, { channelUrl, meshOwner: target.ownerProfileId });
   }
-}
-
-async function pauseCurrentVideo(page) {
-  return require("./youtube-open-today.js").pauseCurrentVideo(page);
 }
 
 async function setThumbnail(page, path) {
@@ -3088,9 +3081,8 @@ async function main() {
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
   let page = await context.newPage();
   attachPageGuards(page);
-  if (job.openTodayOnly || job.watchDirectLinks || job.searchOnly)
-    await require("./youtube-open-today.js").pauseVideoPage(page);
   await page.bringToFront().catch(() => {});
+  const playback = require("./youtube-playback.js");
   // IP не блокируем: прокси уже в Dolphin. Только пишем в лог, если удалось узнать.
   let verifiedIp = "";
   if (!job.openTodayOnly && !job.watchMesh) try {
@@ -3100,18 +3092,17 @@ async function main() {
   } catch (_) {}
 
   if (job.openTodayOnly) {
-    const { openToday } = require("./youtube-open-today.js");
+    const { navigateTodayVideo } = require("./youtube-open-today.js");
     send("start", "YouTube navigation 2026-10-01");
     youtubeOpened = true;
-    const url = await openToday(page, job, (stage, text) => send(stage, text));
-    send("youtube", "Видео открыто · пауза.", { percent: 82 });
-    await pauseCurrentVideo(page);
+    const url = await navigateTodayVideo(page, job, (stage, text) => send(stage, text));
+    send("youtube", "Видео открыто. Смотрю до конца…", { percent: 70 });
+    await playback.waitForVideoEnd(page, {}, (stage, text) => send(stage || "youtube", text));
     await page.close().catch(() => {});
     await browser.close().catch(() => {});
     browser = null;
     finished = true;
-    // C# owns profile shutdown and will not advance batches without an acknowledgement.
-    send("done", "Сегодняшнее видео открыто · пауза.", { success: true, url, percent: 100 });
+    send("done", "Сегодняшнее видео досмотрено.", { success: true, url, percent: 100 });
     return;
   }
 
@@ -3149,8 +3140,8 @@ async function main() {
       });
       try {
         const opened = await openVideoDirect(page, videoId, preferShorts);
-        send("youtube", "Видео открыто · пауза.", { percent: 25 + Math.round(((i + 0.4) / Math.max(1, targets.length)) * 65), url: opened, videoId });
-        await pauseCurrentVideo(page);
+        send("youtube", "Видео открыто. Смотрю до конца…", { percent: 25 + Math.round(((i + 0.4) / Math.max(1, targets.length)) * 65), url: opened, videoId });
+        await playback.waitForVideoEnd(page, {}, (stage, text) => send(stage || "youtube", text));
         watched++;
         send("youtube", "✓ Ссылка " + (i + 1) + "/" + targets.length + " · " + videoId, {
           percent: 25 + Math.round(((i + 1) / Math.max(1, targets.length)) * 65),
@@ -3197,7 +3188,6 @@ async function main() {
     if (!targets.length) throw new Error("Нет ссылок каналов для просмотра.");
     youtubeOpened = true;
     const navigation = require("./youtube-open-today.js");
-    const playback = require("./youtube-playback.js");
     send("start", "YouTube navigation 2026-10-01-watch-grid");
     const navigationJob = {...job, diagnosticsDirectory:path.join(path.dirname(path.dirname(jobPath)), "diagnostics")};
     const reportFn = (stage, text, extra) => send(stage, text, extra);
@@ -3221,14 +3211,14 @@ async function main() {
       searchKeys: job.searchKeys || job.title,
       searchFullTitle: fullTitle
     });
-    send("youtube", "Видео открыто · пауза.", { percent: 82 });
-    await pauseCurrentVideo(page);
+    send("youtube", "Видео открыто. Смотрю до конца…", { percent: 70 });
+    await playback.waitForVideoEnd(page, {}, (stage, text) => send(stage || "youtube", text));
     await browser.close().catch(() => {});
     browser = null;
     await stopProfile();
     await pauseAfterWatch();
     finished = true;
-    send("done", "Видео открыто · пауза, профиль закрыт.", { success: true, keptOpen: false, url: opened, ip: verifiedIp, percent: 100 });
+    send("done", "Видео досмотрено, профиль закрыт.", { success: true, keptOpen: false, url: opened, ip: verifiedIp, percent: 100 });
     return;
   }
 

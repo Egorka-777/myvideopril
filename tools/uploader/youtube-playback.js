@@ -33,35 +33,6 @@ async function skipAdIfPossible(page) {
   if (await visible(skip, 400)) await skip.first().click({ timeout: 1000 }).catch(() => {});
 }
 
-async function ensureVideoPlaying(page) {
-  await dismissYouTubeOverlays(page);
-  await skipAdIfPossible(page);
-  const player = page.locator("#movie_player, .html5-video-player, ytd-player");
-  if (await visible(player, 1500)) {
-    await player.first().click({ position: { x: 40, y: 40 }, timeout: 2000 }).catch(() => {});
-  }
-  const play = page.locator([
-    "button.ytp-large-play-button",
-    "button.ytp-play-button[aria-label*='Play' i]",
-    "button.ytp-play-button[aria-label*='Смотр' i]",
-    "button.ytp-play-button[aria-label*='Воспроиз' i]",
-    "button.ytp-play-button[title*='Play' i]",
-    "button.ytp-play-button[title*='Смотр' i]"
-  ].join(", "));
-  if (await visible(play, 1200)) await play.first().click({ timeout: 2000 }).catch(() => {});
-  await page.keyboard.press("k").catch(() => {});
-  await page.evaluate(() => {
-    const v = document.querySelector("video.html5-main-video") || document.querySelector("#movie_player video") || document.querySelector("video");
-    if (!v) return false;
-    try { v.muted = false; } catch (_) {}
-    try {
-      const p = v.play();
-      if (p && typeof p.catch === "function") p.catch(() => {});
-    } catch (_) {}
-    return true;
-  }).catch(() => {});
-}
-
 async function readPlaybackState(page) {
   return page.evaluate(() => {
     const v = document.querySelector("video.html5-main-video") || document.querySelector("#movie_player video") || document.querySelector("video");
@@ -75,6 +46,32 @@ async function readPlaybackState(page) {
       readyState: v.readyState
     };
   }).catch(() => ({ missing: true }));
+}
+
+/** Запускает воспроизведение только если ролик на паузе. Не переключает Play/Pause. */
+async function resumeIfPaused(page) {
+  await dismissYouTubeOverlays(page);
+  await skipAdIfPossible(page);
+  const state = await readPlaybackState(page);
+  if (state.missing || state.ended || !state.paused) return;
+
+  const play = page.locator([
+    "button.ytp-large-play-button",
+    "button.ytp-play-button[aria-label*='Play' i]",
+    "button.ytp-play-button[aria-label*='Смотр' i]",
+    "button.ytp-play-button[aria-label*='Воспроиз' i]"
+  ].join(", "));
+  if (await visible(play, 1200)) {
+    await play.first().click({ timeout: 2000 }).catch(() => {});
+    return;
+  }
+  await page.evaluate(() => {
+    const v = document.querySelector("video.html5-main-video") || document.querySelector("#movie_player video") || document.querySelector("video");
+    if (v && v.paused && !v.ended) {
+      const p = v.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
+  }).catch(() => {});
 }
 
 function formatClock(seconds) {
@@ -174,11 +171,11 @@ async function waitForVideoEnd(page, opts, report) {
   }
   await dismissYouTubeOverlays(page);
   await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 90000 }).catch(() => {});
-  for (let i = 0; i < 8; i++) {
-    await ensureVideoPlaying(page);
+  for (let i = 0; i < 6; i++) {
     const st = await readPlaybackState(page);
-    if (!st.missing && !st.paused && (st.current > 0.2 || st.readyState >= 2)) break;
-    await new Promise(r => setTimeout(r, 800));
+    if (!st.missing && !st.paused && (st.current > 0.05 || st.readyState >= 2)) break;
+    if (st.paused) await resumeIfPaused(page);
+    await new Promise(r => setTimeout(r, 1000));
   }
 
   const alreadyLiked = await isVideoLiked(page);
@@ -193,7 +190,7 @@ async function waitForVideoEnd(page, opts, report) {
       duration = state.duration;
       break;
     }
-    await ensureVideoPlaying(page);
+    if (state.paused) await resumeIfPaused(page);
     await new Promise(r => setTimeout(r, 1000));
   }
   if (!(duration > 1)) {
@@ -202,12 +199,12 @@ async function waitForVideoEnd(page, opts, report) {
     const retryUntil = Date.now() + 45000;
     while (Date.now() < retryUntil) {
       await skipAdIfPossible(page);
-      await ensureVideoPlaying(page);
       const state = await readPlaybackState(page);
       if (!state.missing && isFinite(state.duration) && state.duration > 1) {
         duration = state.duration;
         break;
       }
+      if (state.paused) await resumeIfPaused(page);
       await new Promise(r => setTimeout(r, 900));
     }
   }
@@ -220,35 +217,31 @@ async function waitForVideoEnd(page, opts, report) {
   let lastReport = 0;
   let stuckAt = -1;
   let stuckSince = Date.now();
-  let maxSeen = 0;
 
   while (true) {
     if (Date.now() - startedAt > hardLimitMs) {
-      throw new Error("Видео не завершилось за отведённое время. Проверьте рекламу или паузу в открытом профиле.");
+      throw new Error("Видео не завершилось за отведённое время. Проверьте рекламу или остановку в открытом профиле.");
     }
     await skipAdIfPossible(page);
     const state = await readPlaybackState(page);
     if (state.missing) {
-      await ensureVideoPlaying(page);
       await new Promise(r => setTimeout(r, 1500));
       continue;
     }
     const curRaw = Number(state.current) || 0;
-    maxSeen = Math.max(maxSeen, curRaw);
     if (state.ended || (state.duration > 1 && state.current >= state.duration - 0.75)) {
       break;
     }
-    if (state.paused) await ensureVideoPlaying(page);
-
-    const cur = Math.floor(state.current || 0);
-    if (cur === stuckAt) {
-      if (Date.now() - stuckSince > 12000) {
+    if (state.paused) {
+      await resumeIfPaused(page);
+    } else if (curRaw - stuckAt < 0.2) {
+      if (Date.now() - stuckSince > 15000) {
         report("youtube", "Просмотр завис — снова запускаю Play…");
-        await ensureVideoPlaying(page);
+        await resumeIfPaused(page);
         stuckSince = Date.now();
       }
     } else {
-      stuckAt = cur;
+      stuckAt = curRaw;
       stuckSince = Date.now();
     }
 
@@ -269,5 +262,5 @@ module.exports = {
   waitForVideoEnd,
   likeCurrentVideo,
   isVideoLiked,
-  ensureVideoPlaying
+  resumeIfPaused
 };

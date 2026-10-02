@@ -32,13 +32,15 @@ assert.match(worker,/if \(!job\.openTodayOnly && !job\.watchMesh\) try/,'Navigat
 assert.match(worker,/openChannelsWatch\(page, targets, navigationJob/);
 assert.match(worker,/2026-10-01-watch-grid/);
 assert.match(worker,/job.openTodayOnly \|\| job.watchMesh/,'C# alone owns closure of navigation profiles');
+assert.doesNotMatch(worker,/pauseVideoPage|pauseCurrentVideo/,'Video pause hooks must be removed');
 const playback=read('tools/uploader/youtube-playback.js');
 assert.match(playback,/waitForVideoEnd/);
+assert.match(playback,/resumeIfPaused/);
 assert.match(playback,/Лайк поставлен/);
 assert.match(playback,/Видео закончилось/);
+assert.doesNotMatch(playback,/keyboard\.press\("k"\)/,'Must not toggle play/pause with hotkey');
 assert.match(navigation,/openChannelsWatch/);
 assert.match(navigation,/navigateTodayVideo/);
-assert.match(navigation,/resourceType\(\) === "media"/);
-assert.match(navigation,/pauseCurrentVideo\(page[,)]/);
+assert.doesNotMatch(navigation,/pauseVideoPage|pauseCurrentVideo|openChannelsPaused/,'Navigation must not force pause');
 assert.match(playback,/if \(!\(await isVideoLiked\(page\)\)\) await likeCurrentVideo/,'Like only after playback ends');
 console.log('OK: watch_regressions.js (navigation, selection and closure)');

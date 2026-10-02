@@ -34,7 +34,7 @@ assert.equal(extractAssignedJson("ytInitialPlayerResponse = {broken};","ytInitia
 // Exercise the real navigation flow, including dates from fetched watch HTML.
 async function run(dates) {
   const visited=[], events=[]; let metadataIndex=0, evalIndex=0;
-  const page={route:async()=>{},addInitScript:async()=>{},goto:async url=>visited.push(url),
+  const page={goto:async url=>visited.push(url),
     url:()=>visited.at(-1), isClosed:()=>false,waitForFunction:async()=>{},waitForSelector:async()=>{},
     locator:()=>({first:()=>({waitFor:async()=>{}})}),
     evaluate:async(fn,arg)=>{
