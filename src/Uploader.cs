@@ -1691,7 +1691,7 @@ namespace VideoBatch {
                                 watchMesh=true,watchTargets=ordered,skipQueueDelay=true
                             },m=>{if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(pair.ch,pair.row,m.text);},ct).ConfigureAwait(false);
                             Interlocked.Increment(ref completed);
-                            MeshStatus(pair.ch,pair.row,"Все ссылки открыты · пауза");
+                            MeshStatus(pair.ch,pair.row,"Все ссылки досмотрены ✓");
                         }catch(OperationCanceledException){throw;}
                         catch(Exception e){errors.Add(pair.ch.Name+": "+e.Message);MeshStatus(pair.ch,pair.row,"Ошибка открытия: "+e.Message);}
                         finally{

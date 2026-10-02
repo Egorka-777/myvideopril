@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Build-Desktop-20261001.ps1 -R
 
 Если полный runtime находится в другой папке, использовать его фактический путь. Скрипт собирает новый комплект, запускает Node и C# проверки и записывает исходный commit/SHA256. Выходную папку не накладывать на старую. Ссылку на новую ветку и точный commit взять из PR этой доработки.
 
-4. Запустить EXE из новой папки `artifacts\Desktop-20261001-...`. При «Смотреть ссылки» worker сообщает `YouTube navigation 2026-10-01-paused-grid`. Проверить SOURCE_COMMIT.txt и SHA256_MANIFEST.txt.
+4. Запустить EXE из новой папки `artifacts\Desktop-20261001-...`. При «Смотреть ссылки» worker сообщает `YouTube navigation 2026-10-01-watch-grid`. Проверить SOURCE_COMMIT.txt и SHA256_MANIFEST.txt.
 
 ## Приёмка на ПК
 

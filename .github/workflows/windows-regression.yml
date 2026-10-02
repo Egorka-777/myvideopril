@@ -41,7 +41,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Native calendar test failed" }
           node tests/browser/youtube_navigation.js
           if ($LASTEXITCODE -ne 0) { throw "YouTube navigation browser test failed" }
-          node tests/browser/youtube_paused_grid.js
+          node tests/browser/youtube_watch_grid.js
           if ($LASTEXITCODE -ne 0) { throw "Paused grid browser test failed" }
       - name: Compile desktop application
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=

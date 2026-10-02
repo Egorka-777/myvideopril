@@ -792,7 +792,7 @@ namespace VideoBatch {
             var urlHints = CollectChannelUrlHints();
             try {
                 SyncWorkspaceToBackend();
-                AppendLog("[" + marketView + "] сетка: " + channels.Count + " аккаунт(ов) · ссылки каналов → сегодняшние видео на паузе.");
+                AppendLog("[" + marketView + "] сетка: " + channels.Count + " аккаунт(ов) · все каналы → досмотр до конца + лайк.");
                 await backend.RunMeshWatchAsync(channels, urlHints, marketView);
                 RefreshGrid();
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
@@ -813,7 +813,7 @@ namespace VideoBatch {
             var urlHints = CollectChannelUrlHintsForMarket("RU");
             try {
                 SyncWorkspaceToBackend();
-                AppendLog("[RU] сетка: " + channels.Count + " аккаунт(ов) · ссылки RU-каналов → сегодняшние видео на паузе.");
+                AppendLog("[RU] сетка: " + channels.Count + " аккаунт(ов) · все RU-каналы → досмотр до конца + лайк.");
                 await backend.RunRuMeshWatchAsync(channels, urlHints);
                 RefreshGrid();
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }

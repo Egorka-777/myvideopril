@@ -3088,7 +3088,7 @@ async function main() {
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
   let page = await context.newPage();
   attachPageGuards(page);
-  if (job.openTodayOnly || job.watchMesh || job.watchDirectLinks || job.searchOnly)
+  if (job.openTodayOnly || job.watchDirectLinks || job.searchOnly)
     await require("./youtube-open-today.js").pauseVideoPage(page);
   await page.bringToFront().catch(() => {});
   // IP не блокируем: прокси уже в Dolphin. Только пишем в лог, если удалось узнать.
@@ -3194,16 +3194,19 @@ async function main() {
 
   if (job.watchMesh) {
     const targets = Array.isArray(job.watchTargets) ? job.watchTargets : [];
+    if (!targets.length) throw new Error("Нет ссылок каналов для просмотра.");
     youtubeOpened = true;
-    const { openChannelsPaused } = require("./youtube-open-today.js");
-    send("start", "YouTube navigation 2026-10-01-paused-grid");
+    const navigation = require("./youtube-open-today.js");
+    const playback = require("./youtube-playback.js");
+    send("start", "YouTube navigation 2026-10-01-watch-grid");
     const navigationJob = {...job, diagnosticsDirectory:path.join(path.dirname(path.dirname(jobPath)), "diagnostics")};
-    const result = await openChannelsPaused(page, targets, navigationJob, (stage, text, extra) => send(stage, text, extra));
+    const reportFn = (stage, text, extra) => send(stage, text, extra);
+    const result = await navigation.openChannelsWatch(page, targets, navigationJob, reportFn, playback);
     await page.close().catch(() => {});
     await browser.close().catch(() => {});
     browser = null;
     finished = true;
-    send("done", "Открыто на паузе: " + result.opened + "/" + targets.length + " каналов.",
+    send("done", "Досмотрено: " + result.opened + "/" + targets.length + " каналов.",
       { success: true, url: result.lastUrl, ip: verifiedIp, percent: 100 });
     return;
   }
