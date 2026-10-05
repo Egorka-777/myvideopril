@@ -140,7 +140,11 @@ with tempfile.TemporaryDirectory(prefix='videobatch-effects-') as tmp:
         tags = {k.lower(): v for k, v in probe(path)['format']['tags'].items()}
         assert tags['make'] == 'OnePlus' and tags['model'] in ['11', '12'] and tags['software'] == 'OxygenOS 14', tags
         from datetime import datetime, timezone, timedelta
-        stamp = datetime.fromisoformat(tags['creation_time'].replace('Z', '+00:00'))
+        # New FFprobe merges native MOV time and mdta creation_time with ';'.
+        # Validate every representation and equality rather than ignoring either tag.
+        stamps = [datetime.fromisoformat(value.replace('Z', '+00:00')) for value in tags['creation_time'].split(';')]
+        assert stamps and all(value == stamps[0] for value in stamps), tags
+        stamp = stamps[0]
         assert datetime.now(timezone.utc)-timedelta(days=30, seconds=3) <= stamp <= datetime.now(timezone.utc)
         assert abs(Path(path).stat().st_mtime-stamp.timestamp()) < 2
         assert 'SOURCE_TITLE' not in json.dumps(tags)
