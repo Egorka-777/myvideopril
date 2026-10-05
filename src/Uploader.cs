@@ -130,7 +130,13 @@ namespace VideoBatch {
                 info.EnvironmentVariables["VIDEOBATCH_DOLPHIN_TOKEN"]=protectedToken;
                 process=new Process{StartInfo=info};if(!process.Start())throw new Exception("Не удалось запустить модуль "+label+".");
                 var stderr=process.StandardError.ReadToEndAsync();
-                using(cancel.Register(()=>{try{if(process!=null&&!process.HasExited)process.Kill();}catch{}})) {
+                using(cancel.Register(()=>{
+                    Task.Run(async()=>{
+                        try{if(process!=null&&!process.HasExited){await process.StandardInput.WriteLineAsync("cancel");await process.StandardInput.FlushAsync();}}catch{}
+                        await Task.Delay(3000).ConfigureAwait(false);
+                        try{if(process!=null&&!process.HasExited)process.Kill();}catch{}
+                    });
+                })) {
                     string line;
                     while((line=await process.StandardOutput.ReadLineAsync().ConfigureAwait(false))!=null) {
                         if(string.IsNullOrWhiteSpace(line))continue;
@@ -1068,6 +1074,13 @@ namespace VideoBatch {
             menu.Items.Add("Превью Shorts",null,async(s,e)=>await ApplyShortsThumbFrames());
             menu.Show(moreBtn,new Point(0,moreBtn.Height));
         }
+        int operationsInFlight;
+        public bool IsBusy => Volatile.Read(ref operationsInFlight)>0||cancellation!=null||uploadsInFlight>0;
+        async Task TrackOperation(Func<Task> operation){
+            Interlocked.Increment(ref operationsInFlight);
+            try{await operation();}
+            finally{Interlocked.Decrement(ref operationsInFlight);}
+        }
         public event Action<string> LogLine;
         public void ReloadFromSettings(){
             workspaceKindView=NormKind(settings.YouTubeKindView);
@@ -1130,20 +1143,20 @@ namespace VideoBatch {
             return VisibleRows().FirstOrDefault(r=>string.Equals((((YouTubeChannel)r.Tag).ProfileId??"").Trim(),pid,StringComparison.OrdinalIgnoreCase));
         }
         public void ApplyNavigationContext(){SelectProfileById(NavigationContext.SelectedProfileId,NavigationContext.SelectedMarket);}
-        public Task RunHttpUploadAsync()=>UploadAllHttp(null);
-        public Task RunHttpUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>UploadAllHttp(channels);
-        public Task RunStudioUploadAsync()=>UploadAll(null);
-        public Task RunStudioUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>UploadAll(channels);
-        public Task RunCheckProfilesAsync()=>CheckProfiles(null);
-        public Task RunCheckProfilesAsync(IReadOnlyList<YouTubeChannel> channels)=>CheckProfiles(channels);
-        public Task RunMeshWatchAsync()=>CrossWatchMesh(null,null,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>CrossWatchMesh(channels,null,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId)=>CrossWatchMesh(channels,channelUrlsByProfileId,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string market)=>CrossWatchMesh(channels,channelUrlsByProfileId,market,null);
-        public Task RunCrossMeshWatchAsync(IReadOnlyList<YouTubeChannel> viewerChannels,IReadOnlyList<YouTubeChannel> targetChannels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string viewerMarket)=>CrossWatchMesh(viewerChannels,channelUrlsByProfileId,viewerMarket,targetChannels);
-        public Task RunLinksWatchAsync(string linksText)=>CrossWatchLinks(null,linksText);
-        public Task RunLinksWatchAsync(IReadOnlyList<YouTubeChannel> channels,string linksText)=>CrossWatchLinks(channels,linksText);
-        public Task RunYouTubeSearchAsync()=>SearchOnYouTube();
+        public Task RunHttpUploadAsync()=>TrackOperation(()=>UploadAllHttp(null));
+        public Task RunHttpUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>UploadAllHttp(channels));
+        public Task RunStudioUploadAsync()=>TrackOperation(()=>UploadAll(null));
+        public Task RunStudioUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>UploadAll(channels));
+        public Task RunCheckProfilesAsync()=>TrackOperation(()=>CheckProfiles(null));
+        public Task RunCheckProfilesAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>CheckProfiles(channels));
+        public Task RunMeshWatchAsync()=>TrackOperation(()=>CrossWatchMesh(null,null,null,null));
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>CrossWatchMesh(channels,null,null,null));
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId)=>TrackOperation(()=>CrossWatchMesh(channels,channelUrlsByProfileId,null,null));
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string market)=>TrackOperation(()=>CrossWatchMesh(channels,channelUrlsByProfileId,market,null));
+        public Task RunCrossMeshWatchAsync(IReadOnlyList<YouTubeChannel> viewerChannels,IReadOnlyList<YouTubeChannel> targetChannels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string viewerMarket)=>TrackOperation(()=>CrossWatchMesh(viewerChannels,channelUrlsByProfileId,viewerMarket,targetChannels));
+        public Task RunLinksWatchAsync(string linksText)=>TrackOperation(()=>CrossWatchLinks(null,linksText));
+        public Task RunLinksWatchAsync(IReadOnlyList<YouTubeChannel> channels,string linksText)=>TrackOperation(()=>CrossWatchLinks(channels,linksText));
+        public Task RunYouTubeSearchAsync()=>TrackOperation(()=>SearchOnYouTube());
         public void RequestStopUpload(){stop.Enabled=false;httpUploadPool?.Stop();if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
         public void AssignVideosToProfile(string profileId,string market,string[] files){
             if(files==null||files.Length==0)return;
@@ -1562,38 +1575,23 @@ namespace VideoBatch {
             if(string.IsNullOrWhiteSpace(WindowsSupport.Unprotect(settings.ProtectedDolphinToken)))throw new Exception("Шаг 1: укажите API-токен Dolphin.");
             ValidateForPreview(forUpload,externalChannels);
         }
-        async Task<UploadRunResult> RunUploadWithRetry(UploadJob job,YouTubeChannel ch,DataGridViewRow row,List<PreparedUploadItem> list,CancellationToken ct,string token){
-            const int maxAttempts=2;
-            Exception last=null;
-            for(int attempt=1;attempt<=maxAttempts;attempt++){
-                try{
-                    return await DolphinRunner.Run(job,m=>{
-                        if(!string.IsNullOrWhiteSpace(m.ip))PropagateIp(ch.ProfileId,m.ip);
-                        if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
-                        if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl))
-                            PropagateChannelUrl(ch.ProfileId,m.channelUrl.Trim());
-                        if(m.packIndex>0&&!string.IsNullOrWhiteSpace(m.url)){
-                            int ix=m.packIndex-1;
-                            if(ix>=0&&ix<list.Count){
-                                list[ix].Source.PublishedUrl=m.url.Trim();
-                                SyncPublishedMeta(list[ix].Source);
-                            }
-                        }else if(!string.IsNullOrWhiteSpace(m.url)&&list.Count==1){
-                            list[0].Source.PublishedUrl=m.url.Trim();
-                            SyncPublishedMeta(list[0].Source);
-                        }
-                    },ct).ConfigureAwait(false);
-                }catch(OperationCanceledException){throw;}
-                catch(Exception e){
-                    last=e;
-                    if(attempt>=maxAttempts)break;
-                    Write(ch.Name+": ошибка, перезапуск профиля (попытка "+attempt+"/"+maxAttempts+")…");
-                    Status(row,ChannelStatus.Preparing);
-                    try{await DolphinRunner.StopProfile(token,settings.DolphinPort,(ch.ProfileId??"").Trim()).ConfigureAwait(false);}catch{}
-                    await Task.Delay(3000,ct).ConfigureAwait(false);
+        async Task<UploadRunResult> RunUploadOnce(UploadJob job,YouTubeChannel ch,DataGridViewRow row,List<PreparedUploadItem> list,CancellationToken ct){
+            return await DolphinRunner.Run(job,m=>{
+                if(!string.IsNullOrWhiteSpace(m.ip))PropagateIp(ch.ProfileId,m.ip);
+                if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
+                if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl))
+                    PropagateChannelUrl(ch.ProfileId,m.channelUrl.Trim());
+                if(m.packIndex>0&&!string.IsNullOrWhiteSpace(m.url)){
+                    int ix=m.packIndex-1;
+                    if(ix>=0&&ix<list.Count){
+                        list[ix].Source.PublishedUrl=m.url.Trim();
+                        SyncPublishedMeta(list[ix].Source);
+                    }
+                }else if(!string.IsNullOrWhiteSpace(m.url)&&list.Count==1){
+                    list[0].Source.PublishedUrl=m.url.Trim();
+                    SyncPublishedMeta(list[0].Source);
                 }
-            }
-            throw last??new Exception("Неизвестная ошибка загрузки.");
+            },ct).ConfigureAwait(false);
         }
         async Task CheckProfiles(IReadOnlyList<YouTubeChannel> channelsFilter=null){if(cancellation!=null)return;string token="";try{SaveGrid();ValidateCommon(false,channelsFilter);cancellation=new CancellationTokenSource();Busy(true);
             List<DataGridViewRow> targetRows;
@@ -1618,7 +1616,7 @@ namespace VideoBatch {
                 try{
                     cancellation.Token.ThrowIfCancellationRequested();
                     Status(row,"Проверка IP…");
-                    var result=await DolphinRunner.Run(new UploadJob{token=token,localPort=settings.DolphinPort,profileId=c.ProfileId,checkOnly=true,skipQueueDelay=true},m=>{if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);},cancellation.Token).ConfigureAwait(false);
+                    var result=await DolphinRunner.Run(new UploadJob{token=token,localPort=settings.DolphinPort,profileId=c.ProfileId,checkOnly=true,skipQueueDelay=true,keepProfileOpen=true},m=>{if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);},cancellation.Token).ConfigureAwait(false);
                     PropagateIp(c.ProfileId,result.Ip);
                     Status(row,"IP сохранён ✓");SafeSave();
                 }catch(OperationCanceledException){throw;}
@@ -1698,41 +1696,32 @@ namespace VideoBatch {
                     ct.ThrowIfCancellationRequested();
                     var batch=viewers.Skip(start).Take(batchSize).ToList();
                     var gate=ProfileLaunchGate.FromSettings(settings,batch.Count);
-                    var closeErrors=new ConcurrentBag<string>();
                     Write("["+runLabel+"] пачка "+(start/batchSize+1)+": "+batch.Count+" профилей.");
                     int batchStart=start;
                     var tasks=batch.Select((pair,index)=>Task.Run(async()=>{
-                        bool launched=false;
                         try{
                             await gate.WaitStaggeredStartAsync(ct).ConfigureAwait(false);
                             ct.ThrowIfCancellationRequested();
                             int offset=(batchStart+index)%targets.Length;
                             var ordered=targets.Skip(offset).Concat(targets.Take(offset)).ToArray();
-                            launched=true;
                             await DolphinRunner.Run(new UploadJob{
                                 token=token,localPort=settings.DolphinPort,profileId=pair.ch.ProfileId,
                                 todayDate=DateTime.Now.ToString("yyyy-MM-dd"),pcUtcOffsetMinutes=(int)DateTimeOffset.Now.Offset.TotalMinutes,
-                                watchMesh=true,watchTargets=ordered,skipQueueDelay=true
+                                watchMesh=true,watchTargets=ordered,skipQueueDelay=true,keepProfileOpen=true
                             },m=>{if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(pair.ch,pair.row,m.text);},ct).ConfigureAwait(false);
                             Interlocked.Increment(ref completed);
                             MeshStatus(pair.ch,pair.row,"Все ссылки досмотрены ✓");
                         }catch(OperationCanceledException){throw;}
                         catch(Exception e){errors.Add(pair.ch.Name+": "+e.Message);MeshStatus(pair.ch,pair.row,"Ошибка открытия: "+e.Message);}
-                        finally{
-                            if(launched)try{
-                                await DolphinRunner.StopProfileRequired(token,settings.DolphinPort,pair.ch.ProfileId).ConfigureAwait(false);
-                            }catch(Exception e){closeErrors.Add(pair.ch.Name+": "+e.Message);Write("ОШИБКА ЗАКРЫТИЯ: "+e.Message);}
-                        }
                     })).ToArray();
                     bool cancelled=false;
                     try{await Task.WhenAll(tasks);}catch(OperationCanceledException){cancelled=true;}
-                    if(closeErrors.Count>0)throw new Exception(string.Join(Environment.NewLine,closeErrors));
-                    Write("Пачка завершена; Dolphin подтвердил закрытие профилей.");
+                    Write("Пачка завершена; профили Dolphin оставлены открытыми.");
                     if(cancelled)ct.ThrowIfCancellationRequested();
                 }
                 Write("Завершено "+completed+"/"+viewers.Count+" профилей · ошибок "+errors.Count+".");
                 if(errors.Count>0)MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Открытие видео",MessageBoxButtons.OK,MessageBoxIcon.Warning);
-            }catch(OperationCanceledException){Write("Открытие остановлено; активная пачка закрыта.");}
+            }catch(OperationCanceledException){Write("Открытие остановлено; профили Dolphin оставлены открытыми.");}
             catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}
             finally{channelUrlHints=null;Finish();}
         }
@@ -1956,7 +1945,8 @@ namespace VideoBatch {
                         ct.ThrowIfCancellationRequested();
                         Status(row,ChannelStatus.Uploading);
                         var job=batch.ToUploadJob(token,settings.DolphinPort);
-                        var result=await RunUploadWithRetry(job,ch,row,batch.Items,ct,token).ConfigureAwait(false);
+                        job.keepProfileOpen=settings.KeepDolphinProfileOpenAfterUpload;
+                        var result=await RunUploadOnce(job,ch,row,batch.Items,ct).ConfigureAwait(false);
                         if(!string.IsNullOrWhiteSpace(result.Url)&&batch.Items.Count==1&&string.IsNullOrWhiteSpace(batch.Items[0].Source.PublishedUrl)){
                             batch.Items[0].Source.PublishedUrl=result.Url.Trim();
                             SyncPublishedMeta(batch.Items[0].Source);
@@ -2114,7 +2104,7 @@ namespace VideoBatch {
                             if(run!=null&&run.ThumbnailWarning)metrics.Finish("warning");else metrics.Finish("success");
                             TaskQueueStore.LogEvent(ch.Name,"HTTP загрузка",run!=null&&run.ThumbnailWarning?"Успех с предупреждением":"Успех","");
                             SafeSave();
-                            if(!run.ManualCheck)try{await DolphinRunner.StopProfile(token,settings.DolphinPort,(ch.ProfileId??"").Trim()).ConfigureAwait(false);}catch{}
+                            if(!run.ManualCheck&&!run.KeptOpen&&!settings.KeepDolphinProfileOpenAfterUpload)try{await DolphinRunner.StopProfile(token,settings.DolphinPort,(ch.ProfileId??"").Trim()).ConfigureAwait(false);}catch{}
                         }
                     }catch(OperationCanceledException){Status(row,"Остановлено");metrics.Finish("stopped");}
                     catch(Exception e){
@@ -2128,8 +2118,7 @@ namespace VideoBatch {
                             ch.Status=ChannelStatus.Error;
                             Status(row,shortStatus);
                             metrics.Finish("error");
-                            if(run==null||!run.WorkerStarted||stage=="preflight"||stage=="worker"&&string.IsNullOrWhiteSpace(run.VideoId))
-                                try{await DolphinRunner.StopProfile(token,settings.DolphinPort,(ch.ProfileId??"").Trim()).ConfigureAwait(false);}catch{}
+                            Write(ch.Name+": профиль сохранён для проверки после ошибки.");
                         }
                         string msg=e.Message+(e is UploadException ue&&ue.KeptOpen?" (профиль оставлен)":"");
                         errors.Add(ch.Name+": "+shortStatus);
@@ -2204,5 +2193,4 @@ namespace VideoBatch {
         void Finish(){if(cancellation!=null){cancellation.Dispose();cancellation=null;}Busy(false);SaveGrid();SaveSearchFields();RefreshMarketUi();}
     }
 }
-
 

@@ -3,6 +3,34 @@ using System.Collections.Generic;
 using System.Linq;
 
 namespace VideoBatch {
+    public static class AccountRemoval {
+        // Persist before updating grids. Restore the same objects if saving fails.
+        public static void Remove(Preferences settings, IEnumerable<YouTubeChannel> youtube,
+            IEnumerable<TikTokAccount> tiktok, Action<Preferences> save = null) {
+            var removeYt = new HashSet<YouTubeChannel>(youtube ?? Enumerable.Empty<YouTubeChannel>());
+            var removeTk = new HashSet<TikTokAccount>(tiktok ?? Enumerable.Empty<TikTokAccount>());
+            var oldYt = settings.YouTubeChannels;
+            var oldTk = settings.TikTokAccounts;
+            var oldExcluded = settings.TikTokSyncExcludedProfiles;
+            try {
+                settings.YouTubeChannels = (oldYt ?? new List<YouTubeChannel>()).Where(x => !removeYt.Contains(x)).ToList();
+                settings.TikTokAccounts = (oldTk ?? new List<TikTokAccount>()).Where(x => !removeTk.Contains(x)).ToList();
+                settings.TikTokSyncExcludedProfiles = new List<string>(oldExcluded ?? new List<string>());
+                foreach (var account in removeTk.Where(x => x != null && !string.IsNullOrWhiteSpace(x.ProfileId))) {
+                    string key = ((account.Market ?? "RU").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU") + "|" + account.ProfileId.Trim();
+                    if (!settings.TikTokSyncExcludedProfiles.Contains(key, StringComparer.OrdinalIgnoreCase)) settings.TikTokSyncExcludedProfiles.Add(key);
+                }
+                (save ?? Store.Save)(settings);
+            } catch {
+                settings.YouTubeChannels = oldYt;
+                settings.TikTokAccounts = oldTk;
+                settings.TikTokSyncExcludedProfiles = oldExcluded;
+                throw;
+            }
+            Store.SaveMeshCatalog(settings.YouTubeChannels);
+        }
+    }
+
     public sealed class UnifiedProfile {
         public string ProfileId = "";
         public string DisplayName = "";

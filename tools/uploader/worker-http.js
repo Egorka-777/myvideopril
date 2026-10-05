@@ -13,7 +13,6 @@ const WORKER_EXIT_DELAY_MS = 150;
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const STUDIO_ORIGIN = "https://studio.youtube.com";
 const STUDIO_READY_TIMEOUT_MS = 5 * 60 * 1000;
-const DOLPHIN_START_TIMEOUT_MS = 2 * 60 * 1000;
 
 let job = null;
 let activePage = null;
@@ -219,15 +218,7 @@ function isAmbiguousUploadError(error) {
   return /scottyresourceid|не подтвердил создание|не вернул url загрузки|принял байты|неоднозначн|повторно не/.test(text);
 }
 
-function automationEndpoint(data) {
-  const root = data && (data.automation || (data.success && typeof data.success === "object" ? data.success.automation || data.success : null) || data.data || data);
-  if (!root) return null;
-  const port = root.port || root.automationPort || root.automation_port;
-  const ws = root.wsEndpoint || root.ws_endpoint;
-  if (ws && /^wss?:\/\//i.test(ws)) return ws;
-  if (ws && port) return `ws://127.0.0.1:${port}${ws.startsWith("/") ? "" : "/"}${ws}`;
-  return port ? `http://127.0.0.1:${port}` : null;
-}
+const { automationEndpoint } = require("./dolphin-session");
 
 async function dolphinApi(path, options = {}, timeoutMs = 35000) {
   const controller = new AbortController();
@@ -261,59 +252,15 @@ function retryableDolphinStartError(error) {
   return /initConnectionError/i.test(String(error && error.message || error || ""));
 }
 
-async function startDolphinProfile() {
-  const startedAt = Date.now();
-  const heartbeat = setInterval(() => {
-    const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-    send("dolphin", `Dolphin запускает профиль (${seconds} сек.) — продолжаю ждать ответ API…`, { percent: 4 });
-  }, 10000);
-  try {
-    return await dolphinApi(
-      `/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`,
-      {},
-      DOLPHIN_START_TIMEOUT_MS
-    );
-  } finally { clearInterval(heartbeat); }
-}
-
 async function startOrConnectProfile() {
   send("dolphin", "Проверяю локальный API Dolphin…", { percent: 2 });
   await dolphinApi("/v1.0/auth/login-with-token", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
   });
-  send("dolphin", "API Dolphin доступен. Запускаю выбранный закрытый профиль в режиме автоматизации…", { percent: 3 });
-  const failures = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const started = await startDolphinProfile();
-      const endpoint = automationEndpoint(started);
-      if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
-      if (attempt > 1) send("dolphin", "Повторный запуск профиля подтверждён Dolphin.", { percent: 5 });
-      return endpoint;
-    } catch (startError) {
-      const original = redactDiagnostic(startError && startError.message || startError);
-      failures.push(original);
-      record("dolphin", `Попытка запуска профиля ${attempt} завершилась ошибкой.`, { attempt, reason: original });
-      const info = await dolphinApi(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
-      const endpoint = automationEndpoint(info);
-      if (endpoint) {
-        send("dolphin", "Dolphin запустил профиль с задержкой; порт автоматизации найден.", { percent: 5 });
-        return endpoint;
-      }
-      const status = dolphinProfileStatus(info);
-      if (dolphinProfileIsRunning(status)) {
-        throw new Error(`Dolphin действительно сообщает статус «${status}», но не отдал порт автоматизации. Ошибки запуска: ${failures.join("; ")}`);
-      }
-      if (attempt === 1 && retryableDolphinStartError(startError)) {
-        send("dolphin", "Dolphin вернул initConnectionError. Профиль не запущен — через 5 секунд повторю ровно один раз…", { percent: 4 });
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        continue;
-      }
-      const statusText = status ? ` Текущий статус по API: «${status}».` : " Статус профиля API не сообщил.";
-      throw new Error(`Dolphin не запустил выбранный профиль или не вернул результат запуска.${statusText} Ошибки запуска: ${failures.join("; ")}`);
-    }
-  }
-  throw new Error(`Dolphin не запустил выбранный профиль. Ошибки запуска: ${failures.join("; ")}`);
+  return require("./dolphin-session").startOrAttach(job,
+    path.join(path.dirname(path.dirname(jobPath)), "dolphin-sessions"),
+    (apiPath, options, timeoutMs) => require("./dolphin-session").requestLocal(job, apiPath, options, timeoutMs),
+    send, { onAttached: () => { job.keepProfileOpen = true; } });
 }
 
 function normalizeIp(value) {
@@ -892,7 +839,7 @@ async function main() {
   if (actualIp) send("ip", `IP профиля: ${actualIp}`, { profileId: job.profileId, ip: actualIp, percent: 12 });
   else send("ip", "IP профиля не записан — загрузка продолжается.", { profileId: job.profileId, percent: 12 });
 
-  const page = context.pages()[0] || await context.newPage();
+  const page = await context.newPage(); // Never navigate the user's existing tab.
   activePage = page;
   attachPageDiagnostics(page);
   const session = await acquireStudioSession(page);
@@ -962,6 +909,11 @@ async function main() {
       throw error;
     }
   }
+  try {
+    await require("./dolphin-session").releaseTaskPage(activePage);
+    if (browser) await browser.close();
+    browser = null;
+  } catch (e) { send("diagnostic", "Видео подтверждены; освобождение вкладки: " + String(e.message).split("\n")[0]); }
   send("done", `Пачка из ${total} видео завершена.`, {
     success: true,
     profileId: job.profileId,

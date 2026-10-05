@@ -209,28 +209,18 @@ async function dolphinApi(apiPath, options = {}, timeoutMs = 35000) {
   } finally { clearTimeout(timer); }
 }
 
-function automationEndpoint(data) {
-  const root = data && (data.automation || data.data || data);
-  if (!root) return null;
-  const port = root.port || root.automationPort;
-  const ws = root.wsEndpoint || root.ws_endpoint;
-  if (ws && /^wss?:\/\//i.test(ws)) return ws;
-  if (ws && port) return `ws://127.0.0.1:${port}${ws.startsWith("/") ? "" : "/"}${ws}`;
-  return port ? `http://127.0.0.1:${port}` : null;
-}
+const { automationEndpoint } = require("./dolphin-session");
 
 async function startOrConnectProfile() {
-  send("dolphin", "Подключаю профиль Dolphin…", { percent: 3 });
   await dolphinApi("/v1.0/auth/login-with-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: job.token })
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
   });
-  const started = await dolphinApi(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
+  const session = require("./dolphin-session");
+  const endpoint = await session.startOrAttach(job,
+    path.join(path.dirname(path.dirname(jobPath)), "dolphin-sessions"),
+    (apiPath, options, timeoutMs) => session.requestLocal(job, apiPath, options, timeoutMs), send,
+    { onAttached: () => { job.keepProfileOpen = true; } });
   profileStarted = true;
-  const endpoint = automationEndpoint(started);
-  if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
-  send("dolphin", "Профиль Dolphin подключён.", { percent: 8 });
   return endpoint;
 }
 
@@ -896,10 +886,15 @@ async function main() {
       if (i < items.length - 1) setItemState("preflight");
     }
 
+    try {
+      await require("./dolphin-session").releaseTaskPage(activePage);
+      if (browser) await browser.close();
+      browser = null;
+    } catch (e) { send("diagnostic", "Освобождение вкладки HTTP: " + String(e.message).split("\n")[0]); }
     if (job.keepProfileOpen !== false) {
       send("dolphin", "Профиль оставлен открытым после успешной HTTP-загрузки.", { percent: 99 });
     } else {
-      await browser.close().catch(() => {});
+      if (browser) await browser.close().catch(() => {});
       browser = null;
       try { await dolphinApi(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
       profileStarted = false;

@@ -283,6 +283,13 @@ namespace VideoBatch {
             SafeSave();
         }
         public event Action<string> LogLine;
+        int operationsInFlight;
+        public bool IsBusy => Volatile.Read(ref operationsInFlight)>0||cancellation!=null||uploadsInFlight>0;
+        async Task TrackOperation(Func<Task> operation){
+            Interlocked.Increment(ref operationsInFlight);
+            try{await operation();}
+            finally{Interlocked.Decrement(ref operationsInFlight);}
+        }
         public void ReloadFromSettings(){LoadGrid();RefreshMarketUi();}
         public void SetMarketView(string market){SwitchMarket(NormMarket(market));}
         public void SelectProfileById(string profileId,string market){
@@ -293,10 +300,10 @@ namespace VideoBatch {
             if(row!=null){grid.ClearSelection();row.Selected=true;grid.CurrentCell=row.Cells[CName];RememberSelectedAccount((TikTokAccount)row.Tag);}
         }
         public void ApplyNavigationContext(){SelectProfileById(NavigationContext.SelectedProfileId,NavigationContext.SelectedMarket);}
-        public Task RunUploadAsync()=>UploadAll(null,"studio");
-        public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter,"http");
-        public Task RunUploadStudioAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter,"studio");
-        public Task RunUploadHttpAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>UploadAll(accountsFilter,"http");
+        public Task RunUploadAsync()=>TrackOperation(()=>UploadAll(null,"studio"));
+        public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>TrackOperation(()=>UploadAll(accountsFilter,"http"));
+        public Task RunUploadStudioAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>TrackOperation(()=>UploadAll(accountsFilter,"studio"));
+        public Task RunUploadHttpAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>TrackOperation(()=>UploadAll(accountsFilter,"http"));
         void RefreshModeHint(string mode){
             if(modeHint==null)return;
             if(string.Equals(mode,"studio",StringComparison.OrdinalIgnoreCase))modeHint.Text="Режим: Studio";
@@ -304,7 +311,7 @@ namespace VideoBatch {
             else if(!string.IsNullOrWhiteSpace(lastHttpBlockReason))modeHint.Text="HTTP недоступен — "+lastHttpBlockReason;
             else modeHint.Text="Режим: HTTP (beta)";
         }
-        public Task RunCheckProfilesAsync()=>CheckProfiles();
+        public Task RunCheckProfilesAsync()=>TrackOperation(()=>CheckProfiles());
         public void RequestStopUpload(){stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
         public void AssignVideosToProfile(string profileId,string market,string[] files){
             if(files==null||files.Length==0)return;
@@ -526,7 +533,7 @@ namespace VideoBatch {
                     try{
                         cancellation.Token.ThrowIfCancellationRequested();
                         Status(row,"Проверка TikTok…");
-                        var result=await DolphinRunner.RunTikTok(new UploadJob{token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,checkOnly=true,skipQueueDelay=true},
+                        var result=await DolphinRunner.RunTikTok(new UploadJob{token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,checkOnly=true,skipQueueDelay=true,keepProfileOpen=true},
                             m=>{if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);},cancellation.Token).ConfigureAwait(false);
                         if(!string.IsNullOrWhiteSpace(result.Ip)){PropagateIp(a.ProfileId,result.Ip);Status(row,"IP сохранён");}
                         else Status(row,"OK");
@@ -768,4 +775,3 @@ namespace VideoBatch {
         }
     }
 }
-

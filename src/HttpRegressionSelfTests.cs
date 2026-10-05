@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 namespace VideoBatch {
     public static class HttpRegressionSelfTests {
         public static bool RunAll() {
+            if (!RunAccountRemovalSelfTest()) return false;
             if (!HttpUploadRunner.RunParallelSerializationSelfTest(10)) return false;
             if (!ScheduleGenerator.RunSelfTests()) return false;
             if (!TikTokScheduleGenerator.RunSelfTests()) return false;
@@ -18,6 +19,36 @@ namespace VideoBatch {
             if (!RunYouTubeMetadataSelfTest()) return false;
             if (!TaskQueueWriter.RunConcurrentWriteSelfTest(40, 25)) return false;
             return RunWorkerPoolScenario();
+        }
+
+        public static bool RunAccountRemovalSelfTest() {
+            string oldRoot = Store.Root;
+            string temp = Path.Combine(Path.GetTempPath(), "videobatch-delete-" + Guid.NewGuid().ToString("N"));
+            try {
+                Store.Root = temp;
+                var first = new YouTubeChannel { ChannelId="a", Name="A", ProfileId="123", Market="RU" };
+                var sibling = new YouTubeChannel { ChannelId="b", Name="B", ProfileId="123", Market="RU" };
+                var other = new YouTubeChannel { ChannelId="c", Name="C", ProfileId="456", Market="EN" };
+                var tk = new TikTokAccount { Name="A", ProfileId="123", Market="RU" };
+                var prefs = new Preferences { YouTubeChannels=new List<YouTubeChannel>{first,sibling,other}, TikTokAccounts=new List<TikTokAccount>{tk} };
+                var before = prefs.YouTubeChannels;
+                try { AccountRemoval.Remove(prefs, new[]{first}, new[]{tk}, p=>{throw new IOException("fixture save failure");}); return false; }
+                catch (IOException) { }
+                if (!ReferenceEquals(before,prefs.YouTubeChannels) || !prefs.TikTokAccounts.Contains(tk) || prefs.TikTokSyncExcludedProfiles.Count!=0) return false;
+                AccountRemoval.Remove(prefs, new[]{first}, new[]{tk});
+                if (prefs.YouTubeChannels.Count!=2 || !prefs.YouTubeChannels.Contains(sibling)) return false;
+                var reloaded = Store.Load();
+                if (reloaded.YouTubeChannels.Exists(x=>x.ChannelId=="a")) return false;
+                if (reloaded.TikTokAccounts.Exists(x=>x.ProfileId=="123"&&x.Market=="RU")) return false;
+                if (!reloaded.TikTokAccounts.Exists(x=>x.ProfileId=="456"&&x.Market=="EN")) return false;
+                // Explicit manual re-add works even when auto-import was suppressed.
+                reloaded.TikTokAccounts.Add(new TikTokAccount { ProfileId="123", Market="RU", Name="manual" });
+                Store.Save(reloaded);
+                return Store.Load().TikTokAccounts.Exists(x=>x.Name=="manual"&&x.ProfileId=="123");
+            } finally {
+                Store.Root=oldRoot;
+                if (Directory.Exists(temp)) Directory.Delete(temp,true);
+            }
         }
 
         public static bool RunYouTubeMetadataSelfTest() {

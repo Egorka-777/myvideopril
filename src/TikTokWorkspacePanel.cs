@@ -203,6 +203,15 @@ namespace VideoBatch {
             grid.CellValueChanged += (s, e) => { if (e.ColumnIndex >= 0 && grid.Columns[e.ColumnIndex].Name == "on") SyncEnabledFromGrid(); };
 
             grid.CurrentCellDirtyStateChanged += (s, e) => { if (grid.IsCurrentCellDirty) grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+            grid.MouseDown += (s, e) => {
+                if (e.Button != MouseButtons.Right) return;
+                var hit = grid.HitTest(e.X, e.Y);
+                if (hit.RowIndex < 0 || !(grid.Rows[hit.RowIndex].Tag is TikTokAccount account)) return;
+                grid.ClearSelection(); grid.Rows[hit.RowIndex].Selected = true;
+                var menu = Theme.MakeContextMenu();
+                menu.Items.Add("Удалить аккаунт из приложения", null, (sender, args) => RemoveAccount(account));
+                menu.Show(grid.PointToScreen(e.Location));
+            };
 
             body.Controls.Add(grid);
 
@@ -249,6 +258,17 @@ namespace VideoBatch {
 
 
         static string NormMarket(string m) { return (m ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU"; }
+
+        void RemoveAccount(TikTokAccount account) {
+            if (account == null || !settings.TikTokAccounts.Contains(account)) return;
+            if (backend.Window.IsBusy) { MessageBox.Show(this, "Сначала завершите операцию или нажмите Стоп и дождитесь её завершения.", "TikTok"); return; }
+            if (MessageBox.Show(this, "Удалить аккаунт «" + account.Name + "» из приложения?\nПрофиль Dolphin, аккаунт TikTok, публикации и файлы сохранятся. Автоимпорт из YouTube не вернёт эту строку.",
+                "Удаление аккаунта", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try { AccountRemoval.Remove(settings, null, new[] { account }); }
+            catch (Exception ex) { MessageBox.Show(this, "Аккаунт не удалён: " + ex.Message, "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            backend.Reload(); RefreshGrid(skipSync: true);
+            AppendLog("Удалён аккаунт из списка: «" + account.Name + "».");
+        }
 
 
 
@@ -669,6 +689,5 @@ namespace VideoBatch {
     }
 
 }
-
 
 

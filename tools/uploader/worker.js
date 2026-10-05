@@ -6,12 +6,15 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-09-30-direct-links-watch-v1";
+const WORKER_BUILD = "2026-10-05-profile-stability-v1";
 
 const jobPath = process.argv[2];
 let job = null;
 let browser = null;
 let profileStarted = false;
+let profileOwned = true;
+let taskPage = null;
+function localStatePath(name) { return path.join(path.dirname(path.dirname(jobPath)), name); }
 let finished = false;
 let youtubeOpened = false;
 function randomDelaySeconds() { return crypto.randomInt(1, 31); }
@@ -97,7 +100,7 @@ async function pauseAfterWatch() {
 
 function markProfileCompleted() {
   const target = localStatePath("youtube-queue-delay.json");
-  const temp = target + ".tmp";
+  const temp = target + "." + process.pid + ".tmp";
   fs.writeFileSync(temp, JSON.stringify({ lastCompleted: Date.now() }), "utf8");
   fs.renameSync(temp, target);
 }
@@ -111,6 +114,7 @@ function fail(message, extra = {}) {
   const error = raw.replace(/\x1b\[[0-9;]*m/g, "");
   send("error", error, Object.assign({ success: false, error }, extra));
   process.exitCode = 1;
+  setTimeout(() => process.exit(1), 200);
 }
 
 async function api(path, options = {}) {
@@ -162,169 +166,25 @@ async function apiRaw(path, options = {}, timeoutMs = 35000) {
   }
 }
 
-function automationEndpoint(data) {
-  const root = data && (data.automation || (data.success && typeof data.success === "object" ? data.success.automation || data.success : null) || data.data || data);
-  if (!root) return null;
-  const port = root.port || root.automationPort || root.automation_port;
-  const ws = root.wsEndpoint || root.ws_endpoint;
-  if (ws && /^wss?:\/\//i.test(ws)) return ws;
-  if (ws && port) return `ws://127.0.0.1:${port}${ws.startsWith("/") ? "" : "/"}${ws}`;
-  return port ? `http://127.0.0.1:${port}` : null;
-}
-
-function extractAutomationEndpoint(data) {
-  if (!data) return null;
-  const queue = [data];
-  const seen = new Set();
-  while (queue.length) {
-    const node = queue.shift();
-    if (!node || typeof node !== "object" || seen.has(node)) continue;
-    seen.add(node);
-    const direct = automationEndpoint(node);
-    if (direct) return direct;
-    for (const key of ["automation", "data", "browserProfile", "profile", "success", "browser_profile"]) {
-      if (node[key] && typeof node[key] === "object") queue.push(node[key]);
-    }
-  }
-  return null;
-}
-
-function isAlreadyRunningError(msg) {
-  return /already running|profile id .* already|уже запущен|profile is running|запущен/i.test(String(msg || ""));
-}
-
-function profileStatusFrom(data) {
-  const root = data && (data.data || data.browserProfile || data.profile || data);
-  return String(root && (root.status || root.state || root.browserStatus) || "").trim().toLowerCase();
-}
-
-function profileLooksRunning(data) {
-  const st = profileStatusFrom(data);
-  return /(^|[^a-z])(running|started|active)([^a-z]|$)|запущен/i.test(st);
-}
+const { automationEndpoint, releaseTaskPage } = require("./dolphin-session");
 
 async function stopProfile() {
-  if (!profileStarted || !job) return;
+  if (!profileStarted || !job || !profileOwned || job.keepProfileOpen) return;
   try { await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
   profileStarted = false;
-}
-
-async function profileRunning() {
-  try {
-    const info = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`);
-    return profileLooksRunning(info.data);
-  } catch (_) { return false; }
-}
-
-async function readProfileAutomationEndpoint() {
-  const res = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
-  return res ? extractAutomationEndpoint(res.data) : null;
-}
-
-async function restartAlreadyRunningProfile() {
-  const id = encodeURIComponent(job.profileId);
-  send("dolphin", "Открытый профиль без CDP — перезапускаю в режиме автоматизации…", { percent: 9 });
-  await api(`/v1.0/browser_profiles/${id}/stop`).catch(() => {});
-  profileStarted = false;
-
-  const deadline = Date.now() + 20000;
-  while (Date.now() < deadline) {
-    if (!(await profileRunning())) break;
-    await new Promise(r => setTimeout(r, 750));
-  }
-
-  const started = await api(`/v1.0/browser_profiles/${id}/start?automation=1`);
-  const endpoint = extractAutomationEndpoint(started);
-  if (!endpoint) throw new Error("Dolphin перезапустил профиль, но не вернул порт автоматизации.");
-  profileStarted = true;
-  send("dolphin", "Профиль перезапущен в режиме автоматизации.", { percent: 11 });
-  return endpoint;
-}
-
-async function connectToOpenProfile() {
-  send("dolphin", "Профиль уже открыт — подключаюсь к существующему окну…", { percent: 8 });
-
-  let endpoint = await readProfileAutomationEndpoint();
-  if (endpoint) {
-    profileStarted = true;
-    send("dolphin", "Порт автоматизации найден у открытого профиля.", { percent: 10 });
-    return endpoint;
-  }
-
-  const startRes = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
-  endpoint = extractAutomationEndpoint(startRes.data);
-  if (endpoint) {
-    profileStarted = true;
-    send("dolphin", startRes.ok
-      ? "Профиль запущен."
-      : "Профиль уже был открыт — подключение через CDP.", { percent: 10 });
-    return endpoint;
-  }
-
-  const waitUntil = Date.now() + 18000;
-  while (Date.now() < waitUntil) {
-    await new Promise(r => setTimeout(r, 900));
-    endpoint = await readProfileAutomationEndpoint();
-    if (endpoint) {
-      profileStarted = true;
-      send("dolphin", "Профиль уже открыт — CDP готов.", { percent: 10 });
-      return endpoint;
-    }
-    if (startRes.status >= 500) {
-      const retry = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`).catch(() => null);
-      endpoint = retry ? extractAutomationEndpoint(retry.data) : null;
-      if (endpoint) {
-        profileStarted = true;
-        send("dolphin", "Профиль уже открыт — CDP получен.", { percent: 10 });
-        return endpoint;
-      }
-    }
-  }
-
-  if (await profileRunning()) {
-    return await restartAlreadyRunningProfile();
-  }
-
-  throw new Error("Не удалось подключиться к открытому профилю Dolphin. Закройте профиль вручную и повторите.");
 }
 
 async function startOrConnectProfile() {
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
   await api("/v1.0/auth/login-with-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: job.token })
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
   });
-
-  try {
-    send("dolphin", "Запуск профиля…", { percent: 5 });
-    const started = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
-    profileStarted = true;
-    const endpoint = extractAutomationEndpoint(started);
-    if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
-    send("dolphin", "Профиль запущен.", { percent: 10 });
-    return endpoint;
-  } catch (e) {
-    const msg = String((e && e.message) || e);
-    if (isAlreadyRunningError(msg)) {
-      return await connectToOpenProfile();
-    }
-    if (/initConnection|ECONNREFUSED/i.test(msg)) {
-      send("dolphin", "Dolphin занят — повтор через 3 сек…", { percent: 6 });
-      await new Promise(r => setTimeout(r, 3000));
-      try {
-        const started = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
-        profileStarted = true;
-        const endpoint = extractAutomationEndpoint(started);
-        if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
-        return endpoint;
-      } catch (e2) {
-        if (isAlreadyRunningError(String((e2 && e2.message) || e2))) return await connectToOpenProfile();
-        throw e2;
-      }
-    }
-    throw e;
-  }
+  const endpoint = await require("./dolphin-session").startOrAttach(
+    job, localStatePath("dolphin-sessions"), apiRaw, send,
+    { onAttached: () => { profileOwned = false; } }
+  );
+  profileStarted = true;
+  return endpoint;
 }
 
 async function connectBrowser(endpoint) {
@@ -473,17 +333,10 @@ async function applyDraftThumbnails(page, toUpload) {
 async function closeProfileSafely(page) {
   send("dolphin", "Жду автосохранение…", { percent: 96 });
   await page.waitForTimeout(4000).catch(() => {});
-  if (browser) await browser.close().catch(() => {});
+  if (page && !page.isClosed()) await releaseTaskPage(page);
+  if (browser) await browser.close(); // Disconnect CDP; Dolphin owns the browser.
   browser = null;
-  if (profileStarted) {
-    for (let i = 0; i < 3; i++) {
-      try { await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
-      await new Promise(r => setTimeout(r, 1500));
-      if (!(await profileRunning())) break;
-    }
-    profileStarted = false;
-  }
-  send("dolphin", "Профиль закрыт.", { percent: 98 });
+  await stopProfile();
 }
 
 async function fetchText(url, timeoutMs = 20000) {
@@ -3080,6 +2933,8 @@ async function main() {
   let context = browser.contexts()[0];
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
   let page = await context.newPage();
+  taskPage = page;
+  send("start", "Worker " + WORKER_BUILD, { profileId: job.profileId });
   attachPageGuards(page);
   await page.bringToFront().catch(() => {});
   const playback = require("./youtube-playback.js");
@@ -3098,7 +2953,7 @@ async function main() {
     const url = await navigateTodayVideo(page, job, (stage, text) => send(stage, text));
     send("youtube", "Видео открыто. Смотрю до конца…", { percent: 70 });
     await playback.waitForVideoEnd(page, {}, (stage, text) => send(stage || "youtube", text));
-    await page.close().catch(() => {});
+    await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
     await browser.close().catch(() => {});
     browser = null;
     finished = true;
@@ -3107,7 +2962,7 @@ async function main() {
   }
 
   if (job.checkOnly) {
-    await page.close().catch(() => {});
+    await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
     await browser.close().catch(() => {});
     browser = null;
     await stopProfile();
@@ -3119,7 +2974,7 @@ async function main() {
   if (job.watchDirectLinks) {
     const targets = Array.isArray(job.watchTargets) ? job.watchTargets : [];
     if (!targets.length) throw new Error("Нет ссылок для просмотра.");
-    const keepOpen = job.keepProfileOpen !== false;
+    const keepOpen = job.keepProfileOpen !== false || !profileOwned;
     youtubeOpened = true;
     send("youtube", "Просмотр ссылок: " + targets.length + " ролик(ов) по очереди…", { percent: 25 });
     let watched = 0;
@@ -3158,8 +3013,10 @@ async function main() {
       if (i < targets.length - 1 && page && !page.isClosed()) await page.waitForTimeout(400);
     }
     if (keepOpen) {
-      if (page && !page.isClosed()) await page.close().catch(() => {});
+      if (page && !page.isClosed()) await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
       send("youtube", "Профиль оставлен открытым (" + watched + " из " + targets.length + " ссылок).", { percent: 99 });
+      if (browser) await browser.close();
+      browser = null;
       finished = true;
       const summary = "Ссылки: " + watched + "/" + targets.length + " ролик(ов)";
       if (failed) {
@@ -3188,16 +3045,16 @@ async function main() {
     if (!targets.length) throw new Error("Нет ссылок каналов для просмотра.");
     youtubeOpened = true;
     const navigation = require("./youtube-open-today.js");
-    send("start", "YouTube navigation 2026-10-01-watch-grid");
+    send("start", "YouTube navigation " + WORKER_BUILD);
     const navigationJob = {...job, diagnosticsDirectory:path.join(path.dirname(path.dirname(jobPath)), "diagnostics")};
     const reportFn = (stage, text, extra) => send(stage, text, extra);
     const result = await navigation.openChannelsWatch(page, targets, navigationJob, reportFn, playback);
-    await page.close().catch(() => {});
+    await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
     await browser.close().catch(() => {});
     browser = null;
     finished = true;
     send("done", "Досмотрено: " + result.opened + "/" + targets.length + " каналов.",
-      { success: true, url: result.lastUrl, ip: verifiedIp, percent: 100 });
+      { success: true, keptOpen: true, url: result.lastUrl, ip: verifiedIp, percent: 100 });
     return;
   }
 
@@ -3264,25 +3121,31 @@ async function main() {
 }
 
 if (require.main === module) {
-  process.on("SIGINT", async () => { await stopProfile(); process.exit(130); });
-  process.on("SIGTERM", async () => { await stopProfile(); process.exit(143); });
-  main().catch(async e => {
-    if (job && (job.openTodayOnly || job.watchMesh)) {
-      if (browser) await browser.close().catch(() => {});
-      fail(e, { keptOpen: profileStarted });
-      return; // C# is responsible for required stop, including cancellation.
-    }
-    // При ошибке после открытия YouTube профиль оставляем открытым: пользователь
-    // видит точное место сбоя и может проверить результат без повторной публикации.
-    if (!youtubeOpened && browser) await browser.close().catch(() => {});
-    if (!youtubeOpened) await stopProfile();
-    fail(e, { keptOpen: youtubeOpened && profileStarted });
+  let stopping = false;
+  async function cancelTask() {
+    if (stopping) return;
+    stopping = true;
+    send("cancel", "Задание остановлено; профиль Dolphin остаётся открытым.");
+    try {
+      if (taskPage && !taskPage.isClosed()) await releaseTaskPage(taskPage);
+      if (browser) await browser.close();
+    } catch (e) { send("diagnostic", "Не удалось освободить вкладку задания: " + e.message); }
+    process.exit(130);
+  }
+  process.on("SIGINT", cancelTask);
+  process.on("SIGTERM", cancelTask);
+  const input = require("readline").createInterface({ input: process.stdin });
+  input.on("line", line => { if (line.trim() === "cancel") cancelTask(); });
+  main().then(() => { input.close(); }).catch(async e => {
+    if (browser) await browser.close().catch(err => send("diagnostic", "Отключение CDP: " + err.message));
+    browser = null;
+    fail(e, { keptOpen: profileStarted });
+    input.close();
   });
 }
 
 module.exports = {
-  automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles,
+  releaseTaskPage, automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles,
   setSchedule, publish, waitEnabled, enrichWatchTarget, buildCatalogPlan,
   buildMeshCatalogPlan, findWatchLinkOnVideosTab, openMeshLongFromVideosTab
 };
-

@@ -117,6 +117,7 @@ namespace VideoBatch {
         public string LastSelectedYouTubeProfileIdRu="", LastSelectedYouTubeProfileIdEn="";
         public string LastSelectedYouTubeChannelIdRu="", LastSelectedYouTubeChannelIdEn="";
         public string LastSelectedTikTokProfileIdRu="", LastSelectedTikTokProfileIdEn="";
+        public List<string> TikTokSyncExcludedProfiles=new List<string>();
         public bool KeepDolphinProfileOpenAfterUpload=true;
         /// <summary>random | period</summary>
         public string YouTubeScheduleMode="network";
