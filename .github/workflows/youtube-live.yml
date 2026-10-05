@@ -49,14 +49,14 @@ jobs:
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           $output = Join-Path $PWD 'artifacts\live-ui'
-          if(!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunUiSelfTests').Invoke($null,@($output))) { throw 'UI test failed' }
+          if(!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunUiSelfTests').Invoke($null,[object[]]@([string]$output))) { throw 'UI test failed' }
       - name: Real mixed media infinite loop test
         shell: powershell
         run: |
           $ffmpeg = (Get-Command ffmpeg.exe).Source
           $ffprobe = (Get-Command ffprobe.exe).Source
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
-          if(!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunMediaSelfTests').Invoke($null,@($ffmpeg,$ffprobe))) { throw 'Live media test failed' }
+          if(!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunMediaSelfTests').Invoke($null,[object[]]@([string]$ffmpeg,[string]$ffprobe))) { throw 'Live media test failed' }
       - name: Upload desktop and instructions
         uses: actions/upload-artifact@v4
         with:

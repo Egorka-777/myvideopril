@@ -12,7 +12,7 @@ $OutputDirectory = (Resolve-Path $OutputDirectory).Path
 $asm = [Reflection.Assembly]::LoadFrom((Join-Path $OutputDirectory 'VideoBatch.exe'))
 $tests = $asm.GetType('VideoBatch.YouTubeLiveSelfTests')
 if (!$tests.GetMethod('RunSelfTests').Invoke($null,@())) { throw 'Live lifecycle/API tests failed' }
-if (!$tests.GetMethod('RunMediaSelfTests').Invoke($null,@((Join-Path $OutputDirectory 'tools\ffmpeg.exe'),(Join-Path $OutputDirectory 'tools\ffprobe.exe')))) { throw 'Live media tests failed' }
+if (!$tests.GetMethod('RunMediaSelfTests').Invoke($null,[object[]]@([string](Join-Path $OutputDirectory 'tools\ffmpeg.exe'),[string](Join-Path $OutputDirectory 'tools\ffprobe.exe')))) { throw 'Live media tests failed' }
 Copy-Item (Join-Path $Root 'docs\AGENT_YOUTUBE_LIVE_20261005_RU.md') $OutputDirectory
 Get-ChildItem $OutputDirectory -Recurse -File | Where-Object {$_.Name -ne 'SHA256_MANIFEST.txt'} | ForEach-Object {
     $hash = Get-FileHash $_.FullName -Algorithm SHA256
