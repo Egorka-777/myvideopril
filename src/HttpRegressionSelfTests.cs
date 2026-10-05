@@ -15,8 +15,24 @@ namespace VideoBatch {
             if (!UploadStaging.RunSelfTests()) return false;
             if (!RunLog160617Scenario()) return false;
             if (!RunYouTubeChannelUrlSelfTest()) return false;
+            if (!RunYouTubeMetadataSelfTest()) return false;
             if (!TaskQueueWriter.RunConcurrentWriteSelfTest(40, 25)) return false;
             return RunWorkerPoolScenario();
+        }
+
+        public static bool RunYouTubeMetadataSelfTest() {
+            var a = YouTubeMetadata.ShuffleTags("527453777", YouTubeMetadata.AllRuTags);
+            var b = YouTubeMetadata.ShuffleTags("797494773", YouTubeMetadata.AllRuTags);
+            if (a.Length != YouTubeMetadata.AllRuTags.Length || b.Length != YouTubeMetadata.AllRuTags.Length) return false;
+            if (string.Join("|", a) == string.Join("|", b)) return false;
+            var same = YouTubeMetadata.ShuffleTags("527453777", YouTubeMetadata.AllRuTags);
+            if (string.Join("|", a) != string.Join("|", same)) return false;
+            string baseText = "Текст описания\n\nBinodex обзор • трейдинг\n\n#BinoDex #трейдинг";
+            string prepared = YouTubeMetadata.AppendTagsFooter(baseText, a);
+            if (!prepared.Contains(YouTubeMetadata.TagsFooterPrefix)) return false;
+            if (prepared.Contains("#BinoDex")) return false;
+            if (!prepared.StartsWith("Текст описания")) return false;
+            return true;
         }
 
         public static bool RunYouTubeChannelUrlSelfTest() {

@@ -554,7 +554,7 @@ namespace VideoBatch {
             var bottom=Ui.Flow();
             uploadHttp=Ui.Button("Быстрая загрузка",null,true);uploadHttp.MinimumSize=new Size(180,42);uploadHttp.BackColor=Theme.Accent;uploadHttp.ForeColor=Color.White;uploadHttp.FlatAppearance.BorderSize=0;uploadHttp.Click+=async(s,e)=>await UploadAllHttp();
             upload=Ui.Button("Через Studio",null);upload.MinimumSize=new Size(150,42);upload.Click+=async(s,e)=>await UploadAll();
-            meshWatch=Ui.Button("Смотреть ссылки",null);meshWatch.Visible=false;meshWatch.Click+=async(s,e)=>await CrossWatchMesh(null,null,null);
+            meshWatch=Ui.Button("Смотреть ссылки",null);meshWatch.Visible=false;meshWatch.Click+=async(s,e)=>await CrossWatchMesh(null,null,null,null);
             applyThumb=Ui.Button("Превью шортс",null);applyThumb.Visible=false;applyThumb.Click+=async(s,e)=>await ApplyShortsThumbFrames();
             stop=Ui.Button("Стоп",()=>{stop.Enabled=false;httpUploadPool?.Stop();if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");});stop.Visible=false;
             removeQueue=Ui.Button("Удалить из очереди",()=>RemoveSelectedFromQueue());
@@ -1064,7 +1064,7 @@ namespace VideoBatch {
             checkItem.Click+=async(s,e)=>{await CheckProfiles();};
             menu.Items.Add(checkItem);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Смотреть ссылки",null,async(s,e)=>await CrossWatchMesh(null,null,null));
+            menu.Items.Add("Смотреть ссылки",null,async(s,e)=>await CrossWatchMesh(null,null,null,null));
             menu.Items.Add("Превью Shorts",null,async(s,e)=>await ApplyShortsThumbFrames());
             menu.Show(moreBtn,new Point(0,moreBtn.Height));
         }
@@ -1136,10 +1136,11 @@ namespace VideoBatch {
         public Task RunStudioUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>UploadAll(channels);
         public Task RunCheckProfilesAsync()=>CheckProfiles(null);
         public Task RunCheckProfilesAsync(IReadOnlyList<YouTubeChannel> channels)=>CheckProfiles(channels);
-        public Task RunMeshWatchAsync()=>CrossWatchMesh(null,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>CrossWatchMesh(channels,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId)=>CrossWatchMesh(channels,channelUrlsByProfileId,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string market)=>CrossWatchMesh(channels,channelUrlsByProfileId,market);
+        public Task RunMeshWatchAsync()=>CrossWatchMesh(null,null,null,null);
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>CrossWatchMesh(channels,null,null,null);
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId)=>CrossWatchMesh(channels,channelUrlsByProfileId,null,null);
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string market)=>CrossWatchMesh(channels,channelUrlsByProfileId,market,null);
+        public Task RunCrossMeshWatchAsync(IReadOnlyList<YouTubeChannel> viewerChannels,IReadOnlyList<YouTubeChannel> targetChannels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string viewerMarket)=>CrossWatchMesh(viewerChannels,channelUrlsByProfileId,viewerMarket,targetChannels);
         public Task RunLinksWatchAsync(string linksText)=>CrossWatchLinks(null,linksText);
         public Task RunLinksWatchAsync(IReadOnlyList<YouTubeChannel> channels,string linksText)=>CrossWatchLinks(channels,linksText);
         public Task RunYouTubeSearchAsync()=>SearchOnYouTube();
@@ -1645,23 +1646,46 @@ namespace VideoBatch {
                 PropagateIp(g.Key,ip);
             }
         }
-        async Task CrossWatchMesh(IReadOnlyList<YouTubeChannel> channelsFilter,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string marketOverride){
+        async Task CrossWatchMesh(IReadOnlyList<YouTubeChannel> channelsFilter,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string viewerMarketOverride,IReadOnlyList<YouTubeChannel> targetChannelsFilter){
             if(cancellation!=null)return;
             if(uploadsInFlight>0){MessageBox.Show(this,"Дождитесь завершения загрузки.","VideoBatch");return;}
             try{
-                string market=NormMarket(string.IsNullOrWhiteSpace(marketOverride)?marketView:marketOverride);
+                string viewerMarket=NormMarket(string.IsNullOrWhiteSpace(viewerMarketOverride)?marketView:viewerMarketOverride);
                 channelUrlHints=channelUrlsByProfileId==null?null:channelUrlsByProfileId.ToDictionary(kv=>kv.Key,kv=>kv.Value,StringComparer.OrdinalIgnoreCase);
                 if(channelsFilter==null){SaveGrid();SaveSearchFields();}
                 ValidateCommon(false,channelsFilter);
                 var source=channelsFilter??Selected().Select(r=>(YouTubeChannel)r.Tag).ToList();
-                var viewers=BuildMeshViewers(source.Where(ch=>ch!=null&&NormMarket(ch.Market)==market).ToList());
+                var viewers=BuildMeshViewers(source.Where(ch=>ch!=null&&NormMarket(ch.Market)==viewerMarket).ToList());
                 foreach(var pair in viewers){
                     string url=ResolveChannelUrlFromGrid(pair.ch,GridUrlHint(pair.ch));
                     if(!Store.IsValidYouTubeChannelUrl(url))
                         throw new Exception(pair.ch.Name+": укажите ссылку канала в колонке «Ссылка».");
                     pair.ch.ChannelUrl=url;
                 }
-                var targets=viewers.Select(pair=>BuildMeshTarget(pair.ch)).ToArray();
+                List<YouTubeChannel> targetChannels;
+                if(targetChannelsFilter!=null&&targetChannelsFilter.Count>0){
+                    var seenTargets=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    targetChannels=new List<YouTubeChannel>();
+                    foreach(var ch in targetChannelsFilter){
+                        if(ch==null||string.IsNullOrWhiteSpace(ch.ProfileId))continue;
+                        string pid=ch.ProfileId.Trim();
+                        if(seenTargets.Contains(pid))continue;
+                        seenTargets.Add(pid);
+                        SyncChannelPrimary(ch);
+                        string url=ResolveChannelUrlFromGrid(ch,GridUrlHint(ch));
+                        if(!Store.IsValidYouTubeChannelUrl(url))
+                            throw new Exception(ch.Name+": укажите ссылку канала в колонке «Ссылка» (вкладка "+MarketLabel(NormMarket(ch.Market))+").");
+                        ch.ChannelUrl=url;
+                        targetChannels.Add(ch);
+                    }
+                    if(targetChannels.Count==0)throw new Exception("Нет каналов целевого рынка для кросс-просмотра.");
+                }else{
+                    targetChannels=viewers.Select(pair=>pair.ch).ToList();
+                }
+                var targets=targetChannels.Select(ch=>BuildMeshTarget(ch)).ToArray();
+                string targetMarket=targetChannels.Count>0?NormMarket(targetChannels[0].Market):viewerMarket;
+                bool crossWatch=targetChannelsFilter!=null&&targetChannelsFilter.Count>0&&!string.Equals(viewerMarket,targetMarket,StringComparison.OrdinalIgnoreCase);
+                string runLabel=crossWatch?MarketLabel(viewerMarket)+"→"+MarketLabel(targetMarket):MarketLabel(viewerMarket);
                 cancellation=new CancellationTokenSource();Busy(true);
                 var ct=cancellation.Token;
                 var token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
@@ -1669,13 +1693,13 @@ namespace VideoBatch {
                 const int batchSize=5;
                 int completed=0;
                 var errors=new ConcurrentBag<string>();
-                Write("["+MarketLabel(market)+"] открытие: "+viewers.Count+" профилей, "+targets.Length+" ссылок на профиль · пачки по 5.");
+                Write("["+runLabel+"] открытие: "+viewers.Count+" профилей, "+targets.Length+" ссылок на профиль · пачки по 5.");
                 for(int start=0;start<viewers.Count;start+=batchSize){
                     ct.ThrowIfCancellationRequested();
                     var batch=viewers.Skip(start).Take(batchSize).ToList();
                     var gate=ProfileLaunchGate.FromSettings(settings,batch.Count);
                     var closeErrors=new ConcurrentBag<string>();
-                    Write("["+MarketLabel(market)+"] пачка "+(start/batchSize+1)+": "+batch.Count+" профилей.");
+                    Write("["+runLabel+"] пачка "+(start/batchSize+1)+": "+batch.Count+" профилей.");
                     int batchStart=start;
                     var tasks=batch.Select((pair,index)=>Task.Run(async()=>{
                         bool launched=false;
@@ -2086,6 +2110,7 @@ namespace VideoBatch {
                             ch.Status=batchMode=="immediate"?ChannelStatus.Published:ChannelStatus.Scheduled;
                             Status(row,batch.Items.Count>1?(okLabel+" · "+batch.Items.Count):okLabel);
                             MarkChannelUploadDone(ch,row);
+                            if(NormMarket(ch.Market)=="RU")YouTubeMetadata.AdvanceDescriptionCursor(settings,batch.Items.Count);
                             if(run!=null&&run.ThumbnailWarning)metrics.Finish("warning");else metrics.Finish("success");
                             TaskQueueStore.LogEvent(ch.Name,"HTTP загрузка",run!=null&&run.ThumbnailWarning?"Успех с предупреждением":"Успех","");
                             SafeSave();
@@ -2127,6 +2152,19 @@ namespace VideoBatch {
                 default:return "Отложенная";
             }
         }
+        (string tags,string description) BuildYouTubeUploadMetadata(YouTubeChannel ch,int itemIndex){
+            string market=NormMarket(ch?.Market??marketView);
+            string raw=market=="EN"?settings.YouTubeDefaultTagsEn:settings.YouTubeDefaultTagsRu;
+            if(string.IsNullOrWhiteSpace(raw))
+                raw=YouTubeMetadata.DefaultTagsCsv(market);
+            var master=YouTubeMetadata.MasterTags(market,raw);
+            var shuffled=YouTubeMetadata.ShuffleTags(ch?.ProfileId??"",master);
+            string tags=YouTubeMetadata.JoinTags(shuffled);
+            string description=market=="RU"
+                ?YouTubeMetadata.AppendTagsFooter(YouTubeMetadata.PickDescriptionBase(settings,ch,itemIndex),shuffled)
+                :"";
+            return (tags,description);
+        }
         HttpUploadJob ToHttpJob(PreparedProfileBatch batch,string publishMode){
             string runId=Guid.NewGuid().ToString("N");
             string kind=string.Equals(batch.Channel?.Kind,"shorts",StringComparison.OrdinalIgnoreCase)?"shorts":"long";
@@ -2147,9 +2185,11 @@ namespace VideoBatch {
                         t.Platform="YouTube";t.Account=batch.Channel.Name;t.ProfileId=batch.ProfileId;t.File=Path.GetFileName(it.StagedVideo);
                         t.UploadMethod="HTTP";t.ScheduledAt=itemMode=="scheduled"?it.ScheduleDate+" "+it.ScheduleTime:"";t.Status=TaskQueueStatus.Waiting;
                     },immediate:true);
+                    var meta=BuildYouTubeUploadMetadata(batch.Channel,it.Index);
                     return new HttpUploadItemJob{
-                        localJobId=id,video=it.StagedVideo,title=it.UploadTitle,scheduleDate=it.ScheduleDate,scheduleTime=it.ScheduleTime,
-                        scheduledUnixSeconds=unix,thumbnail=it.Source?.Thumbnail??"",contentKind=itemKind,publishMode=itemMode,thumbnailStatus="pending"
+                        localJobId=id,video=it.StagedVideo,title=it.UploadTitle,description=meta.description,
+                        scheduleDate=it.ScheduleDate,scheduleTime=it.ScheduleTime,
+                        scheduledUnixSeconds=unix,thumbnail=it.Source?.Thumbnail??"",tags=meta.tags,contentKind=itemKind,publishMode=itemMode,thumbnailStatus="pending"
                     };
                 }).ToArray()
             };

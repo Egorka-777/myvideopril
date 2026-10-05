@@ -5,6 +5,49 @@ async function visible(locator, timeoutMs) {
   catch (_) { return false; }
 }
 
+async function readExpectedVideoId(page) {
+  return page.evaluate(() => {
+    const fromUrl = new URL(location.href).searchParams.get("v") || "";
+    const fromPlayer = window.ytInitialPlayerResponse?.videoDetails?.videoId || "";
+    return fromUrl || fromPlayer || "";
+  }).catch(() => "");
+}
+
+async function assertStillOnVideo(page, expectedId) {
+  if (!expectedId) return;
+  const current = await readExpectedVideoId(page);
+  if (current && current !== expectedId) {
+    throw new Error("YouTube переключил ролик (autoplay?): ожидался " + expectedId + ", сейчас " + current + ".");
+  }
+}
+
+async function disableAutoplay(page) {
+  const toggles = [
+    page.locator("button.ytp-autonav-toggle-button[aria-checked='true']").first(),
+    page.locator("button.ytp-autonav-toggle-button[aria-pressed='true']").first(),
+    page.locator(".ytp-autonav-toggle-button[aria-checked='true']").first()
+  ];
+  for (const toggle of toggles) {
+    if (await visible(toggle, 600)) {
+      await toggle.click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      return;
+    }
+  }
+  await page.evaluate(() => {
+    const btn = document.querySelector(
+      'button.ytp-autonav-toggle-button[aria-checked="true"], button.ytp-autonav-toggle-button[aria-pressed="true"]'
+    );
+    if (btn) btn.click();
+  }).catch(() => {});
+}
+
+function pickLikeAtSec(duration) {
+  const d = Math.max(1, Number(duration) || 0);
+  const ratio = 0.80 + Math.random() * 0.15;
+  return Math.min(d - 0.5, Math.max(d * ratio, d * 0.80));
+}
+
 async function dismissYouTubeOverlays(page) {
   const labels = [
     /Accept all/i, /Accept/i, /I agree/i, /Agree/i,
@@ -163,14 +206,16 @@ async function likeCurrentVideo(page, report) {
   report("youtube", "Лайк поставлен.");
 }
 
-/** Досмотр до конца, затем лайк (не во время воспроизведения). */
+/** Досмотр до конца; лайк ставится один раз после ~80% просмотра (до autoplay). */
 async function waitForVideoEnd(page, opts, report) {
   report = report || (() => {});
   if (/\/shorts\//.test(page.url())) {
     throw new Error("Shorts-плеер не поддерживается для полного просмотра длинного ролика.");
   }
   await dismissYouTubeOverlays(page);
+  const expectedVideoId = await readExpectedVideoId(page);
   await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 90000 }).catch(() => {});
+  await disableAutoplay(page);
   for (let i = 0; i < 6; i++) {
     const st = await readPlaybackState(page);
     if (!st.missing && !st.paused && (st.current > 0.05 || st.readyState >= 2)) break;
@@ -178,10 +223,12 @@ async function waitForVideoEnd(page, opts, report) {
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  const alreadyLiked = await isVideoLiked(page);
+  let alreadyLiked = await isVideoLiked(page);
   if (alreadyLiked) report("youtube", "Лайк уже стоит — всё равно смотрю видео до конца.");
 
   let duration = 0;
+  let likeAtSec = 0;
+  let likePlaced = alreadyLiked;
   const readyDeadline = Date.now() + 120000;
   while (Date.now() < readyDeadline) {
     await skipAdIfPossible(page);
@@ -210,7 +257,12 @@ async function waitForVideoEnd(page, opts, report) {
   }
   if (!(duration > 1)) throw new Error("Видео открылось, но воспроизведение не стартовало (нет длительности).");
 
-  report("youtube", "Смотрю до конца (" + formatClock(duration) + ")…");
+  if (!likePlaced) {
+    likeAtSec = pickLikeAtSec(duration);
+    report("youtube", "Смотрю до конца (" + formatClock(duration) + ") · лайк после ~" + formatClock(likeAtSec) + "…");
+  } else {
+    report("youtube", "Смотрю до конца (" + formatClock(duration) + ")…");
+  }
 
   const hardLimitMs = Math.min(4 * 60 * 60 * 1000, Math.max(3 * 60 * 1000, duration * 1000 + 8 * 60 * 1000));
   const startedAt = Date.now();
@@ -223,13 +275,28 @@ async function waitForVideoEnd(page, opts, report) {
       throw new Error("Видео не завершилось за отведённое время. Проверьте рекламу или остановку в открытом профиле.");
     }
     await skipAdIfPossible(page);
+    await assertStillOnVideo(page, expectedVideoId);
     const state = await readPlaybackState(page);
     if (state.missing) {
       await new Promise(r => setTimeout(r, 1500));
       continue;
     }
     const curRaw = Number(state.current) || 0;
-    if (state.ended || (state.duration > 1 && state.current >= state.duration - 0.75)) {
+    const dur = state.duration > 1 ? state.duration : duration;
+
+    if (!likePlaced && curRaw >= likeAtSec) {
+      await assertStillOnVideo(page, expectedVideoId);
+      if (!(await isVideoLiked(page))) {
+        report("youtube", "Ставлю лайк на ~" + Math.round((curRaw / dur) * 100) + "% просмотра…");
+        await likeCurrentVideo(page, report);
+      } else {
+        report("youtube", "Лайк уже стоит.");
+      }
+      likePlaced = true;
+      await disableAutoplay(page);
+    }
+
+    if (state.ended || (dur > 1 && curRaw >= dur - 0.75)) {
       break;
     }
     if (state.paused) {
@@ -247,20 +314,27 @@ async function waitForVideoEnd(page, opts, report) {
 
     if (Date.now() - lastReport > 8000) {
       lastReport = Date.now();
-      const left = Math.max(0, (state.duration || duration) - (state.current || 0));
-      report("youtube", "Идёт просмотр… " + formatClock(state.current) + " / " + formatClock(state.duration || duration) + " · осталось ~" + formatClock(left));
+      const left = Math.max(0, dur - curRaw);
+      report("youtube", "Идёт просмотр… " + formatClock(curRaw) + " / " + formatClock(dur) + " · осталось ~" + formatClock(left));
     }
     await new Promise(r => setTimeout(r, 1500));
   }
 
+  await assertStillOnVideo(page, expectedVideoId);
   report("youtube", "Видео закончилось.");
-  if (!(await isVideoLiked(page))) await likeCurrentVideo(page, report);
-  else report("youtube", "Лайк уже стоит.");
+  if (!likePlaced && !(await isVideoLiked(page))) {
+    report("youtube", "Лайк не был поставлен во время просмотра — ставлю перед переходом…");
+    await likeCurrentVideo(page, report);
+  } else if (likePlaced || await isVideoLiked(page)) {
+    report("youtube", "Лайк уже стоит.");
+  }
 }
 
 module.exports = {
   waitForVideoEnd,
   likeCurrentVideo,
   isVideoLiked,
-  resumeIfPaused
+  resumeIfPaused,
+  pickLikeAtSec,
+  readExpectedVideoId
 };

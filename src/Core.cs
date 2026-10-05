@@ -86,11 +86,15 @@ namespace VideoBatch {
         public string YouTubeSearchKeysEn="", YouTubeSearchFullTitleEn="";
         /// <summary>Пачка ссылок для просмотра (YouTube workspace, по одной на строку).</summary>
         public string YouTubeMeshLinksRu="", YouTubeMeshLinksEn="";
+        /// <summary>Теги YouTube для HTTP-загрузки (через запятую). Пусто — берётся значение по умолчанию при сохранении настроек.</summary>
+        public string YouTubeDefaultTagsRu="", YouTubeDefaultTagsEn="";
         // Базы заголовков: один раз заполняете, дальше приложение само берёт нужное число (база не съедается).
         public List<string> TitleBankLongRu=new List<string>(), TitleBankLongEn=new List<string>();
         public List<string> TitleBankShortsRu=new List<string>(), TitleBankShortsEn=new List<string>();
         public int TitleCursorLongRu, TitleCursorLongEn, TitleCursorShortsRu, TitleCursorShortsEn;
         public bool TitleBanksSeeded;
+        public List<string> YouTubeDescriptionBankRu=new List<string>();
+        public int YouTubeDescriptionCursorRu;
         // TikTok: те же Profile ID Dolphin, отдельный список аккаунтов и база подписей.
         public List<TikTokAccount> TikTokAccounts=new List<TikTokAccount>();
         public string TikTokMarketView="RU";
@@ -126,6 +130,11 @@ namespace VideoBatch {
         public int YouTubeSchedulePeriodMinGapMinutes=10;
         public string YouTubeScheduleFirstPublish="";
         public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
+    }
+
+    public static class YouTubeTagDefaults {
+        public const string Ru="binodex, бинодекс, трейдинг, binodex регистрация, binodex обзор, обучение трейдингу, binodex бинарные опционы, трейдинг для начинающих, binodex трейдинг, binodex отзывы, трейдинг с нуля, binodex обучение, binodex платформа, binodex сигналы, binodex стратегия, binodex торговля, binodex брокер, трейдинг обучение с нуля, бинарные опциоы, pocket option, покет опшн, ии бот для трейдинга, бинарные опционы стратегия, ии трейдинг, binary options strategy, binary options";
+        public const string En="trading, binary options, pocket option, ai trading, binodex, pocketoption, forex";
     }
 
     public static class TikTokCaptionTemplates {
@@ -257,6 +266,18 @@ namespace VideoBatch {
             if(p.YouTubeSearchTitle==null)p.YouTubeSearchTitle="";
             if(p.YouTubeSearchUrl==null)p.YouTubeSearchUrl="";
             if(string.IsNullOrWhiteSpace(p.YouTubeMarketView)||(p.YouTubeMarketView!="RU"&&p.YouTubeMarketView!="EN"))p.YouTubeMarketView="RU";
+            if(string.IsNullOrWhiteSpace(p.YouTubeDefaultTagsRu))p.YouTubeDefaultTagsRu=YouTubeTagDefaults.Ru;
+            if(string.IsNullOrWhiteSpace(p.YouTubeDefaultTagsEn))p.YouTubeDefaultTagsEn=YouTubeTagDefaults.En;
+            if(p.YouTubeDefaultTagsRu==null)p.YouTubeDefaultTagsRu=YouTubeTagDefaults.Ru;
+            if(p.YouTubeDefaultTagsEn==null)p.YouTubeDefaultTagsEn=YouTubeTagDefaults.En;
+            if(p.YouTubeDescriptionBankRu==null)p.YouTubeDescriptionBankRu=new List<string>();
+            p.YouTubeDescriptionBankRu=p.YouTubeDescriptionBankRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            if(p.YouTubeDescriptionBankRu.Count==0&&p.TikTokFullCaptionBankRu!=null&&p.TikTokFullCaptionBankRu.Count>0)
+                p.YouTubeDescriptionBankRu=new List<string>(p.TikTokFullCaptionBankRu);
+            if(p.YouTubeDescriptionBankRu.Count==0)
+                p.YouTubeDescriptionBankRu=TikTokCaptionTemplates.RussianDefaults();
+            if(p.YouTubeDescriptionBankRu.Count>0)
+                p.YouTubeDescriptionCursorRu=((p.YouTubeDescriptionCursorRu%p.YouTubeDescriptionBankRu.Count)+p.YouTubeDescriptionBankRu.Count)%p.YouTubeDescriptionBankRu.Count;
             if(string.IsNullOrWhiteSpace(p.YouTubeKindView)||(p.YouTubeKindView!="shorts"&&p.YouTubeKindView!="long"))p.YouTubeKindView="shorts";
             if(!p.YouTubeLongScheduled20260923Migrated){
                 if(string.Equals((p.YouTubeHttpLongPublishMode??"").Trim(),"immediate",StringComparison.OrdinalIgnoreCase))

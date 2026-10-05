@@ -200,6 +200,8 @@ function validateBatchJob(value) {
       scheduledUnixSeconds: validated.scheduledUnixSeconds,
       publishMode: validated.publishMode,
       thumbnail: validated.thumbnail || "",
+      tags: String(it.tags || validated.tags || "").trim(),
+      description: String(it.description || validated.description || "").trim(),
       contentKind: validated.contentKind || "long",
       thumbnailStatus: "pending"
     };
@@ -477,16 +479,44 @@ function delegationContext(channelId, data) {
   return { externalChannelId: channelId, roleType: { channelRoleType: channelRoleType(data || { channelId }) } };
 }
 
-function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourceId, title) {
+function parseYouTubeTags(raw) {
+  const parts = String(raw || "")
+    .split(/[,;\n\r]+/)
+    .map(t => t.replace(/^#+/, "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const tags = [];
+  let total = 0;
+  for (const tag of parts) {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    if (tag.length > 100) continue;
+    const next = total + tag.length + (tags.length ? 1 : 0);
+    if (next > 500 || tags.length >= 30) break;
+    seen.add(key);
+    tags.push(tag);
+    total = next;
+  }
+  return tags;
+}
+
+function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourceId, item) {
+  const title = String((item && item.title) || item || "").trim();
+  const description = String((item && item.description) || "").trim();
+  const tags = parseYouTubeTags(item && item.tags);
+  const initialMetadata = {
+    title: { newTitle: title },
+    description: { newDescription: description, shouldSegment: true },
+    privacy: { newPrivacy: "PRIVATE" },
+    draftState: { isDraft: true }
+  };
+  if (tags.length) initialMetadata.tags = { newTags: tags };
   return {
     channelId: data.channelId,
     context: makeContext(data, sessionToken),
     delegationContext: delegationContext(data.channelId, data),
     frontendUploadId: frontEndUploadId,
-    initialMetadata: {
-      title: { newTitle: title }, description: { newDescription: "", shouldSegment: true },
-      privacy: { newPrivacy: "PRIVATE" }, draftState: { isDraft: true }, tags: { newTags: [] }
-    },
+    initialMetadata,
     presumedShort: false,
     resourceId: { scottyResourceId: { id: scottyResourceId } }
   };
@@ -588,19 +618,51 @@ async function applyScheduleViaEditPage(page, session, sapisid, data, videoId, p
   return true;
 }
 
+async function revealThumbnailFileInput(page) {
+  await page.evaluate(() => {
+    const host = document.querySelector("ytcp-video-thumbnail-editor, ytcp-thumbnails-compact-editor, #thumbnail-editor");
+    if (host && host.scrollIntoView) host.scrollIntoView({ block: "center", inline: "nearest" });
+  }).catch(() => {});
+  await page.waitForTimeout(600);
+  const opened = await page.evaluate(() => {
+    const labels = /upload thumbnail|upload file|загрузить значок|загрузить файл|загрузить/i;
+    const nodes = Array.from(document.querySelectorAll("button, ytcp-button, tp-yt-paper-button, [role='button']"));
+    for (const node of nodes) {
+      const text = `${node.getAttribute("aria-label") || ""} ${node.innerText || ""}`.trim();
+      if (!text || text.length > 80) continue;
+      if (labels.test(text)) { node.click(); return true; }
+    }
+    return false;
+  }).catch(() => false);
+  if (opened) await page.waitForTimeout(900);
+}
+
 async function setThumbnail(page, thumbPath) {
   if (!thumbPath) return;
-  const inputs = page.locator("input[type=file]");
-  const count = await inputs.count();
-  for (let i = 0; i < count; i++) {
-    const accept = (await inputs.nth(i).getAttribute("accept").catch(() => "")) || "";
-    if (/image|jpeg|png|webp/i.test(accept)) {
-      await inputs.nth(i).setInputFiles(thumbPath);
-      await page.waitForTimeout(1500);
-      return;
+  if (!fs.existsSync(thumbPath)) throw new Error("Файл превью не найден: " + thumbPath);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const inputs = page.locator("input[type=file]");
+    const count = await inputs.count();
+    for (let i = 0; i < count; i++) {
+      const accept = (await inputs.nth(i).getAttribute("accept").catch(() => "")) || "";
+      if (/image|jpeg|png|webp/i.test(accept)) {
+        await inputs.nth(i).setInputFiles(thumbPath);
+        await page.waitForTimeout(2000);
+        await page.evaluate(() => {
+          const labels = /^save$|^сохранить$|save changes|сохранить изменения/i;
+          const nodes = Array.from(document.querySelectorAll("button, ytcp-button, tp-yt-paper-button, [role='button']"));
+          for (const node of nodes) {
+            const text = `${node.getAttribute("aria-label") || ""} ${node.innerText || ""}`.trim();
+            if (labels.test(text)) { node.click(); return; }
+          }
+        }).catch(() => {});
+        await page.waitForTimeout(1200);
+        return;
+      }
     }
+    await revealThumbnailFileInput(page);
   }
-  throw new Error("YouTube не показал поле превью.");
+  throw new Error("YouTube не показал поле превью. Проверьте верификацию канала и право на пользовательские превью.");
 }
 
 async function applyItemThumbnail(page, item, videoId, packIndex, packTotal) {
@@ -745,10 +807,11 @@ async function uploadOne(page, context, session, sapisid, item, packIndex, packT
   if (!uploadUrl || !/^https:\/\//i.test(uploadUrl)) throw new Error("YouTube не вернул URL загрузки. Ничего не загружено.");
 
   const scottyId = await uploadBinary(page, uploadUrl, item.video);
-  send("video_created", "Файл принят. Создаю ролик…", Object.assign({ percent: 78, lastStage: "video_created" }, base));
+  const tagList = parseYouTubeTags(item.tags);
+  send("video_created", "Файл принят. Создаю ролик…" + (tagList.length ? ` · тегов: ${tagList.length}` : ""), Object.assign({ percent: 78, lastStage: "video_created" }, base));
   const create = await studioFetch(page, `${STUDIO_ORIGIN}/youtubei/v1/upload/createvideo?key=${encodeURIComponent(data.apiKey)}&alt=json`, {
     method: "POST", timeoutMs: 90000, headers,
-    body: JSON.stringify(makeCreateVideoBody(data, session.sessionToken, frontEndUploadId, scottyId, item.title))
+    body: JSON.stringify(makeCreateVideoBody(data, session.sessionToken, frontEndUploadId, scottyId, item))
   });
   let createJson;
   try { createJson = JSON.parse(create.text); } catch (_) { createJson = null; }
@@ -921,7 +984,7 @@ if (require.main === module) {
 module.exports = {
   automationEndpoint, normalizeIp, assertProxy, recordProfileIp, parseStudioBootstrap, parseChannelRoleType,
   studioPageState, waitForStudioChannel, assertExpectedChannel,
-  makeContext, makeCreateVideoBody, makeMetadataBody, validateJob, validateBatchJob, resolvePublishMode,
+  makeContext, makeCreateVideoBody, makeMetadataBody, parseYouTubeTags, validateJob, validateBatchJob, resolvePublishMode,
   authHeaders, isSchedule403, isAmbiguousUploadError,
   safeDiagnosticUrl, redactDiagnostic, dolphinProfileStatus, dolphinProfileIsRunning,
   retryableDolphinStartError

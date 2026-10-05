@@ -45,12 +45,16 @@ assert.ok(drift.warnings.some(w => /отличается/.test(w)));
 worker.assertProxy("1.2.3.4", "5.6.7.8", "9.9.9.9");
 
 const data=bootstrap,sessionToken="session",front="front",scotty="scotty",title="Тест | без цифр";
-const create=worker.makeCreateVideoBody(data,sessionToken,front,scotty,title);
+const create=worker.makeCreateVideoBody(data,sessionToken,front,scotty,{title,tags:"BinoDex, трейдинг, pocketoption",description:"Текст\n\nТэги к видео: one, two"});
+assert.strictEqual(create.initialMetadata.description.newDescription,"Текст\n\nТэги к видео: one, two");
 assert.strictEqual(create.channelId,data.channelId);
 assert.strictEqual(create.context.request.sessionInfo.token,sessionToken);
 assert.strictEqual(create.initialMetadata.title.newTitle,title);
 assert.strictEqual(create.initialMetadata.privacy.newPrivacy,"PRIVATE");
+assert.deepStrictEqual(create.initialMetadata.tags.newTags,["BinoDex","трейдинг","pocketoption"]);
 assert.strictEqual(create.resourceId.scottyResourceId.id,scotty);
+assert.deepStrictEqual(worker.parseYouTubeTags("#one, two;three\nfour"),["one","two","three","four"]);
+assert.deepStrictEqual(worker.makeCreateVideoBody(data,sessionToken,front,scotty,{title}).initialMetadata.tags,undefined);
 
 const scheduled=Math.floor(Date.now()/1000)+7200;
 const metadata=worker.makeMetadataBody(data,sessionToken,"video-id",scheduled);

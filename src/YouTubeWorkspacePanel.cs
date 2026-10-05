@@ -17,7 +17,8 @@ namespace VideoBatch {
         readonly TextBox accountSearch;
         readonly Label marketHint;
         readonly Panel scheduleHint, channelBadge, timezoneChip;
-        readonly Button marketRu, marketEn, kindShorts, kindLong;
+        readonly Button marketRu, marketEn, kindShorts, kindLong, crossWatchBtn;
+        ToolStripMenuItem crossWatchMenuItem;
         ToolStripMenuItem statusMenuRoot;
         readonly Font accountNameFont = new Font(Theme.FontBody.FontFamily, 10.5f, FontStyle.Bold);
         readonly Font accountSubFont = Theme.FontSmall;
@@ -175,7 +176,7 @@ namespace VideoBatch {
                 (Theme.MakeButton("Быстрая загрузка", accent: true, action: async () => await RunUpload(true)), true),
                 (Theme.MakeButton("Через Studio", ghost: true, action: async () => await RunUpload(false)), false),
                 (Theme.MakeButton("Смотреть ссылки", ghost: true, action: async () => await RunLinkWatch()), false),
-                (Theme.MakeButton("Смотреть RU", ghost: true, action: async () => await RunRuLinkWatch()), false),
+                (crossWatchBtn = Theme.MakeButton(CrossWatchButtonLabel(), ghost: true, action: async () => await RunCrossLinkWatch()), false),
                 (stopBtn, false));
             root.Controls.Add(bottom, 0, 3);
 
@@ -201,7 +202,8 @@ namespace VideoBatch {
             menu.Items.Add("Предпросмотр расписания", null, (s, e) => PreviewSchedule());
             menu.Items.Add("Проверить IP (выделенный канал)", null, (s, e) => { _ = RunCheck(); });
             menu.Items.Add("Смотреть ссылки (отмеченные ✓)", null, async (s, e) => await RunLinkWatch());
-            menu.Items.Add("Смотреть RU (отмеченные ✓)", null, async (s, e) => await RunRuLinkWatch());
+            crossWatchMenuItem = new ToolStripMenuItem(CrossWatchButtonLabel() + " (отмеченные ✓)", null, async (s, e) => await RunCrossLinkWatch());
+            menu.Items.Add(crossWatchMenuItem);
             menu.Items.Add("Открыть лог", null, (s, e) => OpenLog());
             menu.Items.Add("Удалить видео с канала", null, (s, e) => RemoveSelectedVideos());
             var b = Theme.MakeButton("Ещё", ghost: true);
@@ -355,9 +357,26 @@ namespace VideoBatch {
             try { Store.Save(settings); } catch { }
             StyleHeroToggle(marketRu, marketView == "RU");
             StyleHeroToggle(marketEn, marketView == "EN");
+            UpdateCrossWatchLabels();
             backend.SetMarketView(marketView);
             backend.SetKindView(kindView);
             RefreshGrid();
+        }
+
+        static string CrossWatchButtonLabel(string market) {
+            return NormMarket(market) == "EN" ? "Смотреть RU" : "Смотреть EN";
+        }
+
+        string CrossWatchButtonLabel() => CrossWatchButtonLabel(marketView);
+
+        static string CrossWatchViewerMarket(string currentMarket) {
+            return NormMarket(currentMarket) == "EN" ? "RU" : "EN";
+        }
+
+        void UpdateCrossWatchLabels() {
+            string label = CrossWatchButtonLabel();
+            if (crossWatchBtn != null) crossWatchBtn.Text = label;
+            if (crossWatchMenuItem != null) crossWatchMenuItem.Text = label + " (отмеченные ✓)";
         }
 
         void SwitchKindFilter(string kind) {
@@ -792,29 +811,40 @@ namespace VideoBatch {
             var urlHints = CollectChannelUrlHints();
             try {
                 SyncWorkspaceToBackend();
-                AppendLog("[" + marketView + "] сетка: " + channels.Count + " аккаунт(ов) · все каналы → досмотр до конца + лайк.");
+                AppendLog("[" + marketView + "] сетка: " + channels.Count + " аккаунт(ов) · все каналы → лайк после ~80% · досмотр до конца.");
                 await backend.RunMeshWatchAsync(channels, urlHints, marketView);
                 RefreshGrid();
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
         }
 
-        async Task RunRuLinkWatch() {
+        async Task RunCrossLinkWatch() {
             grid.EndEdit();
             SyncChannelLinksFromGrid();
             try { Store.Save(settings); } catch { }
-            var channels = GetCheckedChannelsForMarket("RU");
-            if (channels.Count == 0) {
+            string targetMarket = NormMarket(marketView);
+            string viewerMarket = CrossWatchViewerMarket(targetMarket);
+            var targetChannels = GetCheckedChannels();
+            if (targetChannels.Count == 0) {
                 MessageBox.Show(this,
-                    "Отметьте галочкой ✓ RU-аккаунты на вкладке RU.\n\n" +
-                    "Кнопка «Смотреть RU» открывает видео аккаунтами RU-вкладки даже если сейчас открыт EN.",
+                    "Отметьте галочкой ✓ каналы вкладки " + targetMarket + " — их будут смотреть аккаунты " + viewerMarket + ".",
                     "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            var urlHints = CollectChannelUrlHintsForMarket("RU");
+            var viewerChannels = GetCheckedChannelsForMarket(viewerMarket);
+            if (viewerChannels.Count == 0) {
+                MessageBox.Show(this,
+                    "Отметьте галочкой ✓ аккаунты на вкладке " + viewerMarket + ".\n\n" +
+                    "Кнопка «" + CrossWatchButtonLabel() + "» открывает их и просматривает отмеченные каналы вкладки " + targetMarket + ".",
+                    "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var urlHints = CollectChannelUrlHints();
+            foreach (var kv in CollectChannelUrlHintsForMarket(viewerMarket))
+                urlHints[kv.Key] = kv.Value;
             try {
                 SyncWorkspaceToBackend();
-                AppendLog("[RU] сетка: " + channels.Count + " аккаунт(ов) · все RU-каналы → досмотр до конца + лайк.");
-                await backend.RunRuMeshWatchAsync(channels, urlHints);
+                AppendLog("[" + viewerMarket + "→" + targetMarket + "] кросс-сетка: " + viewerChannels.Count + " аккаунт(ов) · " + targetChannels.Count + " канал(ов) → лайк после ~80% · досмотр до конца.");
+                await backend.RunCrossMeshWatchAsync(viewerChannels, targetChannels, urlHints, viewerMarket);
                 RefreshGrid();
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
         }

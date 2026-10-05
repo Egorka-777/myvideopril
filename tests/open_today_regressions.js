@@ -39,6 +39,7 @@ async function run(dates) {
     locator:()=>({first:()=>({waitFor:async()=>{}})}),
     evaluate:async(fn,arg)=>{
       const source=fn.toString();
+      if(source.includes("Подтвердите, что это вы")||source.includes("Confirm it's you"))return false;
       if(source.includes("ytInitialData"))return "UCowner";
       if(source.includes("new Set"))return [id,other];
       if(source.includes("ytd-reel-video-renderer"))return false;

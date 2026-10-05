@@ -77,6 +77,12 @@ async function navigateTodayVideo(page, options, report = () => {}) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(options.todayDate || "")) throw new Error("Не задана календарная дата ПК.");
   report("open_channel", url);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeout(60000) });
+  const needsVerify = await page.evaluate(() =>
+    /Подтвердите, что это вы|Confirm it's you|Verify it's you/i.test(document.body?.innerText || "")
+  ).catch(() => false);
+  if (needsVerify) {
+    throw new Error("YouTube просит подтвердить аккаунт («Подтвердите, что это вы»). Пройдите проверку вручную в профиле Dolphin.");
+  }
   await page.waitForFunction(() => document.querySelector("ytd-rich-grid-renderer, ytd-browse") && window.ytInitialData,
     null, { timeout: timeout(30000) });
   const channelId = await page.evaluate(() => window.ytInitialData?.metadata?.channelMetadataRenderer?.externalId || "");

@@ -421,16 +421,44 @@ function delegationContext(channelId, data) {
   return { externalChannelId: channelId, roleType: { channelRoleType: channelRoleType(data || { channelId }) } };
 }
 
-function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourceId, title) {
+function parseYouTubeTags(raw) {
+  const parts = String(raw || "")
+    .split(/[,;\n\r]+/)
+    .map(t => t.replace(/^#+/, "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const tags = [];
+  let total = 0;
+  for (const tag of parts) {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    if (tag.length > 100) continue;
+    const next = total + tag.length + (tags.length ? 1 : 0);
+    if (next > 500 || tags.length >= 30) break;
+    seen.add(key);
+    tags.push(tag);
+    total = next;
+  }
+  return tags;
+}
+
+function makeCreateVideoBody(data, sessionToken, frontEndUploadId, scottyResourceId, item) {
+  const title = String((item && item.title) || item || "").trim();
+  const description = String((item && item.description) || "").trim();
+  const tags = parseYouTubeTags(item && item.tags);
+  const initialMetadata = {
+    title: { newTitle: title },
+    description: { newDescription: description, shouldSegment: true },
+    privacy: { newPrivacy: "PRIVATE" },
+    draftState: { isDraft: true }
+  };
+  if (tags.length) initialMetadata.tags = { newTags: tags };
   return {
     channelId: data.channelId,
     context: makeContext(data, sessionToken),
     delegationContext: delegationContext(data.channelId, data),
     frontendUploadId: frontEndUploadId,
-    initialMetadata: {
-      title: { newTitle: title }, description: { newDescription: "", shouldSegment: true },
-      privacy: { newPrivacy: "PRIVATE" }, draftState: { isDraft: true }, tags: { newTags: [] }
-    },
+    initialMetadata,
     presumedShort: false,
     resourceId: { scottyResourceId: { id: scottyResourceId } }
   };
@@ -674,7 +702,7 @@ if (require.main === module) {
 module.exports = {
   automationEndpoint, normalizeIp, assertProxy, recordProfileIp, parseStudioBootstrap, parseChannelRoleType,
   studioPageState, waitForStudioChannel, assertExpectedChannel,
-  makeContext, makeCreateVideoBody, makeMetadataBody, validateJob,
+  makeContext, makeCreateVideoBody, makeMetadataBody, parseYouTubeTags, validateJob,
   authHeaders, isSchedule403,
   safeDiagnosticUrl, redactDiagnostic, dolphinProfileStatus, dolphinProfileIsRunning,
   retryableDolphinStartError

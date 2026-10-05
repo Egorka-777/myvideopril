@@ -122,7 +122,7 @@ const channels = {
     );
     assert.deepEqual(opened, ["ru"], "Failure must not skip remaining channels");
     assert.equal(errors.length, 1);
-    console.log("OK: watch grid browser (full watch + like after end, RU/EN, partial failure)");
+    console.log("OK: watch grid browser (full watch + like during playback, RU/EN, partial failure)");
   } finally {
     await browser.close();
   }
