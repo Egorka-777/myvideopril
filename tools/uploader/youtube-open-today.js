@@ -65,6 +65,42 @@ function ordinaryVideoIds(data) {
   return [...new Set(ids)].slice(0, 20);
 }
 
+// Read-only metadata requests can be retried; playback/publication is never repeated.
+async function readVideoMetadataHtml(page, id, timeout, report) {
+  let last;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const started = Date.now();
+    try {
+      return await page.evaluate(async ({ id, fetchTimeout }) => {
+        const controller = new AbortController(), timer = setTimeout(() => controller.abort(), fetchTimeout);
+        try {
+          const response = await fetch("/watch?v=" + id, { credentials: "include", signal: controller.signal });
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return await response.text();
+        } finally { clearTimeout(timer); }
+      }, { id, fetchTimeout: timeout(15000) });
+    } catch (e) {
+      last = e;
+      const message = String(e.message);
+      const transient = /Failed to fetch|NetworkError|AbortError|aborted|HTTP (429|5\d\d)/i.test(message);
+      report("metadata_retry", `Метаданные ${id}: попытка ${attempt}/3, ${Date.now()-started} мс · ${message.split("\n")[0]}`);
+      if (!transient || page.isClosed()) throw e;
+      if (attempt < 3) await page.waitForTimeout(Math.min(500 * attempt, timeout(1000)));
+    }
+  }
+  // A browser fetch may fail even though normal navigation works (CSP/network).
+  // Use the same Dolphin context/proxy; never a direct Node HTTP request.
+  report("metadata_fallback", `Метаданные ${id}: проверяю страницу в отдельной вкладке того же профиля.`);
+  const probe = await page.context().newPage();
+  try {
+    await probe.goto("https://www.youtube.com/watch?v=" + id, { waitUntil: "domcontentloaded", timeout: timeout(30000) });
+    await probe.waitForFunction(() => window.ytInitialPlayerResponse, null, { timeout: timeout(15000) });
+    return await probe.content();
+  } catch (e) {
+    throw new Error(`Не удалось прочитать метаданные ${id}: ${last.message.split("\n")[0]}; проверка вкладкой: ${e.message.split("\n")[0]}`);
+  } finally { await probe.close(); }
+}
+
 /** Навигация: вкладка «Видео» → сегодняшний ролик. */
 async function navigateTodayVideo(page, options, report = () => {}) {
   const url = channelVideosUrl(options.channelUrl);
@@ -95,14 +131,7 @@ async function navigateTodayVideo(page, options, report = () => {}) {
   if (!ids.length) throw new Error("На вкладке «Видео» нет доступных роликов либо изменился интерфейс YouTube.");
   let selected = null;
   for (const id of ids) {
-    const html = await page.evaluate(async ({ id, fetchTimeout }) => {
-      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), fetchTimeout);
-      try {
-        const response = await fetch("/watch?v=" + id, { credentials: "include", signal: controller.signal });
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        return await response.text();
-      } finally { clearTimeout(timer); }
-    }, { id, fetchTimeout: timeout(15000) });
+    const html = await readVideoMetadataHtml(page, id, timeout, report);
     const verdict = classifyVideo(extractAssignedJson(html, "ytInitialPlayerResponse"), id, channelId, options.todayDate, options.pcUtcOffsetMinutes);
     report("video_date", id + ": " + verdict.reason + (verdict.date ? " " + verdict.date : ""));
     if (verdict.eligible) { selected = id; break; }
@@ -178,5 +207,5 @@ async function openChannelsWatch(page, targets, options, report = () => {}, play
 
 module.exports = {
   channelVideosUrl, extractAssignedJson, classifyVideo, ordinaryVideoIds,
-  navigateTodayVideo, openToday, openChannelsWatch
+  navigateTodayVideo, openToday, openChannelsWatch, readVideoMetadataHtml
 };

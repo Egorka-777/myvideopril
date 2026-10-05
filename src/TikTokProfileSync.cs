@@ -37,6 +37,8 @@ namespace VideoBatch {
 
             foreach (var c in yt) {
                 string pid = (c.ProfileId ?? "").Trim();
+                string key = market + "|" + pid;
+                if ((settings.TikTokSyncExcludedProfiles ?? new List<string>()).Contains(key, StringComparer.OrdinalIgnoreCase)) continue;
                 var byPid = settings.TikTokAccounts.FirstOrDefault(a =>
                     a != null && NormMarket(a.Market) == market
                     && string.Equals((a.ProfileId ?? "").Trim(), pid, StringComparison.OrdinalIgnoreCase));

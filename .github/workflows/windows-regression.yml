@@ -1,7 +1,7 @@
 name: VideoBatch Windows regression
 on:
   push:
-    branches: [fix/tiktok-caption-watch-completeness-20260921, fix/tiktok-evidence-20260929]
+    branches: [fix/tiktok-caption-watch-completeness-20260921, fix/tiktok-evidence-20260929, fix/profile-stability-account-delete-20261005]
   pull_request:
     paths:
       - 'src/**'
@@ -43,6 +43,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "YouTube navigation browser test failed" }
           node tests/browser/youtube_watch_grid.js
           if ($LASTEXITCODE -ne 0) { throw "Paused grid browser test failed" }
+          node tests/browser/dolphin_lifecycle.js
+          if ($LASTEXITCODE -ne 0) { throw "Dolphin lifecycle test failed" }
       - name: Compile desktop application
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
       - name: C# self tests
@@ -50,6 +52,7 @@ jobs:
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path ./bin/Release/net48/VideoBatch.exe).Path)
           $cases = @(
+            @{Type='HttpRegressionSelfTests';Method='RunAccountRemovalSelfTest';Args=@()},
             @{Type='HttpUploadRunner';Method='RunParallelSerializationSelfTest';Args=@(10)},
             @{Type='ScheduleGenerator';Method='RunSelfTests';Args=@()},
             @{Type='HttpRegressionSelfTests';Method='RunYouTubeChannelUrlSelfTest';Args=@()},

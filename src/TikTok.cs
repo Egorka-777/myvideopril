@@ -283,6 +283,7 @@ namespace VideoBatch {
             SafeSave();
         }
         public event Action<string> LogLine;
+        public bool IsBusy => cancellation!=null||uploadsInFlight>0;
         public void ReloadFromSettings(){LoadGrid();RefreshMarketUi();}
         public void SetMarketView(string market){SwitchMarket(NormMarket(market));}
         public void SelectProfileById(string profileId,string market){
@@ -526,7 +527,7 @@ namespace VideoBatch {
                     try{
                         cancellation.Token.ThrowIfCancellationRequested();
                         Status(row,"Проверка TikTok…");
-                        var result=await DolphinRunner.RunTikTok(new UploadJob{token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,checkOnly=true,skipQueueDelay=true},
+                        var result=await DolphinRunner.RunTikTok(new UploadJob{token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,checkOnly=true,skipQueueDelay=true,keepProfileOpen=true},
                             m=>{if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);},cancellation.Token).ConfigureAwait(false);
                         if(!string.IsNullOrWhiteSpace(result.Ip)){PropagateIp(a.ProfileId,result.Ip);Status(row,"IP сохранён");}
                         else Status(row,"OK");
@@ -768,4 +769,3 @@ namespace VideoBatch {
         }
     }
 }
-

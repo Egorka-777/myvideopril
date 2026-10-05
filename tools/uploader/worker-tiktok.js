@@ -16,6 +16,7 @@ const jobPath = process.argv[2];
 let job = null;
 let browser = null;
 let profileStarted = false;
+let profileOwned = true;
 let finished = false;
 let tiktokOpened = false;
 let activePage = null;
@@ -101,6 +102,7 @@ function fail(message, extra = {}) {
   const error = raw.replace(/\x1b\[[0-9;]*m/g, "");
   send("error", error, Object.assign({ success: false, error }, extra));
   process.exitCode = 1;
+  setTimeout(() => process.exit(1), 200);
 }
 
 async function api(apiPath, options = {}) {
@@ -152,132 +154,24 @@ async function apiRaw(apiPath, options = {}, timeoutMs = 35000) {
   }
 }
 
-function automationEndpoint(data) {
-  const root = data && (data.automation || (data.success && typeof data.success === "object" ? data.success.automation || data.success : null) || data.data || data);
-  if (!root) return null;
-  const port = root.port || root.automationPort || root.automation_port;
-  const ws = root.wsEndpoint || root.ws_endpoint;
-  if (ws && /^wss?:\/\//i.test(ws)) return ws;
-  if (ws && port) return `ws://127.0.0.1:${port}${ws.startsWith("/") ? "" : "/"}${ws}`;
-  return port ? `http://127.0.0.1:${port}` : null;
-}
-
-function extractAutomationEndpoint(data) {
-  if (!data) return null;
-  const queue = [data];
-  const seen = new Set();
-  while (queue.length) {
-    const node = queue.shift();
-    if (!node || typeof node !== "object" || seen.has(node)) continue;
-    seen.add(node);
-    const direct = automationEndpoint(node);
-    if (direct) return direct;
-    for (const key of ["automation", "data", "browserProfile", "profile", "success", "browser_profile"]) {
-      if (node[key] && typeof node[key] === "object") queue.push(node[key]);
-    }
-  }
-  return null;
-}
-
-function isAlreadyRunningError(msg) {
-  return /already running|profile id .* already|уже запущен|profile is running|запущен/i.test(String(msg || ""));
-}
-
-function profileStatusFrom(data) {
-  const root = data && (data.data || data.browserProfile || data.profile || data);
-  return String(root && (root.status || root.state || root.browserStatus) || "").trim().toLowerCase();
-}
-
-function profileLooksRunning(data) {
-  const st = profileStatusFrom(data);
-  return /(^|[^a-z])(running|started|active)([^a-z]|$)|запущен/i.test(st);
-}
+const { automationEndpoint, releaseTaskPage } = require("./dolphin-session");
 
 async function stopProfile() {
-  if (!profileStarted || !job) return;
+  if (!profileStarted || !job || !profileOwned || job.keepProfileOpen) return;
   try { await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
   profileStarted = false;
 }
 
-async function profileRunning() {
-  try {
-    const info = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`);
-    return profileLooksRunning(info.data);
-  } catch (_) { return false; }
-}
-
-async function readProfileAutomationEndpoint() {
-  const res = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}`).catch(() => null);
-  return res ? extractAutomationEndpoint(res.data) : null;
-}
-
-async function restartAlreadyRunningProfile() {
-  const id = encodeURIComponent(job.profileId);
-  send("dolphin", "Открытый профиль без CDP — перезапускаю в режиме автоматизации…", { percent: 9 });
-  await api(`/v1.0/browser_profiles/${id}/stop`).catch(() => {});
-  profileStarted = false;
-  const deadline = Date.now() + 20000;
-  while (Date.now() < deadline) {
-    if (!(await profileRunning())) break;
-    await new Promise(r => setTimeout(r, 750));
-  }
-  const started = await api(`/v1.0/browser_profiles/${id}/start?automation=1`);
-  const endpoint = extractAutomationEndpoint(started);
-  if (!endpoint) throw new Error("Dolphin перезапустил профиль, но не вернул порт автоматизации.");
-  profileStarted = true;
-  send("dolphin", "Профиль перезапущен в режиме автоматизации.", { percent: 11 });
-  return endpoint;
-}
-
-async function connectToOpenProfile() {
-  send("dolphin", "Профиль уже открыт — подключаюсь к существующему окну…", { percent: 8 });
-  let endpoint = await readProfileAutomationEndpoint();
-  if (endpoint) {
-    profileStarted = true;
-    send("dolphin", "Порт автоматизации найден у открытого профиля.", { percent: 10 });
-    return endpoint;
-  }
-  const startRes = await apiRaw(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
-  endpoint = extractAutomationEndpoint(startRes.data);
-  if (endpoint) {
-    profileStarted = true;
-    send("dolphin", startRes.ok ? "Профиль запущен." : "Профиль уже был открыт — подключение через CDP.", { percent: 10 });
-    return endpoint;
-  }
-  const waitUntil = Date.now() + 18000;
-  while (Date.now() < waitUntil) {
-    await new Promise(r => setTimeout(r, 900));
-    endpoint = await readProfileAutomationEndpoint();
-    if (endpoint) {
-      profileStarted = true;
-      send("dolphin", "Профиль уже открыт — CDP готов.", { percent: 10 });
-      return endpoint;
-    }
-  }
-  if (await profileRunning()) return await restartAlreadyRunningProfile();
-  throw new Error("Не удалось подключиться к открытому профилю Dolphin.");
-}
-
 async function startOrConnectProfile() {
-  send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
   await api("/v1.0/auth/login-with-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: job.token })
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
   });
-  try {
-    send("dolphin", "Запуск профиля…", { percent: 5 });
-    const started = await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`);
-    profileStarted = true;
-    const endpoint = extractAutomationEndpoint(started);
-    if (!endpoint) throw new Error("Dolphin не вернул порт автоматизации.");
-    send("dolphin", "Профиль запущен.", { percent: 10 });
-    return endpoint;
-  } catch (e) {
-    const msg = String((e && e.message) || e);
-    if (isAlreadyRunningError(msg)) return await connectToOpenProfile();
-    throw e;
-  }
+  const endpoint = await require("./dolphin-session").startOrAttach(
+    job, localStatePath("dolphin-sessions"), apiRaw, send,
+    { onAttached: () => { profileOwned = false; } }
+  );
+  profileStarted = true;
+  return endpoint;
 }
 
 async function fetchText(url, timeoutMs = 20000) {
@@ -877,7 +771,7 @@ async function main() {
   } catch (_) {}
 
   if (job.checkOnly) {
-    await page.close().catch(() => {});
+    await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
     await browser.close().catch(() => {});
     browser = null;
     await stopProfile();
@@ -900,6 +794,7 @@ async function main() {
     lastUrl = await uploadOne(page, pack[i], i + 1, pack.length) || lastUrl;
   }
 
+  await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
   await browser.close().catch(() => {});
   browser = null;
   await stopProfile();
@@ -911,8 +806,8 @@ async function main() {
 }
 
 if (require.main === module) {
-  process.on("SIGINT", async () => { await stopProfile(); process.exit(130); });
-  process.on("SIGTERM", async () => { await stopProfile(); process.exit(143); });
+  process.on("SIGINT", () => process.exit(130));
+  process.on("SIGTERM", () => process.exit(143));
   main().catch(async e => {
     if (activePage && !activePage.isClosed() && diagnosticFile) {
       const imagePath = diagnosticFile.replace(/\.jsonl$/i, "-error.png");
@@ -927,7 +822,7 @@ if (require.main === module) {
       send("tiktok", "Снимок окна при ошибке: " + imagePath, { diagnosticFile });
     }
     if (!tiktokOpened && browser) await browser.close().catch(() => {});
-    if (!tiktokOpened) await stopProfile();
+    // Keep the Dolphin window available for diagnosis after any failure.
     fail(e, { keptOpen: tiktokOpened && profileStarted });
   });
 }

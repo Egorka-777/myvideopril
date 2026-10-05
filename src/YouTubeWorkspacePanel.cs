@@ -515,7 +515,24 @@ namespace VideoBatch {
             menu.Items.Add(new ToolStripSeparator());
             bool on = Convert.ToBoolean(grid.Rows[rowIndex].Cells["on"].Value ?? false);
             menu.Items.Add(on ? "Исключить из загрузки" : "Включить в загрузку", null, (s, e) => ToggleUploadFlag(rowIndex));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Удалить аккаунт из приложения", null, (s, e) => RemoveAccount(ch));
             menu.Show(screen);
+        }
+
+        void RemoveAccount(YouTubeChannel ch) {
+            if (ch == null || !settings.YouTubeChannels.Contains(ch)) return;
+            if (backend.Window.IsBusy) {
+                MessageBox.Show(this, "Сначала завершите операцию или нажмите Стоп и дождитесь её завершения.", "YouTube");
+                return;
+            }
+            if (MessageBox.Show(this, "Удалить строку аккаунта «" + ch.Name + "» из приложения?\nПрофиль Dolphin, аккаунт YouTube, опубликованные видео и файлы на ПК сохранятся.",
+                "Удаление аккаунта", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try { AccountRemoval.Remove(settings, new[] { ch }, null); }
+            catch (Exception ex) { MessageBox.Show(this, "Аккаунт не удалён: " + ex.Message, "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            backend.Reload();
+            RefreshGrid();
+            AppendLog("Удалён аккаунт из списка: «" + ch.Name + "».");
         }
 
         void ToggleUploadFlag(int rowIndex) {
@@ -1007,5 +1024,4 @@ namespace VideoBatch {
         }
     }
 }
-
 
