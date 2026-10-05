@@ -36,3 +36,6 @@ Upload/
 # Temp
 *.tmp
 _yt_*
+
+# Python test cache
+__pycache__/

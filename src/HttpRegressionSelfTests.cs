@@ -8,6 +8,8 @@ using System.Threading.Tasks;
 namespace VideoBatch {
     public static class HttpRegressionSelfTests {
         public static bool RunAll() {
+            if (!ProcessingRegressionTests.RunSelfTests()) return false;
+            if (!ProcessingRegressionTests.RunUiSelfTests()) return false;
             if (!RunAccountRemovalSelfTest()) return false;
             if (!HttpUploadRunner.RunParallelSerializationSelfTest(10)) return false;
             if (!ScheduleGenerator.RunSelfTests()) return false;
