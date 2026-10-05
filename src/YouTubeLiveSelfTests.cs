@@ -95,7 +95,11 @@ namespace VideoBatch {
             }
             static HttpResponseMessage Reply(string json) => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
         }
-        public static bool RunSelfTests() { Run().GetAwaiter().GetResult(); return true; }
+        public static bool RunSelfTests() {
+            var task = Task.Run(Run);
+            if (!task.Wait(TimeSpan.FromSeconds(60))) throw new TimeoutException("Live tests did not finish within 60 seconds; see last stage.");
+            task.GetAwaiter().GetResult(); return true;
+        }
         static async Task Run() {
             string root = Path.Combine(Path.GetTempPath(), "videobatch-live-tests-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
@@ -104,6 +108,7 @@ namespace VideoBatch {
                 File.WriteAllText(Path.Combine(folder, "02.mp4"), "dummy"); File.WriteAllText(Path.Combine(folder, "01.mp4"), "dummy");
                 var options = new LiveOptions { Folder = folder, Title = "Test", Tags = new[] { "a", "b" } };
                 options.Validate(); Check(Path.GetFileName(options.Files()[0]) == "01.mp4", "playlist order");
+                Console.WriteLine("LIVE TEST: input and playlist order passed");
                 var store = new LiveStore(root); store.Config.ClientId = "test";
                 var a = new LiveAccount { LocalId = "a", RemoteId = "UCtest", ProtectedRefreshToken = WindowsSupport.Protect("test-refresh") };
                 var b = new LiveAccount { LocalId = "b", RemoteId = "UCtest2", ProtectedRefreshToken = "fake" };
@@ -121,9 +126,11 @@ namespace VideoBatch {
                 await Until(() => manager.View("a")?.Phase == LivePhase.Live && manager.View("b")?.Phase == LivePhase.Live).ConfigureAwait(false);
                 bool rejected = false; try { manager.Start(new[] { ca }, options); } catch (InvalidOperationException) { rejected = true; }
                 Check(rejected && apis["a"].Creates == 1 && prepares == 1, "duplicate launch / shared preparation");
+                Console.WriteLine("LIVE TEST: multi-channel launch and duplicate prevention passed");
                 await manager.Stop("a").ConfigureAwait(false);
                 Check(manager.View("a").Phase == LivePhase.Finished && manager.View("b").Phase == LivePhase.Live, "point stop affected another channel");
                 await manager.StopAll().ConfigureAwait(false); Check(!manager.HasBusy && store.PendingSnapshot().Length == 0, "stop all / journal");
+                Console.WriteLine("LIVE TEST: point stop and stop all passed");
                 apis["a"].FailCreate = true; apis["a"].FailComplete = true;
                 manager.Start(new[] { ca }, options);
                 await Until(() => manager.View("a")?.Phase == LivePhase.NeedsCleanup).ConfigureAwait(false);
@@ -135,13 +142,17 @@ namespace VideoBatch {
                 apis["a"].FailComplete = false;
                 await recovered.StopAll().ConfigureAwait(false); Check(!recovered.HasBusy, "recovery cleanup failed");
                 await manager.StopAll().ConfigureAwait(false);
+                Console.WriteLine("LIVE TEST: lost creation response and crash recovery passed");
                 using (var image = new System.Drawing.Bitmap(2, 2)) { options.Thumbnail = Path.Combine(root, "thumb.png"); image.Save(options.Thumbnail, System.Drawing.Imaging.ImageFormat.Png); }
                 var handler = new Handler();
+                Console.WriteLine("LIVE TEST: begin HTTP contracts");
                 using (var api = new YouTubeLiveApi(store, a, handler)) {
                     await api.VerifyChannel("UCtest", "", CancellationToken.None).ConfigureAwait(false);
+                    Console.WriteLine("LIVE TEST: HTTP channel verification passed");
                     await api.CreateBroadcast(options, "marker", CancellationToken.None).ConfigureAwait(false);
                     await api.CreateStream(options, "marker", CancellationToken.None).ConfigureAwait(false);
                     await api.Configure("broadcast", "stream", options, CancellationToken.None).ConfigureAwait(false);
+                    Console.WriteLine("LIVE TEST: HTTP metadata and thumbnail passed");
                     handler.LostCreate = true;
                     int previous = handler.Calls.Count(c => c.StartsWith("POST /youtube/v3/liveBroadcasts?"));
                     try { await api.CreateBroadcast(options, "marker", CancellationToken.None).ConfigureAwait(false); } catch (HttpRequestException) { }

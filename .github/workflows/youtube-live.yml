@@ -1,4 +1,7 @@
 name: YouTube live streams verification
+concurrency:
+  group: youtube-live-${{ github.ref }}
+  cancel-in-progress: true
 on:
   push:
     branches: [feature/youtube-live-streams-20261005]

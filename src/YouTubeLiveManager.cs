@@ -89,7 +89,7 @@ namespace VideoBatch {
             }
         }
         static async Task<T> AwaitCancelable<T>(Task<T> work, CancellationToken ct) {
-            var canceled = new TaskCompletionSource<bool>();
+            var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             using (ct.Register(() => canceled.TrySetResult(true))) {
                 if (await Task.WhenAny(work, canceled.Task).ConfigureAwait(false) != work) ct.ThrowIfCancellationRequested();
                 ct.ThrowIfCancellationRequested(); return await work.ConfigureAwait(false);
@@ -190,7 +190,8 @@ namespace VideoBatch {
         }
         public async Task Stop(string localId) {
             Session session;
-            lock (gate) { sessions.TryGetValue(localId, out session); session?.Cancel.Cancel(); }
+            lock (gate) sessions.TryGetValue(localId, out session);
+            if (session != null) try { session.Cancel.Cancel(); } catch (ObjectDisposedException) { /* Already completed. */ }
             if (session != null) { await session.Work.ConfigureAwait(false); return; }
             await recoveryGate.WaitAsync().ConfigureAwait(false);
             try {
