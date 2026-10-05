@@ -1074,7 +1074,13 @@ namespace VideoBatch {
             menu.Items.Add("Превью Shorts",null,async(s,e)=>await ApplyShortsThumbFrames());
             menu.Show(moreBtn,new Point(0,moreBtn.Height));
         }
-        public bool IsBusy => cancellation!=null||uploadsInFlight>0;
+        int operationsInFlight;
+        public bool IsBusy => Volatile.Read(ref operationsInFlight)>0||cancellation!=null||uploadsInFlight>0;
+        async Task TrackOperation(Func<Task> operation){
+            Interlocked.Increment(ref operationsInFlight);
+            try{await operation();}
+            finally{Interlocked.Decrement(ref operationsInFlight);}
+        }
         public event Action<string> LogLine;
         public void ReloadFromSettings(){
             workspaceKindView=NormKind(settings.YouTubeKindView);
@@ -1137,20 +1143,20 @@ namespace VideoBatch {
             return VisibleRows().FirstOrDefault(r=>string.Equals((((YouTubeChannel)r.Tag).ProfileId??"").Trim(),pid,StringComparison.OrdinalIgnoreCase));
         }
         public void ApplyNavigationContext(){SelectProfileById(NavigationContext.SelectedProfileId,NavigationContext.SelectedMarket);}
-        public Task RunHttpUploadAsync()=>UploadAllHttp(null);
-        public Task RunHttpUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>UploadAllHttp(channels);
-        public Task RunStudioUploadAsync()=>UploadAll(null);
-        public Task RunStudioUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>UploadAll(channels);
-        public Task RunCheckProfilesAsync()=>CheckProfiles(null);
-        public Task RunCheckProfilesAsync(IReadOnlyList<YouTubeChannel> channels)=>CheckProfiles(channels);
-        public Task RunMeshWatchAsync()=>CrossWatchMesh(null,null,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>CrossWatchMesh(channels,null,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId)=>CrossWatchMesh(channels,channelUrlsByProfileId,null,null);
-        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string market)=>CrossWatchMesh(channels,channelUrlsByProfileId,market,null);
-        public Task RunCrossMeshWatchAsync(IReadOnlyList<YouTubeChannel> viewerChannels,IReadOnlyList<YouTubeChannel> targetChannels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string viewerMarket)=>CrossWatchMesh(viewerChannels,channelUrlsByProfileId,viewerMarket,targetChannels);
-        public Task RunLinksWatchAsync(string linksText)=>CrossWatchLinks(null,linksText);
-        public Task RunLinksWatchAsync(IReadOnlyList<YouTubeChannel> channels,string linksText)=>CrossWatchLinks(channels,linksText);
-        public Task RunYouTubeSearchAsync()=>SearchOnYouTube();
+        public Task RunHttpUploadAsync()=>TrackOperation(()=>UploadAllHttp(null));
+        public Task RunHttpUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>UploadAllHttp(channels));
+        public Task RunStudioUploadAsync()=>TrackOperation(()=>UploadAll(null));
+        public Task RunStudioUploadAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>UploadAll(channels));
+        public Task RunCheckProfilesAsync()=>TrackOperation(()=>CheckProfiles(null));
+        public Task RunCheckProfilesAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>CheckProfiles(channels));
+        public Task RunMeshWatchAsync()=>TrackOperation(()=>CrossWatchMesh(null,null,null,null));
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>CrossWatchMesh(channels,null,null,null));
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId)=>TrackOperation(()=>CrossWatchMesh(channels,channelUrlsByProfileId,null,null));
+        public Task RunMeshWatchAsync(IReadOnlyList<YouTubeChannel> channels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string market)=>TrackOperation(()=>CrossWatchMesh(channels,channelUrlsByProfileId,market,null));
+        public Task RunCrossMeshWatchAsync(IReadOnlyList<YouTubeChannel> viewerChannels,IReadOnlyList<YouTubeChannel> targetChannels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string viewerMarket)=>TrackOperation(()=>CrossWatchMesh(viewerChannels,channelUrlsByProfileId,viewerMarket,targetChannels));
+        public Task RunLinksWatchAsync(string linksText)=>TrackOperation(()=>CrossWatchLinks(null,linksText));
+        public Task RunLinksWatchAsync(IReadOnlyList<YouTubeChannel> channels,string linksText)=>TrackOperation(()=>CrossWatchLinks(channels,linksText));
+        public Task RunYouTubeSearchAsync()=>TrackOperation(()=>SearchOnYouTube());
         public void RequestStopUpload(){stop.Enabled=false;httpUploadPool?.Stop();if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
         public void AssignVideosToProfile(string profileId,string market,string[] files){
             if(files==null||files.Length==0)return;

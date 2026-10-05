@@ -8,6 +8,8 @@ on:
       - 'tools/uploader/**'
       - 'tests/**'
       - 'scripts/Build-Desktop-20261001.ps1'
+      - 'scripts/Build-ProfileStability-20261005.ps1'
+      - 'docs/AGENT_PROFILE_STABILITY_20261005_RU.md'
       - 'docs/ROLLOUT_20261001_RU.md'
       - 'docs/YOUTUBE_PAUSED_GRID_20261001_RU.md'
       - 'VideoBatch.csproj'
@@ -75,13 +77,13 @@ jobs:
       - name: Upload compiled desktop and source workers
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-20261001-with-workers
+          name: desktop-profile-stability-20261005-with-workers
           path: |
             bin/Release/net48/VideoBatch.exe
             bin/Release/net48/VideoBatch.exe.config
             tools/uploader/*.js
             tools/uploader/package*.json
             tools/uploader/tiktok-sign/*.js
-            docs/ROLLOUT_20261001_RU.md
-            docs/YOUTUBE_PAUSED_GRID_20261001_RU.md
+            docs/AGENT_PROFILE_STABILITY_20261005_RU.md
+            scripts/Build-ProfileStability-20261005.ps1
             scripts/Build-Desktop-20261001.ps1
