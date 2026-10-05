@@ -86,7 +86,7 @@ namespace VideoBatch {
             if (InvokeRequired) { BeginInvoke(new Action<string>(LiveLog), line); return; }
             AppendLog(line);
             try { Directory.CreateDirectory(Store.Root); File.AppendAllText(Path.Combine(Store.Root, "youtube-live.log"), DateTime.Now.ToString("o") + " " + line + Environment.NewLine); }
-            catch (IOException e) { AppendLog("Не удалось записать лог эфира: " + e.Message); }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException) { AppendLog("Не удалось записать лог эфира: " + e.Message); }
         }
         void UpdateLiveRows() {
             if (grid == null || liveButton == null) return;

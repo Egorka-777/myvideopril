@@ -20,7 +20,9 @@ namespace VideoBatch {
         public static Dictionary<string, object> Obj(object value) => value as Dictionary<string, object> ?? new Dictionary<string, object>();
         public static object Get(object value, string key) { object result; return Obj(value).TryGetValue(key, out result) ? result : null; }
         public static string Text(object value, string key) => Convert.ToString(Get(value, key)) ?? "";
-        public static object[] Items(object value) => Get(value, "items") as object[] ?? new object[0];
+        public static object[] Array(object value) => value is System.Collections.IEnumerable && !(value is string)
+            ? ((System.Collections.IEnumerable)value).Cast<object>().ToArray() : new object[0];
+        public static object[] Items(object value) => Array(Get(value, "items"));
         public static string Escape(string value) => Uri.EscapeDataString(value ?? "");
     }
     public sealed class LiveApiException : Exception {
@@ -55,8 +57,8 @@ namespace VideoBatch {
             string reason = "requestFailed";
             try {
                 var root = LiveJson.Object(text); var error = LiveJson.Get(root, "error");
-                var errors = LiveJson.Get(error, "errors") as object[];
-                reason = errors != null && errors.Length > 0 ? LiveJson.Text(errors[0], "reason") : Convert.ToString(error);
+                var errors = LiveJson.Array(LiveJson.Get(error, "errors"));
+                reason = errors.Length > 0 ? LiveJson.Text(errors[0], "reason") : Convert.ToString(error);
                 if (string.IsNullOrWhiteSpace(reason) || reason.Length > 100 || reason.Contains(" ")) reason = "requestFailed";
             } catch (ArgumentException) { }
             return new LiveApiException((int)response.StatusCode, reason);
@@ -149,6 +151,7 @@ namespace VideoBatch {
         async Task Discover(LiveJournalEntry entry, CancellationToken ct) {
             string marker = Marker(entry.OperationId);
             foreach (string resource in new[] { "liveBroadcasts", "liveStreams" }) {
+                if (resource == "liveBroadcasts" ? !entry.BroadcastAttempted && string.IsNullOrEmpty(entry.BroadcastId) : !entry.StreamAttempted && string.IsNullOrEmpty(entry.StreamId)) continue;
                 if (resource == "liveBroadcasts" ? !string.IsNullOrEmpty(entry.BroadcastId) : !string.IsNullOrEmpty(entry.StreamId)) continue;
                 string page = ""; bool done = false;
                 for (int i = 0; i < 20; i++) {
@@ -165,6 +168,7 @@ namespace VideoBatch {
         }
         public static string Marker(string operationId) => "[VideoBatch:" + operationId + "]";
         public async Task Complete(LiveJournalEntry entry, CancellationToken ct) {
+            if (!entry.BroadcastAttempted && !entry.StreamAttempted && string.IsNullOrEmpty(entry.BroadcastId) && string.IsNullOrEmpty(entry.StreamId)) return;
             await VerifyChannel(entry.RemoteId, "", ct).ConfigureAwait(false);
             await Discover(entry, ct).ConfigureAwait(false);
             if ((entry.BroadcastAttempted && string.IsNullOrEmpty(entry.BroadcastId)) || (entry.StreamAttempted && string.IsNullOrEmpty(entry.StreamId)))

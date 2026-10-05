@@ -88,7 +88,7 @@ namespace VideoBatch {
                 if (path.EndsWith("/videos") && request.Method == HttpMethod.Put) {
                     var snippet = LiveJson.Get(LiveJson.Object(body), "snippet");
                     Check(LiveJson.Text(snippet, "categoryId") == "22" && LiveJson.Text(snippet, "defaultLanguage") == "ru", "snippet fields lost");
-                    Check(LiveJson.Text(snippet, "title") == "Test" && (LiveJson.Get(snippet, "tags") as object[])?.Length == 2, "metadata missing");
+                    Check(LiveJson.Text(snippet, "title") == "Test" && LiveJson.Array(LiveJson.Get(snippet, "tags")).Length == 2, "metadata missing");
                 }
                 if (path.EndsWith("/thumbnails/set")) Check(request.Content.Headers.ContentType.MediaType == "image/png" && body.Length > 0, "thumbnail upload invalid");
                 return Reply("{}");
