@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace VideoBatch {
-    public sealed class YouTubeWorkspacePanel : UserControl {
+    public sealed partial class YouTubeWorkspacePanel : UserControl {
         readonly Preferences settings;
         readonly YouTubeBackend backend;
         readonly NavigationService navigation;
@@ -62,6 +62,8 @@ namespace VideoBatch {
             headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             var headerActions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Theme.Background };
             headerActions.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: AddVideos));
+            liveButton = Theme.MakeButton("Запустить эфир", accent: true, action: async () => await LiveButtonClick());
+            headerActions.Controls.Add(liveButton);
             headerActions.Controls.Add(BuildMoreMenuButton());
             headerBar.Controls.Add(marketHint, 0, 0);
             headerBar.Controls.Add(headerActions, 1, 0);
@@ -153,6 +155,7 @@ namespace VideoBatch {
             grid.Columns.Add("url", "Ссылка");
             grid.Columns["url"].FillWeight = 70;
             grid.Columns["url"].DefaultCellStyle.ForeColor = Theme.Info;
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "live", HeaderText = "Эфир", ReadOnly = true, Width = 180, MinimumWidth = 130, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
             grid.CellClick += OnGridClick;
             grid.CellContentClick += OnGridContentClick;
             grid.CellEndEdit += SaveChannelLink;
@@ -184,6 +187,7 @@ namespace VideoBatch {
             backend.SetMarketView(marketView);
             backend.SetKindView(kindView);
             RefreshGrid();
+            InitializeLive();
         }
 
         Button BuildMoreMenuButton() {
@@ -205,6 +209,9 @@ namespace VideoBatch {
             crossWatchMenuItem = new ToolStripMenuItem(CrossWatchButtonLabel() + " (отмеченные ✓)", null, async (s, e) => await RunCrossLinkWatch());
             menu.Items.Add(crossWatchMenuItem);
             menu.Items.Add("Открыть лог", null, (s, e) => OpenLog());
+            menu.Items.Add("Настройки эфиров / подключение API", null, (s, e) => ConfigureLive());
+            menu.Items.Add("Запустить эфир на отмеченных каналах", null, (s, e) => StartLive());
+            menu.Items.Add("Завершить все эфиры", null, async (s, e) => await StopLive(null));
             menu.Items.Add("Удалить видео с канала", null, (s, e) => RemoveSelectedVideos());
             var b = Theme.MakeButton("Ещё", ghost: true);
             b.Click += (s, e) => { RebuildStatusSubmenu(); menu.Show(b, new Point(0, b.Height)); };
@@ -290,6 +297,7 @@ namespace VideoBatch {
             Color fgSub = selected ? Color.FromArgb(210, 255, 255, 255) : Theme.TextMuted;
             var rect = e.CellBounds;
             rect.Inflate(-6, -4);
+            PaintLiveIndicator(ch, e.Graphics, ref rect);
             TextRenderer.DrawText(e.Graphics, ch.Name ?? "—", accountNameFont,
                 new Rectangle(rect.X, rect.Y + 2, rect.Width, 22), fg, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             TextRenderer.DrawText(e.Graphics, "Profile " + (ch.ProfileId ?? "—"), accountSubFont,
@@ -472,6 +480,7 @@ namespace VideoBatch {
             Theme.SetBadgeText(timezoneChip, "ПК " + DateTime.Now.ToString("zzz"));
             Theme.SetBadgeText(scheduleHint, ScheduleSummary());
             RestoreGridSelection(keepChannelId);
+            UpdateLiveRows();
         }
 
         void RestoreGridSelection(string channelId) {
@@ -506,6 +515,7 @@ namespace VideoBatch {
 
         void ShowRowContextMenu(YouTubeChannel ch, int rowIndex, Point screen) {
             var menu = Theme.MakeContextMenu();
+            AddLiveContextMenu(menu, ch);
             menu.Items.Add("Изменить название", null, (s, e) => RenameChannel(ch, rowIndex));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Проверить IP", null, (s, e) => { _ = RunCheckChannels(new List<YouTubeChannel> { ch }); });
@@ -522,6 +532,7 @@ namespace VideoBatch {
 
         void RemoveAccount(YouTubeChannel ch) {
             if (ch == null || !settings.YouTubeChannels.Contains(ch)) return;
+            if (live?.View(ch.ChannelId)?.Busy == true) { MessageBox.Show(this, "Сначала завершите эфир этого канала.", "YouTube"); return; }
             if (backend.Window.IsBusy) {
                 MessageBox.Show(this, "Сначала завершите операцию или нажмите Стоп и дождитесь её завершения.", "YouTube");
                 return;
@@ -1024,4 +1035,3 @@ namespace VideoBatch {
         }
     }
 }
-

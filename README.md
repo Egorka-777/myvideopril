@@ -36,3 +36,8 @@ dotnet build VideoBatch.csproj -c Release
 В репозитории **нет**: токенов, IP прокси, имён каналов, логов, settings.xml.
 
 Подробнее: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+# Прямые эфиры YouTube
+
+В разделе YouTube: галочки каналов → «Запустить эфир» → папка, название, превью, теги. Видео идут бесконечно по кругу до остановки. Нужна первоначальная OAuth-настройка каждого канала.
+
+Сборка, установка и проверка: [AGENT_YOUTUBE_LIVE_20261005_RU.md](docs/AGENT_YOUTUBE_LIVE_20261005_RU.md).

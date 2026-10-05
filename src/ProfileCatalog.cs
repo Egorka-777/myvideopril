@@ -4,11 +4,13 @@ using System.Linq;
 
 namespace VideoBatch {
     public static class AccountRemoval {
+        public static event Action<IEnumerable<YouTubeChannel>> RemovingYouTube;
         // Persist before updating grids. Restore the same objects if saving fails.
         public static void Remove(Preferences settings, IEnumerable<YouTubeChannel> youtube,
             IEnumerable<TikTokAccount> tiktok, Action<Preferences> save = null) {
             var removeYt = new HashSet<YouTubeChannel>(youtube ?? Enumerable.Empty<YouTubeChannel>());
             var removeTk = new HashSet<TikTokAccount>(tiktok ?? Enumerable.Empty<TikTokAccount>());
+            RemovingYouTube?.Invoke(removeYt);
             var oldYt = settings.YouTubeChannels;
             var oldTk = settings.TikTokAccounts;
             var oldExcluded = settings.TikTokSyncExcludedProfiles;
