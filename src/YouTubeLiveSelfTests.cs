@@ -106,7 +106,7 @@ namespace VideoBatch {
                 manager.Start(new[] { ca }, options);
                 await Until(() => manager.View("a")?.Phase == LivePhase.NeedsCleanup).ConfigureAwait(false);
                 Check(store.PendingSnapshot().Length == 1 && apis["a"].Creates == 2, "uncertain creation retried or journal lost");
-                await manager.Stop("a").ConfigureAwait(false);
+                try { await manager.Stop("a").ConfigureAwait(false); } catch (HttpRequestException) { /* Expected while cleanup is deliberately unavailable. */ }
                 await Until(() => apis["a"].Completes >= 2).ConfigureAwait(false);
                 var recovered = new YouTubeLiveManager(new LiveStore(root), account => apis[account.LocalId]);
                 Check(recovered.HasBusy && recovered.View("a").Phase == LivePhase.NeedsCleanup, "crash recovery missing");
@@ -127,6 +127,7 @@ namespace VideoBatch {
                 }
                 var args = YouTubeLiveMedia.StreamArguments(new LivePlaylist { Path = "playlist" }, true, 0, "rtmps://test");
                 Check(args.Contains("-stream_loop") && args.Contains("-1") && args.Contains("copy"), "infinite copy stream missing");
+                Check(YouTubeLiveManager.PollSeconds(1) == 60 && YouTubeLiveManager.PollSeconds(12) == 720, "multi-channel quota polling");
             } finally { Directory.Delete(root, true); }
         }
         public static bool RunMediaSelfTests(string ffmpeg, string ffprobe) {

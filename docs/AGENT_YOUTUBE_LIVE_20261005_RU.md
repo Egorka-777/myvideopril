@@ -98,6 +98,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-YouTubeL
 - `thumbnails.set` загружает выбранную обложку до начала передачи.
 - Передача: RTMPS, FFmpeg, плейлист, `-stream_loop -1`, H.264/AAC без перекодирования во время передачи.
 - `liveBroadcasts.list` и `liveStreams.list` подтверждают состояние.
+- Пока эфир запускается, API проверяется примерно каждые 10 секунд. Для работающих эфиров интервал проверки YouTube составляет `max(60, число работающих каналов × 60)` секунд, чтобы не расходовать дневную квоту непрерывным частым опросом. Локальный FFmpeg проверяется примерно каждую секунду независимо от API; зависшая передача обнаруживается по отсутствию прогресса 90 секунд. В подсказке статуса видно время последнего подтверждения YouTube. Изменения, сделанные отдельно в Studio, могут отражаться с задержкой до следующей API-проверки.
 - `liveBroadcasts.transition(complete)` завершает эфир; не стартовавшее событие удаляется. Запись завершённого эфира сохраняется.
 
 Создание не повторяется автоматически при потере ответа: оно уже могло выполниться. До запроса сохраняется уникальная операция, а после каждого создания — ID. Если ответ потерян, завершение ищет созданные ресурсы по уникальному маркеру. В публичном описании маркер удаляется при установке окончательных метаданных до передачи видео.
@@ -125,6 +126,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-YouTubeL
 - https://developers.google.com/youtube/v3/live/docs/liveBroadcasts/transition
 - https://developers.google.com/youtube/v3/docs/videos/update
 - https://developers.google.com/youtube/v3/docs/thumbnails/set
+- https://developers.google.com/youtube/v3/determine_quota_cost
 - https://ffmpeg.org/ffmpeg.html
 - https://ffmpeg.org/ffmpeg-formats.html#concat
 

@@ -28,6 +28,8 @@ namespace VideoBatch {
         public event Action<string> LogLine;
         public bool HasBusy { get { lock (gate) return sessions.Count > 0 || views.Values.Any(v => v.Busy); } }
         public LiveView View(string id) { lock (gate) { LiveView value; return views.TryGetValue(id ?? "", out value) ? value : null; } }
+        public static int PollSeconds(int channels) => Math.Max(60, channels * 60);
+        int LivePollSeconds() { lock (gate) return PollSeconds(sessions.Count); }
         public YouTubeLiveManager(LiveStore store, Func<LiveAccount, IYouTubeLiveApi> apiFactory = null,
             Func<LiveOptions, CancellationToken, Task<LivePlaylist>> prepare = null, Func<LivePlaylist, double, string, ILiveEncoder> encoder = null) {
             Store = store; this.apiFactory = apiFactory ?? (a => new YouTubeLiveApi(store, a)); prepareOverride = prepare; encoderOverride = encoder;
@@ -129,26 +131,30 @@ namespace VideoBatch {
                     s.Encoder = encoderOverride != null ? encoderOverride(playlist, offset, ingestion)
                         : new LiveEncoder(ffmpeg, YouTubeLiveMedia.StreamArguments(playlist, true, offset, ingestion), ingestion);
                     var started = DateTime.UtcNow;
+                    var nextCheck = DateTime.MinValue;
                     bool live = false;
                     int missedChecks = 0;
                     while (!s.Encoder.HasExited) {
                         s.Cancel.Token.ThrowIfCancellationRequested();
                         if ((DateTime.UtcNow - s.Encoder.LastProgress).TotalSeconds > 90) break;
+                        if (DateTime.UtcNow < nextCheck) { await Task.Delay(1000, s.Cancel.Token).ConfigureAwait(false); continue; }
                         try {
                             string broadcast = await api.BroadcastState(s.Journal.BroadcastId, s.Cancel.Token).ConfigureAwait(false);
                             if (broadcast == "complete" || broadcast == "missing" || broadcast == "revoked") throw new InvalidOperationException("Эфир завершён на стороне YouTube.");
                             string streamState = await api.StreamState(s.Journal.StreamId, s.Cancel.Token).ConfigureAwait(false);
                             missedChecks = 0;
                             bool confirmed = broadcast == "live" && streamState == "active";
-                            if (confirmed && !live) { State(s, LivePhase.Live); live = true; }
-                            if (!confirmed && live) { State(s, LivePhase.Reconnecting, "YouTube не подтверждает активную передачу."); live = false; }
+                            if (confirmed) { State(s, LivePhase.Live, "Подтверждено YouTube " + DateTime.Now.ToString("HH:mm:ss")); live = true; started = DateTime.UtcNow; }
+                            if (!confirmed && live) { State(s, LivePhase.Reconnecting, "YouTube не подтверждает активную передачу."); live = false; started = DateTime.UtcNow; }
                         } catch (Exception e) when (e is HttpRequestException || (e is TaskCanceledException && !s.Cancel.IsCancellationRequested) || (e is LiveApiException && ((LiveApiException)e).StatusCode >= 500)) {
+                            if (live) started = DateTime.UtcNow;
                             live = false; missedChecks++;
                             State(s, LivePhase.Reconnecting, "Нет подтверждения от YouTube; проверка " + missedChecks);
                             if (missedChecks >= 3) throw;
                         }
                         if (!live && (DateTime.UtcNow - started).TotalSeconds > 180) throw new InvalidOperationException("YouTube не подтвердил запуск за 3 минуты.");
-                        await Task.Delay(live ? 30000 : 10000, s.Cancel.Token).ConfigureAwait(false);
+                        nextCheck = DateTime.UtcNow.AddSeconds(live ? LivePollSeconds() : 10);
+                        await Task.Delay(1000, s.Cancel.Token).ConfigureAwait(false);
                     }
                     double advanced = s.Encoder.Seconds;
                     string encoderError = s.Encoder.Error;
