@@ -11,6 +11,28 @@ using System.Threading.Tasks;
 namespace VideoBatch {
     // No real Google accounts or network are used by these tests.
     public static class YouTubeLiveSelfTests {
+        public static bool RunUiSelfTests(string outputDirectory) {
+            Check(Thread.CurrentThread.GetApartmentState() == ApartmentState.STA, "UI test requires STA Windows PowerShell");
+            string root = Path.Combine(Path.GetTempPath(), "videobatch-live-ui-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root); Directory.CreateDirectory(outputDirectory);
+            string previousRoot = Store.Root; Store.Root = root;
+            try {
+                var settings = new Preferences(); Store.Normalize(settings);
+                settings.YouTubeChannels.Add(new YouTubeChannel { ChannelId = "ui-test", Name = "Тестовый YouTube-канал", ProfileId = "123456", Market = "RU" });
+                using (var backend = new YouTubeBackend(settings)) using (var host = new System.Windows.Forms.Form { Width = 1500, Height = 950 })
+                using (var panel = new YouTubeWorkspacePanel(settings, backend, new NavigationService())) {
+                    host.Controls.Add(panel); host.Show(); System.Windows.Forms.Application.DoEvents();
+                    using (var bmp = new System.Drawing.Bitmap(host.Width, host.Height)) { host.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(Path.Combine(outputDirectory, "live-youtube.png")); }
+                    host.Hide();
+                }
+                using (var dialog = new YouTubeLiveDialog(new YouTubeLiveManager(new LiveStore(root)), settings.YouTubeChannels)) {
+                    dialog.Show(); System.Windows.Forms.Application.DoEvents();
+                    using (var bmp = new System.Drawing.Bitmap(dialog.Width, dialog.Height)) { dialog.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(Path.Combine(outputDirectory, "live-dialog.png")); }
+                    dialog.Close();
+                }
+                return true;
+            } finally { Store.Root = previousRoot; Directory.Delete(root, true); }
+        }
         static void Check(bool ok, string message) { if (!ok) throw new InvalidOperationException("Live self-test: " + message); }
         static async Task Until(Func<bool> condition) {
             var deadline = DateTime.UtcNow.AddSeconds(10);

@@ -41,6 +41,12 @@ jobs:
       - name: Install FFmpeg for real media tests
         shell: pwsh
         run: choco install ffmpeg --no-progress -y
+      - name: WinForms UI smoke test
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          $output = Join-Path $PWD 'artifacts\live-ui'
+          if(!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunUiSelfTests').Invoke($null,@($output))) { throw 'UI test failed' }
       - name: Real mixed media infinite loop test
         shell: powershell
         run: |
@@ -59,3 +65,4 @@ jobs:
             scripts/Build-YouTubeLive-20261005.ps1
             tools/uploader/*.js
             tools/uploader/package*.json
+            artifacts/live-ui/*.png
