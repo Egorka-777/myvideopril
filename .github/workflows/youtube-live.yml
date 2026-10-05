@@ -32,8 +32,11 @@ jobs:
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           foreach($type in @('HttpRegressionSelfTests','YouTubeLiveSelfTests')) {
+            Write-Host "Running $type"
             $method = if($type -eq 'YouTubeLiveSelfTests') {'RunSelfTests'} else {'RunAll'}
-            if(!$asm.GetType('VideoBatch.'+$type).GetMethod($method).Invoke($null,@())) { throw "$type failed" }
+            try { if(!$asm.GetType('VideoBatch.'+$type).GetMethod($method).Invoke($null,@())) { throw "$type failed" } }
+            catch { Write-Host $_.Exception.GetBaseException().ToString(); throw }
+            Write-Host "$type passed"
           }
       - name: Install FFmpeg for real media tests
         shell: pwsh

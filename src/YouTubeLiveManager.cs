@@ -104,10 +104,13 @@ namespace VideoBatch {
                 State(s, LivePhase.Starting);
                 s.Journal.BroadcastAttempted = true;
                 Store.Journal(s.Journal); journaled = true;
-                s.Journal.BroadcastId = await api.CreateBroadcast(options, YouTubeLiveApi.Marker(s.Journal.OperationId), s.Cancel.Token).ConfigureAwait(false);
+                try { s.Journal.BroadcastId = await api.CreateBroadcast(options, YouTubeLiveApi.Marker(s.Journal.OperationId), s.Cancel.Token).ConfigureAwait(false); }
+                catch (LiveApiException e) when (e.StatusCode < 500) { s.Journal.BroadcastAttempted = false; Store.Journal(s.Journal); throw; }
                 Store.Journal(s.Journal);
                 s.Journal.StreamAttempted = true; Store.Journal(s.Journal);
-                var stream = await api.CreateStream(options, YouTubeLiveApi.Marker(s.Journal.OperationId), s.Cancel.Token).ConfigureAwait(false);
+                Dictionary<string, object> stream;
+                try { stream = await api.CreateStream(options, YouTubeLiveApi.Marker(s.Journal.OperationId), s.Cancel.Token).ConfigureAwait(false); }
+                catch (LiveApiException e) when (e.StatusCode < 500) { s.Journal.StreamAttempted = false; Store.Journal(s.Journal); throw; }
                 s.Journal.StreamId = LiveJson.Text(stream, "id");
                 if (string.IsNullOrEmpty(s.Journal.StreamId)) throw new InvalidOperationException("YouTube не вернул ID видеопотока.");
                 Store.Journal(s.Journal);
@@ -198,7 +201,10 @@ namespace VideoBatch {
         }
         public async Task StopAll() {
             string[] ids;
-            lock (gate) { ids = sessions.Keys.Concat(Store.PendingSnapshot().Select(e => e.LocalId)).Distinct().ToArray(); foreach (var s in sessions.Values) s.Cancel.Cancel(); }
+            Session[] running;
+            lock (gate) { ids = sessions.Keys.Concat(Store.PendingSnapshot().Select(e => e.LocalId)).Distinct().ToArray(); running = sessions.Values.ToArray(); }
+            // Cancellation can synchronously finish a session and remove it. Never enumerate the live dictionary while cancelling.
+            foreach (var s in running) try { s.Cancel.Cancel(); } catch (ObjectDisposedException) { /* This session has already completed. */ }
             var errors = new List<string>();
             foreach (var id in ids) try { await Stop(id).ConfigureAwait(false); } catch (Exception e) { errors.Add(e.Message); }
             Task[] cleanupTasks; lock (gate) cleanupTasks = batches.ToArray();

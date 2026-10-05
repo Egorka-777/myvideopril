@@ -186,8 +186,15 @@ namespace VideoBatch {
                     }
                 }
             }
-            if (!string.IsNullOrEmpty(entry.StreamId) && await StreamState(entry.StreamId, ct).ConfigureAwait(false) != "missing")
-                await Request(HttpMethod.Delete, "liveStreams?id=" + LiveJson.Escape(entry.StreamId), null, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(entry.StreamId)) {
+                string streamState = await StreamState(entry.StreamId, ct).ConfigureAwait(false);
+                for (int i = 0; i < 15 && streamState == "active"; i++) {
+                    await Task.Delay(2000, ct).ConfigureAwait(false);
+                    streamState = await StreamState(entry.StreamId, ct).ConfigureAwait(false);
+                }
+                if (streamState == "active") throw new InvalidOperationException("YouTube ещё принимает видеопоток. Повторите завершение позже.");
+                if (streamState != "missing") await Request(HttpMethod.Delete, "liveStreams?id=" + LiveJson.Escape(entry.StreamId), null, ct).ConfigureAwait(false);
+            }
         }
         public void Dispose() { http.Dispose(); tokenGate.Dispose(); }
     }
