@@ -1,7 +1,7 @@
 name: VideoBatch Windows regression
 on:
   push:
-    branches: [fix/tiktok-caption-watch-completeness-20260921, fix/tiktok-evidence-20260929, fix/profile-stability-account-delete-20261005]
+    branches: [fix/tiktok-caption-watch-completeness-20260921, fix/tiktok-evidence-20260929, fix/profile-stability-account-delete-20261005, feat/processing-ranges-effects-20261005]
   pull_request:
     paths:
       - 'src/**'
@@ -9,6 +9,8 @@ on:
       - 'tests/**'
       - 'scripts/Build-Desktop-20261001.ps1'
       - 'scripts/Build-ProfileStability-20261005.ps1'
+      - 'scripts/Build-Processing-20261005.ps1'
+      - 'docs/AGENT_PROCESSING_20261005_RU.md'
       - 'docs/AGENT_PROFILE_STABILITY_20261005_RU.md'
       - 'docs/ROLLOUT_20261001_RU.md'
       - 'docs/YOUTUBE_PAUSED_GRID_20261001_RU.md'
@@ -54,6 +56,8 @@ jobs:
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path ./bin/Release/net48/VideoBatch.exe).Path)
           $cases = @(
+            @{Type='ProcessingRegressionTests';Method='RunSelfTests';Args=@()},
+            @{Type='ProcessingRegressionTests';Method='RunUiSelfTests';Args=@()},
             @{Type='HttpRegressionSelfTests';Method='RunAccountRemovalSelfTest';Args=@()},
             @{Type='HttpUploadRunner';Method='RunParallelSerializationSelfTest';Args=@(10)},
             @{Type='ScheduleGenerator';Method='RunSelfTests';Args=@()},
@@ -74,10 +78,22 @@ jobs:
             } catch { Write-Host $_; $failed+=($case.Type+'.'+$case.Method) }
           }
           if($failed.Count){throw ('C# self tests failed: '+($failed -join ', '))}
+      - name: Install FFmpeg for processing integration
+        shell: pwsh
+        run: |
+          choco install ffmpeg --no-progress -y --limit-output
+          if ($LASTEXITCODE -ne 0) { throw "FFmpeg installation failed" }
+      - name: Real media processing integration
+        shell: pwsh
+        run: |
+          dotnet build tests/ProcessingHost/ProcessingHost.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw "Processing host build failed" }
+          python tests/processing_integration.py --host tests/ProcessingHost/bin/Release/net8.0/ProcessingHost.dll
+          if ($LASTEXITCODE -ne 0) { throw "Processing integration failed" }
       - name: Upload compiled desktop and source workers
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-profile-stability-20261005-with-workers
+          name: desktop-processing-20261005-with-workers
           path: |
             bin/Release/net48/VideoBatch.exe
             bin/Release/net48/VideoBatch.exe.config
@@ -85,5 +101,7 @@ jobs:
             tools/uploader/package*.json
             tools/uploader/tiktok-sign/*.js
             docs/AGENT_PROFILE_STABILITY_20261005_RU.md
+            docs/AGENT_PROCESSING_20261005_RU.md
+            scripts/Build-Processing-20261005.ps1
             scripts/Build-ProfileStability-20261005.ps1
             scripts/Build-Desktop-20261001.ps1

@@ -22,6 +22,7 @@ namespace VideoBatch {
         public double Brightness=0, Contrast=1, MusicStart=0, MusicVolume=1;
         public string MusicPath="";
         public bool Short=false;
+        [XmlIgnore] public ProcessingSample Processing;
         public static Profile[] Defaults(){return Automatic(10);}
         public static Profile[] Automatic(int count) {
             if(count<1||count>10)throw new Exception("Выберите от 1 до 10 вариантов.");
@@ -60,6 +61,7 @@ namespace VideoBatch {
         public List<string> BackgroundMusicRu=new List<string>(), BackgroundMusicEn=new List<string>();
         public string Output=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch");
         public Profile[] Profiles=Profile.Defaults(); public ShortSettings Ranges=new ShortSettings();
+        public ProcessingSettings Processing=new ProcessingSettings();
         public List<string> Music=new List<string>(); public List<string> MusicRu=new List<string>(), MusicEn=new List<string>();
         public string MusicMarketView="RU";
         public List<Binding> Narrations=new List<Binding>();
@@ -454,6 +456,8 @@ namespace VideoBatch {
             // Обратная совместимость: Music / BackgroundMusic = активный рынок.
             p.Music=new List<string>(p.MusicMarketView=="EN"?p.MusicEn:p.MusicRu);
             p.BackgroundMusic=new List<string>(p.MusicMarketView=="EN"?p.BackgroundMusicEn:p.BackgroundMusicRu);
+            if(p.Processing==null)p.Processing=new ProcessingSettings();
+            p.Processing.Validate();
             if(p.SettingsVersion<2)p.SettingsVersion=2;
             if(p.Profiles.Length<10){var expanded=Profile.Defaults();Array.Copy(p.Profiles,expanded,p.Profiles.Length);p.Profiles=expanded;}
             foreach(var x in p.Profiles)x.Validate();p.Ranges.Validate();Profile.Check(p.BackgroundDb,-60,-.1,"Громкость фона, дБ");
@@ -582,6 +586,7 @@ namespace VideoBatch {
         public List<string> Inputs=new List<string>(),Music=new List<string>(); public List<Binding> Narrations=new List<Binding>();
         public double BackgroundDb=-12.5;
         public bool Shorts; public int Count=5;public string Output,FFmpeg,FFprobe;public Profile[] Profiles=Profile.Defaults(); public ShortSettings Ranges=new ShortSettings();
+        public ProcessingSettings Processing=new ProcessingSettings();
     }
     public static class Core {
         public static readonly CultureInfo Inv=CultureInfo.InvariantCulture;
@@ -627,7 +632,7 @@ namespace VideoBatch {
         }
         static bool ValidFps(string fps){return fps!=null&&Regex.IsMatch(fps,@"^[1-9]\d*/[1-9]\d*$");}
         public static double AudioDuration(ProbeResult p){if(p.streams==null||!p.streams.Any(x=>x.codec_type=="audio"))throw new Exception("В файле нет звуковой дорожки.");double d=p.format==null?0:Parse(p.format.duration);if(d<=0)d=p.streams.Where(x=>x.codec_type=="audio").Select(x=>Parse(x.duration)).FirstOrDefault();if(d<=0)throw new Exception("Не удалось определить длину музыки.");return d;}
-        public static List<Profile> RandomProfiles(ShortSettings s,int count,List<Track> tracks,double duration,Random random) {
+        public static List<Profile> RandomProfiles(ShortSettings s,int count,List<Track> tracks,double duration,Random random,bool additionalRandomness=false) {
             s.Validate();if(count<1||count>10)throw new Exception("Выберите от 1 до 10 вариантов.");
             var pool=tracks.Where(t=>s.Loop||t.Duration>=duration).ToList();if(pool.Count==0)throw new Exception("Нет подходящей музыки. Добавьте более длинный трек или включите повтор коротких треков.");
             for(int i=pool.Count-1;i>0;i--){int j=random.Next(i+1);var t=pool[i];pool[i]=pool[j];pool[j]=t;}
@@ -641,13 +646,14 @@ namespace VideoBatch {
                     candidate.Metadata=candidate.FileDate="custom";candidate.CustomDate=dates[i].CustomDate;
                     if(s.TechnicalVariants){candidate.Format=dates[i].Format;candidate.ScalePercent=dates[i].ScalePercent;candidate.FpsPercent=dates[i].FpsPercent;candidate.Crf=Math.Round(s.Crf.Min+(s.Crf.Max-s.Crf.Min)*(i+random.NextDouble())/count,4);}
                     string signature=string.Join("|",new[]{N(candidate.Crop),N(candidate.Gray),N(candidate.Brightness),N(candidate.Contrast),N(candidate.Crf),candidate.Format,N(candidate.ScalePercent),N(candidate.FpsPercent),candidate.MusicPath,N(candidate.MusicStart)});
-                    if(signatures.Add(signature)){p=candidate;break;}if(room>0)start=random.NextDouble()*room;
+                    if(signatures.Add(signature)||additionalRandomness){p=candidate;break;}if(room>0)start=random.NextDouble()*room;
                 }
                 if(p==null)throw new Exception("Для разных вариантов расширьте хотя бы один диапазон или добавьте другой трек.");result.Add(p);
             }
             return result;
         }
         public static List<string> Arguments(string input,string output,Profile p,Media m,string narration) {
+            if(p.Processing!=null)return ProcessingEngine.Arguments(input,output,p,m,narration);
             p.Validate();int w=m.Width,h=m.Height;
             if(p.Resolution!="source"){double sh=Parse(p.Resolution),lo=Math.Round(sh*16/9),f=w>=h?Math.Min(1,Math.Min(lo/w,sh/h)):Math.Min(1,Math.Min(sh/w,lo/h));w=(int)Math.Max(2,Math.Floor(w*f/2)*2);h=(int)Math.Max(2,Math.Floor(h*f/2)*2);}
             w=(int)Math.Max(2,Math.Floor(w*p.ScalePercent/100/2)*2);h=(int)Math.Max(2,Math.Floor(h*p.ScalePercent/100/2)*2);
@@ -691,12 +697,13 @@ namespace VideoBatch {
             try {
                 if(job.Inputs.Count==0)throw new Exception("Добавьте видео.");if(job.Count<1||job.Count>10)throw new Exception("Неверное количество вариантов.");
                 Directory.CreateDirectory(job.Output);var tracks=new List<Track>();
+                if(job.Processing!=null)job.Processing.Validate();
                 if(job.Shorts)job.Ranges.Validate();else{if(job.Profiles==null||job.Profiles.Length<job.Count)throw new Exception("Недостаточно настроек вариантов.");Profile.Check(job.BackgroundDb,-60,-.1,"Громкость фона, дБ");}
                 foreach(string path in job.Music.Distinct(StringComparer.OrdinalIgnoreCase)){string musicPath=Store.TryRepairStoredPath(path);if(!File.Exists(musicPath))throw new Exception("Не найден файл музыки: "+Path.GetFileName(musicPath));progress.Report(new Update("Читаю музыку…",0));tracks.Add(new Track{Path=musicPath,Duration=AudioDuration(await Probe(job.FFprobe,musicPath,ct).ConfigureAwait(false))});}
                 if(job.Shorts&&tracks.Count==0)throw new Exception("Добавьте музыку.");
                 foreach(string input in job.Inputs) {
                     ct.ThrowIfCancellationRequested();Media media;List<Profile> profiles;
-                    try{media=VideoInfo(await Probe(job.FFprobe,input,ct).ConfigureAwait(false));if(job.Shorts){media.Duration=media.VideoDuration;profiles=RandomProfiles(job.Ranges,job.Count,tracks,media.Duration,random);}else {profiles=Store.Clone(job.Profiles).Take(job.Count).ToList();foreach(var p in profiles){p.Short=false;p.MusicPath="";}
+                    try{media=VideoInfo(await Probe(job.FFprobe,input,ct).ConfigureAwait(false));if(job.Shorts){media.Duration=media.VideoDuration;profiles=RandomProfiles(job.Ranges,job.Count,tracks,media.Duration,random,job.Processing!=null&&job.Processing.IsEnabled);}else {profiles=Store.Clone(job.Profiles).Take(job.Count).ToList();foreach(var p in profiles){p.Short=false;p.MusicPath="";}
                         if(tracks.Count>0){var pool=tracks.OrderBy(t=>random.Next()).ToList();var used=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
                             for(int i=0;i<profiles.Count;i++){var p=profiles[i];var t=pool[i%pool.Count];int visit=used.ContainsKey(t.Path)?used[t.Path]:0;used[t.Path]=visit+1;double room=Math.Max(0,t.Duration-media.Duration/p.Speed);int uses=(profiles.Count-1-i%pool.Count)/pool.Count+1;
                                 p.MusicPath=t.Path;p.MusicStart=room>0?(uses==1?random.NextDouble()*room:room*visit/(uses-1)):t.Duration*visit/uses;p.MusicVolume=Math.Pow(10,job.BackgroundDb/20);
@@ -706,13 +713,14 @@ namespace VideoBatch {
                     catch(OperationCanceledException){throw;}catch(Exception e){result.Errors.Add(Path.GetFileName(input)+": "+e.Message);done+=job.Count;continue;}
                     foreach(var profile in profiles) {
                         ct.ThrowIfCancellationRequested();string partial=null;
+                        ProcessingEngine.Apply(profile,job.Processing,media,random,DateTime.Now);
                         try {
                             string name=Path.GetFileNameWithoutExtension(input);if(name.Length>60)name=name.Substring(0,60);
                             string filename=name+"_v"+profile.Slot+"_"+Guid.NewGuid().ToString("N").Substring(0,8)+"."+profile.Format;
                             string dest=Path.Combine(job.Output,filename);partial=Path.Combine(job.Output,".processing_"+filename);
                             var binding=job.Narrations.FirstOrDefault(b=>b.Video==input&&b.Slot==profile.Slot);string narration=binding==null?"":Store.TryRepairStoredPath(binding.Audio);
                             if(!profile.Short&&narration!=""&&!File.Exists(narration))throw new Exception("Не найдена назначенная озвучка.");
-                            string label="Файл "+(done+1)+" из "+total+" · "+Path.GetFileName(input);int baseDone=done;double duration=media.Duration/profile.Speed;
+                            string label="Файл "+(done+1)+" из "+total+" · "+Path.GetFileName(input);int baseDone=done;double duration=ProcessingEngine.OutputDuration(profile,media);
                             progress.Report(new Update(label,100.0*done/total));
                             await Tool(job.FFmpeg,Arguments(input,partial,profile,media,narration),ct,line=>{if(line.StartsWith("out_time_us=")){double value=Parse(line.Substring(12))/1000000/duration;progress.Report(new Update(label,100.0*(baseDone+Math.Min(.99,Math.Max(0,value)))/total));}}).ConfigureAwait(false);
                             ct.ThrowIfCancellationRequested();if(!File.Exists(partial)||new FileInfo(partial).Length==0)throw new Exception("Не создан результат.");

@@ -211,7 +211,7 @@ namespace VideoBatch {
                     MessageBox.Show(this, hint, "Обработка видео", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                using (var w = new MainWindow()) w.ShowDialog(this);
+                using (var w = new MainWindow(settings)) w.ShowDialog(this);
                 return;
             }
             Control next;
