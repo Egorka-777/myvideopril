@@ -61,7 +61,9 @@ namespace VideoBatch {
         public List<string> BackgroundMusicRu=new List<string>(), BackgroundMusicEn=new List<string>();
         public string Output=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch");
         public Profile[] Profiles=Profile.Defaults(); public ShortSettings Ranges=new ShortSettings();
-        public ProcessingSettings Processing=new ProcessingSettings();
+        public ProcessingSettings Processing=ProcessingSettings.MildDefaults();
+        public bool ProcessingMildEnabled20261006Migrated;
+        public bool ProcessingMirrorDisabled20261006Migrated;
         public List<string> Music=new List<string>(); public List<string> MusicRu=new List<string>(), MusicEn=new List<string>();
         public string MusicMarketView="RU";
         public List<Binding> Narrations=new List<Binding>();
@@ -456,8 +458,16 @@ namespace VideoBatch {
             // Обратная совместимость: Music / BackgroundMusic = активный рынок.
             p.Music=new List<string>(p.MusicMarketView=="EN"?p.MusicEn:p.MusicRu);
             p.BackgroundMusic=new List<string>(p.MusicMarketView=="EN"?p.BackgroundMusicEn:p.BackgroundMusicRu);
-            if(p.Processing==null)p.Processing=new ProcessingSettings();
+            if(p.Processing==null)p.Processing=ProcessingSettings.MildDefaults();
             p.Processing.Validate();
+            if(!p.ProcessingMildEnabled20261006Migrated){
+                if(!p.Processing.IsEnabled)p.Processing=ProcessingSettings.MildDefaults();
+                p.ProcessingMildEnabled20261006Migrated=true;
+            }
+            if(!p.ProcessingMirrorDisabled20261006Migrated){
+                p.Processing.Mirror=false;
+                p.ProcessingMirrorDisabled20261006Migrated=true;
+            }
             if(p.SettingsVersion<2)p.SettingsVersion=2;
             if(p.Profiles.Length<10){var expanded=Profile.Defaults();Array.Copy(p.Profiles,expanded,p.Profiles.Length);p.Profiles=expanded;}
             foreach(var x in p.Profiles)x.Validate();p.Ranges.Validate();Profile.Check(p.BackgroundDb,-60,-.1,"Громкость фона, дБ");
@@ -638,15 +648,15 @@ namespace VideoBatch {
             for(int i=pool.Count-1;i>0;i--){int j=random.Next(i+1);var t=pool[i];pool[i]=pool[j];pool[j]=t;}
             var signatures=new HashSet<string>();var result=new List<Profile>();var dates=Profile.Automatic(count);
             for(int i=0;i<count;i++) {
-                var track=pool[i%pool.Count];double room=Math.Max(0,track.Duration-duration);double start=i==0?0:i==1?room:i==2?room/2:random.NextDouble()*room;
-                if(track.Duration<duration&&i>0)start=random.NextDouble()*track.Duration;
                 Profile p=null;
                 for(int attempt=0;attempt<100;attempt++) {
+                    var track=pool[random.Next(pool.Count)];double room=Math.Max(0,track.Duration-duration);
+                    double start=track.Duration<duration?random.NextDouble()*track.Duration:random.NextDouble()*room;
                     var candidate=new Profile{Short=true,Slot=i+1,Speed=1,Crop=s.Crop.Sample(random),Gray=s.Gray.Sample(random),Brightness=s.Brightness.Sample(random)/100,Contrast=s.Contrast.Sample(random)/100,Crf=s.Crf.Sample(random),Format=s.Format,Fps=s.Fps,Resolution=s.Resolution,Metadata="now",MusicPath=track.Path,MusicStart=Math.Round(start,4),MusicVolume=s.Volume/100};
                     candidate.Metadata=candidate.FileDate="custom";candidate.CustomDate=dates[i].CustomDate;
                     if(s.TechnicalVariants){candidate.Format=dates[i].Format;candidate.ScalePercent=dates[i].ScalePercent;candidate.FpsPercent=dates[i].FpsPercent;candidate.Crf=Math.Round(s.Crf.Min+(s.Crf.Max-s.Crf.Min)*(i+random.NextDouble())/count,4);}
                     string signature=string.Join("|",new[]{N(candidate.Crop),N(candidate.Gray),N(candidate.Brightness),N(candidate.Contrast),N(candidate.Crf),candidate.Format,N(candidate.ScalePercent),N(candidate.FpsPercent),candidate.MusicPath,N(candidate.MusicStart)});
-                    if(signatures.Add(signature)||additionalRandomness){p=candidate;break;}if(room>0)start=random.NextDouble()*room;
+                    if(signatures.Add(signature)||additionalRandomness){p=candidate;break;}
                 }
                 if(p==null)throw new Exception("Для разных вариантов расширьте хотя бы один диапазон или добавьте другой трек.");result.Add(p);
             }

@@ -127,8 +127,9 @@ with tempfile.TemporaryDirectory(prefix='videobatch-effects-') as tmp:
     spatial = {'Mirror': True, 'Rotation': parameter(12), 'Crop': parameter(4), 'Brightness': parameter(-20), 'Contrast': parameter(60), 'Sharpness': parameter(-50), 'Noise': parameter(25), 'GridOpacity': parameter(50), 'Zoom': parameter(125)}
     baseline_frame = frame(base)
     for key, value in spatial.items():
-        path = execute(root, 'spatial_' + key, source, {key: value})[0]
-        assert difference(frame(path), baseline_frame) > .5, key
+        paths = execute(root, 'spatial_' + key, source, {key: value}, count=3 if key == 'Mirror' else 1)
+        assert any(difference(frame(path), baseline_frame) > .5 for path in paths), key
+        path = paths[0]
         stream = next(s for s in probe(path)['streams'] if s['codec_type'] == 'video')
         assert (stream['width'], stream['height']) == (320, 180), (key, stream)
     check('mirror, rotation, crop, brightness, contrast, blur, noise, grid and zoom each alter pixels and retain frame size')

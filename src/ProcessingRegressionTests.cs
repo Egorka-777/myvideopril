@@ -52,7 +52,7 @@ namespace VideoBatch {
                 if (begin < 0 || end < begin) return false;
                 File.WriteAllText(Store.Config, xml.Remove(begin, end + "</Processing>".Length - begin));
                 var restored = Store.Load();
-                if (restored.Processing.IsEnabled || restored.Ranges.Volume != 83 || restored.Profiles[0].Crop != 2.3 || restored.ProtectedDolphinToken != "encrypted-fixture" || restored.VideoCount != 7 || restored.YouTubeChannels.Single().ProfileId != "keep") return false;
+                if (!restored.Processing.IsEnabled || restored.Ranges.Volume != 83 || restored.Profiles[0].Crop != 2.3 || restored.ProtectedDolphinToken != "encrypted-fixture" || restored.VideoCount != 7 || restored.YouTubeChannels.Single().ProfileId != "keep") return false;
                 restored.Processing = loaded; Store.Save(restored);
                 if (!Store.Load().Processing.Pitch.Enabled) return false;
                 var invalid = Store.Clone(settings); invalid.Brands = new string[0];
@@ -75,7 +75,7 @@ namespace VideoBatch {
                 using (var window = new MainWindow(prefs)) {
                     if (!ReferenceEquals(typeof(MainWindow).GetField("settings", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window), prefs)) return false;
                 }
-                using (var dialog = new ProcessingDialog(new ProcessingSettings())) {
+                using (var dialog = new ProcessingDialog(ProcessingSettings.MildDefaults())) {
                     int tabs = 0, ranges = 0;
                     Action<Control> walk = null; walk = c => {
                         if (c is TabControl t) tabs += t.TabPages.Count;
@@ -83,7 +83,7 @@ namespace VideoBatch {
                         foreach (Control child in c.Controls) walk(child);
                     };
                     walk(dialog);
-                    return tabs == 4 && ranges == 39 && !dialog.Settings.IsEnabled;
+                    return tabs == 4 && ranges == 39 && dialog.Settings.IsEnabled;
                 }
             } finally { Store.Root=oldRoot;if(Directory.Exists(temp))Directory.Delete(temp,true); }
         }

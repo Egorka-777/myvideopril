@@ -77,6 +77,21 @@ namespace VideoBatch {
                 current[i].Values = new Range(Math.Min(a, b), Math.Max(a, b));
             }
         }
+        public void EnableMildDefaults() {
+            foreach (var p in Parameters()) p.Enabled = true;
+            Mirror = false;
+            DeviceMetadata = true;
+            CaptureDateEnabled = true;
+            RandomizeCaptureTime = true;
+            CaptureDaysBack = 30;
+            if (Brands == null || Brands.Length == 0) Brands = (string[])ProcessingDevices.BrandNames.Clone();
+        }
+        public static ProcessingSettings MildDefaults() {
+            var s = new ProcessingSettings();
+            s.EnableMildDefaults();
+            s.Validate();
+            return s;
+        }
     }
 
     public class ProcessingSample {

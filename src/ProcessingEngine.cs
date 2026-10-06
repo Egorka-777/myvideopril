@@ -19,7 +19,7 @@ namespace VideoBatch {
                 Sharpness = settings.Sharpness.Sample(random, 0), Noise = settings.Noise.Sample(random, 0),
                 Volume = settings.Volume.Sample(random, 100) / 100, Pitch = settings.Pitch.Sample(random, 100) / 100,
                 Tempo = settings.Tempo.Sample(random, 100) / 100, FadeIn = settings.FadeIn.Sample(random, 0),
-                FadeOut = settings.FadeOut.Sample(random, 0), Mirror = settings.Mirror,
+                FadeOut = settings.FadeOut.Sample(random, 0), Mirror = settings.Mirror && random.Next(2) == 0,
                 GridOpacity = settings.GridOpacity.Sample(random, 0) / 100,
                 GridCell = settings.GridCell.Sample(random), Zoom = settings.Zoom.Sample(random, 100) / 100,
                 ZoomPeriod = settings.ZoomPeriod.Sample(random), ZoomX = .3 + random.NextDouble() * .4,
