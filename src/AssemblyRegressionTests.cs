@@ -94,6 +94,13 @@ namespace VideoBatch {
                 using (var window = new AssemblyWindow(true)) {
                     window.Show(); window.SetBounds(0, 0, 1240, 820); System.Windows.Forms.Application.DoEvents();
                     if (window.BackColor != Theme.Background || All(window).Any(c => c is System.Windows.Forms.TabControl)) return false;
+                    var imageCard = (AssemblyAssetCard)Field(window, "imageCard"); var stack = (AssemblyScrollStack)imageCard.Parent;
+                    int originalTop = imageCard.Top;
+                    Invoke(stack, "OnMouseWheel", new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.None, 0, 10, 10, -120));
+                    if (imageCard.Top >= originalTop) return false;
+                    stack.PerformLayout();
+                    Invoke(stack, "OnMouseWheel", new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.None, 0, 10, 10, 120));
+                    if (imageCard.Top != originalTop) return false;
                     var timeline = (System.Windows.Forms.FlowLayoutPanel)Field(window, "timeline");
                     if (timeline.Controls.OfType<System.Windows.Forms.Button>().Count(b => b.Name.StartsWith("InsertScene")) != 4) return false;
                     var duration = (System.Windows.Forms.NumericUpDown)Field(window, "duration");
@@ -131,7 +138,9 @@ namespace VideoBatch {
                         canvas.SetBackground(background);
                         Capture(window, Path.Combine(screenshots, "studio-scenes.png"));
                         Invoke(window, "SwitchInspector", true); Capture(window, Path.Combine(screenshots, "studio-export.png")); Invoke(window, "SwitchInspector", false);
-                        window.SetBounds(0, 0, 1024, 730); System.Windows.Forms.Application.DoEvents(); Capture(window, Path.Combine(screenshots, "studio-compact.png"));
+                        window.SetBounds(0, 0, 1024, 730); System.Windows.Forms.Application.DoEvents();
+                        if (imageCard.Top < 0 || imageCard.Bottom > stack.ClientSize.Height) throw new Exception("Video/image import card is clipped at compact window size");
+                        Capture(window, Path.Combine(screenshots, "studio-compact.png"));
                     }
                     timeline.Controls.OfType<System.Windows.Forms.Button>().First(b => b.Name == "InsertScene1").PerformClick();
                     if (current.Scenes.Count != 4 || current.Scenes[1].Name != "Новая сцена" || !Directory.Exists(current.Resolve(current.Scenes[1].Videos))) return false;
