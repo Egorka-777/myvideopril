@@ -8,6 +8,7 @@ namespace VideoBatch {
         Profiles,
         Proxy,
         VideoProcessing,
+        VideoAssembly,
         YouTube,
         TikTok,
         Warmup,
@@ -21,7 +22,7 @@ namespace VideoBatch {
         public event Action<NavSection> Navigated;
 
         public void Navigate(NavSection section) {
-            if (Current == section) return;
+            if (Current == section && section != NavSection.VideoProcessing && section != NavSection.VideoAssembly) return;
             Current = section;
             Navigated?.Invoke(section);
         }
@@ -34,6 +35,7 @@ namespace VideoBatch {
                 case NavSection.Profiles: return "Профили";
                 case NavSection.Proxy: return "Прокси";
                 case NavSection.VideoProcessing: return "Обработка видео";
+                case NavSection.VideoAssembly: return "Сборка роликов";
                 case NavSection.YouTube: return "YouTube";
                 case NavSection.TikTok: return "TikTok";
                 case NavSection.Warmup: return "Прогрев";

@@ -79,7 +79,7 @@ namespace VideoBatch {
             int y = 0;
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
             y = AddNavGroup(panel, "Аккаунты", y, NavItem("Профили", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
-            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok));
+            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok));
             y = AddNavGroup(panel, "Автоматизация", y, NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
             return panel;
@@ -206,6 +206,10 @@ namespace VideoBatch {
         void ShowSection(NavSection section) {
             pageTitleLabel.Text = NavigationService.Title(section);
             HighlightNav(section);
+            if (section == NavSection.VideoAssembly) {
+                using (var w = new AssemblyWindow()) w.ShowDialog(this);
+                return;
+            }
             if (section == NavSection.VideoProcessing) {
                 if (!ToolsLocator.TryResolve(out _, out _, out var hint)) {
                     MessageBox.Show(this, hint, "Обработка видео", MessageBoxButtons.OK, MessageBoxIcon.Information);

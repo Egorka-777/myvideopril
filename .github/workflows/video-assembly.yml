@@ -1,0 +1,72 @@
+name: Video assembly Windows kit
+on:
+  push:
+    branches: [feat/template-video-assembly-20261006]
+  pull_request:
+    paths:
+      - 'src/Assembly*.cs'
+      - 'src/AppShell.cs'
+      - 'src/NavigationService.cs'
+      - 'VideoBatch.csproj'
+      - 'tests/AssemblyHost/**'
+      - 'tests/assembly_integration.py'
+      - '.github/workflows/video-assembly.yml'
+jobs:
+  verify-and-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Compile desktop
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Planner, image rendering, scene insertion and UI regressions
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          foreach ($method in @('RunPlannerTests','RunRasterTests','RunUiTests')) {
+            $ok = $asm.GetType('VideoBatch.AssemblyRegressionTests').GetMethod($method).Invoke($null,@())
+            Write-Host "$method = $ok"
+            if (!$ok) { throw "Failed: $method" }
+          }
+          foreach ($method in @('RunSelfTests','RunUiSelfTests')) {
+            if (!$asm.GetType('VideoBatch.ProcessingRegressionTests').GetMethod($method).Invoke($null,@())) { throw "Processing regression: $method" }
+          }
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg --no-progress -y --limit-output
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
+      - name: Actual MP4 integration
+        shell: pwsh
+        run: |
+          dotnet build tests/AssemblyHost/AssemblyHost.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Test host build failed' }
+          python tests/assembly_integration.py --host tests/AssemblyHost/bin/Release/net8.0/AssemblyHost.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Video assembly integration failed' }
+      - name: Package runnable application with FFmpeg and workers
+        shell: pwsh
+        run: |
+          npm ci --prefix tools/uploader --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'Worker dependency installation failed' }
+          $kit = 'artifacts/VideoBatch-Assembly'
+          New-Item -ItemType Directory -Force "$kit/tools/uploader" | Out-Null
+          Copy-Item bin/Release/net48/VideoBatch.exe $kit
+          Copy-Item bin/Release/net48/VideoBatch.exe.config $kit
+          Copy-Item (Get-Command ffmpeg).Source "$kit/tools/ffmpeg.exe"
+          Copy-Item (Get-Command ffprobe).Source "$kit/tools/ffprobe.exe"
+          Copy-Item (Get-Command node).Source "$kit/tools/uploader/node.exe"
+          Copy-Item tools/uploader/* "$kit/tools/uploader" -Recurse -Force
+          Copy-Item docs/VIDEO_ASSEMBLY_RU.md "$kit/СНАЧАЛА-ПРОЧИТАЙ.md"
+          git rev-parse HEAD | Set-Content "$kit/SOURCE_COMMIT.txt"
+          Get-ChildItem $kit -Recurse -File | ForEach-Object { "$((Get-FileHash $_.FullName).Hash)  $($_.FullName.Substring((Resolve-Path $kit).Path.Length+1))" } | Set-Content "$kit/SHA256_MANIFEST.txt"
+          Compress-Archive -Path "$kit/*" -DestinationPath artifacts/VideoBatch-Assembly-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoBatch-Assembly-Windows
+          path: artifacts/VideoBatch-Assembly-Windows.zip
+          if-no-files-found: error
