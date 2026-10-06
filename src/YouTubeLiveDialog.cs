@@ -95,9 +95,9 @@ namespace VideoBatch {
             try {
                 if (string.IsNullOrWhiteSpace(channel.ProfileId)) throw new InvalidOperationException("Укажите Profile ID этого канала в Dolphin.");
                 var pendingBefore = manager.Store.PendingSnapshot().Where(e => e.LocalId == channel.ChannelId).ToArray();
-                if (pendingBefore.Any(e => e.Transport != "studio" || e.ProfileId != channel.ProfileId))
+                if (pendingBefore.Any(e => e.Transport != "studio" || e.ProfileId != channel.ProfileId || e.LocalPort != (manager.Preferences?.DolphinPort ?? 3001)))
                     throw new InvalidOperationException("Сначала завершите прежний эфир его прежним способом подключения. OAuth-журнал нельзя переносить на сессию.");
-                var account = new LiveAccount { LocalId = channel.ChannelId, ProfileId = channel.ProfileId, Transport = "studio" };
+                var account = new LiveAccount { LocalId = channel.ChannelId, ProfileId = channel.ProfileId, Transport = "studio", LocalPort = manager.Preferences?.DolphinPort ?? 3001 };
                 using (var api = new YouTubeLiveSessionApi(account, manager.Preferences)) {
                     await api.VerifyChannel("", channel.ChannelUrl, lifetime.Token);
                     account.RemoteId = api.ChannelId; account.Name = string.IsNullOrWhiteSpace(api.ChannelName) ? channel.Name : api.ChannelName;

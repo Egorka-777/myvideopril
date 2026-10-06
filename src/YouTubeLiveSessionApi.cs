@@ -36,7 +36,7 @@ namespace VideoBatch {
         async Task<Dictionary<string, object>> Call(string command, CancellationToken ct, string broadcast = "", LiveOptions options = null) {
             var job = new Dictionary<string, object> {
                 ["command"] = command, ["operationId"] = operation, ["profileId"] = account.ProfileId,
-                ["expectedChannelId"] = account.RemoteId, ["localPort"] = preferences?.DolphinPort ?? 3001,
+                ["expectedChannelId"] = account.RemoteId, ["localPort"] = account.LocalPort,
                 ["stateDirectory"] = Path.Combine(Store.Root, "live-session"), ["broadcastId"] = broadcast
             };
             if (options != null) job["options"] = new Dictionary<string, object> {
@@ -104,7 +104,10 @@ namespace VideoBatch {
                     try {
                         var drain = process.StandardError.ReadToEndAsync();
                         string json = new JavaScriptSerializer().Serialize(job);
-                        await process.StandardInput.WriteLineAsync(json).ConfigureAwait(false); process.StandardInput.Close();
+                        byte[] payload = new UTF8Encoding(false).GetBytes(json + "\n");
+                        await process.StandardInput.BaseStream.WriteAsync(payload, 0, payload.Length, timeout.Token).ConfigureAwait(false);
+                        await process.StandardInput.BaseStream.FlushAsync(timeout.Token).ConfigureAwait(false);
+                        process.StandardInput.BaseStream.Close();
                         Dictionary<string, object> reply = null;
                         string line;
                         while ((line = await process.StandardOutput.ReadLineAsync().ConfigureAwait(false)) != null) {

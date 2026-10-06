@@ -63,13 +63,17 @@ namespace VideoBatch {
                         throw new InvalidOperationException("Сначала проверьте сессию Dolphin в окне запуска: " + channel.Name);
                     if (account.Transport == "studio" && (string.IsNullOrWhiteSpace(account.ProfileId) || channel.ProfileId != account.ProfileId))
                         throw new InvalidOperationException("Profile ID изменён. Повторите проверку сессии: " + channel.Name);
+                    if (account.Transport == "studio" && Preferences != null && account.LocalPort != Preferences.DolphinPort)
+                        throw new InvalidOperationException("Порт Dolphin изменён. Повторите проверку сессии: " + channel.Name);
                     if (account.Transport == "studio" && (batch.Any(s => s.Account.ProfileId == account.ProfileId) || sessions.Values.Any(s => s.Account.Transport == "studio" && s.Account.ProfileId == account.ProfileId)))
                         throw new InvalidOperationException("Для одновременных эфиров нужны разные Dolphin-профили: " + channel.Name);
+                    if (account.Transport == "studio" && Store.PendingSnapshot().Any(e => e.Transport == "studio" && e.ProfileId == account.ProfileId && e.LocalPort == account.LocalPort))
+                        throw new InvalidOperationException("Dolphin-профиль требует завершения прежнего эфира: " + channel.Name);
                     if (!remoteIds.Add(account.RemoteId)) throw new InvalidOperationException("Две строки подключены к одному YouTube-каналу. Выберите только одну.");
                     if (sessions.ContainsKey(channel.ChannelId) || (views.ContainsKey(channel.ChannelId) && views[channel.ChannelId].Busy) || sessions.Values.Any(s => s.Account.RemoteId == account.RemoteId)
                         || Store.PendingSnapshot().Any(e => e.RemoteId == account.RemoteId)) throw new InvalidOperationException("Эфир уже запускается, работает или требует завершения: " + channel.Name);
                     batch.Add(new Session { Channel = channel, Account = account, Journal = new LiveJournalEntry {
-                        LocalId = channel.ChannelId, RemoteId = account.RemoteId, Transport = account.Transport, ProfileId = account.ProfileId, OperationId = Guid.NewGuid().ToString("N") } });
+                        LocalId = channel.ChannelId, RemoteId = account.RemoteId, Transport = account.Transport, ProfileId = account.ProfileId, LocalPort = account.LocalPort, OperationId = Guid.NewGuid().ToString("N") } });
                 }
                 foreach (var s in batch) { sessions.Add(s.Channel.ChannelId, s); State(s, LivePhase.Preparing); }
                 // The playlist is prepared once, shared by all channels; no encoding per channel while live.
@@ -204,7 +208,7 @@ namespace VideoBatch {
                 foreach (var entry in Store.PendingSnapshot().Where(e => e.LocalId == localId)) {
                     var account = Store.Account(localId);
                     if (account == null || account.RemoteId != entry.RemoteId) throw new InvalidOperationException("Подключите прежний канал для завершения старого эфира.");
-                    if ((entry.Transport ?? "") != (account.Transport ?? "") || (entry.Transport == "studio" && entry.ProfileId != account.ProfileId))
+                    if ((entry.Transport ?? "") != (account.Transport ?? "") || (entry.Transport == "studio" && (entry.ProfileId != account.ProfileId || entry.LocalPort != account.LocalPort)))
                         throw new InvalidOperationException("Для завершения нужен прежний способ подключения и Dolphin-профиль.");
                     using (var api = apiFactory(account)) using (var ct = new CancellationTokenSource(TimeSpan.FromSeconds(90))) {
                         await api.Complete(entry, ct.Token).ConfigureAwait(false); Store.Journal(entry, true);

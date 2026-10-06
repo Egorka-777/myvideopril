@@ -7,7 +7,7 @@ const video = "abcdefghijk", channel = "UCfixture";
 const state = { title: "", description: "", tags: [], privacy: "private", kids: false, exists: false, live: false, ended: false, keyName: "", thumbnail: "https://i.ytimg.com/default.jpg" };
 function html(url) {
   const mode = url.includes("/manage") ? "manage" : url.endsWith("/edit") ? "edit" : "room";
-  return `<!doctype html><html><body><div id="channel-name">Fixture channel</div><main></main><script>
+  return `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="channel-name">Fixture channel</div><main></main><script>
   const state=${JSON.stringify(state)}, mode=${JSON.stringify(mode)};
   window.ytcfg={get:k=>k==='DELEGATED_SESSION_ID'?${JSON.stringify(channel)}:''};
   const main=document.querySelector('main');
@@ -53,7 +53,7 @@ function html(url) {
       return route.fulfill({ contentType: "text/html", body: html(u.pathname) });
     });
     const ui = new NativeStudio(page, channel);
-    const options = { title: "Live fixture", description: "Description fixture", tags: ["one", "two"], privacy: "unlisted", madeForKids: false, thumbnail: path.join(root, "thumb.png") };
+    const options = { title: "Эфир — проверка", description: "Описание эфира", tags: ["one", "два"], privacy: "unlisted", madeForKids: false, thumbnail: path.join(root, "thumb.png") };
     fs.writeFileSync(options.thumbnail, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX0AAAAASUVORK5CYII=", "base64"));
     assert.equal(await ui.create("VideoBatch live " + "a".repeat(32), options), video);
     assert.equal(state.privacy, "private");
