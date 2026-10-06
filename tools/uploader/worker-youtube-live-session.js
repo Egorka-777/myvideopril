@@ -70,7 +70,8 @@ class OperationStore {
     const directory = path.join(path.dirname(this.job.stateDirectory), "dolphin-sessions");
     const lease = dolphin.liveLeasePath(this.job, directory);
     fs.mkdirSync(path.dirname(lease), { recursive: true });
-    fs.writeFileSync(lease, JSON.stringify({ operationId: this.job.operationId, profileId: this.job.profileId, channelId: this.job.expectedChannelId }), { flag: "wx", mode: 0o600 });
+    try { fs.writeFileSync(lease, JSON.stringify({ operationId: this.job.operationId, profileId: this.job.profileId, channelId: this.job.expectedChannelId }), { flag: "wx", mode: 0o600 }); }
+    catch (error) { if (error.code === "EEXIST") throw new Error("Dolphin-профиль уже зарезервирован другим эфиром. Сначала проверьте завершение."); throw error; }
   }
   release() {
     const directory = path.join(path.dirname(this.job.stateDirectory), "dolphin-sessions");
@@ -320,8 +321,9 @@ class NativeStudio {
       throw new Error("Studio не сохранил название/описание эфира.");
     const audience = await uniqueVisible(verify.getByRole("radio", { name: options.madeForKids ? labels.kidsYes : labels.kidsNo }));
     if (await audience.getAttribute("aria-checked") !== "true" && !await audience.isChecked().catch(() => false)) throw new Error("Studio не подтвердил аудиторию.");
-    const visibleText = await verify.innerText();
-    for (const tag of options.tags) if (!visibleText.includes(tag)) throw new Error("Studio не подтвердил сохранение тегов.");
+    const savedTags = await verify.locator("#tags-container ytcp-chip, #tags-container [role='listitem']").evaluateAll(nodes => nodes.map(n =>
+      (n.getAttribute("text") || n.querySelector("#text, #label, .chip-text")?.textContent || Array.from(n.childNodes).filter(c => c.nodeType === Node.TEXT_NODE).map(c => c.textContent).join("")).trim()));
+    if (JSON.stringify(savedTags.slice().sort()) !== JSON.stringify(options.tags.slice().sort())) throw new Error("Studio не подтвердил сохранение точного списка тегов.");
     if (options.thumbnail && !(await verify.locator('img[src*="ytimg"], #thumbnail-editor img, ytcp-thumbnails-compact-editor img').evaluateAll(nodes => nodes.map(n => n.src))).includes(this.thumbnailEvidence))
       throw new Error("Studio не подтвердил сохранение выбранного превью.");
     const checkedPrivacy = await uniqueVisible(verify.getByRole("radio", { name: labels[options.privacy] }), false);
@@ -348,7 +350,7 @@ class NativeStudio {
     await this.assertTarget(); await this.click(labels.go);
     // Some accounts show a confirmation dialog. Only act inside that dialog.
     const d = await uniqueVisible(this.page.locator('[role="dialog"], ytcp-dialog[opened]'), false);
-    if (d && await this.button(labels.go, d, false)) await this.click(labels.go, d);
+    if (d && await this.button(labels.go, d, false)) { await this.click(labels.go, d); await waitUntil(async () => !await d.isVisible()); }
     await waitUntil(async () => await this.state() === "live", 20000);
   }
   async complete(startAttempted) {
@@ -358,6 +360,7 @@ class NativeStudio {
       await this.click(labels.end);
       const dialog = await this.dialog();
       await this.click(labels.end, dialog);
+      await waitUntil(async () => !await dialog.isVisible());
       await waitUntil(async () => await this.state() === "complete", 30000); return;
     }
     if (startAttempted) throw new Error("Запуск запрашивался, но завершение не подтверждено. Проверьте Studio вручную.");
@@ -369,6 +372,7 @@ class NativeStudio {
     const dialog = await this.dialog();
     const box = await uniqueVisible(dialog.getByRole("checkbox")); await box.check();
     await this.click(/^(Delete forever|Удалить навсегда)$/i, dialog);
+    await waitUntil(async () => /video (?:successfully )?deleted|видео (?:успешно )?удалено/i.test(await this.page.locator("body").innerText()), 30000);
     await waitUntil(async () => !this.page.url().includes(`/video/${this.broadcastId}/`));
     // A navigation alone is not deletion confirmation: prove the exact video is absent from Manage.
     await this.manage();

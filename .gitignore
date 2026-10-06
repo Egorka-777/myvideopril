@@ -21,6 +21,7 @@ settings.xml
 youtube-live.xml*
 client_secret*.json
 live-media/
+live-session/
 .env
 .env.*
 tools/uploader/tiktok-sign/webmssdk.js
