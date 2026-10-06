@@ -1,3 +1,5 @@
+> В новой ветке `feature/youtube-live-dolphin-session-20261006` новые эфиры используют сессию Dolphin. См. [актуальную инструкцию](AGENT_YOUTUBE_LIVE_SESSION_20261006_RU.md). Этот документ оставлен для старой OAuth-версии и восстановления её незавершённых эфиров.
+
 # Прямые эфиры YouTube: установка и проверка
 
 Ветка: `feature/youtube-live-streams-20261005`.

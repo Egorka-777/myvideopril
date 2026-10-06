@@ -4,9 +4,9 @@ concurrency:
   cancel-in-progress: true
 on:
   push:
-    branches: [feature/youtube-live-streams-20261005]
+    branches: [feature/youtube-live-streams-20261005, feature/youtube-live-dolphin-session-20261006]
   pull_request:
-    paths: ['src/YouTubeLive*.cs', 'src/YouTubeWorkspacePanel*.cs', 'src/AppShell.cs', 'VideoBatch.csproj', '.github/workflows/youtube-live.yml']
+    paths: ['src/YouTubeLive*.cs', 'src/YouTubeWorkspacePanel*.cs', 'src/AppShell.cs', 'VideoBatch.csproj', 'tools/uploader/*live*', 'tools/uploader/dolphin-session.js', 'tests/*live*', 'tests/browser/*live*', '.github/workflows/youtube-live.yml']
   workflow_dispatch:
 jobs:
   verify:
@@ -30,6 +30,12 @@ jobs:
           }
       - name: Compile desktop
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Install Chromium for isolated Studio fixture
+        shell: pwsh
+        run: node tools/uploader/node_modules/playwright-core/cli.js install chromium
+      - name: Studio session DOM fixture
+        shell: pwsh
+        run: node tests/browser/youtube-live-studio-ui.js
       - name: Live lifecycle and API contract tests
         shell: powershell
         run: |
@@ -60,12 +66,14 @@ jobs:
       - name: Upload desktop and instructions
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-youtube-live-20261005
+          name: desktop-youtube-live-session-20261006
           path: |
             bin/Release/net48/VideoBatch.exe
             bin/Release/net48/VideoBatch.exe.config
             docs/AGENT_YOUTUBE_LIVE_20261005_RU.md
+            docs/AGENT_YOUTUBE_LIVE_SESSION_20261006_RU.md
             scripts/Build-YouTubeLive-20261005.ps1
+            scripts/Build-YouTubeLiveSession-20261006.ps1
             tools/uploader/*.js
             tools/uploader/package*.json
             artifacts/live-ui/*.png

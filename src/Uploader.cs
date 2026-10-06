@@ -163,9 +163,11 @@ namespace VideoBatch {
         }
         public static async Task StopProfile(string token,int port,string profileId) {
             if(string.IsNullOrWhiteSpace(token)||string.IsNullOrWhiteSpace(profileId))return;
+            YouTubeLiveSessionApi.AssertProfileCanStop(port,profileId);
             try{using(var handler=new HttpClientHandler{UseProxy=false})using(var client=new HttpClient(handler)){client.Timeout=TimeSpan.FromSeconds(10);var body=new StringContent("{\"token\":\""+JsonEscape(token)+"\"}",Encoding.UTF8,"application/json");await client.PostAsync("http://127.0.0.1:"+port+"/v1.0/auth/login-with-token",body).ConfigureAwait(false);await client.GetAsync("http://127.0.0.1:"+port+"/v1.0/browser_profiles/"+Uri.EscapeDataString(profileId)+"/stop").ConfigureAwait(false);}}catch{}
         }
         public static async Task StopProfileRequired(string token,int port,string profileId) {
+            YouTubeLiveSessionApi.AssertProfileCanStop(port,profileId);
             using(var handler=new HttpClientHandler{UseProxy=false})
             using(var client=new HttpClient(handler){Timeout=TimeSpan.FromSeconds(20)}){
                 var body=new StringContent("{\"token\":\""+JsonEscape(token)+"\"}",Encoding.UTF8,"application/json");

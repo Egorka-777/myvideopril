@@ -33,6 +33,17 @@ function cachePath(job, directory) {
   const key = crypto.createHash("sha256").update(`${job.localPort}:${job.profileId}`).digest("hex");
   return path.join(directory, key + ".json");
 }
+function liveLeasePath(job, directory) {
+  const key = crypto.createHash("sha256").update(`${job.localPort}:${job.profileId}`).digest("hex");
+  return path.join(path.dirname(directory), "live-session", "leases", key + ".json");
+}
+function assertLiveLease(job, directory) {
+  const file = liveLeasePath(job, directory);
+  if (!fs.existsSync(file)) return;
+  const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!job.liveOperationId || saved.operationId !== job.liveOperationId)
+    throw new Error("Этот Dolphin-профиль занят прямым эфиром. Сначала завершите эфир; профиль не перезапускался.");
+}
 
 async function releaseTaskPage(page) {
   if (!page || page.isClosed()) return;
@@ -86,6 +97,7 @@ function saveEndpoint(job, directory, endpoint, report) {
 }
 
 async function startOrAttach(job, directory, request, report = () => {}, options = {}) {
+  assertLiveLease(job, directory);
   const fetchImpl = options.fetchImpl || fetch;
   const cached = await readCached(job, directory, fetchImpl);
   if (cached) {
@@ -131,4 +143,4 @@ async function startOrAttach(job, directory, request, report = () => {}, options
   throw new Error("Dolphin не подтвердил подключение (" + last + "). Профиль не закрывался; проверьте API и прокси. Повторная публикация не выполнялась.");
 }
 
-module.exports = { automationEndpoint, localBrowserEndpoint, endpointAlive, cachePath, readCached, saveEndpoint, startOrAttach, requestLocal, releaseTaskPage };
+module.exports = { automationEndpoint, localBrowserEndpoint, endpointAlive, cachePath, readCached, saveEndpoint, startOrAttach, requestLocal, releaseTaskPage, liveLeasePath, assertLiveLease };
