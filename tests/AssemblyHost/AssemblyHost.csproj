@@ -2,6 +2,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition="'$(OS)' == 'Windows_NT'">net8.0-windows</TargetFramework>
+    <UseWindowsForms Condition="'$(OS)' == 'Windows_NT'">true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <VideoBatchAssembly Condition="'$(VideoBatchAssembly)' == ''">../../bin/Release/net48/VideoBatch.exe</VideoBatchAssembly>
   </PropertyGroup>

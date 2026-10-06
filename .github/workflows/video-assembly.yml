@@ -49,7 +49,7 @@ jobs:
         run: |
           dotnet build tests/AssemblyHost/AssemblyHost.csproj -c Release
           if ($LASTEXITCODE -ne 0) { throw 'Test host build failed' }
-          python tests/assembly_integration.py --host tests/AssemblyHost/bin/Release/net8.0/AssemblyHost.dll
+          python tests/assembly_integration.py --host tests/AssemblyHost/bin/Release/net8.0-windows/AssemblyHost.dll
           if ($LASTEXITCODE -ne 0) { throw 'Video assembly integration failed' }
       - name: Package runnable application with FFmpeg and workers
         shell: pwsh
