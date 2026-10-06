@@ -14,6 +14,7 @@ on:
 jobs:
   verify-and-package:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -29,11 +30,13 @@ jobs:
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           foreach ($method in @('RunPlannerTests','RunRasterTests','RunUiTests')) {
+            Write-Host "Starting $method"
             $ok = $asm.GetType('VideoBatch.AssemblyRegressionTests').GetMethod($method).Invoke($null,@())
             Write-Host "$method = $ok"
             if (!$ok) { throw "Failed: $method" }
           }
           foreach ($method in @('RunSelfTests','RunUiSelfTests')) {
+            Write-Host "Starting processing $method"
             if (!$asm.GetType('VideoBatch.ProcessingRegressionTests').GetMethod($method).Invoke($null,@())) { throw "Processing regression: $method" }
           }
       - name: Install FFmpeg
@@ -57,8 +60,13 @@ jobs:
           New-Item -ItemType Directory -Force "$kit/tools/uploader" | Out-Null
           Copy-Item bin/Release/net48/VideoBatch.exe $kit
           Copy-Item bin/Release/net48/VideoBatch.exe.config $kit
-          Copy-Item (Get-Command ffmpeg).Source "$kit/tools/ffmpeg.exe"
-          Copy-Item (Get-Command ffprobe).Source "$kit/tools/ffprobe.exe"
+          # Copy actual binaries, not Chocolatey's forwarding shims.
+          $ffmpeg = Get-ChildItem "$env:ChocolateyInstall/lib/ffmpeg" -Filter ffmpeg.exe -Recurse -File | Sort-Object Length -Descending | Select-Object -First 1
+          if (!$ffmpeg -or $ffmpeg.Length -lt 1000000) { throw 'Actual FFmpeg binary not found' }
+          $ffprobe = Join-Path $ffmpeg.DirectoryName 'ffprobe.exe'
+          if (!(Test-Path $ffprobe) -or (Get-Item $ffprobe).Length -lt 1000000) { throw 'Actual FFprobe binary not found' }
+          Copy-Item $ffmpeg.FullName "$kit/tools/ffmpeg.exe"
+          Copy-Item $ffprobe "$kit/tools/ffprobe.exe"
           Copy-Item (Get-Command node).Source "$kit/tools/uploader/node.exe"
           Copy-Item tools/uploader/* "$kit/tools/uploader" -Recurse -Force
           Copy-Item docs/VIDEO_ASSEMBLY_RU.md "$kit/СНАЧАЛА-ПРОЧИТАЙ.md"

@@ -204,11 +204,11 @@ namespace VideoBatch {
                 var item = new ListViewItem(new[] { target.Name, target.Path, size.ToString() }) { Tag = target }; sources.Items.Add(item);
             }
         }
-        void CreateFolders() { Safe(() => { ReadTop(); if (string.IsNullOrWhiteSpace(template.Materials)) throw new Exception("Выбери общую папку материалов."); Directory.CreateDirectory(template.Materials); RefreshSources(); foreach (ListViewItem item in sources.Items) { var target = (SourceTarget)item.Tag; string path = template.Resolve(target.Path); if (!string.IsNullOrWhiteSpace(path) && !File.Exists(path) && !Path.HasExtension(path)) Directory.CreateDirectory(path); } RefreshSources(); Ui.Open(template.Materials); }); }
+        void CreateFolders() { Safe(() => { ReadTop(); if (string.IsNullOrWhiteSpace(template.Materials)) throw new Exception("Выбери общую папку материалов."); Directory.CreateDirectory(template.Materials); RefreshSources(); foreach (ListViewItem item in sources.Items) { var target = (SourceTarget)item.Tag; string path = template.Resolve(target.Path); if (!string.IsNullOrWhiteSpace(path) && !File.Exists(path) && (Directory.Exists(path) || !target.Extensions.Contains(Path.GetExtension(path).ToLowerInvariant()))) Directory.CreateDirectory(path); } RefreshSources(); Ui.Open(template.Materials); }); }
         void AddFiles() { Safe(() => { if (sources.SelectedItems.Count == 0) throw new Exception("Выбери строку материала в списке."); using (var d = new OpenFileDialog { Multiselect = true, Filter = "Все файлы|*.*" }) if (d.ShowDialog(this) == DialogResult.OK) CopyFiles(d.FileNames); }); }
         void CopyFiles(string[] files) {
             ReadTop(); if (sources.SelectedItems.Count == 0) throw new Exception("Выбери строку материала."); var target = (SourceTarget)sources.SelectedItems[0].Tag;
-            string folder = template.Resolve(target.Path); if (File.Exists(folder) || Path.HasExtension(folder)) throw new Exception("Этот источник — отдельный файл. Его можно заменить на вкладке 2."); Directory.CreateDirectory(folder);
+            string folder = template.Resolve(target.Path); if (File.Exists(folder) || (!Directory.Exists(folder) && target.Extensions.Contains(Path.GetExtension(folder).ToLowerInvariant()))) throw new Exception("Этот источник — отдельный файл. Его можно заменить на вкладке 2."); Directory.CreateDirectory(folder);
             foreach (string file in files) {
                 if (!File.Exists(file) || !target.Extensions.Contains(Path.GetExtension(file).ToLowerInvariant())) continue;
                 string dest = Path.Combine(folder, Path.GetFileName(file)); if (Path.GetFullPath(file).Equals(dest, StringComparison.OrdinalIgnoreCase)) continue;
