@@ -1,0 +1,71 @@
+name: YouTube live streams verification
+concurrency:
+  group: youtube-live-${{ github.ref }}
+  cancel-in-progress: true
+on:
+  push:
+    branches: [feature/youtube-live-streams-20261005]
+  pull_request:
+    paths: ['src/YouTubeLive*.cs', 'src/YouTubeWorkspacePanel*.cs', 'src/AppShell.cs', 'VideoBatch.csproj', '.github/workflows/youtube-live.yml']
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Worker regressions
+        shell: pwsh
+        run: |
+          npm ci --prefix tools/uploader --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+          Get-ChildItem tests -Filter *.js | ForEach-Object {
+            node $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Failed: $($_.Name)" }
+          }
+      - name: Compile desktop
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Live lifecycle and API contract tests
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          foreach($type in @('HttpRegressionSelfTests','YouTubeLiveSelfTests')) {
+            Write-Host "Running $type"
+            $method = if($type -eq 'YouTubeLiveSelfTests') {'RunSelfTests'} else {'RunAll'}
+            try { if(!$asm.GetType('VideoBatch.'+$type).GetMethod($method).Invoke($null,@())) { throw "$type failed" } }
+            catch { Write-Host $_.Exception.GetBaseException().ToString(); throw }
+            Write-Host "$type passed"
+          }
+      - name: Install FFmpeg for real media tests
+        shell: pwsh
+        run: choco install ffmpeg --no-progress -y
+      - name: WinForms UI smoke test
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          $output = Join-Path $PWD 'artifacts\live-ui'
+          if(!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunUiSelfTests').Invoke($null,[object[]]@([string]$output))) { throw 'UI test failed' }
+      - name: Real mixed media infinite loop test
+        shell: powershell
+        run: |
+          $ffmpeg = (Get-Command ffmpeg.exe).Source
+          $ffprobe = (Get-Command ffprobe.exe).Source
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          if(!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunMediaSelfTests').Invoke($null,[object[]]@([string]$ffmpeg,[string]$ffprobe))) { throw 'Live media test failed' }
+      - name: Upload desktop and instructions
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-youtube-live-20261005
+          path: |
+            bin/Release/net48/VideoBatch.exe
+            bin/Release/net48/VideoBatch.exe.config
+            docs/AGENT_YOUTUBE_LIVE_20261005_RU.md
+            scripts/Build-YouTubeLive-20261005.ps1
+            tools/uploader/*.js
+            tools/uploader/package*.json
+            artifacts/live-ui/*.png

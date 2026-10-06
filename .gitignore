@@ -18,6 +18,9 @@ tools/uploader/node_modules/
 # Runtime / local data (never commit secrets)
 *.log
 settings.xml
+youtube-live.xml*
+client_secret*.json
+live-media/
 .env
 .env.*
 tools/uploader/tiktok-sign/webmssdk.js

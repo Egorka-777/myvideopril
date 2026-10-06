@@ -71,7 +71,19 @@ namespace VideoBatch {
             BuildPanels();
             ShowSection(NavSection.Home);
             Shown += async (s, e) => await CheckDolphinAsync(false);
-            FormClosing += (s, e) => { SaveSettings(); youtubeBackend?.Dispose(); tiktokBackend?.Dispose(); };
+            bool closingAfterLive = false, waitingForLive = false;
+            FormClosing += async (s, e) => {
+                if (!closingAfterLive && youtubeWorkspace?.HasLiveWork == true) {
+                    e.Cancel = true;
+                    if (waitingForLive) return;
+                    waitingForLive = true;
+                    Enabled = false;
+                    try { if (await youtubeWorkspace.FinishLiveBeforeClose()) { closingAfterLive = true; BeginInvoke(new Action(Close)); } }
+                    finally { waitingForLive = false; Enabled = true; }
+                    return;
+                }
+                SaveSettings(); youtubeBackend?.Dispose(); tiktokBackend?.Dispose();
+            };
         }
 
         Panel BuildSidebar() {
