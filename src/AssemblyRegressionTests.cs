@@ -92,7 +92,7 @@ namespace VideoBatch {
                 using (var b = new Bitmap(700, 160)) { using (var g = Graphics.FromImage(b)) { g.Clear(Color.Black); using (var font = new Font("Arial", 38, FontStyle.Bold)) g.DrawString("Проверяю сигналы", font, Brushes.White, 22, 40); } b.Save(asset, System.Drawing.Imaging.ImageFormat.Png); }
                 AssemblyFiles.Save(Path.Combine(temp, "assembly-template.xml"), t);
                 using (var window = new AssemblyWindow(true)) {
-                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    window.Show(); window.SetBounds(0, 0, 1240, 820); System.Windows.Forms.Application.DoEvents();
                     if (window.BackColor != Theme.Background || All(window).Any(c => c is System.Windows.Forms.TabControl)) return false;
                     var timeline = (System.Windows.Forms.FlowLayoutPanel)Field(window, "timeline");
                     if (timeline.Controls.OfType<System.Windows.Forms.Button>().Count(b => b.Name.StartsWith("InsertScene")) != 4) return false;
@@ -131,7 +131,7 @@ namespace VideoBatch {
                         canvas.SetBackground(background);
                         Capture(window, Path.Combine(screenshots, "studio-scenes.png"));
                         Invoke(window, "SwitchInspector", true); Capture(window, Path.Combine(screenshots, "studio-export.png")); Invoke(window, "SwitchInspector", false);
-                        window.Size = window.MinimumSize; System.Windows.Forms.Application.DoEvents(); Capture(window, Path.Combine(screenshots, "studio-compact.png"));
+                        window.SetBounds(0, 0, 1024, 730); System.Windows.Forms.Application.DoEvents(); Capture(window, Path.Combine(screenshots, "studio-compact.png"));
                     }
                     timeline.Controls.OfType<System.Windows.Forms.Button>().First(b => b.Name == "InsertScene1").PerformClick();
                     if (current.Scenes.Count != 4 || current.Scenes[1].Name != "Новая сцена" || !Directory.Exists(current.Resolve(current.Scenes[1].Videos))) return false;
@@ -143,7 +143,7 @@ namespace VideoBatch {
         }
         static void Capture(System.Windows.Forms.Form form, string path) {
             form.PerformLayout(); System.Windows.Forms.Application.DoEvents();
-            using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png); }
+            using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png); }
         }
     }
 }
