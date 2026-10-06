@@ -64,7 +64,7 @@ namespace VideoBatch {
                 Directory.CreateDirectory(temp); Store.Root = temp;
                 var t = AssemblyTemplate.Defaults(); t.Materials = Path.Combine(temp, "materials"); t.Output = Path.Combine(temp, "output");
                 AssemblyFiles.Save(Path.Combine(temp, "assembly-template.xml"), t);
-                using (var window = new AssemblyWindow()) {
+                using (var window = new AssemblyWindow(true)) {
                     window.CreateControl(); if (window.Text.IndexOf("Сборка роликов", StringComparison.Ordinal) < 0) return false;
                     typeof(AssemblyWindow).GetMethod("AddScene", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(window, new object[] { true });
                     var saved = AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp, "assembly-template.xml"));
@@ -74,6 +74,76 @@ namespace VideoBatch {
                 var nav = new NavigationService(); int calls = 0; nav.Navigated += _ => calls++;
                 nav.Navigate(NavSection.VideoAssembly); nav.Navigate(NavSection.VideoAssembly); return calls == 2;
             } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+        }
+
+        static object Field(object obj, string name) { return obj.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance).GetValue(obj); }
+        static object Invoke(object obj, string name, params object[] args) { return obj.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance).Invoke(obj, args); }
+        static System.Collections.Generic.IEnumerable<System.Windows.Forms.Control> All(System.Windows.Forms.Control c) {
+            foreach (System.Windows.Forms.Control child in c.Controls) { yield return child; foreach (var nested in All(child)) yield return nested; }
+        }
+        public static bool RunStudioUiTests() { return StudioCheck(null); }
+        public static bool WriteStudioScreenshots(string folder) { return StudioCheck(folder); }
+        static bool StudioCheck(string screenshots) {
+            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-studio-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root = temp;
+                var t = AssemblyTemplate.Defaults(); t.Materials = Path.Combine(temp, "materials"); t.Output = Path.Combine(temp, "output");
+                string asset = Path.Combine(temp, "headline.png");
+                using (var b = new Bitmap(700, 160)) { using (var g = Graphics.FromImage(b)) { g.Clear(Color.Black); using (var font = new Font("Arial", 38, FontStyle.Bold)) g.DrawString("Проверяю сигналы", font, Brushes.White, 22, 40); } b.Save(asset, System.Drawing.Imaging.ImageFormat.Png); }
+                AssemblyFiles.Save(Path.Combine(temp, "assembly-template.xml"), t);
+                using (var window = new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    if (window.BackColor != Theme.Background || All(window).Any(c => c is System.Windows.Forms.TabControl)) return false;
+                    var timeline = (System.Windows.Forms.FlowLayoutPanel)Field(window, "timeline");
+                    if (timeline.Controls.OfType<System.Windows.Forms.Button>().Count(b => b.Name.StartsWith("InsertScene")) != 4) return false;
+                    var duration = (System.Windows.Forms.NumericUpDown)Field(window, "duration");
+                    var slider = All(window).OfType<AssemblySlider>().First(c => c.Name == "SceneDurationSlider");
+                    typeof(AssemblySlider).GetMethod("OnKeyDown", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(slider, new object[] { new System.Windows.Forms.KeyEventArgs(System.Windows.Forms.Keys.Right) });
+                    if (duration.Value != 5.1m) return false;
+                    Invoke(window, "ImportSceneFiles", false, new string[] { asset });
+                    var current = (AssemblyTemplate)Field(window, "template");
+                    if (AssemblyFiles.Pool(current.Resolve(current.Scenes[0].Layers[0].Source), AssemblyFiles.ImageExtensions).Count != 1 || !File.Exists(asset)) return false;
+                    ((System.Windows.Forms.Button)Field(window, "permanent")).PerformClick();
+                    if (!current.Scenes[0].Layers[0].Fixed || current.Scenes[0].Layers[0].Unique) return false;
+                    ((System.Windows.Forms.Button)Field(window, "fresh")).PerformClick();
+                    if (current.Scenes[0].Layers[0].Fixed || !current.Scenes[0].Layers[0].Unique) return false;
+                    var width = (System.Windows.Forms.NumericUpDown)Field(window, "width"); var layer = current.Scenes[0].Layers[0]; double ratio = layer.Height / layer.Width;
+                    width.Value = 70;
+                    if (Math.Abs(layer.Height / layer.Width - ratio) > .001) return false;
+                    var start = (System.Windows.Forms.NumericUpDown)Field(window, "start"); var end = (System.Windows.Forms.NumericUpDown)Field(window, "end");
+                    start.Value = 1; end.Value = 4;
+                    if (layer.Start != 1 || layer.End != 4) return false;
+                    duration.Value = .5m; current.Validate();
+                    if (layer.Start >= .5 || layer.End != 0 || current.TransitionDuration >= .25) return false;
+                    duration.Value = 5; start.Value = 0;
+                    // Exercise actual canvas drag, then verify that the saved template has the new placement.
+                    var canvas = (AssemblyCanvas)Field(window, "canvas");
+                    var frame = (RectangleF)typeof(AssemblyCanvas).GetProperty("Frame", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(canvas);
+                    int px = (int)(frame.X + (layer.X + layer.Width / 2) * frame.Width), py = (int)(frame.Y + (layer.Y + layer.Height / 2) * frame.Height); double before = layer.X;
+                    typeof(AssemblyCanvas).GetMethod("OnMouseDown", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(canvas, new object[] { new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, px, py, 0) });
+                    typeof(AssemblyCanvas).GetMethod("OnMouseMove", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(canvas, new object[] { new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 0, px + 12, py + 10, 0) });
+                    typeof(AssemblyCanvas).GetMethod("OnMouseUp", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(canvas, new object[] { new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, px + 12, py + 10, 0) });
+                    if (layer.X <= before) return false;
+                    Invoke(window, "Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp, "assembly-template.xml")).Scenes[0].Layers[0].X != layer.X) return false;
+                    if (screenshots != null) {
+                        Directory.CreateDirectory(screenshots); var background = new Bitmap(360, 640);
+                        using (var g = Graphics.FromImage(background)) { using (var brush = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0,0,360,640), Color.FromArgb(33,46,44), Color.FromArgb(9,13,12), 90)) g.FillRectangle(brush, 0, 0, 360, 640); using (var pen = new Pen(Theme.Accent, 3)) g.DrawLines(pen, new[] { new Point(0,420), new Point(45,380), new Point(75,402), new Point(120,310), new Point(165,345), new Point(215,225), new Point(270,255), new Point(330,130), new Point(360,155) }); }
+                        canvas.SetBackground(background);
+                        Capture(window, Path.Combine(screenshots, "studio-scenes.png"));
+                        Invoke(window, "SwitchInspector", true); Capture(window, Path.Combine(screenshots, "studio-export.png")); Invoke(window, "SwitchInspector", false);
+                        window.Size = window.MinimumSize; System.Windows.Forms.Application.DoEvents(); Capture(window, Path.Combine(screenshots, "studio-compact.png"));
+                    }
+                    timeline.Controls.OfType<System.Windows.Forms.Button>().First(b => b.Name == "InsertScene1").PerformClick();
+                    if (current.Scenes.Count != 4 || current.Scenes[1].Name != "Новая сцена" || !Directory.Exists(current.Resolve(current.Scenes[1].Videos))) return false;
+                    Invoke(window, "MoveScene", 1); if (current.Scenes[2].Name != "Новая сцена") return false;
+                    window.Close();
+                }
+                return true;
+            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+        }
+        static void Capture(System.Windows.Forms.Form form, string path) {
+            form.PerformLayout(); System.Windows.Forms.Application.DoEvents();
+            using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png); }
         }
     }
 }
