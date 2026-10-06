@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 
 
 def run(args):
-    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=240)
+    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=240)
     if p.returncode:
         raise RuntimeError(f'{args[0]} failed: {p.stderr[-4000:]}\n{p.stdout[-1000:]}')
     return p.stdout
@@ -89,24 +89,24 @@ def main():
             return subprocess.check_output([args.ffmpeg, '-v', 'error', '-ss', str(time), '-i', str(file), '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'])
         def pixel(data, x, y):
             return tuple(data[(y * 360 + x) * 3:(y * 360 + x) * 3 + 3])
-        def verify(file):
+        def verify(file, duration=5, bot_time=4, scene_count=3):
             probe = json.loads(run([args.ffprobe, '-v', 'error', '-show_streams', '-show_format', '-of', 'json', file]))
             video = next(s for s in probe['streams'] if s['codec_type'] == 'video')
             assert video['width'] == 360 and video['height'] == 640
-            assert abs(float(video['duration']) - 5) < .12, video['duration']
+            assert abs(float(video['duration']) - duration) < .12, video['duration']
             assert any(s['codec_type'] == 'audio' for s in probe['streams'])
             assert min(pixel(frame(file, .75), 100, 60)) > 190, 'first headline missing'
             assert min(pixel(frame(file, 2.25), 100, 60)) > 190, 'second headline missing'
-            bot = pixel(frame(file, 4), 180, 260)
+            bot = pixel(frame(file, bot_time), 180, 260)
             assert bot[0] > 230 and bot[1] < 25 and bot[2] < 25, bot
-            assert min(pixel(frame(file, 4), 100, 520)) > 210, 'CTA missing'
+            assert min(pixel(frame(file, bot_time), 100, 520)) > 210, 'CTA missing'
             audio = subprocess.check_output([args.ffmpeg, '-v', 'error', '-i', str(file), '-vn', '-ac', '1', '-ar', '48000', '-f', 's16le', '-'])
             for t in [1.5, 3]:
                 samples = struct.unpack('<' + 'h' * 960, audio[int((t - .01) * 48000) * 2:int((t + .01) * 48000) * 2])
                 assert sum(v * v for v in samples) / len(samples) > 100000, 'music gap at scene boundary'
             recipe = ET.parse(str(file) + '.assembly.xml').getroot()
             videos = [n.findtext('Video/Path') for n in recipe.findall('Scenes/AssemblyScenePlan')]
-            assert len(set(videos)) == 3 and Path(videos[1]).parent.name == 'Торговля'
+            assert len(set(videos)) == scene_count and Path(videos[1]).parent.name == 'Торговля'
         template(path, root)
         result = call(); assert len(result['Outputs']) == 3 and not result['Errors'], result
         for file in result['Outputs']:
@@ -122,11 +122,22 @@ def main():
         early = pixel(frame(result['Outputs'][0], .1), 100, 60); late = pixel(frame(result['Outputs'][0], 1.2), 100, 60)
         assert min(early) < 190 and min(late) < 190
         assert min(pixel(frame(result['Outputs'][0], .75), 100, 60)) > 190
+        # Inserting a fourth scene must preserve ordering, overlays and the final card.
+        template(path, root, 'fade', 1, 'inserted')
+        doc = ET.parse(path); scenes = doc.getroot().find('Scenes')
+        inserted = ET.Element('AssemblyScene'); value(inserted, 'Name', 'Inserted'); value(inserted, 'Duration', 1)
+        layer(ET.SubElement(inserted, 'Layers'), 'Extra picture', 'cta')
+        scenes.insert(2, inserted); doc.write(path, encoding='utf-8', xml_declaration=True)
+        result = call(); assert len(result['Outputs']) == 1 and not result['Errors'], result
+        verify(result['Outputs'][0], duration=6, bot_time=5, scene_count=4)
+        recipe = ET.parse(result['Outputs'][0] + '.assembly.xml').getroot()
+        assert recipe.findall('Scenes/AssemblyScenePlan')[2].findtext('Scene/Name') == 'Inserted'
+        assert min(pixel(frame(result['Outputs'][0], 3.7), 100, 520)) > 210, 'inserted overlay missing'
         template(path, root, 'fade', 1, 'cancel')
         cancelled = call(['100']); assert cancelled['Cancelled'] and not cancelled['Outputs'], cancelled
         assert not (history / 'cancel.xml').exists(), 'cancelled batch consumed headlines'
         assert not list((root / 'out').glob('.assembly-*')), 'temporary render folders leaked'
-    print('PASS: 3-scene MP4, two headlines, fixed bot + CTA, continuous music, fade/cut/slide/blur, timing, history and cancellation')
+    print('PASS: 3/4-scene MP4, scene insertion, two headlines, fixed bot + CTA, continuous music, fade/cut/slide/blur, timing, history and cancellation')
 
 
 if __name__ == '__main__':
