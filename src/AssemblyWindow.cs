@@ -73,6 +73,12 @@ namespace VideoBatch {
         static Label Caption(string text, int height = 25) { return new Label { Text = text, Height = height, AutoSize = false, ForeColor = Theme.TextSecondary, Dock = DockStyle.Top, TextAlign = ContentAlignment.MiddleLeft }; }
         static FlowLayoutPanel Row(int height = 44) { return new FlowLayoutPanel { Dock = DockStyle.Top, Height = height, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty }; }
         static Button Button(string text, Action action = null, bool primary = false) { return new AssemblyStudioButton(text, action, primary); }
+        static Button Picker(ComboBox model, string[] choices) {
+            var button = Button(choices[0] + "  ▾"); button.AutoSize = false; button.Height = 40; button.TextAlign = ContentAlignment.MiddleLeft;
+            button.Click += (s, e) => { var menu = Theme.MakeContextMenu(); for (int i = 0; i < choices.Length; i++) { int index = i; var item = menu.Items.Add(choices[i], null, (sender, args) => model.SelectedIndex = index); if (item is ToolStripMenuItem option) option.Checked = model.SelectedIndex == index; } menu.Show(button, new Point(0, button.Height)); };
+            model.SelectedIndexChanged += (s, e) => { if (model.SelectedIndex >= 0 && model.SelectedIndex < choices.Length) button.Text = choices[model.SelectedIndex] + "  ▾"; };
+            return button;
+        }
         static FlowLayoutPanel Stack() { return new AssemblyScrollStack { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 14, 12) }; }
         static void FitStack(FlowLayoutPanel stack) { stack.SizeChanged += (s, e) => { foreach (Control c in stack.Controls) c.Width = Math.Max(270, stack.ClientSize.Width - 24); }; }
         void BuildStudio() {
@@ -141,11 +147,9 @@ namespace VideoBatch {
             var presets = Row(44); presets.Width = 358; foreach (int n in new[] { 1, 5, 10, 20 }) { int v = n; presets.Controls.Add(Button(v + " шт.", () => count.Value = v)); } f.Controls.Add(presets);
             f.Controls.Add(new AssemblySlider("Сколько роликов", count, "шт.") { Width = 358 });
             f.Controls.Add(Caption("Как будут меняться сцены"));
-            var effects = Theme.MakeCombo(new[] { "Без перехода", "Плавно", "Через чёрный", "Через белый", "Сдвиг влево", "Сдвиг вправо", "Мягкий сдвиг", "Размытие", "Приближение" }); effects.Width = 358; f.Controls.Add(effects);
-            effects.SelectedIndexChanged += (s, e) => { if (!loading) transition.SelectedIndex = effects.SelectedIndex; }; transition.SelectedIndexChanged += (s, e) => effects.SelectedIndex = transition.SelectedIndex;
+            var effects = Picker(transition, new[] { "Без перехода", "Плавно", "Через чёрный", "Через белый", "Сдвиг влево", "Сдвиг вправо", "Мягкий сдвиг", "Размытие", "Приближение" }); effects.Width = 358; f.Controls.Add(effects);
             f.Controls.Add(new AssemblySlider("Мягкость перехода", transitionTime, "с") { Width = 358 });
-            f.Controls.Add(Caption("Формат ролика")); var formats = Theme.MakeCombo(resolution.Items.Cast<string>().ToArray()); formats.Width = 358; f.Controls.Add(formats);
-            formats.SelectedIndexChanged += (s, e) => { if (!loading) resolution.SelectedIndex = formats.SelectedIndex; }; resolution.SelectedIndexChanged += (s, e) => formats.SelectedIndex = resolution.SelectedIndex;
+            f.Controls.Add(Caption("Формат ролика")); var formats = Picker(resolution, new[] { "Вертикально · чётче", "Вертикально · легче", "Широкий кадр · чётче", "Широкий кадр · легче" }); formats.Width = 358; f.Controls.Add(formats);
             var random = Button("Случайный участок видео", () => randomStart.Checked = !randomStart.Checked); random.Width = 358; f.Controls.Add(random); randomStart.CheckedChanged += (s, e) => random.BackColor = randomStart.Checked ? Theme.Accent : Theme.Elevated;
             var destination = new AssemblyAssetCard("Куда сохранять ролики", "Выбрать папку", ChooseOutput) { Width = 358 }; destination.FolderClick += () => Safe(() => { ReadTop(); Directory.CreateDirectory(template.Output); Ui.Open(template.Output); }); outputCaption = destination.Detail; f.Controls.Add(destination);
             f.Controls.Add(Caption("Видео можно использовать снова. Картинки\n«Без повторов» расходуются один раз.", 48));
