@@ -23,6 +23,7 @@ namespace VideoBatch {
         readonly Func<LiveAccount, IYouTubeLiveApi> apiFactory;
         readonly Func<LiveOptions, CancellationToken, Task<LivePlaylist>> prepareOverride;
         readonly Func<LivePlaylist, double, string, ILiveEncoder> encoderOverride;
+        public Preferences Preferences { get; }
         public LiveStore Store { get; }
         public event Action Changed;
         public event Action<string> LogLine;
@@ -31,8 +32,9 @@ namespace VideoBatch {
         public static int PollSeconds(int channels) => Math.Max(60, channels * 60);
         int LivePollSeconds() { lock (gate) return PollSeconds(sessions.Count); }
         public YouTubeLiveManager(LiveStore store, Func<LiveAccount, IYouTubeLiveApi> apiFactory = null,
-            Func<LiveOptions, CancellationToken, Task<LivePlaylist>> prepare = null, Func<LivePlaylist, double, string, ILiveEncoder> encoder = null) {
-            Store = store; this.apiFactory = apiFactory ?? (a => new YouTubeLiveApi(store, a)); prepareOverride = prepare; encoderOverride = encoder;
+            Func<LiveOptions, CancellationToken, Task<LivePlaylist>> prepare = null, Func<LivePlaylist, double, string, ILiveEncoder> encoder = null, Preferences preferences = null) {
+            Store = store; Preferences = preferences;
+            this.apiFactory = apiFactory ?? (a => a.Transport == "studio" ? (IYouTubeLiveApi)new YouTubeLiveSessionApi(a, preferences) : new YouTubeLiveApi(store, a)); prepareOverride = prepare; encoderOverride = encoder;
             foreach (var entry in store.PendingSnapshot()) views[entry.LocalId] = new LiveView {
                 LocalId = entry.LocalId, Name = store.Account(entry.LocalId)?.Name ?? entry.LocalId, Phase = LivePhase.NeedsCleanup,
                 Url = string.IsNullOrEmpty(entry.BroadcastId) ? "" : "https://www.youtube.com/watch?v=" + entry.BroadcastId,
@@ -57,13 +59,17 @@ namespace VideoBatch {
                 foreach (var channel in channels) {
                     if (string.IsNullOrWhiteSpace(channel.ChannelId)) throw new InvalidOperationException("У канала отсутствует локальный ID.");
                     var account = Store.Account(channel.ChannelId);
-                    if (account == null || string.IsNullOrEmpty(account.RemoteId) || string.IsNullOrEmpty(account.ProtectedRefreshToken))
-                        throw new InvalidOperationException("Сначала подключите YouTube API: " + channel.Name);
+                    if (account == null || string.IsNullOrEmpty(account.RemoteId) || (account.Transport != "studio" && string.IsNullOrEmpty(account.ProtectedRefreshToken)))
+                        throw new InvalidOperationException("Сначала проверьте сессию Dolphin в окне запуска: " + channel.Name);
+                    if (account.Transport == "studio" && (string.IsNullOrWhiteSpace(account.ProfileId) || channel.ProfileId != account.ProfileId))
+                        throw new InvalidOperationException("Profile ID изменён. Повторите проверку сессии: " + channel.Name);
+                    if (account.Transport == "studio" && (batch.Any(s => s.Account.ProfileId == account.ProfileId) || sessions.Values.Any(s => s.Account.Transport == "studio" && s.Account.ProfileId == account.ProfileId)))
+                        throw new InvalidOperationException("Для одновременных эфиров нужны разные Dolphin-профили: " + channel.Name);
                     if (!remoteIds.Add(account.RemoteId)) throw new InvalidOperationException("Две строки подключены к одному YouTube-каналу. Выберите только одну.");
                     if (sessions.ContainsKey(channel.ChannelId) || (views.ContainsKey(channel.ChannelId) && views[channel.ChannelId].Busy) || sessions.Values.Any(s => s.Account.RemoteId == account.RemoteId)
                         || Store.PendingSnapshot().Any(e => e.RemoteId == account.RemoteId)) throw new InvalidOperationException("Эфир уже запускается, работает или требует завершения: " + channel.Name);
                     batch.Add(new Session { Channel = channel, Account = account, Journal = new LiveJournalEntry {
-                        LocalId = channel.ChannelId, RemoteId = account.RemoteId, OperationId = Guid.NewGuid().ToString("N") } });
+                        LocalId = channel.ChannelId, RemoteId = account.RemoteId, Transport = account.Transport, ProfileId = account.ProfileId, OperationId = Guid.NewGuid().ToString("N") } });
                 }
                 foreach (var s in batch) { sessions.Add(s.Channel.ChannelId, s); State(s, LivePhase.Preparing); }
                 // The playlist is prepared once, shared by all channels; no encoding per channel while live.
@@ -198,6 +204,8 @@ namespace VideoBatch {
                 foreach (var entry in Store.PendingSnapshot().Where(e => e.LocalId == localId)) {
                     var account = Store.Account(localId);
                     if (account == null || account.RemoteId != entry.RemoteId) throw new InvalidOperationException("Подключите прежний канал для завершения старого эфира.");
+                    if ((entry.Transport ?? "") != (account.Transport ?? "") || (entry.Transport == "studio" && entry.ProfileId != account.ProfileId))
+                        throw new InvalidOperationException("Для завершения нужен прежний способ подключения и Dolphin-профиль.");
                     using (var api = apiFactory(account)) using (var ct = new CancellationTokenSource(TimeSpan.FromSeconds(90))) {
                         await api.Complete(entry, ct.Token).ConfigureAwait(false); Store.Journal(entry, true);
                     }

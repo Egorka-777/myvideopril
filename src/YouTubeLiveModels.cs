@@ -9,9 +9,12 @@ namespace VideoBatch {
     public enum LivePhase { Preparing, Starting, Live, Reconnecting, Stopping, Finished, Error, NeedsCleanup }
     public sealed class LiveAccount {
         public string LocalId = "", RemoteId = "", Name = "", ProtectedRefreshToken = "";
+        // Empty Transport means a legacy OAuth account. Never silently migrate an unfinished OAuth broadcast.
+        public string Transport = "", ProfileId = "";
     }
     public sealed class LiveJournalEntry {
         public string LocalId = "", RemoteId = "", OperationId = "", BroadcastId = "", StreamId = "";
+        public string Transport = "", ProfileId = "";
         public bool BroadcastAttempted, StreamAttempted;
     }
     public sealed class LiveConfiguration {

@@ -14,7 +14,7 @@ namespace VideoBatch {
         bool stoppingLive;
         void InitializeLive() {
             try {
-                live = new YouTubeLiveManager(new LiveStore());
+                live = new YouTubeLiveManager(new LiveStore(), preferences: settings);
                 live.LogLine += LiveLog; live.Changed += LiveChanged;
                 AccountRemoval.RemovingYouTube += ValidateLiveAccountRemoval;
             } catch (Exception ex) { liveButton.Enabled = false; AppendLog("ЭФИР · " + ex.Message); }
@@ -37,7 +37,7 @@ namespace VideoBatch {
         void AddLiveContextMenu(ContextMenuStrip menu, YouTubeChannel channel) {
             menu.Items.Add("Завершить эфир этого канала", null, async (s, e) => await StopLive(channel.ChannelId)).Enabled = live?.View(channel.ChannelId)?.Busy == true;
             menu.Items.Add("Завершить все эфиры", null, async (s, e) => await StopLive(null)).Enabled = live?.HasBusy == true;
-            menu.Items.Add("Настроить эфир / подключить канал", null, (s, e) => ConfigureLive(channel));
+            menu.Items.Add("Настроить эфир / проверить сессию", null, (s, e) => ConfigureLive(channel));
             var state = live?.View(channel.ChannelId);
             if (!string.IsNullOrEmpty(state?.Url)) menu.Items.Add("Открыть страницу эфира", null, (s, e) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(state.Url) { UseShellExecute = true }));
             menu.Items.Add(new ToolStripSeparator());
@@ -64,7 +64,7 @@ namespace VideoBatch {
         void ConfigureLive(YouTubeChannel channel = null) {
             if (live == null || stoppingLive) return;
             var channels = channel == null ? GetCheckedChannels() : new List<YouTubeChannel> { channel };
-            if (channels.Count == 0) { MessageBox.Show(this, "Отметьте каналы, которые нужно подключить к API.", "YouTube"); return; }
+            if (channels.Count == 0) { MessageBox.Show(this, "Отметьте каналы, сессии которых нужно проверить.", "YouTube"); return; }
             try { using (var dialog = new YouTubeLiveDialog(live, channels)) {
                 if (dialog.ShowDialog(FindForm()) == DialogResult.OK) live.Start(channels, dialog.Options);
             } } catch (Exception e) { MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }

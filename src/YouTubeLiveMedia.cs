@@ -69,6 +69,7 @@ namespace VideoBatch {
     }
     public sealed class LiveEncoder : ILiveEncoder {
         readonly Process process;
+        readonly YouTubeLiveProcessOwner owner;
         readonly Task output, error;
         readonly object gate = new object();
         readonly Queue<string> errors = new Queue<string>();
@@ -84,6 +85,8 @@ namespace VideoBatch {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
                 StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 } };
             if (!process.Start()) { process.Dispose(); throw new InvalidOperationException("Не удалось запустить передачу видео."); }
+            try { owner = new YouTubeLiveProcessOwner(process); }
+            catch { if (!process.HasExited) process.Kill(); process.Dispose(); throw; }
             output = Task.Run(async () => {
                 string line;
                 while ((line = await process.StandardOutput.ReadLineAsync().ConfigureAwait(false)) != null) {
@@ -112,6 +115,6 @@ namespace VideoBatch {
             }
             await Task.WhenAll(output, error).ConfigureAwait(false);
         }
-        public void Dispose() { process.Dispose(); }
+        public void Dispose() { owner.Dispose(); process.Dispose(); }
     }
 }

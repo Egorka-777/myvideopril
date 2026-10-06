@@ -161,7 +161,44 @@ namespace VideoBatch {
                 var args = YouTubeLiveMedia.StreamArguments(new LivePlaylist { Path = "playlist" }, true, 0, "rtmps://test");
                 Check(args.Contains("-stream_loop") && args.Contains("-1") && args.Contains("copy"), "infinite copy stream missing");
                 Check(YouTubeLiveManager.PollSeconds(1) == 60 && YouTubeLiveManager.PollSeconds(12) == 720, "multi-channel quota polling");
+                await SessionContracts().ConfigureAwait(false);
+                // A real Windows kernel job: closing its handle must terminate the child process.
+                using (var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 > nul") { UseShellExecute = false, CreateNoWindow = true })) {
+                    using (var owner = new YouTubeLiveProcessOwner(child)) { }
+                    Check(child.WaitForExit(5000), "encoder ownership must stop children when app/job closes");
+                }
+                Console.WriteLine("LIVE TEST: session adapter and Windows child ownership passed");
             } finally { Directory.Delete(root, true); }
+        }
+        static async Task SessionContracts() {
+            var calls = new List<Dictionary<string, object>>();
+            var account = new LiveAccount { LocalId = "local", RemoteId = "UCtest", ProfileId = "123", Transport = "studio" };
+            Func<Dictionary<string, object>, CancellationToken, Task<Dictionary<string, object>>> runner = (job, ct) => {
+                calls.Add(job);
+                string command = LiveJson.Text(job, "command");
+                var reply = new Dictionary<string, object>();
+                if (command == "verify") { reply["channelId"] = "UCtest"; reply["channelName"] = "Session test"; }
+                if (command == "create" || command == "ingest") reply["broadcastId"] = "abcdefghijk";
+                if (command == "ingest") { reply["address"] = "rtmps://a.rtmps.youtube.com/live2"; reply["key"] = "test-stream-key"; }
+                if (command == "status") reply["broadcastState"] = "live";
+                if (command == "stream-status") reply["streamState"] = "active";
+                return Task.FromResult(reply);
+            };
+            using (var api = new YouTubeLiveSessionApi(account, new Preferences { DolphinPort = 3001 }, runner)) {
+                var ct = CancellationToken.None; var options = new LiveOptions { Title = "Live", Tags = new[] { "one" } };
+                string operation = new string('a', 32);
+                await api.VerifyChannel("UCtest", "https://youtube.com/channel/UCtest", ct).ConfigureAwait(false);
+                Check(api.ChannelId == "UCtest", "session binding identity");
+                string id = await api.CreateBroadcast(options, YouTubeLiveApi.Marker(operation), ct).ConfigureAwait(false);
+                var stream = await api.CreateStream(options, YouTubeLiveApi.Marker(operation), ct).ConfigureAwait(false);
+                Check(LiveJson.Text(stream, "id") == id, "native Studio uses its broadcast handle");
+                await api.Configure(id, id, options, ct).ConfigureAwait(false);
+                Check(await api.BroadcastState(id, ct).ConfigureAwait(false) == "live", "native broadcast status");
+                Check(await api.StreamState(id, ct).ConfigureAwait(false) == "active", "native stream status");
+                await api.Complete(new LiveJournalEntry { OperationId = operation, BroadcastId = id, BroadcastAttempted = true }, ct).ConfigureAwait(false);
+                Check(calls.Skip(1).All(j => LiveJson.Text(j, "operationId") == operation && LiveJson.Text(j, "profileId") == "123" && LiveJson.Text(j, "expectedChannelId") == "UCtest"), "session ownership lost");
+                Check(calls.All(j => !j.ContainsKey("token") && !j.ContainsKey("refresh_token") && !j.ContainsKey("cookie")), "credentials in session jobs");
+            }
         }
         public static bool RunMediaSelfTests(string ffmpeg, string ffprobe) {
             Media(ffmpeg, ffprobe).GetAwaiter().GetResult(); return true;
