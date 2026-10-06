@@ -15,6 +15,7 @@ const STUDIO_ORIGIN = "https://studio.youtube.com";
 const STUDIO_READY_TIMEOUT_MS = 5 * 60 * 1000;
 
 let job = null;
+let jobPath = "";
 let activePage = null;
 let diagnosticFile = "";
 const runId = crypto.randomUUID();
@@ -813,7 +814,7 @@ async function uploadOne(page, context, session, sapisid, item, packIndex, packT
 }
 
 async function main() {
-  const jobPath = process.argv[2];
+  jobPath = process.argv[2];
   if (!jobPath || !fs.existsSync(jobPath)) throw new Error("Файл задания не найден.");
   const rawJob = JSON.parse(fs.readFileSync(jobPath, "utf8"));
   setupDiagnostics(jobPath, rawJob && rawJob.runId);

@@ -47,6 +47,7 @@ const NOTICE_MIT =
   "Portions of the TikTok web upload sequence follow the MIT-licensed TiktokAutoUploader project (makiisthenes/TiktokAutoUploader).";
 
 let job = null;
+let jobPath = "";
 let browser = null;
 let profileStarted = false;
 let activePage = null;
@@ -834,7 +835,7 @@ function validateItem(item, index) {
 }
 
 async function main() {
-  const jobPath = process.argv[2];
+  jobPath = process.argv[2];
   if (!jobPath || !fs.existsSync(jobPath)) throw new Error("Не найдено задание загрузки.");
   job = JSON.parse(fs.readFileSync(jobPath, "utf8"));
   setupDiagnostics(jobPath);
