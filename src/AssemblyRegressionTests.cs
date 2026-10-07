@@ -9,7 +9,7 @@ namespace VideoBatch {
         public static bool RunPlannerTests() {
             string temp = Path.Combine(Path.GetTempPath(), "assembly-tests-" + Guid.NewGuid().ToString("N"));
             try {
-                var t = AssemblyTemplate.Defaults(); t.Materials = temp; t.Output = Path.Combine(temp, "output"); t.Validate();
+                var t = LegacyTemplate(); t.Materials = temp; t.Output = Path.Combine(temp, "output"); t.Validate();
                 if (t.Scenes.Count != 3 || t.Duration != 17 || !t.Scenes[2].Layers[0].Fixed || !t.Scenes[0].Layers[0].Unique || !t.Scenes[1].Layers[0].Unique) return false;
                 foreach (string folder in new[] { "Видео", "Торговля", "Заголовки", "Заголовки-2", "TG-бот", "Призыв" }) Directory.CreateDirectory(Path.Combine(temp, folder));
                 for (int i = 0; i < 4; i++) File.WriteAllText(Path.Combine(temp, "Видео", i + ".mp4"), "video" + i);
@@ -58,24 +58,43 @@ namespace VideoBatch {
                 return true;
             } finally { Directory.Delete(temp, true); }
         }
-        public static bool RunUiTests() {
-            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-ui-" + Guid.NewGuid().ToString("N"));
-            try {
-                Directory.CreateDirectory(temp); Store.Root = temp;
-                var t = AssemblyTemplate.Defaults(); t.Materials = Path.Combine(temp, "materials"); t.Output = Path.Combine(temp, "output");
-                AssemblyFiles.Save(Path.Combine(temp, "assembly-template.xml"), t);
-                using (var window = new AssemblyWindow(true)) {
-                    window.CreateControl(); if (window.Text.IndexOf("Сборка роликов", StringComparison.Ordinal) < 0) return false;
-                    typeof(AssemblyWindow).GetMethod("AddScene", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(window, new object[] { true });
-                    var saved = AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp, "assembly-template.xml"));
-                    if (saved.Scenes.Count != 4 || saved.Scenes[1].Name != "Новая сцена") return false;
-                    if (!Directory.Exists(saved.Resolve(saved.Scenes[1].Videos)) || !Directory.Exists(saved.Resolve(saved.Scenes[1].Layers[0].Source))) return false;
-                }
-                var nav = new NavigationService(); int calls = 0; nav.Navigated += _ => calls++;
-                nav.Navigate(NavSection.VideoAssembly); nav.Navigate(NavSection.VideoAssembly); return calls == 2;
-            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+        static AssemblyTemplate LegacyTemplate() {
+            var t = new AssemblyTemplate();
+            t.Scenes.Add(new AssemblyScene { Name = "1. Hook", Duration = 5, Layers = { new AssemblyLayer { Name = "Заголовок", Source = "Заголовки", Unique = true } } });
+            t.Scenes.Add(new AssemblyScene { Name = "2. Торговля", Duration = 6, Videos = "Торговля", Layers = { new AssemblyLayer { Name = "Второй заголовок", Source = "Заголовки-2", Unique = true } } });
+            t.Scenes.Add(new AssemblyScene { Name = "3. TG-бот и призыв", Duration = 6, Layers = { new AssemblyLayer { Name = "Скриншот TG-бота", Source = "TG-бот", Fixed = true }, new AssemblyLayer { Name = "Финальный призыв", Source = "Призыв" } } });
+            return t;
         }
-
+        public static bool RunPackTests() {
+            string temp = Path.Combine(Path.GetTempPath(),"assembly-packs-" + Guid.NewGuid().ToString("N"));
+            try {
+                var t = AssemblyTemplate.Defaults(); t.Materials = temp; t.Output = Path.Combine(temp,"out"); AssemblyWorkspace.Prepare(t); t.Validate();
+                if (t.Scenes.Count != 4 || t.Duration != 20 || t.Scenes.Select(s => s.Folder).Distinct().Count() != 4) return false;
+                if (t.Scenes.Any(s => !Directory.Exists(t.Resolve(s.Layers[0].Source)))) return false;
+                File.WriteAllText(t.Resolve("Видео/a.mp4"),"a"); File.WriteAllText(t.Resolve("Музыка/a.wav"),"music-a"); File.WriteAllText(t.Resolve("Музыка/b.wav"),"music-b");
+                var videos = new[] { new AssemblyVideo { Path = t.Resolve("Видео/a.mp4"), Hash = "video-a", Duration = 1 } };
+                // Four empty image packs and one short video must still produce a usable plan.
+                var batch = AssemblyPlanner.Create(t,videos,new AssemblyHistory(),new Random(31),2);
+                if (batch.Plans.Count != 2 || batch.Plans.Any(p => p.Scenes.Count != 4 || p.Scenes.Any(s => s.Layers.Count != 0))) return false;
+                if (batch.Plans.Select(p => p.Music).Distinct().Count() != 2) return false;
+                var history = new AssemblyHistory(); history.Combinations.AddRange(batch.Plans.Select(p => p.Signature));
+                if (AssemblyPlanner.Create(t,videos,history,new Random(13),1).Plans.Count != 0) return false;
+                // Empty packs are optional, but populated packs marked unique still honor history.
+                var l = t.Scenes[0].Layers[0]; l.Unique = true;
+                File.WriteAllText(t.Resolve(Path.Combine(l.Source,"a.png")),"picture-a"); File.WriteAllText(t.Resolve(Path.Combine(l.Source,"b.png")),"picture-b");
+                File.WriteAllText(t.Resolve(Path.Combine(l.Source,"ignored.txt")),"This is not an image.");
+                batch = AssemblyPlanner.Create(t,videos,new AssemblyHistory(),new Random(14),10);
+                if (batch.Plans.Count != 2 || batch.Plans.SelectMany(p => p.UniqueImages).Distinct().Count() != 2 || batch.Limit == "") return false;
+                // Legacy empty headline folders stop being required after migration, without losing used assets/history identity.
+                var legacy = LegacyTemplate(); legacy.Materials = temp; legacy.Output = t.Output; string id = legacy.Id;
+                AssemblyWorkspace.Prepare(legacy);
+                if (legacy.Id != id || legacy.Scenes.Count != 3 || !legacy.Scenes[0].Layers[0].Unique || legacy.Scenes[0].Layers[0].Source != "Заголовки") return false;
+                batch = AssemblyPlanner.Create(legacy,videos,new AssemblyHistory(),new Random(1),1); if (batch.Plans.Count != 1) return false;
+                string folder = t.Scenes[1].Folder; AssemblyWorkspace.Insert(t,1); if (t.Scenes[2].Folder != folder) return false;
+                return true;
+            } finally { if (Directory.Exists(temp)) Directory.Delete(temp,true); }
+        }
+        public static bool RunUiTests() { return StudioCheck(null); }
         static object Field(object obj, string name) { return obj.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance).GetValue(obj); }
         static object Invoke(object obj, string name, params object[] args) { return obj.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance).Invoke(obj, args); }
         static System.Collections.Generic.IEnumerable<System.Windows.Forms.Control> All(System.Windows.Forms.Control c) {
@@ -84,71 +103,60 @@ namespace VideoBatch {
         public static bool RunStudioUiTests() { return StudioCheck(null); }
         public static bool WriteStudioScreenshots(string folder) { return StudioCheck(folder); }
         static bool StudioCheck(string screenshots) {
-            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-studio-" + Guid.NewGuid().ToString("N"));
+            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(),"assembly-studio-" + Guid.NewGuid().ToString("N"));
             try {
                 Directory.CreateDirectory(temp); Store.Root = temp;
-                var t = AssemblyTemplate.Defaults(); t.Materials = Path.Combine(temp, "materials"); t.Output = Path.Combine(temp, "output");
-                string asset = Path.Combine(temp, "headline.png");
-                using (var b = new Bitmap(700, 160)) { using (var g = Graphics.FromImage(b)) { g.Clear(Color.Black); using (var font = new Font("Arial", 38, FontStyle.Bold)) g.DrawString("Проверяю сигналы", font, Brushes.White, 22, 40); } b.Save(asset, System.Drawing.Imaging.ImageFormat.Png); }
-                AssemblyFiles.Save(Path.Combine(temp, "assembly-template.xml"), t);
+                var t = AssemblyTemplate.Defaults(); t.Materials = Path.Combine(temp,"materials"); t.Output = Path.Combine(temp,"output");
+                string asset = Path.Combine(temp,"image.png"), other = Path.Combine(temp,"second.png");
+                using (var b = new Bitmap(700,160)) { using (var g = Graphics.FromImage(b)) { g.Clear(Color.Black); using (var font = new Font("Arial",38,FontStyle.Bold)) g.DrawString("Проверяю сигналы",font,Brushes.White,22,40); } b.Save(asset,System.Drawing.Imaging.ImageFormat.Png); }
+                using (var b = new Bitmap(300,400)) { using (var g = Graphics.FromImage(b)) { g.Clear(Color.FromArgb(25,43,56)); using (var font = new Font("Arial",28)) g.DrawString("Мой бот",font,Brushes.White,35,150); } b.Save(other,System.Drawing.Imaging.ImageFormat.Png); }
+                AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),t);
                 using (var window = new AssemblyWindow(true)) {
-                    window.Show(); window.SetBounds(0, 0, 1240, 820); System.Windows.Forms.Application.DoEvents();
-                    if (window.BackColor != Theme.Background || All(window).Any(c => c is System.Windows.Forms.TabControl)) return false;
-                    var imageCard = (AssemblyAssetCard)Field(window, "imageCard"); var stack = (AssemblyScrollStack)imageCard.Parent;
-                    int originalTop = imageCard.Top;
-                    Invoke(stack, "OnMouseWheel", new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.None, 0, 10, 10, -120));
-                    if (imageCard.Top >= originalTop) return false;
-                    stack.PerformLayout();
-                    Invoke(stack, "OnMouseWheel", new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.None, 0, 10, 10, 120));
-                    if (imageCard.Top != originalTop) return false;
-                    var timeline = (System.Windows.Forms.FlowLayoutPanel)Field(window, "timeline");
-                    if (timeline.Controls.OfType<System.Windows.Forms.Button>().Count(b => b.Name.StartsWith("InsertScene")) != 4) return false;
-                    var duration = (System.Windows.Forms.NumericUpDown)Field(window, "duration");
-                    var slider = All(window).OfType<AssemblySlider>().First(c => c.Name == "SceneDurationSlider");
-                    typeof(AssemblySlider).GetMethod("OnKeyDown", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(slider, new object[] { new System.Windows.Forms.KeyEventArgs(System.Windows.Forms.Keys.Right) });
-                    if (duration.Value != 5.1m) return false;
-                    Invoke(window, "ImportSceneFiles", false, new string[] { asset });
-                    var current = (AssemblyTemplate)Field(window, "template");
-                    if (AssemblyFiles.Pool(current.Resolve(current.Scenes[0].Layers[0].Source), AssemblyFiles.ImageExtensions).Count != 1 || !File.Exists(asset)) return false;
-                    ((System.Windows.Forms.Button)Field(window, "permanent")).PerformClick();
-                    if (!current.Scenes[0].Layers[0].Fixed || current.Scenes[0].Layers[0].Unique) return false;
-                    ((System.Windows.Forms.Button)Field(window, "fresh")).PerformClick();
-                    if (current.Scenes[0].Layers[0].Fixed || !current.Scenes[0].Layers[0].Unique) return false;
-                    var width = (System.Windows.Forms.NumericUpDown)Field(window, "width"); var layer = current.Scenes[0].Layers[0]; double ratio = layer.Height / layer.Width;
-                    width.Value = 70;
-                    if (Math.Abs(layer.Height / layer.Width - ratio) > .001) return false;
-                    var start = (System.Windows.Forms.NumericUpDown)Field(window, "start"); var end = (System.Windows.Forms.NumericUpDown)Field(window, "end");
-                    start.Value = 1; end.Value = 4;
-                    if (layer.Start != 1 || layer.End != 4) return false;
-                    duration.Value = .5m; current.Validate();
-                    if (layer.Start >= .5 || layer.End != 0 || current.TransitionDuration >= .25) return false;
-                    duration.Value = 5; start.Value = 0;
-                    // Exercise actual canvas drag, then verify that the saved template has the new placement.
-                    var canvas = (AssemblyCanvas)Field(window, "canvas");
-                    var frame = (RectangleF)typeof(AssemblyCanvas).GetProperty("Frame", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(canvas);
-                    int px = (int)(frame.X + (layer.X + layer.Width / 2) * frame.Width), py = (int)(frame.Y + (layer.Y + layer.Height / 2) * frame.Height); double before = layer.X;
-                    typeof(AssemblyCanvas).GetMethod("OnMouseDown", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(canvas, new object[] { new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, px, py, 0) });
-                    typeof(AssemblyCanvas).GetMethod("OnMouseMove", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(canvas, new object[] { new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 0, px + 12, py + 10, 0) });
-                    typeof(AssemblyCanvas).GetMethod("OnMouseUp", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(canvas, new object[] { new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, px + 12, py + 10, 0) });
-                    if (layer.X <= before) return false;
-                    Invoke(window, "Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp, "assembly-template.xml")).Scenes[0].Layers[0].X != layer.X) return false;
+                    window.Show(); window.SetBounds(0,0,1180,790); System.Windows.Forms.Application.DoEvents();
+                    if (window.BackColor != Theme.Background || All(window).Any(c => c is System.Windows.Forms.TabControl || c is System.Windows.Forms.TextBox)) return false;
+                    var current = (AssemblyTemplate)Field(window,"template"); if (current.Scenes.Count != 4) return false;
+                    Invoke(window,"ImportPool",2,new string[] {asset,other},false);
+                    var l = current.Scenes[0].Layers[0]; string source = l.Source;
+                    if (AssemblyFiles.Pool(current.Resolve(source),AssemblyFiles.PictureExtensions).Count != 2 || !File.Exists(asset)) return false;
+                    Invoke(window,"SetImageMode",2); if (!l.Unique || l.Fixed) return false;
+                    var size = (System.Windows.Forms.NumericUpDown)Field(window,"width"); double ratio = l.Height/l.Width; size.Value = 70;
+                    if (Math.Abs(l.Height/l.Width-ratio) > .001) return false;
+                    var canvas = (AssemblyCanvas)Field(window,"canvas");
+                    var frame = (RectangleF)typeof(AssemblyCanvas).GetProperty("Frame",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(canvas);
+                    int px = (int)(frame.X+(l.X+l.Width/2)*frame.Width), py = (int)(frame.Y+(l.Y+l.Height/2)*frame.Height); double before = l.Y;
+                    Invoke(canvas,"OnMouseDown",new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,1,px,py,0));
+                    Invoke(canvas,"OnMouseMove",new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,0,px+12,py+10,0));
+                    Invoke(canvas,"OnMouseUp",new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,1,px+12,py+10,0));
+                    if (l.Y <= before) return false;
+                    var duration = (System.Windows.Forms.NumericUpDown)Field(window,"duration"); l.Start = 4; l.End = 5; duration.Value = .5m; current.Validate(); if (l.Start >= .5 || l.End != 0) return false; duration.Value = 5;
+                    Invoke(window,"SetFormat",1080,1350); Invoke(window,"Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Width != 1080) return false; Invoke(window,"SetFormat",1080,1920);
                     if (screenshots != null) {
-                        Directory.CreateDirectory(screenshots); var background = new Bitmap(360, 640);
-                        using (var g = Graphics.FromImage(background)) { using (var brush = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0,0,360,640), Color.FromArgb(33,46,44), Color.FromArgb(9,13,12), 90)) g.FillRectangle(brush, 0, 0, 360, 640); using (var pen = new Pen(Theme.Accent, 3)) g.DrawLines(pen, new[] { new Point(0,420), new Point(45,380), new Point(75,402), new Point(120,310), new Point(165,345), new Point(215,225), new Point(270,255), new Point(330,130), new Point(360,155) }); }
-                        canvas.SetBackground(background);
-                        Capture(window, Path.Combine(screenshots, "studio-scenes.png"));
-                        Invoke(window, "SwitchInspector", true); Capture(window, Path.Combine(screenshots, "studio-export.png")); Invoke(window, "SwitchInspector", false);
-                        window.SetBounds(0, 0, 1024, 730); System.Windows.Forms.Application.DoEvents();
-                        if (imageCard.Top < 0 || imageCard.Bottom > stack.ClientSize.Height) throw new Exception("Video/image import card is clipped at compact window size");
-                        Capture(window, Path.Combine(screenshots, "studio-compact.png"));
+                        Directory.CreateDirectory(screenshots); l.Start = 0; l.Unique = false;
+                        var background = new Bitmap(360,640); using (var g = Graphics.FromImage(background)) { g.Clear(Color.FromArgb(16,26,25)); using (var pen = new Pen(Theme.Accent,3)) g.DrawLines(pen,new[] {new Point(0,420),new Point(70,380),new Point(120,430),new Point(190,250),new Point(240,270),new Point(320,130),new Point(360,155)}); } canvas.SetBackground(background);
+                        Capture(window,Path.Combine(screenshots,"studio-scenes.png"));
+                        using (var pool = (System.Windows.Forms.Form)Invoke(window,"CreatePoolWindow",2)) { pool.Show(window); System.Windows.Forms.Application.DoEvents(); Capture(pool,Path.Combine(screenshots,"studio-files.png")); pool.Close(); }
+                        window.SetBounds(0,0,1000,700); System.Windows.Forms.Application.DoEvents();
+                        if (All(window).Where(c => c.Name == "SceneFiles3").Any(c => !c.Visible)) return false;
+                        Capture(window,Path.Combine(screenshots,"studio-compact.png"));
                     }
-                    timeline.Controls.OfType<System.Windows.Forms.Button>().First(b => b.Name == "InsertScene1").PerformClick();
-                    if (current.Scenes.Count != 4 || current.Scenes[1].Name != "Новая сцена" || !Directory.Exists(current.Resolve(current.Scenes[1].Videos))) return false;
-                    Invoke(window, "MoveScene", 1); if (current.Scenes[2].Name != "Новая сцена") return false;
-                    window.Close();
+                    // Replacement changes the pool atomically and retains old originals/copies.
+                    string old = current.Resolve(source); Invoke(window,"ImportPool",2,new string[] {other},true);
+                    if (l.Source == source || !Directory.Exists(old) || AssemblyFiles.Pool(current.Resolve(l.Source),AssemblyFiles.PictureExtensions).Count != 1) return false;
+                    Invoke(window,"AddPack",new string[] {asset}); if (current.Scenes[0].Layers.Count != 2) return false;
+                    Invoke(window,"InsertScene",1); if (current.Scenes.Count != 5 || !Directory.Exists(current.Resolve(current.Scenes[1].Folder))) return false;
+                    string addedFolder = current.Scenes[1].Folder; Invoke(window,"MoveScene",1); if (current.Scenes[2].Folder != addedFolder) return false;
+                    Invoke(window,"RemoveScene"); if (current.Scenes.Count != 4 || !Directory.Exists(current.Resolve(addedFolder))) return false;
+                    Invoke(window,"Save"); window.Close();
                 }
-                return true;
-            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+                using (var reopened = new AssemblyWindow(true)) {
+                    var saved = (AssemblyTemplate)Field(reopened,"template");
+                    if (saved.Scenes.Count != 4 || saved.Scenes[0].Layers.Count != 2 || AssemblyFiles.Pool(saved.Resolve(saved.Scenes[0].Layers[0].Source),AssemblyFiles.PictureExtensions).Count != 1) return false;
+                }
+                // Exercise actual legacy load, automatic migration and backup.
+                var legacy = LegacyTemplate(); legacy.Materials = t.Materials; legacy.Output = t.Output; AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),legacy);
+                using (var migrated = new AssemblyWindow(true)) { var saved = (AssemblyTemplate)Field(migrated,"template"); if (saved.PackStudioVersion != 1 || saved.Id != legacy.Id || !Directory.GetFiles(temp,"assembly-template.xml.before-packs-*.xml").Any()) return false; }
+                var nav = new NavigationService(); int calls = 0; nav.Navigated += _ => calls++; nav.Navigate(NavSection.VideoAssembly); nav.Navigate(NavSection.VideoAssembly); return calls == 2;
+            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp,true); }
         }
         static void Capture(System.Windows.Forms.Form form, string path) {
             form.PerformLayout(); System.Windows.Forms.Application.DoEvents();

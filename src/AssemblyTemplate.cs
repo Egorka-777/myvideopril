@@ -17,14 +17,16 @@ namespace VideoBatch {
         public double FontSize = 54, Radius = 28, Padding = 24;
     }
     public class AssemblyScene {
+        public string Folder = "";
         public string Name = "Сцена", Videos = ""; // Empty: use the common video folder.
         public double Duration = 4;
         public List<AssemblyLayer> Layers = new List<AssemblyLayer>();
         public override string ToString() { return Name + " · " + Duration.ToString("0.##") + " с"; }
     }
     public class AssemblyTemplate {
-        public int Version = 1;
-        public string Id = Guid.NewGuid().ToString("N"), Name = "Hook → торговля → TG-бот";
+        public int Version = 1, PackStudioVersion = 0;
+        public bool LoopShortVideos = false, AllowVideoReuse = false;
+        public string Id = Guid.NewGuid().ToString("N"), Name = "Моя студия";
         public string Materials = "", Videos = "Видео", Music = "", Output = "";
         public int Width = 1080, Height = 1920, Fps = 30, Count = 10;
         public string Transition = "fade";
@@ -37,23 +39,25 @@ namespace VideoBatch {
             return Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Materials, path));
         }
         public static AssemblyTemplate Defaults() {
-            var t = new AssemblyTemplate();
-            t.Scenes.Add(new AssemblyScene { Name = "1. Hook", Duration = 5, Layers = new List<AssemblyLayer> {
-                new AssemblyLayer { Name = "Заголовок", Source = "Заголовки", Unique = true, Y = .38, Height = .22 }
-            }});
-            t.Scenes.Add(new AssemblyScene { Name = "2. Торговля", Videos = "Торговля", Duration = 6, Layers = new List<AssemblyLayer> {
-                new AssemblyLayer { Name = "Второй заголовок", Source = "Заголовки-2", Unique = true, Y = .65, Height = .23 }
-            }});
-            t.Scenes.Add(new AssemblyScene { Name = "3. TG-бот и призыв", Duration = 6, Layers = new List<AssemblyLayer> {
-                new AssemblyLayer { Name = "Скриншот TG-бота", Source = "TG-бот", Fixed = true, Y = .12, Height = .48 },
-                new AssemblyLayer { Name = "Финальный призыв", Source = "Призыв", Y = .65, Height = .23 }
-            }});
+            var t = new AssemblyTemplate { PackStudioVersion = 1, LoopShortVideos = true, AllowVideoReuse = true, Music = "Музыка" };
+            for (int i = 1; i <= 4; i++) {
+                string folder = Path.Combine("Сцены", "Сцена-" + i.ToString("00"));
+                t.Scenes.Add(new AssemblyScene { Name = "Сцена " + i, Folder = folder, Duration = 5, Layers = new List<AssemblyLayer> {
+                    new AssemblyLayer { Name = "Пачка 1", Source = Path.Combine(folder, "Изображения"), Y = .35, Height = .3 }
+                }});
+            }
             return t;
         }
+        public string VideoSource(AssemblyScene scene) {
+            if (string.IsNullOrWhiteSpace(scene.Videos)) return Videos;
+            if (PackStudioVersion > 0 && AssemblyFiles.Pool(Resolve(scene.Videos), AssemblyFiles.VideoExtensions).Count == 0) return Videos;
+            return scene.Videos;
+        }
+        public string[] PictureExtensions { get { return PackStudioVersion > 0 ? AssemblyFiles.PictureExtensions : AssemblyFiles.ImageExtensions; } }
         public void Validate() {
             if (Version != 1) throw new Exception("Неизвестная версия шаблона.");
             if (string.IsNullOrWhiteSpace(Id) || Id.Length > 100 || Id.Any(c => !char.IsLetterOrDigit(c) && c != '-')) throw new Exception("Некорректный ID шаблона.");
-            if (Scenes == null || Scenes.Count < 2 || Scenes.Count > 12) throw new Exception("В шаблоне должно быть от 2 до 12 сцен.");
+            if (Scenes == null || Scenes.Count < 1 || Scenes.Count > 12) throw new Exception("В шаблоне должно быть от 1 до 12 сцен.");
             if (Width < 180 || Width > 2160 || Height < 180 || Height > 3840 || Width % 2 != 0 || Height % 2 != 0) throw new Exception("Размер кадра должен быть чётным, от 180 до 2160 × 3840.");
             if (Fps < 15 || Fps > 60 || Count < 1 || Count > 1000) throw new Exception("FPS: 15–60. Количество роликов: 1–1000.");
             Check(MusicVolume, 0, 2, "Громкость музыки"); Check(TransitionDuration, 0, 2, "Длительность перехода");
@@ -81,6 +85,8 @@ namespace VideoBatch {
     }
     public static class AssemblyFiles {
         public static readonly string[] VideoExtensions = { ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v" };
+        public static readonly string[] MusicExtensions = { ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac" };
+        public static readonly string[] PictureExtensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
         public static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".txt" };
         public static List<string> Pool(string path, string[] extensions) {
             var items = File.Exists(path) ? new[] { path } : Directory.Exists(path) ? Directory.GetFiles(path) : new string[0];
@@ -109,6 +115,59 @@ namespace VideoBatch {
                 }
                 if (File.Exists(path)) File.Replace(temp, path, path + ".bak"); else File.Move(temp, path);
             } finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+    }
+    public static class AssemblyWorkspace {
+        public static void Prepare(AssemblyTemplate t) {
+            bool migrate = t.PackStudioVersion == 0;
+            if (migrate) { t.PackStudioVersion = 1; t.LoopShortVideos = true; t.AllowVideoReuse = true; }
+            Directory.CreateDirectory(t.Materials);
+            for (int i = 0; i < t.Scenes.Count; i++) {
+                var scene = t.Scenes[i];
+                if (string.IsNullOrWhiteSpace(scene.Folder)) scene.Folder = NewFolder(t, i + 1);
+                Directory.CreateDirectory(t.Resolve(scene.Folder));
+                Directory.CreateDirectory(t.Resolve(Path.Combine(scene.Folder, "Видео")));
+                if (scene.Layers.Count == 0) scene.Layers.Add(new AssemblyLayer { Name = "Пачка 1", Source = Path.Combine(scene.Folder, "Изображения") });
+                for (int j = 0; j < scene.Layers.Count; j++) {
+                    var l = scene.Layers[j];
+                    if (migrate) l.Name = "Пачка " + (j + 1);
+                    if (string.IsNullOrWhiteSpace(l.Source)) l.Source = Path.Combine(scene.Folder, j == 0 ? "Изображения" : "Пачка-" + (j + 1));
+                    MakeFolder(t.Resolve(l.Source));
+                }
+            }
+            if (string.IsNullOrWhiteSpace(t.Videos)) t.Videos = "Видео";
+            if (string.IsNullOrWhiteSpace(t.Music)) t.Music = "Музыка";
+            MakeFolder(t.Resolve(t.Videos)); MakeFolder(t.Resolve(t.Music));
+        }
+        static void MakeFolder(string path) { if (!File.Exists(path)) Directory.CreateDirectory(path); }
+        public static string NewFolder(AssemblyTemplate t, int index) {
+            string path = Path.Combine("Сцены", "Сцена-" + index.ToString("00"));
+            if (Directory.Exists(t.Resolve(path)) || t.Scenes.Any(s => s.Folder == path)) path += "-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            return path;
+        }
+        public static AssemblyScene Insert(AssemblyTemplate t, int index) {
+            if (t.Scenes.Count >= 12) throw new Exception("Можно добавить до 12 сцен.");
+            var s = new AssemblyScene { Name = "Сцена " + (t.Scenes.Count + 1), Folder = NewFolder(t, t.Scenes.Count + 1), Duration = 5 };
+            s.Layers.Add(new AssemblyLayer { Name = "Пачка 1", Source = Path.Combine(s.Folder, "Изображения") });
+            t.Scenes.Insert(Math.Max(0, Math.Min(index, t.Scenes.Count)), s); Prepare(t); return s;
+        }
+        public static int Import(AssemblyTemplate t, ref string source, string fallback, string[] files, string[] extensions, bool replace) {
+            string oldSource = source, path = t.Resolve(source);
+            bool newFolder = replace || string.IsNullOrWhiteSpace(source) || File.Exists(path);
+            if (newFolder) path = t.Resolve(fallback + "-" + Guid.NewGuid().ToString("N").Substring(0, 6));
+            Directory.CreateDirectory(path); int added = 0;
+            if (newFolder && !replace && File.Exists(t.Resolve(oldSource))) File.Copy(t.Resolve(oldSource),Path.Combine(path,Path.GetFileName(oldSource)));
+            try {
+                foreach (string file in files.Where(File.Exists).Where(p => extensions.Contains(Path.GetExtension(p).ToLowerInvariant()))) {
+                    string destination = Path.Combine(path, Path.GetFileName(file));
+                    if (Path.GetFullPath(file).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) continue;
+                    if (File.Exists(destination) && AssemblyFiles.Hash(file) == AssemblyFiles.Hash(destination)) continue;
+                    while (File.Exists(destination)) destination = Path.Combine(path, Path.GetFileNameWithoutExtension(file) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + Path.GetExtension(file));
+                    File.Copy(file, destination); added++;
+                }
+                if (newFolder && added > 0) source = path; // Keep the old pack intact on cancel/failure.
+                return added;
+            } catch { source = oldSource; throw; }
         }
     }
     public class AssemblyHistory {
@@ -140,26 +199,31 @@ namespace VideoBatch {
             var combinations = new HashSet<string>(history.Combinations);
             var pools = new Dictionary<AssemblyLayer, List<AssemblyAsset>>();
             foreach (var l in t.Scenes.SelectMany(s => s.Layers).Where(l => l.Enabled)) {
-                var assets = AssemblyFiles.Pool(t.Resolve(l.Source), AssemblyFiles.ImageExtensions).Select(p => new AssemblyAsset { Path = p, Hash = AssemblyFiles.Hash(p) }).GroupBy(a => a.Hash).Select(g => g.First()).ToList();
-                if (assets.Count == 0) throw new Exception("Нет изображений или TXT в источнике «" + l.Name + "»: " + t.Resolve(l.Source));
+                var assets = AssemblyFiles.Pool(t.Resolve(l.Source), t.PictureExtensions).Select(p => new AssemblyAsset { Path = p, Hash = AssemblyFiles.Hash(p) }).GroupBy(a => a.Hash).Select(g => g.First()).ToList();
+                if (assets.Count == 0 && t.PackStudioVersion == 0) throw new Exception("Нет изображений в источнике «" + l.Name + "»: " + t.Resolve(l.Source));
                 pools.Add(l, assets);
             }
             int distinctVideos = videos.Select(v => v.Hash).Distinct().Count();
-            if (distinctVideos < t.Scenes.Count) throw new Exception("Нужно минимум " + t.Scenes.Count + " разных видео: по одному на сцену. Найдено " + distinctVideos + ".");
+            if (!t.AllowVideoReuse && distinctVideos < t.Scenes.Count) throw new Exception("Нужно минимум " + t.Scenes.Count + " разных видео: по одному на сцену. Найдено " + distinctVideos + ".");
+            var music = AssemblyFiles.Pool(t.Resolve(t.Music), AssemblyFiles.MusicExtensions);
+            var musicHashes = music.ToDictionary(p => p, AssemblyFiles.Hash);
             var batch = new AssemblyPlanBatch();
             for (int item = 0; item < count; item++) {
                 AssemblyPlan accepted = null; string reason = "Исчерпаны разные сочетания материалов.";
                 for (int attempt = 0; attempt < 400 && accepted == null; attempt++) {
-                    var p = new AssemblyPlan(); var selectedVideos = new HashSet<string>(); var selectedImages = new HashSet<string>(); bool failed = false;
+                    var p = new AssemblyPlan { Music = music.Count == 0 ? "" : music[random.Next(music.Count)] }; var selectedVideos = new HashSet<string>(); var selectedImages = new HashSet<string>(); bool failed = false;
                     for (int i = 0; i < t.Scenes.Count; i++) {
                         var scene = t.Scenes[i]; double duration = scene.Duration + (i < t.Scenes.Count - 1 && t.Transition != "cut" ? t.TransitionDuration : 0);
-                        string folder = t.Resolve(string.IsNullOrWhiteSpace(scene.Videos) ? t.Videos : scene.Videos);
+                        string folder = t.Resolve(t.VideoSource(scene));
                         var allowed = new HashSet<string>(AssemblyFiles.Pool(folder, AssemblyFiles.VideoExtensions), StringComparer.OrdinalIgnoreCase);
-                        var videoPool = videos.Where(v => allowed.Contains(v.Path) && !selectedVideos.Contains(v.Hash) && v.Duration + .001 >= duration).ToList();
+                        var eligible = videos.Where(v => allowed.Contains(v.Path) && (v.Duration + .001 >= duration || t.LoopShortVideos && v.Duration > 0)).ToList();
+                        var videoPool = eligible.Where(v => !selectedVideos.Contains(v.Hash)).ToList();
+                        if (videoPool.Count == 0 && t.AllowVideoReuse) videoPool = eligible;
                         if (videoPool.Count == 0) { reason = "Не хватает разных видео нужной длины для «" + scene.Name + "» (нужно " + duration.ToString("0.##") + " с)."; failed = true; break; }
                         var video = videoPool[random.Next(videoPool.Count)]; selectedVideos.Add(video.Hash);
                         var sp = new AssemblyScenePlan { Scene = scene, Video = video, RenderDuration = duration, VideoStart = t.RandomVideoStart ? random.NextDouble() * Math.Max(0, video.Duration - duration) : 0 };
                         foreach (var l in scene.Layers.Where(l => l.Enabled)) {
+                            if (pools[l].Count == 0) continue; // An empty pack is a scene without a picture.
                             var pool = pools[l].Where(a => !l.Unique || (!used.Contains(a.Hash) && !selectedImages.Contains(a.Hash))).ToList();
                             if (pool.Count == 0) { reason = "Закончились материалы без повторов: «" + l.Name + "» (" + l.Source + ")."; failed = true; break; }
                             var asset = l.Fixed ? pool[0] : pool[random.Next(pool.Count)];
@@ -170,12 +234,14 @@ namespace VideoBatch {
                     }
                     if (failed) continue;
                     // Random start times do not create artificial "new" combinations.
-                    p.Signature = AssemblyFiles.HashText(string.Join("|", p.Scenes.Select(s => s.Video.Hash + ":" + string.Join(",", s.Layers.Select(l => l.Asset.Hash)))));
+                    string signature = string.Join("|", p.Scenes.Select(s => s.Video.Hash + ":" + string.Join(",", s.Layers.Select(l => l.Asset.Hash))));
+                    if (t.PackStudioVersion > 0) signature += "|music:" + (p.Music == "" ? "" : musicHashes[p.Music]);
+                    p.Signature = AssemblyFiles.HashText(signature);
                     if (!combinations.Contains(p.Signature)) accepted = p;
                 }
                 if (accepted == null) { batch.Limit = reason; break; }
                 foreach (string h in accepted.UniqueImages) used.Add(h);
-                combinations.Add(accepted.Signature); accepted.Music = t.Resolve(t.Music); batch.Plans.Add(accepted);
+                combinations.Add(accepted.Signature); batch.Plans.Add(accepted);
             }
             return batch;
         }

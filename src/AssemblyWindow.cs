@@ -11,369 +11,268 @@ using System.Windows.Forms;
 namespace VideoBatch {
     public sealed class AssemblyWindow : Form {
         AssemblyTemplate template;
-        readonly string templatePath, historyFolder;
-        TextBox materials, musicPath, output, videoSource, layerSource, sceneName, layerName, fontName;
-        ListBox sceneList, layerList;
-        ListView sources;
-        NumericUpDown duration, count, transitionTime, volume, start, end, x, y, width, height, opacity, fontSize, radius, padding;
-        ComboBox transition, resolution;
-        CheckBox enabled, unique, fixedAsset, randomStart;
-        AssemblyCanvas canvas;
-        Panel left, header, sceneEditor, exportEditor;
-        FlowLayoutPanel footer, timeline, layerChips;
-        Label status, total, sceneCaption, musicCaption, outputCaption;
-        ProgressBar progress;
-        Button stop, sceneTab, exportTab, changing, permanent, fresh, visibleLayer;
-        AssemblyAssetCard videoCard, imageCard;
-        readonly List<Button> sceneCards = new List<Button>();
+        readonly string templatePath, historyFolder, previewFolder;
         readonly bool throwErrors;
+        int sceneIndex, layerIndex, previewVersion;
         bool loading, closeAfter;
-        CancellationTokenSource cancellation;
-        AssemblyPlan previewPlan;
-        readonly string previewFolder;
-
+        CancellationTokenSource cancellation, previewCancellation;
+        readonly System.Windows.Forms.Timer saveTimer = new System.Windows.Forms.Timer { Interval = 400 };
+        NumericUpDown duration, width, count, volume;
+        AssemblyCanvas canvas;
+        AssemblyScrollStack sceneStack;
+        Panel header, workspace;
+        FlowLayoutPanel options;
+        FlowLayoutPanel footer, packChips;
+        Label status, selectedCaption, summary;
+        Button videoButton, musicButton, formatButton, stop, imageFiles;
+        ProgressBar progress;
+        readonly List<Button> sceneCards = new List<Button>();
+        readonly Dictionary<AssemblyLayer, string> previewImages = new Dictionary<AssemblyLayer, string>();
         public AssemblyWindow(bool throwErrors = false) {
             this.throwErrors = throwErrors;
             templatePath = Path.Combine(Store.Root, "assembly-template.xml"); historyFolder = Path.Combine(Store.Root, "assembly-history");
             previewFolder = Path.Combine(Path.GetTempPath(), "videobatch-preview-" + Guid.NewGuid().ToString("N"));
-            string loadError = null;
+            string note = null;
             try { template = File.Exists(templatePath) ? AssemblyFiles.Load<AssemblyTemplate>(templatePath) : AssemblyTemplate.Defaults(); template.Validate(); }
-            catch (Exception e) { template = AssemblyTemplate.Defaults(); loadError = "Не удалось прочитать шаблон: " + e.Message; }
+            catch (Exception e) { if (File.Exists(templatePath)) File.Copy(templatePath, templatePath + ".unreadable-" + Guid.NewGuid().ToString("N").Substring(0,6) + ".xml"); template = AssemblyTemplate.Defaults(); note = "Старый шаблон сохранён отдельно: " + e.Message; }
             if (string.IsNullOrWhiteSpace(template.Materials)) template.Materials = Path.Combine(AppPaths.ExeDirectory, "Материалы-сборки");
             if (string.IsNullOrWhiteSpace(template.Output)) template.Output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "VideoBatch", "Assembled");
-            Text = "Сборка роликов — конструктор"; ClientSize = new Size(1220, 780); MinimumSize = new Size(1080, 690);
+            if (template.PackStudioVersion == 0 && File.Exists(templatePath)) {
+                File.Copy(templatePath, templatePath + ".before-packs-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".xml", true);
+                note = "Пачки и позиции сохранены. Пустые папки больше не мешают сборке.";
+            }
+            AssemblyWorkspace.Prepare(template);
+            Text = "Сборка роликов — моя студия"; ClientSize = new Size(1180, 790); MinimumSize = new Size(980, 660);
             StartPosition = FormStartPosition.CenterParent; Font = Theme.FontBody; BackColor = Theme.Background; ForeColor = Theme.TextPrimary;
-            var area = Screen.FromControl(this).WorkingArea;
-            ClientSize = new Size(Math.Min(ClientSize.Width, area.Width - 40), Math.Min(ClientSize.Height, area.Height - 70));
-            InitBindings(); BuildStudio();
-            FormClosing += (s, e) => { if (cancellation != null) { e.Cancel = true; closeAfter = true; cancellation.Cancel(); } else Safe(Save); };
-            LoadTop(); RefreshScenes(0); RefreshSources();
-            status.Text = loadError ?? "Начни с первой сцены: добавь видео и картинку. Оригиналы остаются у тебя.";
+            var area = Screen.FromControl(this).WorkingArea; ClientSize = new Size(Math.Min(ClientSize.Width, area.Width - 24), Math.Min(ClientSize.Height, area.Height - 60));
+            var bindings = new Panel { Visible = false }; Controls.Add(bindings);
+            duration = Value(.5m, 60, 1); width = Value(2, 100, 1); count = Value(1, 1000, 0); volume = Value(0, 200, 0);
+            bindings.Controls.AddRange(new Control[] { duration, width, count, volume }); count.Value = template.Count; volume.Value = (decimal)(template.MusicVolume * 100);
+            duration.ValueChanged += (s,e) => ChangeDuration(); width.ValueChanged += (s,e) => ChangeSize();
+            count.ValueChanged += (s,e) => { if (!loading) { template.Count = (int)count.Value; Changed(false); } };
+            volume.ValueChanged += (s,e) => { if (!loading) { template.MusicVolume = (double)volume.Value / 100; Changed(false); } };
+            BuildStudio(); SelectScene(0); Save();
+            if (note != null) status.Text = note;
+            saveTimer.Tick += (s,e) => { saveTimer.Stop(); Safe(Save); };
+            Shown += (s,e) => RequestBackground();
+            FormClosing += (s,e) => { if (cancellation != null) { e.Cancel = true; closeAfter = true; cancellation.Cancel(); } else { saveTimer.Stop(); Safe(Save); previewCancellation?.Cancel(); } };
         }
-        void InitBindings() {
-            var hidden = new Panel { Visible = false }; Controls.Add(hidden);
-            materials = new TextBox(); musicPath = new TextBox(); output = new TextBox(); videoSource = new TextBox(); layerSource = new TextBox(); sceneName = new TextBox(); layerName = new TextBox(); fontName = new TextBox();
-            duration = Value(.5m, 60); count = Value(1, 1000, 0); transitionTime = Value(0, 2, 2); volume = Value(0, 200, 0);
-            start = Value(0, 60); end = Value(0, 60); x = Value(0, 100); y = Value(0, 100); width = Value(2, 100); height = Value(2, 100); opacity = Value(0, 100); fontSize = Value(12, 240, 0); radius = Value(0, 200, 0); padding = Value(0, 150, 0);
-            enabled = new CheckBox(); unique = new CheckBox(); fixedAsset = new CheckBox(); randomStart = new CheckBox();
-            sceneList = new ListBox(); layerList = new ListBox(); sources = new ListView();
-            transition = new ComboBox(); transition.Items.AddRange(AssemblyTemplate.Transitions);
-            resolution = new ComboBox(); resolution.Items.AddRange(new object[] { "Вертикально · Full HD", "Вертикально · HD", "Горизонтально · Full HD", "Горизонтально · HD" });
-            hidden.Controls.AddRange(new Control[] { materials, musicPath, output, videoSource, layerSource, sceneName, layerName, fontName, duration, count, transitionTime, volume, start, end, x, y, width, height, opacity, fontSize, radius, padding, enabled, unique, fixedAsset, randomStart, sceneList, layerList, sources, transition, resolution });
-            sceneList.SelectedIndexChanged += (s, e) => { if (!loading) LoadScene(); };
-            layerList.SelectedIndexChanged += (s, e) => { if (!loading) { LoadLayer(); RefreshCanvas(); } };
-            foreach (var box in new[] { sceneName, videoSource, layerName, layerSource, fontName }) box.TextChanged += (s, e) => EditorChanged();
-            foreach (var n in new[] { duration, x, y, width, height, opacity, start, end, fontSize, radius, padding }) n.ValueChanged += (s, e) => EditorChanged();
-            foreach (var c in new[] { enabled, unique, fixedAsset }) c.CheckedChanged += (s, e) => EditorChanged();
-            foreach (var n in new[] { count, transitionTime, volume }) n.ValueChanged += (s, e) => { if (!loading) { ReadTop(); RefreshCanvas(); } };
-            foreach (var c in new[] { transition, resolution }) c.SelectedIndexChanged += (s, e) => { if (!loading) { ReadTop(); previewPlan = null; canvas?.SetBackground(null); RefreshCanvas(); } };
-            randomStart.CheckedChanged += (s, e) => { if (!loading) ReadTop(); };
-        }
-        static NumericUpDown Value(decimal min, decimal max, int decimals = 1) { return new NumericUpDown { Minimum = min, Maximum = max, DecimalPlaces = decimals, Increment = decimals == 0 ? 1 : .1m }; }
-        static Label Caption(string text, int height = 25) { return new Label { Text = text, Height = height, AutoSize = false, ForeColor = Theme.TextSecondary, Dock = DockStyle.Top, TextAlign = ContentAlignment.MiddleLeft }; }
-        static FlowLayoutPanel Row(int height = 44) { return new FlowLayoutPanel { Dock = DockStyle.Top, Height = height, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty }; }
-        static Button Button(string text, Action action = null, bool primary = false) { return new AssemblyStudioButton(text, action, primary); }
-        static Button Picker(ComboBox model, string[] choices) {
-            var button = Button(choices[0] + "  ▾"); button.AutoSize = false; button.Height = 40; button.TextAlign = ContentAlignment.MiddleLeft;
-            button.Click += (s, e) => { var menu = Theme.MakeContextMenu(); for (int i = 0; i < choices.Length; i++) { int index = i; var item = menu.Items.Add(choices[i], null, (sender, args) => model.SelectedIndex = index); if (item is ToolStripMenuItem option) option.Checked = model.SelectedIndex == index; } menu.Show(button, new Point(0, button.Height)); };
-            model.SelectedIndexChanged += (s, e) => { if (model.SelectedIndex >= 0 && model.SelectedIndex < choices.Length) button.Text = choices[model.SelectedIndex] + "  ▾"; };
-            return button;
-        }
-        static FlowLayoutPanel Stack() { return new AssemblyScrollStack { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 14, 12) }; }
-        static void FitStack(FlowLayoutPanel stack) { stack.SizeChanged += (s, e) => { foreach (Control c in stack.Controls) c.Width = Math.Max(270, stack.ClientSize.Width - 24); }; }
+        static NumericUpDown Value(decimal min, decimal max, int decimals) { return new NumericUpDown { Minimum = min, Maximum = max, DecimalPlaces = decimals, Increment = decimals == 0 ? 1 : .1m }; }
+        static Button Button(string text, Action action = null, bool accent = false) { var b = new AssemblyStudioButton(text, action, accent); if (text.Length == 1) { b.AutoSize = false; b.MinimumSize = new Size(36,34); b.Size = new Size(36,34); b.Padding = Padding.Empty; } return b; }
+        static Label Label(string text, int height = 24) { return new Label { Text = text, Height = height, Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true }; }
+        static FlowLayoutPanel Row() { return new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty }; }
+        AssemblyScene SelectedScene { get { return template.Scenes[sceneIndex]; } }
+        AssemblyLayer SelectedLayer { get { return layerIndex >= 0 && layerIndex < SelectedScene.Layers.Count ? SelectedScene.Layers[layerIndex] : null; } }
         void BuildStudio() {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18, 12, 18, 12), ColumnCount = 1, RowCount = 4, BackColor = Theme.Background };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90)); Controls.Add(root); root.BringToFront();
-            header = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(header, 0, 0);
-            var title = new Label { Text = "Конструктор роликов", Font = Theme.FontPageTitle, ForeColor = Theme.TextPrimary, Location = new Point(0, 0), AutoSize = true }; header.Controls.Add(title);
-            header.Controls.Add(new Label { Text = "Собери сцены как конструктор. Картинки двигай прямо на экране.", Location = new Point(2, 36), AutoSize = true, ForeColor = Theme.TextSecondary });
-            var menu = Theme.MakeMenuButton("Шаблон", ("Сохранить", () => Safe(Save)), ("Загрузить", LoadTemplate), ("Сохранить копию…", ExportTemplate), ("Папка материалов…", ChooseMaterials));
-            menu.Anchor = AnchorStyles.Top | AnchorStyles.Right; header.Controls.Add(menu); header.SizeChanged += (s, e) => menu.Location = new Point(header.Width - menu.Width, 6);
-            var workspace = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
-            workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 406)); workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); root.Controls.Add(workspace, 0, 1);
-            left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 16, 0) }; workspace.Controls.Add(left, 0, 0);
-            var inspector = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 }; inspector.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); inspector.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); left.Controls.Add(inspector);
-            var nav = Row(); sceneTab = Button("① Сцена", () => SwitchInspector(false), true); exportTab = Button("② Музыка и выпуск", () => SwitchInspector(true)); nav.Controls.AddRange(new Control[] { sceneTab, exportTab }); inspector.Controls.Add(nav, 0, 0);
-            var host = new Panel { Dock = DockStyle.Fill }; inspector.Controls.Add(host, 0, 1);
-            sceneEditor = new Panel { Dock = DockStyle.Fill }; exportEditor = new Panel { Dock = DockStyle.Fill, Visible = false }; host.Controls.AddRange(new Control[] { sceneEditor, exportEditor }); BuildSceneEditor(); BuildExportEditor();
-            var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Theme.Card, Padding = new Padding(14) };
-            right.RowStyles.Add(new RowStyle(SizeType.Absolute, 46)); right.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); right.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); workspace.Controls.Add(right, 1, 0);
-            var previewRow = Row(); var bg = Button("▶ Обновить фон", async () => await ShowSample()); previewRow.Controls.Add(bg); previewRow.Controls.Add(new Label { Text = "Тяни картинку или угол рамки", AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(4, 10, 0, 0) }); right.Controls.Add(previewRow, 0, 0);
-            canvas = new AssemblyCanvas { Dock = DockStyle.Fill }; right.Controls.Add(canvas, 0, 1);
-            canvas.LayerSelected += i => layerList.SelectedIndex = i;
-            canvas.PlacementChanged += () => { previewPlan = null; LoadLayer(); RefreshCanvas(); };
-            total = Caption("", 40); right.Controls.Add(total, 0, 2);
-            var strip = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(0, 8, 0, 0) };
-            strip.RowStyles.Add(new RowStyle(SizeType.Absolute, 20)); strip.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); strip.Controls.Add(Caption("ПОРЯДОК СЦЕН · нажми карточку или плюс между ними", 20), 0, 0);
-            timeline = new FlowLayoutPanel { Name = "SceneTimeline", Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true, Padding = new Padding(0, 4, 0, 0), BackColor = Theme.Background }; strip.Controls.Add(timeline, 0, 1); root.Controls.Add(strip, 0, 2);
-            var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 }; bottom.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute, 6)); bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            status = Caption("", 25); status.AutoEllipsis = true; bottom.Controls.Add(status, 0, 0);
-            progress = new ProgressBar { Dock = DockStyle.Fill, Maximum = 1000 }; bottom.Controls.Add(progress, 0, 1);
-            footer = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 10, 0, 0) };
-            footer.Controls.Add(Button("▶ Проверить пример", async () => await Run(true)));
-            footer.Controls.Add(Button("✦ Собрать ролики", async () => await Run(false), true));
-            footer.Controls.Add(Button("Открыть результаты", () => Safe(() => { ReadTop(); Directory.CreateDirectory(template.Output); Ui.Open(template.Output); })));
-            stop = Button("■ Стоп", () => cancellation?.Cancel()); stop.Visible = false; footer.Controls.Add(stop); bottom.Controls.Add(footer, 0, 2); root.Controls.Add(bottom, 0, 3);
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18,12,18,12), RowCount = 3, ColumnCount = 1, BackColor = Theme.Background };
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60)); root.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 124)); Controls.Add(root); root.BringToFront();
+            header = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(header,0,0);
+            header.Controls.Add(new Label { Text = "Моя студия", Font = Theme.FontPageTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Location = new Point(0,0) });
+            header.Controls.Add(new Label { Text = "Загрузи пачки. Расставь картинки один раз. Собирай новые ролики.", AutoSize = true, ForeColor = Theme.TextSecondary, Location = new Point(2,36) });
+            var settings = Button("⋯", SettingsMenu); settings.AutoSize = false; settings.Size = new Size(46,36); settings.MinimumSize = settings.Size; header.Controls.Add(settings);
+            header.SizeChanged += (s,e) => settings.Location = new Point(header.Width - settings.Width,4);
+            workspace = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(workspace,0,1);
+            var columns = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+            columns.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340)); columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); workspace.Controls.Add(columns);
+            var library = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Padding = new Padding(0,0,16,0) };
+            library.RowStyles.Add(new RowStyle(SizeType.Absolute,64)); library.RowStyles.Add(new RowStyle(SizeType.Absolute,64)); library.RowStyles.Add(new RowStyle(SizeType.Absolute,30)); library.RowStyles.Add(new RowStyle(SizeType.Percent,100)); columns.Controls.Add(library,0,0);
+            videoButton = Button("", () => OpenPool(0)); videoButton.Name = "VideoPool"; videoButton.AutoSize = false; videoButton.Dock = DockStyle.Fill; videoButton.TextAlign = ContentAlignment.MiddleLeft; videoButton.Margin = new Padding(0,0,0,8); library.Controls.Add(videoButton,0,0);
+            musicButton = Button("", () => OpenPool(1)); musicButton.Name = "MusicPool"; musicButton.AutoSize = false; musicButton.Dock = DockStyle.Fill; musicButton.TextAlign = ContentAlignment.MiddleLeft; musicButton.Margin = new Padding(0,0,0,8); library.Controls.Add(musicButton,0,1);
+            library.Controls.Add(Label("СЦЕНЫ · картинки берутся из твоих пачек"),0,2);
+            sceneStack = new AssemblyScrollStack { Name = "SceneTimeline", Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0,0,14,0) }; library.Controls.Add(sceneStack,0,3);
+            sceneStack.SizeChanged += (s,e) => { foreach (Control c in sceneStack.Controls) c.Width = Math.Max(220, sceneStack.ClientSize.Width - 18); };
+            var editor = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = Theme.Card, Padding = new Padding(12) };
+            editor.RowStyles.Add(new RowStyle(SizeType.Absolute,40)); editor.RowStyles.Add(new RowStyle(SizeType.Absolute,38)); editor.RowStyles.Add(new RowStyle(SizeType.Percent,100)); editor.RowStyles.Add(new RowStyle(SizeType.Absolute,112)); columns.Controls.Add(editor,1,0);
+            var sceneHead = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
+            sceneHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); foreach (int w in new[] {44,44,100,44}) sceneHead.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,w));
+            selectedCaption = Label(""); selectedCaption.Font = Theme.FontCardTitle; selectedCaption.ForeColor = Theme.TextPrimary; sceneHead.Controls.Add(selectedCaption,0,0);
+            sceneHead.Controls.Add(Button("←", () => MoveScene(-1)),1,0); sceneHead.Controls.Add(Button("→", () => MoveScene(1)),2,0);
+            imageFiles = Button("+ Файлы", () => OpenPool(2)); imageFiles.Name = "SceneFiles"; sceneHead.Controls.Add(imageFiles,3,0); sceneHead.Controls.Add(Button("⋯", SceneMenu),4,0); editor.Controls.Add(sceneHead,0,0);
+            packChips = Row(); editor.Controls.Add(packChips,0,1);
+            canvas = new AssemblyCanvas { Dock = DockStyle.Fill }; editor.Controls.Add(canvas,0,2);
+            canvas.LayerSelected += i => { layerIndex = i; LoadLayer(); RefreshChips(); };
+            canvas.PlacementChanged += () => { LoadLayer(); Changed(false); };
+            var controls = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
+            controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); controls.RowStyles.Add(new RowStyle(SizeType.Absolute,70)); controls.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
+            controls.Controls.Add(new AssemblySlider("Длительность",duration,"с") { Dock = DockStyle.Fill, Name = "SceneDurationSlider" },0,0);
+            controls.Controls.Add(new AssemblySlider("Размер картинки",width,"%") { Dock = DockStyle.Fill, Name = "ImageSizeSlider" },1,0);
+            var positions = Row(); positions.Controls.Add(Button("↑", () => Place(.08))); positions.Controls.Add(Button("По центру", () => Place(-1))); positions.Controls.Add(Button("↓", () => Place(-2))); controls.Controls.Add(positions,0,1); controls.SetColumnSpan(positions,2); editor.Controls.Add(controls,0,3);
+            var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Padding = new Padding(0,8,0,0) };
+            bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,24)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,4)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,42)); bottom.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.Controls.Add(bottom,0,2);
+            status = Label(""); status.Name = "AssemblyStatus"; bottom.Controls.Add(status,0,0); progress = new ProgressBar { Dock = DockStyle.Fill, Maximum = 1000 }; bottom.Controls.Add(progress,0,1);
+            options = Row(); options.Padding = new Padding(0,5,0,0); formatButton = Button("", FormatMenu); options.Controls.Add(formatButton);
+            options.Controls.Add(Button("−", () => count.Value = Math.Max(1,count.Value - 1))); summary = Label(""); summary.AutoSize = false; summary.Size = new Size(225,34); summary.Dock = DockStyle.None; options.Controls.Add(summary); options.Controls.Add(Button("+", () => count.Value = Math.Min(1000,count.Value + 1))); options.Controls.Add(Button("10 роликов", () => count.Value = 10)); bottom.Controls.Add(options,0,2);
+            footer = Row(); footer.Padding = new Padding(0,4,0,0); footer.Controls.Add(Button("▶ Посмотреть ролик", async () => await Run(true))); footer.Controls.Add(Button("✦ Собрать ролики", async () => await Run(false),true)); footer.Controls.Add(Button("Результаты", () => Safe(() => { Directory.CreateDirectory(template.Output); Ui.Open(template.Output); }))); stop = Button("■ Стоп", () => cancellation?.Cancel()); stop.Visible = false; footer.Controls.Add(stop); bottom.Controls.Add(footer,0,3);
+            SetDrop(videoButton, files => ImportPool(0,files)); SetDrop(musicButton,files => ImportPool(1,files)); SetDrop(imageFiles,files => ImportPool(2,files)); BuildScenes();
         }
-        void SwitchInspector(bool export) {
-            sceneEditor.Visible = !export; exportEditor.Visible = export; if (export) exportEditor.BringToFront(); else sceneEditor.BringToFront();
-            sceneTab.BackColor = export ? Theme.Elevated : Theme.Accent; exportTab.BackColor = export ? Theme.Accent : Theme.Elevated;
-        }
-        void BuildSceneEditor() {
-            var f = Stack(); sceneEditor.Controls.Add(f); FitStack(f);
-            var sceneHead = new TableLayoutPanel { Width = 358, Height = 42, ColumnCount = 4, RowCount = 1, Margin = Padding.Empty };
-            sceneHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); sceneHead.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40)); sceneHead.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40)); sceneHead.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42));
-            sceneCaption = Caption("Сцена", 34); sceneCaption.Font = Theme.FontCardTitle; sceneCaption.ForeColor = Theme.TextPrimary; sceneCaption.AutoEllipsis = true; sceneCaption.Dock = DockStyle.Fill;
-            sceneHead.Controls.Add(sceneCaption, 0, 0); sceneHead.Controls.Add(Theme.MakeIconButton("←", () => MoveScene(-1)), 1, 0); sceneHead.Controls.Add(Theme.MakeIconButton("→", () => MoveScene(1)), 2, 0); sceneHead.Controls.Add(Theme.MakeIconButton("⋯", ShowSceneMenu), 3, 0); f.Controls.Add(sceneHead);
-            videoCard = new AssemblyAssetCard("Фоновое видео", "+ Видео", () => ImportSceneFiles(true)); videoCard.Width = 358;
-            videoCard.FolderClick += () => SourceMenu(true, videoCard); videoCard.FilesDropped += files => ImportSceneFiles(true, files); f.Controls.Add(videoCard);
-            layerChips = new FlowLayoutPanel { Width = 358, Height = 44, WrapContents = true, AutoSize = true, MinimumSize = new Size(0, 40), MaximumSize = new Size(0, 120) }; f.Controls.Add(layerChips);
-            imageCard = new AssemblyAssetCard("Выбранная картинка", "+ Картинки", () => ImportSceneFiles(false)); imageCard.Width = 358;
-            imageCard.FolderClick += () => SourceMenu(false, imageCard); imageCard.FilesDropped += files => ImportSceneFiles(false, files); f.Controls.Add(imageCard);
-            f.Controls.Add(new AssemblySlider("Длительность сцены", duration, "с") { Width = 358, Name = "SceneDurationSlider" });
-            var modes = Row(44); modes.Width = 358;
-            changing = Button("Менять", () => SetImageMode(0)); permanent = Button("Одна", () => SetImageMode(1)); fresh = Button("Без повторов", () => SetImageMode(2)); modes.Controls.AddRange(new Control[] { changing, permanent, fresh }); f.Controls.Add(modes);
-            f.Controls.Add(new AssemblySlider("Размер картинки", width, "%") { Width = 358 });
-            f.Controls.Add(new AssemblySlider("Видимость картинки", opacity, "%") { Width = 358 });
-            var placement = Row(44); placement.Width = 358;
-            placement.Controls.Add(Button("Сверху", () => PlaceImage(.08))); placement.Controls.Add(Button("По центру", () => PlaceImage(-1))); placement.Controls.Add(Button("Снизу", () => PlaceImage(-2))); f.Controls.Add(placement);
-            var extra = Row(44); extra.Width = 358;
-            visibleLayer = Button("◉ Показать", () => enabled.Checked = !enabled.Checked); extra.Controls.Add(visibleLayer); extra.Controls.Add(Button("⋯ Картинка", ShowImageMenu)); f.Controls.Add(extra);
-        }
-        void BuildExportEditor() {
-            var f = Stack(); exportEditor.Controls.Add(f); FitStack(f);
-            var music = new AssemblyAssetCard("Музыка на весь ролик", "+ Музыка", ChooseMusic) { Width = 358 }; music.FolderClick += () => { musicPath.Text = ""; ReadTop(); RefreshSmart(); }; musicCaption = music.Detail; f.Controls.Add(music);
-            f.Controls.Add(new AssemblySlider("Громкость", volume, "%") { Width = 358 });
-            var presets = Row(44); presets.Width = 358; foreach (int n in new[] { 1, 5, 10, 20 }) { int v = n; presets.Controls.Add(Button(v + " шт.", () => count.Value = v)); } f.Controls.Add(presets);
-            f.Controls.Add(new AssemblySlider("Сколько роликов", count, "шт.") { Width = 358 });
-            f.Controls.Add(Caption("Как будут меняться сцены"));
-            var effects = Picker(transition, new[] { "Без перехода", "Плавно", "Через чёрный", "Через белый", "Сдвиг влево", "Сдвиг вправо", "Мягкий сдвиг", "Размытие", "Приближение" }); effects.Width = 358; f.Controls.Add(effects);
-            f.Controls.Add(new AssemblySlider("Мягкость перехода", transitionTime, "с") { Width = 358 });
-            f.Controls.Add(Caption("Формат ролика")); var formats = Picker(resolution, new[] { "Вертикально · чётче", "Вертикально · легче", "Широкий кадр · чётче", "Широкий кадр · легче" }); formats.Width = 358; f.Controls.Add(formats);
-            var random = Button("Случайный участок видео", () => randomStart.Checked = !randomStart.Checked); random.Width = 358; f.Controls.Add(random); randomStart.CheckedChanged += (s, e) => random.BackColor = randomStart.Checked ? Theme.Accent : Theme.Elevated;
-            var destination = new AssemblyAssetCard("Куда сохранять ролики", "Выбрать папку", ChooseOutput) { Width = 358 }; destination.FolderClick += () => Safe(() => { ReadTop(); Directory.CreateDirectory(template.Output); Ui.Open(template.Output); }); outputCaption = destination.Detail; f.Controls.Add(destination);
-            f.Controls.Add(Caption("Видео можно использовать снова. Картинки\n«Без повторов» расходуются один раз.", 48));
-        }
-        void BuildTimeline() {
-            foreach (Control c in timeline.Controls.Cast<Control>().ToArray()) c.Dispose(); timeline.Controls.Clear(); sceneCards.Clear();
+        void SetDrop(Control c, Action<string[]> action) { c.AllowDrop = true; c.DragEnter += (s,e) => e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; c.DragDrop += (s,e) => Safe(() => action((string[])e.Data.GetData(DataFormats.FileDrop))); }
+        void BuildScenes() {
+            foreach (Control c in sceneStack.Controls.Cast<Control>().ToArray()) c.Dispose(); sceneStack.Controls.Clear(); sceneCards.Clear();
             for (int i = 0; i <= template.Scenes.Count; i++) {
-                int position = i; var add = Button("+", () => InsertScene(position)); add.Name = "InsertScene" + i; add.AutoSize = false; add.Size = new Size(36, 60); add.MinimumSize = new Size(36, 60); add.Padding = Padding.Empty; add.Margin = new Padding(0, 0, 6, 0); timeline.Controls.Add(add);
+                int at = i; var add = Button("+", () => InsertScene(at)); add.Name = "InsertScene" + i; add.AutoSize = false; add.Height = 18; add.MinimumSize = new Size(40,18); add.Padding = Padding.Empty; add.Margin = new Padding(0,1,0,1); add.Width = Math.Max(220,sceneStack.Width - 18); sceneStack.Controls.Add(add);
                 if (i == template.Scenes.Count) break;
-                int index = i; var card = Button("", () => { sceneList.SelectedIndex = index; SwitchInspector(false); }); card.Name = "SceneCard" + i; card.AutoSize = false; card.Size = new Size(180, 60); card.MinimumSize = card.Size; card.TextAlign = ContentAlignment.MiddleLeft; card.Padding = new Padding(12, 4, 8, 4); card.Margin = new Padding(0, 0, 6, 0); sceneCards.Add(card); timeline.Controls.Add(card);
+                int index = i; var card = Button("", () => SelectScene(index)); card.Name = "SceneCard" + i; card.AutoSize = false; card.Height = 60; card.Width = Math.Max(220,sceneStack.Width - 18); card.TextAlign = ContentAlignment.MiddleLeft; card.Margin = Padding.Empty; card.Dock = DockStyle.Fill;
+                var row = new Panel { Width = Math.Max(220,sceneStack.Width - 18), Height = 60, Margin = Padding.Empty };
+                var filesButton = Button("Файлы", () => { SelectScene(index); OpenPool(2); }); filesButton.AutoSize = false; filesButton.Width = 88; filesButton.Dock = DockStyle.Right; filesButton.Name = "SceneFiles" + i; row.Controls.Add(card); row.Controls.Add(filesButton); sceneCards.Add(card); sceneStack.Controls.Add(row);
             }
-            RefreshSmart();
+            RefreshInfo();
         }
-        void RefreshLayerChips() {
-            if (layerChips == null) return; foreach (Control c in layerChips.Controls.Cast<Control>().ToArray()) c.Dispose(); layerChips.Controls.Clear();
-            if (SelectedScene == null) return;
-            for (int i = 0; i < SelectedScene.Layers.Count; i++) { int index = i; var b = Button(SelectedScene.Layers[i].Name, () => layerList.SelectedIndex = index); b.Tag = i; layerChips.Controls.Add(b); }
-            layerChips.Controls.Add(Button("+ Картинка", AddImage));
+        void SelectScene(int index) { sceneIndex = Math.Max(0,Math.Min(index,template.Scenes.Count - 1)); layerIndex = 0; loading = true; duration.Value = (decimal)SelectedScene.Duration; loading = false; canvas.SetBackground(null); LoadLayer(); RefreshChips(); RefreshCanvas(); RefreshInfo(); RequestBackground(); }
+        void LoadLayer() { loading = true; width.Enabled = SelectedLayer != null && Pool(SelectedLayer.Source,AssemblyFiles.PictureExtensions).Count > 0; if (SelectedLayer != null) width.Value = (decimal)(SelectedLayer.Width * 100); loading = false; }
+        void RefreshChips() {
+            foreach (Control c in packChips.Controls.Cast<Control>().ToArray()) c.Dispose(); packChips.Controls.Clear();
+            var filled = SelectedScene.Layers.Select((l,i) => new {Layer=l,Index=i}).Where(p => p.Layer.Enabled && Pool(p.Layer.Source,AssemblyFiles.PictureExtensions).Count > 0).ToList();
+            if (filled.Count <= 1) { packChips.Controls.Add(new Label { Text = "Двигай картинку мышью · размер меняй ползунком", ForeColor = Theme.TextSecondary, AutoSize = true, Margin = new Padding(0,8,0,0) }); return; }
+            foreach (var p in filled) { int i = p.Index; packChips.Controls.Add(Button("Картинка " + (i + 1), () => { layerIndex = i; LoadLayer(); RefreshChips(); RefreshCanvas(); }, i == layerIndex)); }
         }
-        void RefreshSmart() {
-            if (videoCard == null || SelectedScene == null) return;
-            sceneCaption.Text = FriendlyScene(SelectedScene.Name);
-            for (int i = 0; i < sceneCards.Count && i < template.Scenes.Count; i++) { sceneCards[i].Text = (i + 1) + "  " + FriendlyScene(template.Scenes[i].Name) + "\n" + template.Scenes[i].Duration.ToString("0.##") + " сек  ·  " + template.Scenes[i].Layers.Count + " карт."; sceneCards[i].BackColor = i == sceneList.SelectedIndex ? Theme.Accent : Theme.Card; }
-            foreach (Button b in layerChips.Controls.OfType<Button>()) { if (!(b.Tag is int)) continue; int i = (int)b.Tag; b.Text = SelectedScene.Layers[i].Name; b.BackColor = i == layerList.SelectedIndex ? Theme.Accent : Theme.Elevated; }
-            var videos = PoolSafe(SceneVideoSource(), AssemblyFiles.VideoExtensions); videoCard.SetInfo("Фоновое видео", videos.Count == 0 ? "Добавь короткие видео для этой сцены" : videos.Count + " видео · варианты для сборки", null);
-            var l = SelectedLayer; imageCard.Enabled = l != null;
-            foreach (var b in new[] { changing, permanent, fresh, visibleLayer }) b.Enabled = l != null;
-            if (l != null) { var files = PoolSafe(l.Source, AssemblyFiles.ImageExtensions); imageCard.SetInfo(l.Name, files.Count == 0 ? "Добавь готовую картинку с текстом" : files.Count + " карт. · " + (l.Fixed ? "всегда одна" : l.Unique ? "без повторов" : "выбирается случайно"), files.FirstOrDefault()); }
-            else imageCard.SetInfo("Пока без картинок", "Нажми + рядом с заголовком выше", null);
-            changing.BackColor = l != null && !l.Fixed && !l.Unique ? Theme.Accent : Theme.Elevated; permanent.BackColor = l?.Fixed == true ? Theme.Accent : Theme.Elevated; fresh.BackColor = l?.Unique == true ? Theme.Accent : Theme.Elevated;
-            visibleLayer.Text = l?.Enabled == true ? "◉ Видна" : "○ Скрыта";
-            if (musicCaption != null) musicCaption.Text = string.IsNullOrWhiteSpace(musicPath.Text) ? "Можно собрать без музыки" : Path.GetFileName(musicPath.Text);
-            if (outputCaption != null) outputCaption.Text = string.IsNullOrWhiteSpace(output.Text) ? "Выбери папку" : Path.GetFileName(output.Text.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        List<string> Pool(string source, string[] extensions) { return AssemblyFiles.Pool(template.Resolve(source),extensions); }
+        void RefreshInfo() {
+            if (videoButton == null) return;
+            int videos = Pool(template.Videos,AssemblyFiles.VideoExtensions).Count, songs = Pool(template.Music,AssemblyFiles.MusicExtensions).Count;
+            videoButton.Text = "▶  Видео · " + videos + " файлов\n" + (videos == 0 ? "+ Добавить пачку видео" : "Файлы · общие для всех сцен");
+            musicButton.Text = "♫  Музыка · " + songs + " файлов\n" + (songs == 0 ? "+ Добавить · можно без музыки" : "Файлы · один трек на весь ролик");
+            for (int i = 0; i < sceneCards.Count; i++) { var scene = template.Scenes[i]; int images = scene.Layers.Where(l => l.Enabled).Sum(l => Pool(l.Source,AssemblyFiles.PictureExtensions).Count); sceneCards[i].Text = (i + 1) + "  " + SceneLabel(scene,i) + "\n" + scene.Duration.ToString("0.##") + " с · " + (images == 0 ? "Без картинок" : images + " картинок"); sceneCards[i].BackColor = i == sceneIndex ? Theme.Accent : Theme.Card; }
+            selectedCaption.Text = SceneLabel(SelectedScene,sceneIndex); formatButton.Text = template.Width + ":" + template.Height + "  ▾"; int gcd = Gcd(template.Width,template.Height); formatButton.Text = template.Width/gcd + ":" + template.Height/gcd + "  ▾";
+            summary.Text = template.Count + " роликов · " + template.Duration.ToString("0.##") + " секунд";
         }
-        List<string> PoolSafe(string path, string[] extensions) { try { return AssemblyFiles.Pool(template.Resolve(path), extensions); } catch { return new List<string>(); } }
-        static string FriendlyScene(string name) { return name == "1. Hook" ? "Начало" : name == "2. Торговля" ? "Торговля" : name == "3. TG-бот и призыв" ? "Бот и призыв" : name; }
-        string SceneVideoSource() { return string.IsNullOrWhiteSpace(SelectedScene.Videos) ? template.Videos : SelectedScene.Videos; }
-        void InsertScene(int index) { if (index == 0) { sceneList.SelectedIndex = 0; AddScene(false); } else { sceneList.SelectedIndex = index - 1; AddScene(true); } }
-        void SetImageMode(int mode) { if (SelectedLayer == null) return; loading = true; fixedAsset.Checked = mode == 1; unique.Checked = mode == 2; loading = false; EditorChanged(); }
-        void PlaceImage(double position) { if (SelectedLayer == null) return; x.Value = (decimal)((1 - SelectedLayer.Width) * 50); y.Value = (decimal)((position == -1 ? (1 - SelectedLayer.Height) / 2 : position == -2 ? Math.Max(0, .92 - SelectedLayer.Height) : Math.Min(position, 1 - SelectedLayer.Height)) * 100); }
-        void AddImage() { Safe(() => { if (SelectedScene.Layers.Count >= 8) throw new Exception("В сцене можно разместить до 8 картинок."); string folder = Path.Combine("Сцены", "Картинка-" + Guid.NewGuid().ToString("N").Substring(0, 6)); Directory.CreateDirectory(template.Resolve(folder)); SelectedScene.Layers.Add(new AssemblyLayer { Name = "Новая картинка", Source = folder }); previewPlan = null; RefreshLayers(SelectedScene.Layers.Count - 1); Save(); }); }
-        void ShowSceneMenu() { var m = Theme.MakeContextMenu(); m.Items.Add("Переименовать…", null, (s, e) => Rename(sceneName, "Название сцены")); m.Items.Add("Добавить перед", null, (s, e) => AddScene(false)); m.Items.Add("Добавить после", null, (s, e) => AddScene(true)); m.Items.Add("Удалить сцену", null, (s, e) => Safe(() => { if (template.Scenes.Count <= 2) throw new Exception("Оставь минимум две сцены."); int i = sceneList.SelectedIndex; template.Scenes.RemoveAt(i); previewPlan = null; RefreshScenes(Math.Min(i, template.Scenes.Count - 1)); })); m.Show(Cursor.Position); }
-        void ShowImageMenu() { if (SelectedLayer == null) return; var m = Theme.MakeContextMenu(); m.Items.Add("Переименовать…", null, (s, e) => Rename(layerName, "Название картинки")); m.Items.Add("Точная настройка…", null, (s, e) => AdvancedImage()); m.Items.Add("Удалить картинку", null, (s, e) => Safe(() => { int i = layerList.SelectedIndex; SelectedScene.Layers.RemoveAt(i); previewPlan = null; RefreshLayers(Math.Min(i, SelectedScene.Layers.Count - 1)); })); m.Show(Cursor.Position); }
-        void Rename(TextBox target, string title) { using (var form = new Form { Text = title, ClientSize = new Size(360, 114), BackColor = Theme.Background, ForeColor = Theme.TextPrimary, Font = Theme.FontBody, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false }) { var input = Theme.MakeSearchBox(); input.Text = target.Text; input.SetBounds(16, 16, 328, 28); form.Controls.Add(input); var ok = Button("Готово", () => { target.Text = input.Text; form.Close(); }, true); ok.SetBounds(226, 62, 118, 36); form.Controls.Add(ok); form.AcceptButton = ok; form.ShowDialog(this); } }
-        void SourceMenu(bool video, Control owner) {
-            if (!video && SelectedLayer == null) return; var m = Theme.MakeContextMenu();
-            m.Items.Add("Открыть папку материалов", null, (s, e) => Safe(() => { string path = template.Resolve(video ? SceneVideoSource() : SelectedLayer.Source); if (File.Exists(path)) path = Path.GetDirectoryName(path); Directory.CreateDirectory(path); Ui.Open(path); }));
-            m.Items.Add("Использовать другую папку…", null, (s, e) => { var p = Ui.Folder(this, template.Materials); if (p != null) { if (video) videoSource.Text = p; else layerSource.Text = p; } });
-            if (!video) m.Items.Add("Использовать одну картинку…", null, (s, e) => { using (var d = new OpenFileDialog { Filter = "Картинки|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.txt" }) if (d.ShowDialog(this) == DialogResult.OK) { layerSource.Text = d.FileName; SetImageMode(1); } });
-            m.Show(owner, new Point(0, owner.Height));
-        }
-        void ImportSceneFiles(bool video, string[] files = null) {
-            Safe(() => {
-                if (!video && SelectedLayer == null) return;
-                if (files == null) using (var d = new OpenFileDialog { Multiselect = true, Filter = video ? "Видео|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v" : "Картинки|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.txt" }) { if (d.ShowDialog(this) != DialogResult.OK) return; files = d.FileNames; }
-                ReadTop(); string source = video ? SceneVideoSource() : SelectedLayer.Source; string folder = template.Resolve(source); var extensions = video ? AssemblyFiles.VideoExtensions : AssemblyFiles.ImageExtensions;
-                if (File.Exists(folder) || !Directory.Exists(folder) && extensions.Contains(Path.GetExtension(folder).ToLowerInvariant())) { source = Path.Combine("Сцены", "Материалы-" + Guid.NewGuid().ToString("N").Substring(0, 6)); if (video) videoSource.Text = source; else layerSource.Text = source; folder = template.Resolve(source); }
-                Directory.CreateDirectory(folder); int added = 0;
-                foreach (string file in files) { if (!File.Exists(file) || !extensions.Contains(Path.GetExtension(file).ToLowerInvariant())) continue; string dest = Path.Combine(folder, Path.GetFileName(file)); if (Path.GetFullPath(file).Equals(Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase)) continue; if (File.Exists(dest)) dest = Path.Combine(folder, Path.GetFileNameWithoutExtension(file) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + Path.GetExtension(file)); File.Copy(file, dest); added++; }
-                previewPlan = null; RefreshSources(); RefreshCanvas(); Save(); status.Text = "Добавлено: " + added + ". Картинку можно двигать в просмотре справа.";
-            });
-        }
-        void ChooseMusic() { using (var d = new OpenFileDialog { Filter = "Музыка|*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac" }) if (d.ShowDialog(this) == DialogResult.OK) { musicPath.Text = d.FileName; ReadTop(); RefreshSmart(); } }
-        void ChooseOutput() { var p = Ui.Folder(this, output.Text); if (p != null) { output.Text = p; ReadTop(); RefreshSmart(); } }
-        void ChooseMaterials() { var p = Ui.Folder(this, materials.Text); if (p != null) { materials.Text = p; ReadTop(); previewPlan = null; canvas.SetBackground(null); RefreshSources(); RefreshCanvas(); } }
-        void ExportTemplate() { Safe(() => { Save(); using (var d = new SaveFileDialog { Filter = "Шаблон|*.xml", DefaultExt = "xml", FileName = "VideoBatch-template.xml" }) if (d.ShowDialog(this) == DialogResult.OK) AssemblyFiles.Save(d.FileName, template); }); }
-        void AdvancedImage() {
-            using (var form = new Form { Text = "Точная настройка картинки", ClientSize = new Size(410, 630), BackColor = Theme.Background, ForeColor = Theme.TextPrimary, Font = Theme.FontBody, StartPosition = FormStartPosition.CenterParent }) {
-                var f = Stack(); f.Padding = new Padding(16); form.Controls.Add(f);
-                foreach (var entry in new[] { Tuple.Create("По горизонтали", x, "%"), Tuple.Create("По вертикали", y, "%"), Tuple.Create("Ширина", width, "%"), Tuple.Create("Высота", height, "%"), Tuple.Create("Появится через", start, "с"), Tuple.Create("Исчезнет через · 0 = до конца", end, "с"), Tuple.Create("Для TXT: размер текста", fontSize, ""), Tuple.Create("Для TXT: круглые углы", radius, ""), Tuple.Create("Для TXT: отступ внутри", padding, "") }) f.Controls.Add(new AssemblySlider(entry.Item1, entry.Item2, entry.Item3) { Width = 350 });
-                f.Controls.Add(Button("Шрифт TXT…", () => Rename(fontName, "Шрифт TXT"))); f.Controls.Add(Button("Готово", () => form.Close(), true)); form.ShowDialog(this);
-            }
-        }
-        AssemblyScene SelectedScene { get { return sceneList.SelectedIndex >= 0 ? template.Scenes[sceneList.SelectedIndex] : null; } }
-        AssemblyLayer SelectedLayer { get { return SelectedScene != null && layerList.SelectedIndex >= 0 ? SelectedScene.Layers[layerList.SelectedIndex] : null; } }
-        void LoadTop() {
-            loading = true; materials.Text = template.Materials; output.Text = template.Output; musicPath.Text = template.Music;
-            count.Value = template.Count; transition.SelectedItem = template.Transition; transitionTime.Value = (decimal)template.TransitionDuration; volume.Value = (decimal)(template.MusicVolume * 100); randomStart.Checked = template.RandomVideoStart;
-            resolution.SelectedIndex = template.Width == 720 ? 1 : template.Width == 1920 ? 2 : template.Width == 1280 ? 3 : 0; loading = false;
-        }
-        void ReadTop() {
-            template.Materials = materials.Text.Trim(); template.Output = output.Text.Trim(); template.Music = musicPath.Text.Trim(); template.Count = (int)count.Value;
-            template.Transition = (string)transition.SelectedItem ?? "fade"; template.TransitionDuration = (double)transitionTime.Value; template.MusicVolume = (double)volume.Value / 100; template.RandomVideoStart = randomStart.Checked;
-            int[,] sizes = { { 1080, 1920 }, { 720, 1280 }, { 1920, 1080 }, { 1280, 720 } }; int index = Math.Max(0, resolution.SelectedIndex); template.Width = sizes[index, 0]; template.Height = sizes[index, 1];
-        }
-        void RefreshScenes(int selected) { loading = true; sceneList.Items.Clear(); foreach (var s in template.Scenes) sceneList.Items.Add(s); sceneList.SelectedIndex = selected; loading = false; BuildTimeline(); LoadScene(); }
-        void LoadScene() {
-            if (SelectedScene == null) return; canvas?.SetBackground(null); loading = true; sceneName.Text = SelectedScene.Name; duration.Value = (decimal)SelectedScene.Duration; videoSource.Text = SelectedScene.Videos; loading = false; RefreshLayers(0); RefreshSources();
-        }
-        void RefreshLayers(int selected) { loading = true; layerList.Items.Clear(); if (SelectedScene != null) foreach (var l in SelectedScene.Layers) layerList.Items.Add(l.Name); layerList.SelectedIndex = layerList.Items.Count == 0 ? -1 : Math.Max(0, selected); loading = false; RefreshLayerChips(); LoadLayer(); RefreshCanvas(); RefreshSources(); }
-        void LoadLayer() {
-            loading = true; var l = SelectedLayer;
-            foreach (Control c in new Control[] { layerName, layerSource, fontName, enabled, unique, fixedAsset, x, y, width, height, opacity, start, end, fontSize, radius, padding }) c.Enabled = l != null;
-            if (l != null) {
-                layerName.Text = l.Name; layerSource.Text = l.Source; enabled.Checked = l.Enabled; unique.Checked = l.Unique; fixedAsset.Checked = l.Fixed;
-                x.Value = (decimal)(l.X * 100); y.Value = (decimal)(l.Y * 100); width.Value = (decimal)(l.Width * 100); height.Value = (decimal)(l.Height * 100); opacity.Value = (decimal)(l.Opacity * 100);
-                start.Value = (decimal)l.Start; end.Value = (decimal)l.End; fontName.Text = l.Font; fontSize.Value = (decimal)l.FontSize; radius.Value = (decimal)l.Radius; padding.Value = (decimal)l.Padding;
-            }
-            loading = false;
-        }
-        void EditorChanged() {
-            if (loading || SelectedScene == null) return;
-            bool durationChanged = Math.Abs(SelectedScene.Duration - (double)duration.Value) > .00001;
-            if (SelectedScene.Videos != videoSource.Text.Trim()) canvas?.SetBackground(null);
-            SelectedScene.Name = sceneName.Text; SelectedScene.Duration = (double)duration.Value; SelectedScene.Videos = videoSource.Text.Trim();
-            // Keep timing valid when a user shortens a scene with the slider.
-            if (durationChanged) {
-                loading = true;
-                foreach (var layer in SelectedScene.Layers) { layer.Start = Math.Min(layer.Start, Math.Max(0, SelectedScene.Duration - .1)); if (layer.End > SelectedScene.Duration || layer.End != 0 && layer.End <= layer.Start) layer.End = 0; }
-                if (SelectedLayer != null) { start.Value = (decimal)SelectedLayer.Start; end.Value = (decimal)SelectedLayer.End; }
-                if (template.Transition != "cut") { decimal limit = (decimal)Math.Max(0, template.Scenes.Min(s => s.Duration) / 2 - .01); if (transitionTime.Value > limit) { transitionTime.Value = limit; template.TransitionDuration = (double)limit; } }
-                loading = false;
-            }
-            var l = SelectedLayer;
-            if (l != null) {
-                l.Name = layerName.Text; l.Source = layerSource.Text.Trim(); l.Enabled = enabled.Checked;
-                if (fixedAsset.Checked && unique.Checked) { loading = true; if (l.Fixed) fixedAsset.Checked = false; else unique.Checked = false; loading = false; }
-                double requestedWidth = (double)width.Value / 100;
-                if (Math.Abs(requestedWidth - l.Width) > .00001) { loading = true; height.Value = (decimal)Math.Max(2, Math.Min(100, l.Height * requestedWidth / l.Width * 100)); loading = false; }
-                l.Unique = unique.Checked; l.Fixed = fixedAsset.Checked; l.X = (double)x.Value / 100; l.Y = (double)y.Value / 100;
-                l.Width = Math.Min((double)width.Value / 100, 1 - l.X); l.Height = Math.Min((double)height.Value / 100, 1 - l.Y);
-                if (l.Width < .02) { l.X = .98; l.Width = .02; } if (l.Height < .02) { l.Y = .98; l.Height = .02; }
-                l.Opacity = (double)opacity.Value / 100; l.Start = (double)start.Value; l.End = (double)end.Value; l.Font = fontName.Text; l.FontSize = (double)fontSize.Value; l.Radius = (double)radius.Value; l.Padding = (double)padding.Value;
-                loading = true; x.Value = (decimal)(l.X * 100); y.Value = (decimal)(l.Y * 100); width.Value = (decimal)(l.Width * 100); height.Value = (decimal)(l.Height * 100); layerList.Items[layerList.SelectedIndex] = l.Name; loading = false;
-            }
-            loading = true; sceneList.Items[sceneList.SelectedIndex] = SelectedScene; loading = false; previewPlan = null; RefreshCanvas(); RefreshSources();
-        }
+        static int Gcd(int a,int b) { while (b != 0) { int next = a % b; a = b; b = next; } return a; }
+        static string SceneLabel(AssemblyScene s,int i) { return s.Name.Contains("Hook") || s.Name.Contains("TG-бот") || s.Name.Contains("Торговля") || s.Name == "Новая сцена" ? "Сцена " + (i + 1) : s.Name; }
         void RefreshCanvas() {
-            if (canvas == null || SelectedScene == null) return;
-            var sp = new AssemblyScenePlan { Scene = SelectedScene }; int i = 0;
+            var sp = new AssemblyScenePlan { Scene = SelectedScene };
             foreach (var l in SelectedScene.Layers.Where(l => l.Enabled)) {
-                try {
-                    var pp = previewPlan != null && sceneList.SelectedIndex < previewPlan.Scenes.Count ? previewPlan.Scenes[sceneList.SelectedIndex] : null;
-                    if (pp != null && i < pp.Layers.Count) sp.Layers.Add(new AssemblyLayerPlan { Layer = l, Asset = pp.Layers[i].Asset });
-                    else { var files = AssemblyFiles.Pool(template.Resolve(l.Source), AssemblyFiles.ImageExtensions); if (files.Count > 0) sp.Layers.Add(new AssemblyLayerPlan { Layer = l, Asset = new AssemblyAsset { Path = files[0] } }); }
-                } catch { } i++;
+                var files = Pool(l.Source,AssemblyFiles.PictureExtensions); string chosen;
+                if (files.Count == 0) continue;
+                if (!previewImages.TryGetValue(l,out chosen) || !files.Contains(chosen)) chosen = files[0];
+                sp.Layers.Add(new AssemblyLayerPlan { Layer = l, Asset = new AssemblyAsset { Path = chosen } });
             }
-            canvas.SetScene(template, sp, SelectedLayer); total.Text = template.Scenes.Count + " сцены · " + template.Duration.ToString("0.##") + " сек · к выпуску " + template.Count + " роликов"; RefreshSmart();
+            canvas.SetScene(template,sp,SelectedLayer);
         }
-        sealed class SourceTarget { public string Name, Path; public string[] Extensions; }
-        void RefreshSources() {
-            if (sources == null) return; sources.Items.Clear();
-            var all = new List<SourceTarget> { new SourceTarget { Name = "Общие видео", Path = template.Videos, Extensions = AssemblyFiles.VideoExtensions } };
-            all.AddRange(template.Scenes.Where(s => !string.IsNullOrWhiteSpace(s.Videos)).Select(s => new SourceTarget { Name = "Видео: " + s.Name, Path = s.Videos, Extensions = AssemblyFiles.VideoExtensions }));
-            all.AddRange(template.Scenes.SelectMany(s => s.Layers).Where(l => l.Enabled).Select(l => new SourceTarget { Name = l.Name, Path = l.Source, Extensions = AssemblyFiles.ImageExtensions }));
-            foreach (var target in all.GroupBy(t => t.Path, StringComparer.OrdinalIgnoreCase).Select(g => g.First())) {
-                int size = 0; try { size = AssemblyFiles.Pool(template.Resolve(target.Path), target.Extensions).Count; } catch { }
-                var item = new ListViewItem(new[] { target.Name, target.Path, size.ToString() }) { Tag = target }; sources.Items.Add(item);
-            }
-            RefreshSmart();
+        void ChangeDuration() {
+            if (loading) return; SelectedScene.Duration = (double)duration.Value;
+            foreach (var l in SelectedScene.Layers) { l.Start = Math.Min(l.Start,Math.Max(0,SelectedScene.Duration - .1)); if (l.End > SelectedScene.Duration || l.End != 0 && l.End <= l.Start) l.End = 0; }
+            if (template.TransitionDuration >= template.Scenes.Min(s => s.Duration) / 2) template.TransitionDuration = Math.Max(0,template.Scenes.Min(s => s.Duration) / 2 - .01);
+            Changed(false);
         }
-        void CreateFolders() { Safe(() => { ReadTop(); if (string.IsNullOrWhiteSpace(template.Materials)) throw new Exception("Выбери общую папку материалов."); Directory.CreateDirectory(template.Materials); RefreshSources(); foreach (ListViewItem item in sources.Items) { var target = (SourceTarget)item.Tag; string path = template.Resolve(target.Path); if (!string.IsNullOrWhiteSpace(path) && !File.Exists(path) && (Directory.Exists(path) || !target.Extensions.Contains(Path.GetExtension(path).ToLowerInvariant()))) Directory.CreateDirectory(path); } RefreshSources(); Ui.Open(template.Materials); }); }
-        void AddFiles() { Safe(() => { if (sources.SelectedItems.Count == 0) throw new Exception("Выбери строку материала в списке."); using (var d = new OpenFileDialog { Multiselect = true, Filter = "Все файлы|*.*" }) if (d.ShowDialog(this) == DialogResult.OK) CopyFiles(d.FileNames); }); }
-        void CopyFiles(string[] files) {
-            ReadTop(); if (sources.SelectedItems.Count == 0) throw new Exception("Выбери строку материала."); var target = (SourceTarget)sources.SelectedItems[0].Tag;
-            string folder = template.Resolve(target.Path); if (File.Exists(folder) || (!Directory.Exists(folder) && target.Extensions.Contains(Path.GetExtension(folder).ToLowerInvariant()))) throw new Exception("Этот источник — отдельный файл. Его можно заменить на вкладке 2."); Directory.CreateDirectory(folder);
-            foreach (string file in files) {
-                if (!File.Exists(file) || !target.Extensions.Contains(Path.GetExtension(file).ToLowerInvariant())) continue;
-                string dest = Path.Combine(folder, Path.GetFileName(file)); if (Path.GetFullPath(file).Equals(dest, StringComparison.OrdinalIgnoreCase)) continue;
-                if (File.Exists(dest)) dest = Path.Combine(folder, Path.GetFileNameWithoutExtension(file) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + Path.GetExtension(file));
-                File.Copy(file, dest);
-            }
-            previewPlan = null; RefreshSources(); RefreshCanvas(); status.Text = "Материалы добавлены. Вкладка 2 — расположение изображений.";
+        void ChangeSize() {
+            if (loading || SelectedLayer == null) return; var l = SelectedLayer; double next = (double)width.Value / 100;
+            l.Height = Math.Max(.02,Math.Min(1,l.Height * next / l.Width)); l.Width = next; l.X = Math.Min(l.X,1 - l.Width); l.Y = Math.Min(l.Y,1 - l.Height); Changed(false);
         }
-        void OpenSource() { Safe(() => { ReadTop(); if (sources.SelectedItems.Count == 0) throw new Exception("Выбери строку материала."); string path = template.Resolve(((SourceTarget)sources.SelectedItems[0].Tag).Path); if (File.Exists(path)) path = Path.GetDirectoryName(path); Directory.CreateDirectory(path); Ui.Open(path); }); }
-        void MoveScene(int delta) { Safe(() => { int i = sceneList.SelectedIndex, next = i + delta; if (next < 0 || next >= template.Scenes.Count) return; var item = template.Scenes[i]; template.Scenes.RemoveAt(i); template.Scenes.Insert(next, item); previewPlan = null; RefreshScenes(next); }); }
-        void AddScene(bool after) {
+        void Place(double at) { if (SelectedLayer == null) return; var l = SelectedLayer; l.X = (1 - l.Width)/2; l.Y = at == -1 ? (1 - l.Height)/2 : at == -2 ? Math.Max(0,.92 - l.Height) : Math.Min(at,1 - l.Height); Changed(false); }
+        void Changed(bool background) { RefreshInfo(); RefreshCanvas(); saveTimer.Stop(); saveTimer.Start(); if (background) RequestBackground(); }
+        void Save() { template.Validate(); AssemblyFiles.Save(templatePath,template); }
+        void InsertScene(int index) { Safe(() => { AssemblyWorkspace.Insert(template,index); BuildScenes(); SelectScene(index); Save(); status.Text = "Сцена добавлена. Папка создана — нажми «+ Файлы»."; }); }
+        void MoveScene(int delta) { Safe(() => { int next = sceneIndex + delta; if (next < 0 || next >= template.Scenes.Count) return; var scene = SelectedScene; template.Scenes.RemoveAt(sceneIndex); template.Scenes.Insert(next,scene); BuildScenes(); SelectScene(next); Save(); }); }
+        void RemoveScene() { Safe(() => { if (template.Scenes.Count == 1) throw new Exception("Оставь хотя бы одну сцену."); template.Scenes.RemoveAt(sceneIndex); sceneIndex = Math.Min(sceneIndex,template.Scenes.Count - 1); BuildScenes(); SelectScene(sceneIndex); Save(); status.Text = "Сцена убрана. Её файлы сохранены в папке материалов."; }); }
+        void SceneMenu() { var menu = Theme.MakeContextMenu(); menu.Items.Add("Файлы сцены",null,(s,e) => OpenPool(2)); menu.Items.Add("Видео только для этой сцены",null,(s,e) => OpenPool(3)); menu.Items.Add("Добавить сцену после",null,(s,e) => InsertScene(sceneIndex + 1)); menu.Items.Add("Убрать сцену",null,(s,e) => RemoveScene()); menu.Show(Cursor.Position); }
+        void FormatMenu() {
+            var menu = Theme.MakeContextMenu();
+            foreach (var format in new[] { Tuple.Create("9:16 · TikTok / Shorts",1080,1920), Tuple.Create("9:16 · быстрее собирать",720,1280), Tuple.Create("4:5 · вертикальный",1080,1350), Tuple.Create("3:4 · вертикальный",1080,1440), Tuple.Create("1:1 · квадрат",1080,1080), Tuple.Create("16:9 · широкий",1920,1080) }) { var f = format; menu.Items.Add(f.Item1,null,(s,e) => SetFormat(f.Item2,f.Item3)); }
+            menu.Show(formatButton,new Point(0,formatButton.Height));
+        }
+        void SetFormat(int w,int h) { template.Width = w; template.Height = h; Changed(true); }
+        string Source(int kind) { return kind == 0 ? template.Videos : kind == 1 ? template.Music : kind == 3 ? SelectedScene.Videos : SelectedLayer.Source; }
+        string[] Extensions(int kind) { return kind == 0 || kind == 3 ? AssemblyFiles.VideoExtensions : kind == 1 ? AssemblyFiles.MusicExtensions : AssemblyFiles.PictureExtensions; }
+        void SetSource(int kind,string source) { if (kind == 0) template.Videos = source; else if (kind == 1) template.Music = source; else if (kind == 3) SelectedScene.Videos = source; else SelectedLayer.Source = source; }
+        string[] PickFiles(int kind) { using (var dialog = new OpenFileDialog { Multiselect = true, Filter = "Файлы|" + string.Join(";",Extensions(kind).Select(e => "*" + e)) }) return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileNames : null; }
+        void ImportPool(int kind,string[] files,bool replace = false) {
             Safe(() => {
-                ReadTop(); if (template.Scenes.Count >= 12) throw new Exception("В одном шаблоне поддерживается до 12 сцен.");
-                if (string.IsNullOrWhiteSpace(template.Materials)) throw new Exception("Выбери папку материалов в меню «Шаблон».");
-                int index = Math.Max(0, sceneList.SelectedIndex) + (after ? 1 : 0);
-                string relative = Path.Combine("Сцены", "Сцена-" + Guid.NewGuid().ToString("N").Substring(0, 6));
-                string video = Path.Combine(relative, "Видео"), image = Path.Combine(relative, "Изображения");
-                Directory.CreateDirectory(template.Resolve(video)); Directory.CreateDirectory(template.Resolve(image));
-                var scene = new AssemblyScene { Name = "Новая сцена", Videos = video, Duration = 4, Layers = new List<AssemblyLayer> { new AssemblyLayer { Name = "Изображение новой сцены", Source = image } } };
-                template.Scenes.Insert(Math.Min(index, template.Scenes.Count), scene); previewPlan = null; RefreshScenes(Math.Min(index, template.Scenes.Count - 1));
-                Save(); status.Text = "Сцена добавлена. Созданы папки «Видео» и «Изображения»: " + template.Resolve(relative);
+                if (files == null || files.Length == 0) return;
+                if (kind == 2) foreach (string file in files.Where(File.Exists).Where(p => AssemblyFiles.PictureExtensions.Contains(Path.GetExtension(p).ToLowerInvariant()))) {
+                    try { using (var image = Image.FromFile(file)) { if (image.Width <= 0 || image.Height <= 0) throw new Exception("Пустое изображение."); } }
+                    catch (Exception e) { throw new Exception("Не удалось открыть картинку «" + Path.GetFileName(file) + "». Проверь файл или загрузи другую картинку.",e); }
+                }
+                if (kind == 2 && SelectedLayer == null) { SelectedScene.Layers.Add(new AssemblyLayer { Name = "Пачка 1", Source = Path.Combine(SelectedScene.Folder,"Изображения") }); layerIndex = 0; }
+                string source = Source(kind); bool empty = Pool(source,Extensions(kind)).Count == 0;
+                string fallback = kind == 0 ? "Видео" : kind == 1 ? "Музыка" : Path.Combine(SelectedScene.Folder,kind == 3 ? "Видео" : "Изображения");
+                int added = AssemblyWorkspace.Import(template,ref source,fallback,files,Extensions(kind),replace); SetSource(kind,source);
+                if (kind == 2 && added > 0 && (empty || replace)) { SelectedLayer.Enabled = true; var first = Pool(source,Extensions(kind)).FirstOrDefault(); if (first != null) FitImage(SelectedLayer,first); }
+                LoadLayer(); RefreshChips(); Changed(kind != 1); Save(); status.Text = "Сохранено файлов: " + added + ". Пачка останется после закрытия приложения.";
             });
         }
-        void Save() { ReadTop(); template.Validate(); AssemblyFiles.Save(templatePath, template); status.Text = "Шаблон сохранён. Эти папки, время и расположение восстановятся при следующем открытии."; }
-        void LoadTemplate() { Safe(() => { using (var d = new OpenFileDialog { Filter = "Шаблон сборки|*.xml" }) if (d.ShowDialog(this) == DialogResult.OK) { var t = AssemblyFiles.Load<AssemblyTemplate>(d.FileName); t.Validate(); template = t; previewPlan = null; LoadTop(); RefreshScenes(0); RefreshSources(); } }); }
-        void Busy(bool busy) {
-            left.Enabled = !busy; canvas.Enabled = !busy; header.Enabled = !busy; timeline.Enabled = !busy; foreach (Control c in footer.Controls) c.Enabled = !busy; stop.Visible = busy; stop.Enabled = busy; if (busy) progress.Value = 0;
-        }
-        async Task<AssemblyPlan> Sample(AssemblyTemplate t, string probe, CancellationToken ct) {
-            var videos = await AssemblyEngine.ReadVideos(t, probe, ct); string path = Path.Combine(historyFolder, t.Id + ".xml");
-            var h = File.Exists(path) ? AssemblyFiles.Load<AssemblyHistory>(path) : new AssemblyHistory(); var batch = AssemblyPlanner.Create(t, videos, h, new Random(), 1);
-            if (batch.Plans.Count == 0) throw new Exception(batch.Limit); return batch.Plans[0];
-        }
-        async Task ShowSample() {
-            if (cancellation != null) return;
-            try {
-                ReadTop(); var files = PoolSafe(SceneVideoSource(), AssemblyFiles.VideoExtensions);
-                if (files.Count == 0) throw new Exception("Добавь видео в выбранную сцену кнопкой «+ Видео».");
-                if (!ToolsLocator.TryResolve(out string ffmpeg, out string probe, out string hint)) throw new Exception(hint);
-                cancellation = new CancellationTokenSource(); Busy(true); var t = Store.Clone(template);
-                var selected = previewPlan != null && sceneList.SelectedIndex < previewPlan.Scenes.Count ? previewPlan.Scenes[sceneList.SelectedIndex] : null;
-                string video = selected?.Video.Path ?? files[0]; double offset = selected?.VideoStart ?? 0;
-                Directory.CreateDirectory(previewFolder); string path = Path.Combine(previewFolder, Guid.NewGuid().ToString("N") + ".jpg");
-                await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-ss", Core.N(offset), "-i", video, "-frames:v", "1", "-vf", "scale=" + t.Width + ":" + t.Height + ":force_original_aspect_ratio=increase,crop=" + t.Width + ":" + t.Height, path }, cancellation.Token, null, 60);
-                using (var image = Image.FromFile(path)) canvas.SetBackground(new Bitmap(image)); File.Delete(path); RefreshCanvas(); status.Text = "Фон готов. Двигай картинку мышью. Музыку и переходы можно проверить в примере.";
-            } catch (OperationCanceledException) { status.Text = "Предпросмотр остановлен."; } catch (Exception e) { status.Text = e.Message; Ui.Error(this, e); } finally { Finish(); }
-        }
-        async Task Run(bool sample) {
-            if (cancellation != null) return;
-            try {
-                Save(); if (!ToolsLocator.TryResolve(out string ffmpeg, out string probe, out string hint)) throw new Exception(hint);
-                var t = Store.Clone(template); cancellation = new CancellationTokenSource(); Busy(true);
-                var updates = new Progress<Update>(u => { status.Text = u.Text; progress.Value = (int)Math.Max(0, Math.Min(1000, u.Percent * 10)); });
-                if (sample) {
-                    var plan = await Sample(t, probe, cancellation.Token); previewPlan = plan; Directory.CreateDirectory(previewFolder);
-                    string path = Path.Combine(previewFolder, "preview-" + Guid.NewGuid().ToString("N") + ".mp4"), work = Path.Combine(previewFolder, "render-" + Guid.NewGuid().ToString("N"));
-                    try { await Task.Run(() => AssemblyEngine.Render(t, plan, ffmpeg, probe, path, work, AssemblyRaster.Save, cancellation.Token, s => ((IProgress<Update>)updates).Report(new Update(s, 0)))); }
-                    finally { if (Directory.Exists(work)) Directory.Delete(work, true); }
-                    RefreshCanvas(); status.Text = "Пример готов: " + t.Duration.ToString("0.##") + " с. Заголовки не израсходованы."; progress.Value = 1000; Ui.Open(path);
-                } else {
-                    var result = await Task.Run(() => AssemblyEngine.Run(t, ffmpeg, probe, historyFolder, AssemblyRaster.Save, updates, cancellation.Token)); previewPlan = null; RefreshSources();
-                    if (result.Errors.Count > 0) MessageBox.Show(this, "Готовых роликов: " + result.Outputs.Count + "\n\n" + string.Join("\n\n", result.Errors), "Сборка роликов", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        void FitImage(AssemblyLayer l,string path) { using (var image = Image.FromFile(path)) { l.Width = .84; l.Height = l.Width * template.Width * image.Height / image.Width / template.Height; if (l.Height > .78) { l.Width *= .78/l.Height; l.Height = .78; } l.Height = Math.Max(.02,l.Height); l.Width = Math.Max(.02,l.Width); l.X = (1-l.Width)/2; l.Y = (1-l.Height)/2; } }
+        void OpenPool(int kind) { Safe(() => { using (var form = CreatePoolWindow(kind)) form.ShowDialog(this); }); }
+        Form CreatePoolWindow(int kind) {
+            var form = new Form { Text = kind == 0 ? "Видео для всех сцен" : kind == 1 ? "Музыка на весь ролик" : kind == 3 ? "Видео выбранной сцены" : "Картинки · " + SceneLabel(SelectedScene,sceneIndex), ClientSize = new Size(680,560), MinimumSize = new Size(600,440), BackColor = Theme.Background, ForeColor = Theme.TextPrimary, Font = Theme.FontBody, StartPosition = FormStartPosition.CenterParent };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 5 };
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute,44)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,44)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,46)); root.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,44)); form.Controls.Add(root);
+            var packs = Row(); root.Controls.Add(packs,0,0); var actions = Row(); root.Controls.Add(actions,0,1); var modes = Row(); root.Controls.Add(modes,0,2);
+            var filesView = new AssemblyScrollStack { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0,0,16,0) }; root.Controls.Add(filesView,0,3);
+            var bottom = Row(); bottom.Controls.Add(Button("Готово", () => form.Close(),true)); bottom.Controls.Add(Button("Открыть папку", () => Safe(() => { string path = template.Resolve(Source(kind)); if (File.Exists(path)) path = Path.GetDirectoryName(path); if (string.IsNullOrWhiteSpace(path)) path = template.Resolve(SelectedScene.Folder); Directory.CreateDirectory(path); Ui.Open(path); }))); root.Controls.Add(bottom,0,4);
+            Action refresh = null;
+            refresh = () => {
+                foreach (Control c in packs.Controls.Cast<Control>().ToArray()) c.Dispose(); packs.Controls.Clear();
+                foreach (Control c in modes.Controls.Cast<Control>().ToArray()) c.Dispose(); modes.Controls.Clear();
+                if (kind == 1) modes.Controls.Add(new AssemblySlider("Громкость",volume,"%") { Width = 560, Height = 66 });
+                if (kind == 2) {
+                    for (int i = 0; i < SelectedScene.Layers.Count; i++) { int at = i; packs.Controls.Add(Button("Пачка " + (i+1), () => { layerIndex = at; LoadLayer(); RefreshChips(); RefreshCanvas(); refresh(); },i == layerIndex)); }
+                    packs.Controls.Add(Button("+ Ещё поверх", () => { var files = PickFiles(kind); if (files == null) return; AddPack(files); refresh(); }));
+                    modes.Controls.Add(Button("Перемешивать", () => { SetImageMode(0); refresh(); },!SelectedLayer.Fixed && !SelectedLayer.Unique)); modes.Controls.Add(Button("Одна картинка", () => { SetImageMode(1); refresh(); },SelectedLayer.Fixed)); modes.Controls.Add(Button("Без повторов", () => { SetImageMode(2); refresh(); },SelectedLayer.Unique));
+                } else packs.Controls.Add(new Label { Text = kind == 0 ? "Видео само заполняет кадр. Короткое видео повторится до конца сцены." : kind == 1 ? "На каждый ролик выбирается один трек из этой пачки." : "Пустая пачка — используются общие видео.", ForeColor = Theme.TextSecondary, AutoSize = true, Margin = new Padding(0,8,0,0) });
+                foreach (Control c in filesView.Controls.Cast<Control>().ToArray()) c.Dispose(); filesView.Controls.Clear();
+                var files = Pool(Source(kind),Extensions(kind));
+                if (files.Count == 0) filesView.Controls.Add(new Label { Text = "Пока пусто. Нажми «+ Добавить файлы» или перетащи файлы сюда.\nПустая пачка картинок не мешает собрать ролик.", Width = 580, Height = 64, ForeColor = Theme.TextSecondary });
+                foreach (string file in files) {
+                    var row = new Panel { Width = Math.Max(500,filesView.Width-24), Height = 78, BackColor = Theme.Card, Margin = new Padding(0,0,0,6) };
+                    var thumb = new PictureBox { Location = new Point(8,6), Size = new Size(86,64), SizeMode = PictureBoxSizeMode.Zoom, BackColor = Theme.Background }; row.Controls.Add(thumb);
+                    if (kind == 2) try { using (var img = Image.FromFile(file)) thumb.Image = new Bitmap(img); } catch { }
+                    row.Disposed += (s,e) => thumb.Image?.Dispose();
+                    var pick = Button(Path.GetFileName(file), () => { if (kind == 2) { previewImages[SelectedLayer] = file; RefreshCanvas(); } else Ui.Open(file); }); pick.SetBounds(104,12,Math.Max(300,row.Width-116),50); pick.AutoSize = false; pick.TextAlign = ContentAlignment.MiddleLeft; row.Controls.Add(pick); filesView.Controls.Add(row);
                 }
-            } catch (OperationCanceledException) { status.Text = "Сборка остановлена."; } catch (Exception e) { status.Text = e.Message; Ui.Error(this, e); } finally { Finish(); }
+            };
+            actions.Controls.Add(Button("+ Добавить файлы", () => { ImportPool(kind,PickFiles(kind)); refresh(); },true)); actions.Controls.Add(Button("Заменить пачку", () => { ImportPool(kind,PickFiles(kind),true); refresh(); }));
+            actions.Controls.Add(Button("Очистить", () => { ClearPool(kind); refresh(); }));
+            if (kind == 1) root.RowStyles[2].Height = 72;
+            SetDrop(filesView,files => { ImportPool(kind,files); refresh(); }); refresh();
+            form.FormClosed += (s,e) => { LoadLayer(); RefreshChips(); Changed(true); Save(); };
+            return form;
         }
-        void Finish() { cancellation?.Dispose(); cancellation = null; Busy(false); if (closeAfter) Close(); }
-        void Safe(Action action) { try { action(); } catch (Exception e) { if (throwErrors) throw; if (status != null) status.Text = e.Message; Ui.Error(this, e); } }
-        protected override void Dispose(bool disposing) { if (disposing && Directory.Exists(previewFolder)) try { Directory.Delete(previewFolder, true); } catch { } base.Dispose(disposing); }
+        void AddPack(string[] files) { if (SelectedScene.Layers.Count >= 8) throw new Exception("В сцене можно разместить до 8 пачек."); var layer = new AssemblyLayer { Name = "Пачка " + (SelectedScene.Layers.Count + 1), Source = Path.Combine(SelectedScene.Folder,"Пачка-" + Guid.NewGuid().ToString("N").Substring(0,6)) }; SelectedScene.Layers.Add(layer); layerIndex = SelectedScene.Layers.Count-1; ImportPool(2,files); }
+        void ClearPool(int kind) { string path = (kind == 0 ? "Видео" : kind == 1 ? "Музыка" : Path.Combine(SelectedScene.Folder,kind == 3 ? "Видео" : "Изображения")) + "-" + Guid.NewGuid().ToString("N").Substring(0,6); Directory.CreateDirectory(template.Resolve(path)); SetSource(kind,path); previewImages.Clear(); LoadLayer(); RefreshChips(); Changed(true); Save(); status.Text = "Пачка очищена в студии. Предыдущие файлы сохранены в папке материалов."; }
+        void SetImageMode(int mode) { SelectedLayer.Fixed = mode == 1; SelectedLayer.Unique = mode == 2; SelectedLayer.Enabled = true; Changed(false); Save(); }
+        void SettingsMenu() {
+            var menu = Theme.MakeContextMenu(); menu.Items.Add("Папка материалов",null,(s,e) => Ui.Open(template.Materials));
+            menu.Items.Add("Куда сохранять ролики…",null,(s,e) => Safe(() => { var p = Ui.Folder(this,template.Output); if (p != null) { template.Output = p; Save(); } }));
+            menu.Items.Add("Переходы…",null,(s,e) => { var effects = Theme.MakeContextMenu(); var names = new[] {"Без перехода","Плавно","Через чёрный","Через белый","Сдвиг влево","Сдвиг вправо","Мягкий сдвиг","Размытие","Приближение"}; for (int i = 0; i < names.Length; i++) { int at = i; effects.Items.Add(names[i],null,(sender,args) => { template.Transition = AssemblyTemplate.Transitions[at]; template.TransitionDuration = Math.Min(.35,template.Scenes.Min(scene => scene.Duration)/2-.01); Changed(false); }); } effects.Show(Cursor.Position); });
+            menu.Items.Add("Сохранить копию студии…",null,(s,e) => Safe(() => { Save(); using (var d = new SaveFileDialog { Filter = "Студия|*.xml", FileName = "Моя-студия.xml" }) if (d.ShowDialog(this) == DialogResult.OK) AssemblyFiles.Save(d.FileName,template); }));
+            menu.Items.Add("Открыть сохранённую студию…",null,(s,e) => Safe(() => { using (var d = new OpenFileDialog { Filter = "Студия|*.xml" }) if (d.ShowDialog(this) == DialogResult.OK) { var t = AssemblyFiles.Load<AssemblyTemplate>(d.FileName); t.Validate(); AssemblyWorkspace.Prepare(t); template = t; loading = true; count.Value = template.Count; volume.Value = (decimal)(template.MusicVolume*100); loading = false; previewImages.Clear(); BuildScenes(); SelectScene(0); Save(); } }));
+            menu.Items.Add("Новая студия · 4 сцены",null,(s,e) => Safe(() => { Save(); AssemblyFiles.Save(templatePath + ".saved-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".xml",template); string folder = Path.Combine(template.Materials,"Студия-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); template = AssemblyTemplate.Defaults(); template.Materials = folder; template.Output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch","Assembled"); AssemblyWorkspace.Prepare(template); previewImages.Clear(); loading = true; count.Value = template.Count; volume.Value = (decimal)(template.MusicVolume*100); loading = false; BuildScenes(); SelectScene(0); Save(); })); menu.Show(Cursor.Position);
+        }
+        async void RequestBackground() {
+            if (canvas == null || !IsHandleCreated || cancellation != null) return;
+            previewCancellation?.Cancel(); int version = ++previewVersion; var ct = new CancellationTokenSource(); previewCancellation = ct;
+            try {
+                var files = Pool(template.VideoSource(SelectedScene),AssemblyFiles.VideoExtensions); if (files.Count == 0) return;
+                if (!ToolsLocator.TryResolve(out string ffmpeg,out string probe,out string hint)) { status.Text = hint; return; }
+                int w = template.Width, h = template.Height; Directory.CreateDirectory(previewFolder); string file = Path.Combine(previewFolder,Guid.NewGuid().ToString("N") + ".jpg");
+                try { await Core.Tool(ffmpeg,new[] { "-v","error","-y","-i",files[0],"-frames:v","1","-vf","scale="+w+":"+h+":force_original_aspect_ratio=increase,crop="+w+":"+h,"-threads","1",file },ct.Token,null,60);
+                    if (version == previewVersion && !IsDisposed) using (var img = Image.FromFile(file)) canvas.SetBackground(new Bitmap(img));
+                } finally { if (File.Exists(file)) File.Delete(file); }
+            } catch (OperationCanceledException) { } catch (Exception e) { if (version == previewVersion && !IsDisposed) status.Text = "Не удалось показать видео: " + e.Message; }
+            finally { if (previewCancellation == ct) previewCancellation = null; ct.Dispose(); }
+        }
+        void Busy(bool busy) { header.Enabled = workspace.Enabled = options.Enabled = !busy; foreach (Control c in footer.Controls) c.Enabled = !busy; stop.Visible = busy; stop.Enabled = busy; if (busy) progress.Value = 0; }
+        async Task Run(bool sample) {
+            if (cancellation != null) return; saveTimer.Stop(); previewCancellation?.Cancel(); ++previewVersion;
+            try {
+                Save(); if (!ToolsLocator.TryResolve(out string ffmpeg,out string probe,out string hint)) throw new Exception(hint);
+                cancellation = new CancellationTokenSource(); Busy(true); var t = Store.Clone(template);
+                var updates = new Progress<Update>(u => { status.Text = u.Text; progress.Value = (int)Math.Max(0,Math.Min(1000,u.Percent*10)); });
+                if (sample) {
+                    var videos = await AssemblyEngine.ReadVideos(t,probe,cancellation.Token); string hp = Path.Combine(historyFolder,t.Id+".xml"); var history = File.Exists(hp) ? AssemblyFiles.Load<AssemblyHistory>(hp) : new AssemblyHistory();
+                    var batch = AssemblyPlanner.Create(t,videos,history,new Random(),1); if (batch.Plans.Count == 0) throw new Exception(batch.Limit);
+                    Directory.CreateDirectory(previewFolder); string path = Path.Combine(previewFolder,"example-" + Guid.NewGuid().ToString("N") + ".mp4"), work = Path.Combine(previewFolder,"render-" + Guid.NewGuid().ToString("N"));
+                    try { await Task.Run(() => AssemblyEngine.Render(t,batch.Plans[0],ffmpeg,probe,path,work,AssemblyRaster.Save,cancellation.Token,s => ((IProgress<Update>)updates).Report(new Update(s,0)))); }
+                    finally { if (Directory.Exists(work)) Directory.Delete(work,true); }
+                    status.Text = "Пример готов. Файлы без повторов не израсходованы."; progress.Value = 1000; Ui.Open(path);
+                } else {
+                    var result = await Task.Run(() => AssemblyEngine.Run(t,ffmpeg,probe,historyFolder,AssemblyRaster.Save,updates,cancellation.Token));
+                    if (result.Errors.Count > 0) { string details = "Готовых роликов: " + result.Outputs.Count + "\n\n" + string.Join("\n\n",result.Errors); MessageBox.Show(this,details,"Сборка роликов",MessageBoxButtons.OK,result.Outputs.Count == 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information); }
+                }
+            } catch (OperationCanceledException) { status.Text = "Сборка остановлена."; } catch (Exception e) { status.Text = e.Message; if (throwErrors) throw; Ui.Error(this,e); }
+            finally { cancellation?.Dispose(); cancellation = null; Busy(false); if (closeAfter) Close(); }
+        }
+        void Safe(Action action) { try { action(); } catch (Exception e) { if (throwErrors) throw; if (status != null) status.Text = e.Message; Ui.Error(this,e); } }
+        protected override void Dispose(bool disposing) { if (disposing) { saveTimer.Dispose(); previewCancellation?.Cancel(); cancellation?.Cancel(); } base.Dispose(disposing); }
     }
     public sealed class AssemblyCanvas : Control {
         AssemblyTemplate template;
@@ -401,16 +300,16 @@ namespace VideoBatch {
         protected override void OnPaint(PaintEventArgs e) {
             base.OnPaint(e); if (scene == null || Frame.Width <= 0) return; var f = Frame; e.Graphics.FillRectangle(Brushes.Black, f);
             if (background != null) e.Graphics.DrawImage(background, f);
-            else { using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center }) e.Graphics.DrawString("ВИДЕО СЦЕНЫ\n\nДобавь видео слева\nи нажми «Обновить фон»", Font, Brushes.Gray, f, format); }
+            else { using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center }) e.Graphics.DrawString("Добавь пачку видео слева\n\nФон появится автоматически", Font, Brushes.Gray, f, format); }
             for (int i = 0; i < images.Count; i++) if (images[i] != null) e.Graphics.DrawImage(images[i], f);
-            foreach (var l in scene.Scene.Layers.Where(l => l.Enabled)) {
+            foreach (var l in scene.Layers.Select(p => p.Layer)) {
                 var box = Box(l); using (var pen = new Pen(l == selected ? Theme.Accent : Theme.TextMuted, l == selected ? 2 : 1)) e.Graphics.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
-                using (var brush = new SolidBrush(Theme.Accent)) { e.Graphics.DrawString(l.Name, Font, brush, box.X + 4, box.Y + 3); if (l == selected) e.Graphics.FillEllipse(brush, box.Right - 6, box.Bottom - 6, 12, 12); }
+                using (var brush = new SolidBrush(Theme.Accent)) { if (l == selected) e.Graphics.FillEllipse(brush, box.Right - 6, box.Bottom - 6, 12, 12); }
             }
         }
         protected override void OnMouseDown(MouseEventArgs e) {
             base.OnMouseDown(e); if (scene == null || e.Button != MouseButtons.Left) return;
-            var hit = scene.Scene.Layers.LastOrDefault(l => l.Enabled && Box(l).Contains(e.Location)); if (hit == null) return;
+            var hit = scene.Layers.Select(p => p.Layer).LastOrDefault(l => Box(l).Contains(e.Location)); if (hit == null) return;
             selected = hit; LayerSelected?.Invoke(scene.Scene.Layers.IndexOf(hit)); var box = Box(hit); resizing = e.X >= box.Right - 14 && e.Y >= box.Bottom - 14;
             dragging = true; Capture = true; origin = e.Location; oldX = hit.X; oldY = hit.Y; oldWidth = hit.Width; oldHeight = hit.Height;
         }

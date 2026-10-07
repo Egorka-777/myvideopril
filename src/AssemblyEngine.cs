@@ -8,23 +8,26 @@ using System.Threading.Tasks;
 namespace VideoBatch {
     public static class AssemblyEngine {
         public static async Task<List<AssemblyVideo>> ReadVideos(AssemblyTemplate t, string probe, CancellationToken ct) {
-            var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(string.IsNullOrWhiteSpace(s.Videos) ? t.Videos : s.Videos), AssemblyFiles.VideoExtensions)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            if (paths.Count == 0) throw new Exception("Не найдены видео. Выберите папку материалов и заполните папки видео.");
+            var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(t.VideoSource(s)), AssemblyFiles.VideoExtensions)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (paths.Count == 0) throw new Exception("Не найдены видео. Нажми «Видео» слева и добавь хотя бы один файл.");
             var result = new List<AssemblyVideo>();
             foreach (var path in paths) {
                 ct.ThrowIfCancellationRequested();
                 var m = Core.VideoInfo(await Core.Probe(probe, path, ct).ConfigureAwait(false));
                 result.Add(new AssemblyVideo { Path = path, Duration = m.VideoDuration, Hash = AssemblyFiles.Hash(path) });
             }
-            if (!string.IsNullOrWhiteSpace(t.Music)) {
-                string path = t.Resolve(t.Music);
-                if (!File.Exists(path)) throw new Exception("Не найден музыкальный файл: " + path);
-                Core.AudioDuration(await Core.Probe(probe, path, ct).ConfigureAwait(false));
+            foreach (string path in AssemblyFiles.Pool(t.Resolve(t.Music), AssemblyFiles.MusicExtensions)) {
+                try { Core.AudioDuration(await Core.Probe(probe, path, ct).ConfigureAwait(false)); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception e) { throw new Exception("Не удалось прочитать музыку «" + Path.GetFileName(path) + "»: " + e.Message, e); }
             }
+            if (t.PackStudioVersion == 0 && !string.IsNullOrWhiteSpace(t.Music) && !File.Exists(t.Resolve(t.Music))) throw new Exception("Не найден музыкальный файл: " + t.Resolve(t.Music));
             return result;
         }
         public static List<string> SceneArguments(AssemblyTemplate t, AssemblyScenePlan s, string output) {
-            var args = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-filter_complex_threads", "1", "-ss", Core.N(s.VideoStart), "-t", Core.N(s.RenderDuration), "-i", s.Video.Path };
+            var args = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-filter_complex_threads", "1" };
+            if (t.LoopShortVideos && s.Video.Duration + .001 < s.RenderDuration) args.AddRange(new[] { "-stream_loop", "-1" });
+            args.AddRange(new[] { "-ss", Core.N(s.VideoStart), "-t", Core.N(s.RenderDuration), "-i", s.Video.Path });
             foreach (var layer in s.Layers) args.AddRange(new[] { "-loop", "1", "-framerate", t.Fps.ToString(), "-i", layer.Raster });
             var graph = new List<string>();
             graph.Add("[0:v:0]setpts=PTS-STARTPTS,scale=" + t.Width + ":" + t.Height + ":force_original_aspect_ratio=increase,crop=" + t.Width + ":" + t.Height + ",setsar=1,fps=" + t.Fps + ",format=yuv420p,trim=duration=" + Core.N(s.RenderDuration) + "[base]");
@@ -70,7 +73,9 @@ namespace VideoBatch {
             for (int i = 0; i < p.Scenes.Count; i++) {
                 ct.ThrowIfCancellationRequested(); var scene = p.Scenes[i];
                 for (int j = 0; j < scene.Layers.Count; j++) {
-                    string png = Path.Combine(work, "layer-" + i + "-" + j + ".png"); rasterize(t, scene.Layers[j], png); scene.Layers[j].Raster = png;
+                    string png = Path.Combine(work, "layer-" + i + "-" + j + ".png"); try { rasterize(t, scene.Layers[j], png); }
+                    catch (Exception e) { throw new Exception("Не удалось прочитать картинку «" + Path.GetFileName(scene.Layers[j].Asset.Path) + "» в сцене " + (i + 1) + ": " + e.Message,e); }
+                    scene.Layers[j].Raster = png;
                 }
                 string path = Path.Combine(work, "scene-" + i + ".mp4"); paths.Add(path);
                 progress?.Invoke("Сцена " + (i + 1) + " из " + p.Scenes.Count);
