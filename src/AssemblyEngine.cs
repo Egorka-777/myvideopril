@@ -49,7 +49,7 @@ namespace VideoBatch {
             string current = "base";
             for (int i = 0; i < s.Layers.Count; i++) {
                 var layer = s.Layers[i]; string next = "v" + i;
-                double end = layer.Layer.End == 0 ? s.RenderDuration : layer.Layer.End;
+                double end = layer.Layer.End == 0 || Math.Abs(layer.Layer.End-s.Scene.Duration)<.001 ? s.RenderDuration : layer.Layer.End;
                 graph.Add("[" + current + "][" + (i + 1) + ":v:0]overlay=0:0:format=auto:enable='between(t," + Core.N(layer.Layer.Start) + "," + Core.N(end) + ")'[" + next + "]");
                 current = next;
             }
@@ -114,26 +114,32 @@ namespace VideoBatch {
                     var history = File.Exists(historyPath) ? AssemblyFiles.Load<AssemblyHistory>(historyPath) : new AssemblyHistory();
                     progress.Report(new Update("Проверяю материалы…", 0));
                     var videos = await ReadVideos(t, ffprobe, ct).ConfigureAwait(false);
-                    var batch = AssemblyPlanner.Create(t, videos, history, new Random(), t.Count);
-                    if (batch.Plans.Count == 0) throw new Exception(batch.Limit);
-                    for (int i = 0; i < batch.Plans.Count; i++) {
-                        ct.ThrowIfCancellationRequested(); var plan = batch.Plans[i];
-                        string itemWork = Path.Combine(work, i.ToString()); Directory.CreateDirectory(itemWork);
-                        string partial = Path.Combine(itemWork, "result.mp4");
-                        string destination = Path.Combine(t.Output, "assembled-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4");
-                        try {
-                            await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct, s => progress.Report(new Update("Ролик " + (i + 1) + " из " + batch.Plans.Count + " · " + s, 100.0 * i / batch.Plans.Count))).ConfigureAwait(false);
-                            ct.ThrowIfCancellationRequested();
-                            // Keep an exact, readable recipe next to each completed video.
-                            AssemblyFiles.Save(destination + ".assembly.xml", plan);
-                            File.Move(partial, destination);
-                            history.UsedImages.AddRange(plan.UniqueImages); history.Combinations.Add(plan.Signature); history.Outputs.Add(destination);
-                            try { AssemblyFiles.Save(historyPath, history); } catch { File.Delete(destination); File.Delete(destination + ".assembly.xml"); throw; }
-                            result.Outputs.Add(destination);
-                        } catch (OperationCanceledException) { throw; }
-                        catch (Exception e) { result.Errors.Add("Ролик " + (i + 1) + ": " + e.Message); break; }
+                    var random=new Random(); var mix=new AssemblyMixTracker();
+                    while (result.Outputs.Count<t.Count) {
+                        ct.ThrowIfCancellationRequested();
+                        var batch = AssemblyPlanner.Create(t, videos, history, random, Math.Min(256,t.Count-result.Outputs.Count),mix,ct);
+                        if (batch.Plans.Count == 0) { if (result.Outputs.Count==0) throw new Exception(batch.Limit); limitNote=batch.Limit; break; }
+                        for (int i = 0; i < batch.Plans.Count; i++) {
+                            int global=result.Outputs.Count;
+                            ct.ThrowIfCancellationRequested(); var plan = batch.Plans[i];
+                            string itemWork = Path.Combine(work, global.ToString()); Directory.CreateDirectory(itemWork);
+                            string partial = Path.Combine(itemWork, "result.mp4");
+                            string destination = Path.Combine(t.Output, "assembled-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4");
+                            try {
+                                await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct, s => progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + s, 100.0 * global / t.Count))).ConfigureAwait(false);
+                                ct.ThrowIfCancellationRequested();
+                                // Keep an exact, readable recipe next to each completed video.
+                                AssemblyFiles.Save(destination + ".assembly.xml", plan);
+                                File.Move(partial, destination);
+                                history.UsedImages.AddRange(plan.UniqueImages); history.Combinations.Add(plan.Signature); history.Outputs.Add(destination);
+                                try { AssemblyFiles.Save(historyPath, history); } catch { File.Delete(destination); File.Delete(destination + ".assembly.xml"); throw; }
+                                result.Outputs.Add(destination); try {Directory.Delete(itemWork,true);} catch (IOException) { }
+                            } catch (OperationCanceledException) { throw; }
+                            catch (Exception e) { result.Errors.Add("Ролик " + (global + 1) + ": " + e.Message); break; }
+                        }
+                        if (batch.Limit != "") { limitNote = " Запрошено " + t.Count + ": " + batch.Limit; break; }
+                        if (result.Errors.Count>0) break;
                     }
-                    if (batch.Limit != "") limitNote = " Запрошено " + t.Count + ": " + batch.Limit;
                 }
             } catch (OperationCanceledException) { result.Cancelled = true; }
             catch (IOException e) { result.Errors.Add("Не удалось открыть файлы или историю. Проверьте, не запущена ли другая сборка этого шаблона. " + e.Message); }

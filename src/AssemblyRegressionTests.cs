@@ -101,6 +101,37 @@ namespace VideoBatch {
             } finally { if (Directory.Exists(temp)) Directory.Delete(temp,true); }
         }
         public static bool RunUiTests() { return StudioCheck(null); }
+        public static bool RunObjectsTests() {
+            string temp=Path.Combine(Path.GetTempPath(),"assembly-objects-"+Guid.NewGuid().ToString("N"));
+            try {
+                var t=AssemblyTemplate.Defaults(); t.Materials=temp; t.Scenes.RemoveAt(3); AssemblyWorkspace.Prepare(t);
+                var videos=new System.Collections.Generic.List<AssemblyVideo>();
+                for (int i=0; i<7; i++) {string path=t.Resolve("Видео/"+i+".mp4"); File.WriteAllText(path,"video-"+i); videos.Add(new AssemblyVideo {Path=path,Hash=AssemblyFiles.Hash(path),Duration=9}); File.WriteAllText(t.Resolve("Музыка/"+i+".wav"),"music-"+i);}
+                for (int scene=0; scene<3; scene++) for (int i=0; i<(scene==2?12:11); i++) File.WriteAllText(t.Resolve(Path.Combine(t.Scenes[scene].Layers[0].Source,i+".png")),"picture-"+scene+"-"+i);
+                var changing=t.Scenes[2].Layers[0]; changing.Y=.74; changing.Height=.16;
+                string source=Path.Combine(t.Scenes[2].Folder,"CTA"); Directory.CreateDirectory(t.Resolve(source)); string pin=t.Resolve(Path.Combine(source,"fixed.png")); File.WriteAllText(pin,"constant-cta");
+                var fixedLayer=new AssemblyLayer {Source=source,Fixed=true,FixedAssetHash=AssemblyFiles.Hash(pin),Width=.65,Height=.42,X=.175,Y=.12}; t.Scenes[2].Layers.Insert(0,fixedLayer);
+                var h=new AssemblyHistory(); var capacity=new AssemblyInventory(t,videos,h).Calculate();
+                if (!capacity.Exact || capacity.Variants!=2134440 || capacity.BatchLimit!=2134440) throw new Exception("Expected P(7,3)*7*11*11*12 = 2,134,440, without a 1000-roll cap");
+                t.Count=1001; t.Validate(); var plans=AssemblyPlanner.Create(t,videos,h,new Random(18),11).Plans;
+                if (plans.Count!=11 || plans.Select(p => p.Signature).Distinct().Count()!=11) throw new Exception("Expected eleven unique output combinations");
+                for (int scene=0; scene<3; scene++) {
+                    int layer=scene==2 ? 1 : 0;
+                    if (plans.Select(p => p.Scenes[scene].Layers[layer].Asset.Hash).Distinct().Count()!=11) throw new Exception("A changing object's images repeated before its pool was exhausted");
+                    if (plans.Any(p => p.Scenes[scene].Layers.Count!=(scene==2 ? 2 : 1))) throw new Exception("An object rendered more than one image from its pool");
+                    if (plans.Take(3).Select(p => p.Scenes[scene].Video.Hash).Distinct().Count()!=3) throw new Exception("Backgrounds did not shuffle by scene");
+                }
+                if (plans.Take(3).Select(p => p.MusicHash).Distinct().Count()!=3 || plans.Any(p => p.Scenes[2].Layers[0].Asset.Hash!=fixedLayer.FixedAssetHash)) throw new Exception("Music or fixed CTA selection incorrect");
+                var mix=new AssemblyMixTracker(); var first=AssemblyPlanner.Create(t,videos,h,new Random(2),6,mix);
+                h.Combinations.AddRange(first.Plans.Select(p => p.Signature)); var second=AssemblyPlanner.Create(t,videos,h,new Random(3),6,mix);
+                if (first.Plans.Concat(second.Plans).Take(11).Select(p => p.Scenes[0].Layers[0].Asset.Hash).Distinct().Count()!=11) throw new Exception("A rendering chunk reset image shuffling");
+                // Old accidental fixed multi-image pools change; a single CTA and geometry survive.
+                t.ObjectStudioVersion=0; var l=t.Scenes[0].Layers[0]; l.Fixed=true; l.FixedAssetHash=AssemblyFiles.Hash(AssemblyFiles.Pool(t.Resolve(l.Source),t.PictureExtensions)[0]); l.Width=.6; l.Y=.12;
+                AssemblyWorkspace.Prepare(t); if (l.Fixed || l.Width!=.6 || l.Y!=.12 || !fixedLayer.Fixed || t.ObjectStudioVersion!=1) throw new Exception("Object migration changed layout or failed to release a fixed multi-image pool");
+                t.Scenes[1].Layers.Clear(); AssemblyWorkspace.Prepare(t); if (t.Scenes[1].Layers.Count!=0) throw new Exception("Deleted objects returned during workspace preparation");
+                return true;
+            } finally {if (Directory.Exists(temp)) Directory.Delete(temp,true);}
+        }
         public static bool RunCapacityTests() {
             string temp=Path.Combine(Path.GetTempPath(),"assembly-capacity-"+Guid.NewGuid().ToString("N"));
             try {
@@ -163,6 +194,7 @@ namespace VideoBatch {
                     window.Show(); window.SetBounds(0,0,1180,790); System.Windows.Forms.Application.DoEvents();
                     if (window.BackColor != Theme.Background || All(window).Any(c => c.Visible && (c is System.Windows.Forms.TabControl || c is System.Windows.Forms.TextBox))) throw new Exception("Studio checkpoint 1 failed");
                     var current = (AssemblyTemplate)Field(window,"template"); if (current.Scenes.Count != 4) throw new Exception("Studio checkpoint 2 failed");
+                    if (!All(window).Any(c => c.Name=="Object0") || !All(window).Any(c => c.Name=="AddObject") || All(window).Any(c => c.Text=="10 роликов")) throw new Exception("Object selectors or the single-line footer are incorrect");
                     Invoke(window,"ImportPool",2,new string[] {asset,other},false);
                     var l = current.Scenes[0].Layers[0]; string source = l.Source;
                     if (AssemblyFiles.Pool(current.Resolve(source),AssemblyFiles.PictureExtensions).Count != 2 || !File.Exists(asset)) throw new Exception("Studio checkpoint 3 failed");
@@ -195,13 +227,18 @@ namespace VideoBatch {
                         if (!fourth.Visible || fourth.Parent.Bottom > stack.ClientSize.Height) throw new Exception("Fourth scene files button is clipped at compact window size");
                         if (All(window).First(c => c.Name=="InsertScene4").Bottom>stack.ClientSize.Height) throw new Exception("Final insertion button is clipped");
                         Capture(window,Path.Combine(screenshots,"studio-compact.png"));
+                        var resultButton=All(window).First(c => c.Name=="Results"); var footer=(System.Windows.Forms.FlowLayoutPanel)Field(window,"footer"); if (resultButton.Right>footer.ClientSize.Width) throw new Exception("Single-line results button is clipped");
+                        var number=(System.Windows.Forms.NumericUpDown)Field(window,"count"); number.Value=72; Invoke(window,"ChangeCount",1); if (number.Value!=72 || number.Maximum!=72) throw new Exception("Requested count exceeded the available combinations"); number.Value=3;
+                        Invoke(window,"FormatMenu"); System.Windows.Forms.Application.DoEvents(); var choice=window.OwnedForms.First(f => f.Name=="StudioChoice"); Capture(choice,Path.Combine(screenshots,"studio-format-choice.png")); choice.Close();
                         // A real two-layer final card: the top image stays, the bottom pack changes.
                         Invoke(window,"SelectScene",3); Invoke(window,"ImportPool",2,new string[] {other},false); Invoke(window,"SetImageMode",1);
                         var fixedLayer=current.Scenes[3].Layers[0]; fixedLayer.Width=.62; fixedLayer.Height=.42; fixedLayer.X=.19; fixedLayer.Y=.14;
-                        Invoke(window,"AddPack",(object)new string[] {asset}); var changing=current.Scenes[3].Layers[1]; changing.Width=.86; changing.Height=.16; changing.X=.07; changing.Y=.74;
+                        string alternative=Path.Combine(temp,"another-headline.png");
+                        using (var b=new Bitmap(700,160)) {using (var g=Graphics.FromImage(b)) {g.Clear(Color.Black);using (var font=new Font("Arial",38,FontStyle.Bold)) g.DrawString("Посмотри результат",font,Brushes.White,22,40);} b.Save(alternative,System.Drawing.Imaging.ImageFormat.Png);}
+                        Invoke(window,"AddPack",(object)new string[] {asset,alternative}); var changing=current.Scenes[3].Layers[1]; changing.Width=.86; changing.Height=.16; changing.X=.07; changing.Y=.74;
                         Invoke(window,"RefreshCanvas");
                         Invoke(window,"SelectScene",3); Invoke(window,"SetImageMode",1); var finalBackground=new Bitmap(360,640); using (var g=Graphics.FromImage(finalBackground)) g.Clear(Color.FromArgb(16,26,25)); canvas.SetBackground(finalBackground);
-                        WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Доступно 72 "),"Final card capacity did not refresh");
+                        WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Доступно 144 "),"Final card capacity did not refresh");
                         Capture(window,Path.Combine(screenshots,"studio-final-cta.png")); Invoke(window,"SelectScene",0);
                     }
                     // Replacement changes the pool atomically and retains old originals/copies.
@@ -211,6 +248,9 @@ namespace VideoBatch {
                     if (l.Width!=oldWidth || l.Height!=oldHeight || l.X!=oldX || l.Y!=oldY) throw new Exception("Replacing a pack reset its placement");
                     Invoke(window,"SetImageMode",1); if (l.FixedAssetHash!=pin) throw new Exception("Pinned hash was not saved");
                     Invoke(window,"AddPack",(object)new string[] {asset}); if (current.Scenes[0].Layers.Count != 2) throw new Exception("Studio checkpoint 11 failed");
+                    Invoke(window,"AddObject"); var empty=current.Scenes[0].Layers[2]; Invoke(window,"Place",.72); double emptyY=empty.Y; Invoke(window,"ImportPool",2,new string[] {asset,other},false);
+                    if (current.Scenes[0].Layers.Count!=3 || empty.Y!=emptyY || empty.Fixed) throw new Exception("Import created separate objects or reset prepared placement");
+                    string removed=empty.Source; Invoke(window,"RemoveObject",2); if (!Directory.Exists(current.Resolve(removed)) || current.Scenes[0].Layers.Count!=2) throw new Exception("Object removal deleted its files");
                     Invoke(window,"InsertScene",1); if (current.Scenes.Count != 5 || !Directory.Exists(current.Resolve(current.Scenes[1].Folder))) throw new Exception("Studio checkpoint 12 failed");
                     string addedFolder = current.Scenes[1].Folder; Invoke(window,"MoveScene",1); if (current.Scenes[2].Folder != addedFolder) throw new Exception("Studio checkpoint 13 failed");
                     var moved=All(window).First(c => c.Name=="SceneCard2"); moved.ContextMenuStrip.Show(moved,new Point(0,moved.Height)); System.Windows.Forms.Application.DoEvents();
