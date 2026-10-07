@@ -136,9 +136,9 @@ def main():
         # New pack studio: four scenes, optional empty pictures, short looping backgrounds,
         # a music pool, automatic cover crop and no TXT phantom headline requirements.
         short = root / 'short'; short.mkdir(); songs = root / 'songs'; songs.mkdir()
-        run([args.ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=green:s=640x360:r=30:d=.4', '-c:v', 'libx264', '-threads', '1', '-pix_fmt', 'yuv420p', short / 'short.mp4'])
+        run([args.ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=green:s=640x360:r=30:d=0.4', '-c:v', 'libx264', '-threads', '1', '-pix_fmt', 'yuv420p', short / 'short.mp4'])
         for freq in [440, 660]:
-            run([args.ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i', f'sine=frequency={freq}:sample_rate=48000:duration=.6', songs / f'{freq}.wav'])
+            run([args.ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i', f'sine=frequency={freq}:sample_rate=48000:duration=0.6', songs / f'{freq}.wav'])
         template(path, root, 'fade', 2, 'packs')
         doc = ET.parse(path); top = doc.getroot()
         for key, val in dict(PackStudioVersion=1, LoopShortVideos='true', AllowVideoReuse='true').items():
@@ -175,7 +175,7 @@ def main():
             nodes = recipe.findall('Scenes/AssemblyScenePlan')
             assert len(nodes) == 4 and not nodes[1].findall('Layers/AssemblyLayerPlan') and not nodes[3].findall('Layers/AssemblyLayerPlan')
             assert len({n.findtext('Video/Path') for n in nodes}) == 1
-            audio = subprocess.check_output([args.ffmpeg, '-v', 'error', '-ss', '1.5', '-i', file, '-t', '.2', '-vn', '-ac', '1', '-ar', '48000', '-f', 's16le', '-'])
+            audio = subprocess.check_output([args.ffmpeg, '-v', 'error', '-ss', '1.5', '-i', file, '-t', '0.2', '-vn', '-ac', '1', '-ar', '48000', '-f', 's16le', '-'])
             samples = struct.unpack('<' + 'h' * (len(audio)//2), audio)
             crossings = sum(a <= 0 < b for a,b in zip(samples,samples[1:])); frequency = crossings / (len(samples)/48000)
             assert abs(frequency - int(Path(music_file).stem)) < 25, (frequency, music_file)

@@ -136,7 +136,8 @@ namespace VideoBatch {
                         Capture(window,Path.Combine(screenshots,"studio-scenes.png"));
                         using (var pool = (System.Windows.Forms.Form)Invoke(window,"CreatePoolWindow",2)) { pool.Show(window); System.Windows.Forms.Application.DoEvents(); Capture(pool,Path.Combine(screenshots,"studio-files.png")); pool.Close(); }
                         window.SetBounds(0,0,1000,700); System.Windows.Forms.Application.DoEvents();
-                        if (All(window).Where(c => c.Name == "SceneFiles3").Any(c => !c.Visible)) throw new Exception("Studio checkpoint 9 failed");
+                        var fourth = All(window).First(c => c.Name == "SceneFiles3"); var stack = (AssemblyScrollStack)Field(window,"sceneStack");
+                        if (!fourth.Visible || fourth.Parent.Bottom > stack.ClientSize.Height) throw new Exception("Fourth scene files button is clipped at compact window size");
                         Capture(window,Path.Combine(screenshots,"studio-compact.png"));
                     }
                     // Replacement changes the pool atomically and retains old originals/copies.

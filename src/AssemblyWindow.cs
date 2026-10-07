@@ -75,7 +75,7 @@ namespace VideoBatch {
             var columns = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
             columns.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340)); columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); workspace.Controls.Add(columns);
             var library = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Padding = new Padding(0,0,16,0) };
-            library.RowStyles.Add(new RowStyle(SizeType.Absolute,64)); library.RowStyles.Add(new RowStyle(SizeType.Absolute,64)); library.RowStyles.Add(new RowStyle(SizeType.Absolute,30)); library.RowStyles.Add(new RowStyle(SizeType.Percent,100)); columns.Controls.Add(library,0,0);
+            library.RowStyles.Add(new RowStyle(SizeType.Absolute,56)); library.RowStyles.Add(new RowStyle(SizeType.Absolute,56)); library.RowStyles.Add(new RowStyle(SizeType.Absolute,26)); library.RowStyles.Add(new RowStyle(SizeType.Percent,100)); columns.Controls.Add(library,0,0);
             videoButton = Button("", () => OpenPool(0)); videoButton.Name = "VideoPool"; videoButton.AutoSize = false; videoButton.Dock = DockStyle.Fill; videoButton.TextAlign = ContentAlignment.MiddleLeft; videoButton.Margin = new Padding(0,0,0,8); library.Controls.Add(videoButton,0,0);
             musicButton = Button("", () => OpenPool(1)); musicButton.Name = "MusicPool"; musicButton.AutoSize = false; musicButton.Dock = DockStyle.Fill; musicButton.TextAlign = ContentAlignment.MiddleLeft; musicButton.Margin = new Padding(0,0,0,8); library.Controls.Add(musicButton,0,1);
             library.Controls.Add(Label("СЦЕНЫ · картинки берутся из твоих пачек"),0,2);
@@ -101,7 +101,7 @@ namespace VideoBatch {
             bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,24)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,4)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,42)); bottom.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.Controls.Add(bottom,0,2);
             status = Label(""); status.Name = "AssemblyStatus"; bottom.Controls.Add(status,0,0); progress = new ProgressBar { Dock = DockStyle.Fill, Maximum = 1000 }; bottom.Controls.Add(progress,0,1);
             options = Row(); options.Padding = new Padding(0,5,0,0); formatButton = Button("", FormatMenu); options.Controls.Add(formatButton);
-            options.Controls.Add(Button("−", () => count.Value = Math.Max(1,count.Value - 1))); summary = Label(""); summary.AutoSize = false; summary.Size = new Size(225,34); summary.Dock = DockStyle.None; options.Controls.Add(summary); options.Controls.Add(Button("+", () => count.Value = Math.Min(1000,count.Value + 1))); options.Controls.Add(Button("10 роликов", () => count.Value = 10)); bottom.Controls.Add(options,0,2);
+            options.Controls.Add(Button("−", () => count.Value = Math.Max(1,count.Value - 1))); summary = Label(""); summary.Cursor = Cursors.Hand; summary.Click += (s,e) => CountMenu(); summary.AutoSize = false; summary.Size = new Size(225,34); summary.Dock = DockStyle.None; options.Controls.Add(summary); options.Controls.Add(Button("+", () => count.Value = Math.Min(1000,count.Value + 1))); options.Controls.Add(Button("10 роликов", () => count.Value = 10)); bottom.Controls.Add(options,0,2);
             footer = Row(); footer.Padding = new Padding(0,4,0,0); footer.Controls.Add(Button("▶ Посмотреть ролик", async () => await Run(true))); footer.Controls.Add(Button("✦ Собрать ролики", async () => await Run(false),true)); footer.Controls.Add(Button("Результаты", () => Safe(() => { Directory.CreateDirectory(template.Output); Ui.Open(template.Output); }))); stop = Button("■ Стоп", () => cancellation?.Cancel()); stop.Visible = false; footer.Controls.Add(stop); bottom.Controls.Add(footer,0,3);
             SetDrop(videoButton, files => ImportPool(0,files)); SetDrop(musicButton,files => ImportPool(1,files)); SetDrop(imageFiles,files => ImportPool(2,files)); BuildScenes();
         }
@@ -109,10 +109,10 @@ namespace VideoBatch {
         void BuildScenes() {
             foreach (Control c in sceneStack.Controls.Cast<Control>().ToArray()) c.Dispose(); sceneStack.Controls.Clear(); sceneCards.Clear();
             for (int i = 0; i <= template.Scenes.Count; i++) {
-                int at = i; var add = Button("+", () => InsertScene(at)); add.Name = "InsertScene" + i; add.AutoSize = false; add.Height = 18; add.MinimumSize = new Size(40,18); add.Padding = Padding.Empty; add.Margin = new Padding(0,1,0,1); add.Width = Math.Max(220,sceneStack.Width - 18); sceneStack.Controls.Add(add);
+                int at = i; var add = Button("+", () => InsertScene(at)); add.Name = "InsertScene" + i; add.AutoSize = false; add.MinimumSize = new Size(40,16); add.Height = 16; add.Padding = Padding.Empty; add.Margin = new Padding(0,1,0,1); add.Width = Math.Max(220,sceneStack.Width - 18); sceneStack.Controls.Add(add);
                 if (i == template.Scenes.Count) break;
-                int index = i; var card = Button("", () => SelectScene(index)); card.Name = "SceneCard" + i; card.AutoSize = false; card.Height = 60; card.Width = Math.Max(220,sceneStack.Width - 18); card.TextAlign = ContentAlignment.MiddleLeft; card.Margin = Padding.Empty; card.Dock = DockStyle.Fill;
-                var row = new Panel { Width = Math.Max(220,sceneStack.Width - 18), Height = 60, Margin = Padding.Empty };
+                int index = i; var card = Button("", () => SelectScene(index)); card.Name = "SceneCard" + i; card.AutoSize = false; card.Height = 50; card.Width = Math.Max(220,sceneStack.Width - 18); card.TextAlign = ContentAlignment.MiddleLeft; card.Margin = Padding.Empty; card.Dock = DockStyle.Fill;
+                var row = new Panel { Width = Math.Max(220,sceneStack.Width - 18), Height = 50, Margin = Padding.Empty };
                 var filesButton = Button("Файлы", () => { SelectScene(index); OpenPool(2); }); filesButton.AutoSize = false; filesButton.Width = 88; filesButton.Dock = DockStyle.Right; filesButton.Name = "SceneFiles" + i; row.Controls.Add(card); row.Controls.Add(filesButton); sceneCards.Add(card); sceneStack.Controls.Add(row);
             }
             RefreshInfo();
@@ -131,12 +131,12 @@ namespace VideoBatch {
             int videos = Pool(template.Videos,AssemblyFiles.VideoExtensions).Count, songs = Pool(template.Music,AssemblyFiles.MusicExtensions).Count;
             videoButton.Text = "▶  Видео · " + videos + " файлов\n" + (videos == 0 ? "+ Добавить пачку видео" : "Файлы · общие для всех сцен");
             musicButton.Text = "♫  Музыка · " + songs + " файлов\n" + (songs == 0 ? "+ Добавить · можно без музыки" : "Файлы · один трек на весь ролик");
-            for (int i = 0; i < sceneCards.Count; i++) { var scene = template.Scenes[i]; int images = scene.Layers.Where(l => l.Enabled).Sum(l => Pool(l.Source,AssemblyFiles.PictureExtensions).Count); sceneCards[i].Text = (i + 1) + "  " + SceneLabel(scene,i) + "\n" + scene.Duration.ToString("0.##") + " с · " + (images == 0 ? "Без картинок" : images + " картинок"); sceneCards[i].BackColor = i == sceneIndex ? Theme.Accent : Theme.Card; }
+            for (int i = 0; i < sceneCards.Count; i++) { var scene = template.Scenes[i]; int images = scene.Layers.Where(l => l.Enabled).Sum(l => Pool(l.Source,AssemblyFiles.PictureExtensions).Count); sceneCards[i].Text = SceneLabel(scene,i) + "\n" + scene.Duration.ToString("0.##") + " с · " + (images == 0 ? "Без картинок" : images + " картинок"); sceneCards[i].BackColor = i == sceneIndex ? Theme.Accent : Theme.Card; }
             selectedCaption.Text = SceneLabel(SelectedScene,sceneIndex); formatButton.Text = template.Width + ":" + template.Height + "  ▾"; int gcd = Gcd(template.Width,template.Height); formatButton.Text = template.Width/gcd + ":" + template.Height/gcd + "  ▾";
             summary.Text = template.Count + " роликов · " + template.Duration.ToString("0.##") + " секунд";
         }
         static int Gcd(int a,int b) { while (b != 0) { int next = a % b; a = b; b = next; } return a; }
-        static string SceneLabel(AssemblyScene s,int i) { return s.Name.Contains("Hook") || s.Name.Contains("TG-бот") || s.Name.Contains("Торговля") || s.Name == "Новая сцена" ? "Сцена " + (i + 1) : s.Name; }
+        static string SceneLabel(AssemblyScene s,int i) { return s.Name.StartsWith("Сцена ") || s.Name.Contains("Hook") || s.Name.Contains("TG-бот") || s.Name.Contains("Торговля") || s.Name == "Новая сцена" ? "Сцена " + (i + 1) : s.Name; }
         void RefreshCanvas() {
             var sp = new AssemblyScenePlan { Scene = SelectedScene };
             foreach (var l in SelectedScene.Layers.Where(l => l.Enabled)) {
@@ -164,6 +164,7 @@ namespace VideoBatch {
         void MoveScene(int delta) { Safe(() => { int next = sceneIndex + delta; if (next < 0 || next >= template.Scenes.Count) return; var scene = SelectedScene; template.Scenes.RemoveAt(sceneIndex); template.Scenes.Insert(next,scene); BuildScenes(); SelectScene(next); Save(); }); }
         void RemoveScene() { Safe(() => { if (template.Scenes.Count == 1) throw new Exception("Оставь хотя бы одну сцену."); template.Scenes.RemoveAt(sceneIndex); sceneIndex = Math.Min(sceneIndex,template.Scenes.Count - 1); BuildScenes(); SelectScene(sceneIndex); Save(); status.Text = "Сцена убрана. Её файлы сохранены в папке материалов."; }); }
         void SceneMenu() { var menu = Theme.MakeContextMenu(); menu.Items.Add("Файлы сцены",null,(s,e) => OpenPool(2)); menu.Items.Add("Видео только для этой сцены",null,(s,e) => OpenPool(3)); menu.Items.Add("Добавить сцену после",null,(s,e) => InsertScene(sceneIndex + 1)); menu.Items.Add("Убрать сцену",null,(s,e) => RemoveScene()); menu.Show(Cursor.Position); }
+        void CountMenu() { var menu = Theme.MakeContextMenu(); foreach (int n in new[] {1,5,10,20,30,50,100}) { int at = n; menu.Items.Add(at + " роликов",null,(s,e) => count.Value = at); } menu.Show(summary,new Point(0,summary.Height)); }
         void FormatMenu() {
             var menu = Theme.MakeContextMenu();
             foreach (var format in new[] { Tuple.Create("9:16 · TikTok / Shorts",1080,1920), Tuple.Create("9:16 · быстрее собирать",720,1280), Tuple.Create("4:5 · вертикальный",1080,1350), Tuple.Create("3:4 · вертикальный",1080,1440), Tuple.Create("1:1 · квадрат",1080,1080), Tuple.Create("16:9 · широкий",1920,1080) }) { var f = format; menu.Items.Add(f.Item1,null,(s,e) => SetFormat(f.Item2,f.Item3)); }

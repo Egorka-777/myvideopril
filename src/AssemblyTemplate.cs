@@ -235,9 +235,10 @@ namespace VideoBatch {
                     if (failed) continue;
                     // Random start times do not create artificial "new" combinations.
                     string signature = string.Join("|", p.Scenes.Select(s => s.Video.Hash + ":" + string.Join(",", s.Layers.Select(l => l.Asset.Hash))));
+                    string legacySignature = AssemblyFiles.HashText(signature);
                     if (t.PackStudioVersion > 0) signature += "|music:" + (p.Music == "" ? "" : musicHashes[p.Music]);
                     p.Signature = AssemblyFiles.HashText(signature);
-                    if (!combinations.Contains(p.Signature)) accepted = p;
+                    if (!combinations.Contains(p.Signature) && !(t.PackStudioVersion > 0 && combinations.Contains(legacySignature))) accepted = p;
                 }
                 if (accepted == null) { batch.Limit = reason; break; }
                 foreach (string h in accepted.UniqueImages) used.Add(h);
