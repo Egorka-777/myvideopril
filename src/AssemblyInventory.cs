@@ -65,7 +65,7 @@ namespace VideoBatch {
             if (RawBound() > EnumerationLimit) return null;
             var output = new List<AssemblyPlan>();
             WalkScenes(0,new AssemblyPlan(),new HashSet<string>(),new HashSet<string>(),output);
-            return output;
+            return output.GroupBy(p => p.Signature).Select(g => g.First()).ToList();
         }
         void WalkScenes(int index,AssemblyPlan plan,HashSet<string> selectedVideo,HashSet<string> selectedImage,List<AssemblyPlan> output) {
             if (index == videos.Count) {
@@ -141,7 +141,7 @@ namespace VideoBatch {
                 bool same = videos.All(v => new HashSet<string>(v.Select(a => a.Hash)).SetEquals(videos[0].Select(a => a.Hash)));
                 bool noSharedUnique = pictures.Where(p => p.Key.Unique).SelectMany(p => p.Value.Select(a => a.Hash)).GroupBy(h => h).All(g => g.Count()==1);
                 if (same && noSharedUnique && (template.AllowVideoReuse || videos[0].Count >= videos.Count)) {
-                    int n=videos[0].Count; BigInteger count=music.Count;
+                    int n=videos[0].Count; BigInteger count=template.PackStudioVersion>0 ? music.Count : 1;
                     for (int i=0; i<videos.Count; i++) count *= i<n ? n-i : n;
                     foreach (var pool in pictures.Values) count *= pool.Count;
                     result.Variants=count; result.Exact=true;

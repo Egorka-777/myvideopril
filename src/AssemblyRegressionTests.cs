@@ -152,6 +152,12 @@ namespace VideoBatch {
                 string asset = Path.Combine(temp,"image.png"), other = Path.Combine(temp,"second.png");
                 using (var b = new Bitmap(700,160)) { using (var g = Graphics.FromImage(b)) { g.Clear(Color.Black); using (var font = new Font("Arial",38,FontStyle.Bold)) g.DrawString("Проверяю сигналы",font,Brushes.White,22,40); } b.Save(asset,System.Drawing.Imaging.ImageFormat.Png); }
                 using (var b = new Bitmap(300,400)) { using (var g = Graphics.FromImage(b)) { g.Clear(Color.FromArgb(25,43,56)); using (var font = new Font("Arial",28)) g.DrawString("Мой бот",font,Brushes.White,35,150); } b.Save(other,System.Drawing.Imaging.ImageFormat.Png); }
+                if (screenshots!=null) {
+                    AssemblyWorkspace.Prepare(t);
+                    if (!ToolsLocator.TryResolve(out string ffmpeg,out string probe,out string hint)) throw new Exception("Live studio screenshots require FFmpeg: "+hint);
+                    foreach (string color in new[] {"darkgreen","darkblue","purple"}) Core.Tool(ffmpeg,new[] {"-v","error","-y","-f","lavfi","-i","color=c="+color+":s=360x640:r=30:d=0.4","-c:v","libx264","-threads","1",t.Resolve("Видео/"+color+".mp4")},System.Threading.CancellationToken.None,null,30).GetAwaiter().GetResult();
+                    foreach (int frequency in new[] {440,660}) Core.Tool(ffmpeg,new[] {"-v","error","-y","-f","lavfi","-i","sine=frequency="+frequency+":duration=0.6",t.Resolve("Музыка/"+frequency+".wav")},System.Threading.CancellationToken.None,null,30).GetAwaiter().GetResult();
+                }
                 AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),t);
                 using (var window = new AssemblyWindow(true)) {
                     window.Show(); window.SetBounds(0,0,1180,790); System.Windows.Forms.Application.DoEvents();
@@ -180,12 +186,14 @@ namespace VideoBatch {
                     Invoke(window,"SetFormat",1080,1350); Invoke(window,"Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Width != 1080) throw new Exception("Studio checkpoint 8 failed"); Invoke(window,"SetFormat",1080,1920);
                     if (screenshots != null) {
                         Directory.CreateDirectory(screenshots); l.Start = 0; l.Unique = false;
+                        Invoke(window,"Save"); WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Доступно 72 "),"Live capacity should show 18 video orders * 2 pictures * 2 songs = 72");
                         var background = new Bitmap(360,640); using (var g = Graphics.FromImage(background)) { g.Clear(Color.FromArgb(16,26,25)); using (var pen = new Pen(Theme.Accent,3)) g.DrawLines(pen,new[] {new Point(0,420),new Point(70,380),new Point(120,430),new Point(190,250),new Point(240,270),new Point(320,130),new Point(360,155)}); } canvas.SetBackground(background);
                         Capture(window,Path.Combine(screenshots,"studio-scenes.png"));
                         using (var pool = (System.Windows.Forms.Form)Invoke(window,"CreatePoolWindow",2)) { pool.Show(window); System.Windows.Forms.Application.DoEvents(); Capture(pool,Path.Combine(screenshots,"studio-files.png")); pool.Close(); }
                         window.SetBounds(0,0,1000,700); System.Windows.Forms.Application.DoEvents();
                         var fourth = All(window).First(c => c.Name == "SceneFiles3"); var stack = (AssemblyScrollStack)Field(window,"sceneStack");
                         if (!fourth.Visible || fourth.Parent.Bottom > stack.ClientSize.Height) throw new Exception("Fourth scene files button is clipped at compact window size");
+                        if (All(window).First(c => c.Name=="InsertScene4").Bottom>stack.ClientSize.Height) throw new Exception("Final insertion button is clipped");
                         Capture(window,Path.Combine(screenshots,"studio-compact.png"));
                         // A real two-layer final card: the top image stays, the bottom pack changes.
                         Invoke(window,"SelectScene",3); Invoke(window,"ImportPool",2,new string[] {other},false); Invoke(window,"SetImageMode",1);
@@ -193,6 +201,7 @@ namespace VideoBatch {
                         Invoke(window,"AddPack",(object)new string[] {asset}); var changing=current.Scenes[3].Layers[1]; changing.Width=.86; changing.Height=.16; changing.X=.07; changing.Y=.74;
                         Invoke(window,"RefreshCanvas");
                         Invoke(window,"SelectScene",3); Invoke(window,"SetImageMode",1); var finalBackground=new Bitmap(360,640); using (var g=Graphics.FromImage(finalBackground)) g.Clear(Color.FromArgb(16,26,25)); canvas.SetBackground(finalBackground);
+                        WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Доступно 72 "),"Final card capacity did not refresh");
                         Capture(window,Path.Combine(screenshots,"studio-final-cta.png")); Invoke(window,"SelectScene",0);
                     }
                     // Replacement changes the pool atomically and retains old originals/copies.
@@ -208,6 +217,7 @@ namespace VideoBatch {
                     ((System.Windows.Forms.ToolStripMenuItem)moved.ContextMenuStrip.Items.Cast<System.Windows.Forms.ToolStripItem>().First(item => item.Name=="DeleteScene")).PerformClick();
                     if (current.Scenes.Count != 4 || !Directory.Exists(current.Resolve(addedFolder))) throw new Exception("Scene context deletion failed");
                     Invoke(window,"Save"); window.Close();
+                    WaitFor(() => Field(window,"capacityCancellation")==null && Field(window,"previewCancellation")==null,"Media checks did not stop when the studio closed");
                 }
                 using (var reopened = new AssemblyWindow(true)) {
                     var saved = (AssemblyTemplate)Field(reopened,"template");
@@ -223,6 +233,11 @@ namespace VideoBatch {
         static void Capture(System.Windows.Forms.Form form, string path) {
             form.PerformLayout(); System.Windows.Forms.Application.DoEvents();
             using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png); }
+        }
+        static void WaitFor(Func<bool> condition,string failure) {
+            var watch=System.Diagnostics.Stopwatch.StartNew();
+            while (!condition() && watch.Elapsed.TotalSeconds<20) { System.Windows.Forms.Application.DoEvents(); System.Threading.Thread.Sleep(10); }
+            if (!condition()) throw new Exception(failure);
         }
     }
 }

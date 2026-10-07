@@ -40,23 +40,28 @@ jobs:
             if (!$asm.GetType('VideoBatch.ProcessingRegressionTests').GetMethod($method).Invoke($null,@())) { throw "Processing regression: $method" }
           }
           if (!$asm.GetType('VideoBatch.YouTubeLiveSelfTests').GetMethod('RunSelfTests').Invoke($null,@())) { throw 'YouTube live regression' }
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg --no-progress -y --limit-output
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
       - name: Capture real Windows editor screenshots
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           New-Item -ItemType Directory -Force artifacts/editor-preview | Out-Null
           $path = (Resolve-Path artifacts/editor-preview).Path
+          $ffmpeg = Get-ChildItem "$env:ChocolateyInstall/lib/ffmpeg" -Filter ffmpeg.exe -Recurse -File | Sort-Object Length -Descending | Select-Object -First 1
+          New-Item -ItemType Directory -Force artifacts/editor-tools/tools | Out-Null
+          Copy-Item $ffmpeg.FullName artifacts/editor-tools/tools/ffmpeg.exe
+          Copy-Item (Join-Path $ffmpeg.DirectoryName 'ffprobe.exe') artifacts/editor-tools/tools/ffprobe.exe
+          $env:VIDEOBATCH_HOME = (Resolve-Path artifacts/editor-tools).Path
           if (!$asm.GetType('VideoBatch.AssemblyRegressionTests').GetMethod('WriteStudioScreenshots').Invoke($null,@($path))) { throw 'Editor screenshots failed' }
       - uses: actions/upload-artifact@v4
         with:
           name: VideoBatch-Editor-Preview
           path: artifacts/editor-preview/*.png
           if-no-files-found: error
-      - name: Install FFmpeg
-        shell: pwsh
-        run: |
-          choco install ffmpeg --no-progress -y --limit-output
-          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
       - name: Actual MP4 integration
         shell: pwsh
         run: |

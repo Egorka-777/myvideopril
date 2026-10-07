@@ -111,11 +111,11 @@ namespace VideoBatch {
         void BuildScenes() {
             foreach (Control c in sceneStack.Controls.Cast<Control>().ToArray()) c.Dispose(); sceneStack.Controls.Clear(); sceneCards.Clear();
             for (int i = 0; i <= template.Scenes.Count; i++) {
-                int at = i; var add = new AssemblyInsertButton(() => InsertScene(at)); add.Name = "InsertScene" + i; add.Height = 16; add.Margin = new Padding(0,1,0,1); add.Width = Math.Max(220,sceneStack.Width - 18); sceneStack.Controls.Add(add);
+                int at = i; var add = new AssemblyInsertButton(() => InsertScene(at)); add.Name = "InsertScene" + i; add.Height = 20; add.Margin = new Padding(0,1,0,1); add.Width = Math.Max(220,sceneStack.Width - 18); sceneStack.Controls.Add(add);
                 if (i == template.Scenes.Count) break;
                 int index = i; var card = new AssemblySceneButton(index+1,() => SelectScene(index)); card.Name = "SceneCard" + i; card.Dock = DockStyle.Fill;
-                var row = new Panel { Width = Math.Max(220,sceneStack.Width - 18), Height = 50, BackColor=Theme.Card, Margin = Padding.Empty };
-                var filesButton = Button("▧", () => { SelectScene(index); OpenPool(2); }); filesButton.AccessibleName="Файлы сцены " + (index+1); filesButton.AutoSize = false; filesButton.Width = 44; filesButton.Dock = DockStyle.Right; filesButton.Name = "SceneFiles" + i;
+                var row = new AssemblySceneRow { Width = Math.Max(220,sceneStack.Width - 18), Height = 46, BackColor=Theme.Card, Margin = Padding.Empty };
+                var filesButton = Button("Файлы", () => { SelectScene(index); OpenPool(2); }); filesButton.AccessibleName="Файлы сцены " + (index+1); filesButton.AutoSize = false; filesButton.Width = 78; filesButton.Dock = DockStyle.Right; filesButton.Name = "SceneFiles" + i;
                 var context = CreateSceneMenu(index); card.ContextMenuStrip = filesButton.ContextMenuStrip = row.ContextMenuStrip = context; row.Disposed += (sender,args) => context.Dispose();
                 row.Controls.Add(card); row.Controls.Add(filesButton); sceneCards.Add(card); sceneStack.Controls.Add(row);
             }
@@ -334,6 +334,12 @@ namespace VideoBatch {
         }
         void Safe(Action action) { try { action(); } catch (Exception e) { if (throwErrors) throw; if (status != null) status.Text = e.Message; Ui.Error(this,e); } }
         protected override void Dispose(bool disposing) { if (disposing) { saveTimer.Dispose(); previewCancellation?.Cancel(); capacityCancellation?.Cancel(); cancellation?.Cancel(); } base.Dispose(disposing); }
+    }
+    public sealed class AssemblySceneRow : Panel {
+        protected override void OnSizeChanged(EventArgs e) {
+            base.OnSizeChanged(e); if (Width<16 || Height<16) return;
+            using (var path=new GraphicsPath()) { int d=16,w=Width,h=Height; path.AddArc(0,0,d,d,180,90); path.AddArc(w-d,0,d,d,270,90); path.AddArc(w-d,h-d,d,d,0,90); path.AddArc(0,h-d,d,d,90,90); path.CloseFigure(); var old=Region; Region=new Region(path); old?.Dispose(); }
+        }
     }
     public sealed class AssemblySceneButton : Button {
         readonly int number;
