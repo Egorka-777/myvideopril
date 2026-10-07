@@ -229,6 +229,7 @@ namespace VideoBatch {
                         Capture(window,Path.Combine(screenshots,"studio-compact.png"));
                         var resultButton=All(window).First(c => c.Name=="Results"); var footer=(System.Windows.Forms.FlowLayoutPanel)Field(window,"footer"); if (resultButton.Right>footer.ClientSize.Width) throw new Exception("Single-line results button is clipped");
                         var number=(System.Windows.Forms.NumericUpDown)Field(window,"count"); number.Value=72; Invoke(window,"ChangeCount",1); if (number.Value!=72 || number.Maximum!=72) throw new Exception("Requested count exceeded the available combinations"); number.Value=3;
+                        current.Count=1001; Invoke(window,"BindTemplateValues"); if (number.Value!=1001) throw new Exception("Loading a studio retained the previous studio's count limit"); current.Count=3; Invoke(window,"BindTemplateValues"); number.Maximum=72;
                         Invoke(window,"FormatMenu"); System.Windows.Forms.Application.DoEvents(); var choice=window.OwnedForms.First(f => f.Name=="StudioChoice"); Capture(choice,Path.Combine(screenshots,"studio-format-choice.png")); choice.Close();
                         // A real two-layer final card: the top image stays, the bottom pack changes.
                         Invoke(window,"SelectScene",3); Invoke(window,"ImportPool",2,new string[] {other},false); Invoke(window,"SetImageMode",1);
