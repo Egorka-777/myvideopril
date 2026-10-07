@@ -251,7 +251,8 @@ namespace VideoBatch {
                     Invoke(window,"AddPack",(object)new string[] {asset}); if (current.Scenes[0].Layers.Count != 2) throw new Exception("Studio checkpoint 11 failed");
                     Invoke(window,"AddObject"); var empty=current.Scenes[0].Layers[2]; Invoke(window,"Place",.72); double emptyY=empty.Y; Invoke(window,"ImportPool",2,new string[] {asset,other},false);
                     if (current.Scenes[0].Layers.Count!=3 || empty.Y!=emptyY || empty.Fixed) throw new Exception("Import created separate objects or reset prepared placement");
-                    string removed=empty.Source; Invoke(window,"RemoveObject",2); if (!Directory.Exists(current.Resolve(removed)) || current.Scenes[0].Layers.Count!=2) throw new Exception("Object removal deleted its files");
+                    string removed=empty.Source; var objectCard=All(window).First(c => c.Name=="Object2"); objectCard.ContextMenuStrip.Show(objectCard,new Point(0,objectCard.Height)); System.Windows.Forms.Application.DoEvents();
+                    ((System.Windows.Forms.ToolStripMenuItem)objectCard.ContextMenuStrip.Items.Cast<System.Windows.Forms.ToolStripItem>().First(item => item.Text=="Удалить объект")).PerformClick(); if (!Directory.Exists(current.Resolve(removed)) || current.Scenes[0].Layers.Count!=2) throw new Exception("Object removal deleted its files");
                     Invoke(window,"InsertScene",1); if (current.Scenes.Count != 5 || !Directory.Exists(current.Resolve(current.Scenes[1].Folder))) throw new Exception("Studio checkpoint 12 failed");
                     string addedFolder = current.Scenes[1].Folder; Invoke(window,"MoveScene",1); if (current.Scenes[2].Folder != addedFolder) throw new Exception("Studio checkpoint 13 failed");
                     var moved=All(window).First(c => c.Name=="SceneCard2"); moved.ContextMenuStrip.Show(moved,new Point(0,moved.Height)); System.Windows.Forms.Application.DoEvents();

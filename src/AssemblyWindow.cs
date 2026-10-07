@@ -154,7 +154,7 @@ namespace VideoBatch {
             int start=Math.Max(0,layerIndex)/3*3;
             for (int i=start; i<Math.Min(start+3,SelectedScene.Layers.Count); i++) {
                 int at=i; var l=SelectedScene.Layers[i]; int n=Pool(l.Source,AssemblyFiles.PictureExtensions).Count;
-                var b=Button("Объект "+(i+1)+"\n"+(n==0 ? "+ Варианты" : n+" вариантов · "+(l.Fixed ? "постоянный" : l.Unique ? "без повторов" : "менять")),() => SelectObject(at),i==layerIndex); b.Name="Object"+i; b.AutoSize=false; b.Size=new Size(144,44); b.MinimumSize=b.Size; b.Padding=new Padding(6,3,6,3);
+                var b=Button("Объект "+(i+1)+"\n"+(n==0 ? "+ Варианты" : (l.Fixed ? "Постоянный · " : l.Unique ? "Без повторов · " : "Менять · ")+n),() => SelectObject(at),i==layerIndex); b.Name="Object"+i; b.AutoSize=false; b.Size=new Size(144,44); b.MinimumSize=b.Size; b.Padding=new Padding(6,3,6,3);
                 var menu=Theme.MakeContextMenu(); menu.Opening+=(sender,args) => {layerIndex=at; LoadLayer(); RefreshCanvas();}; menu.Items.Add("Загрузить варианты",null,(sender,args) => Safe(() => ImportPool(2,PickFiles(2)))); menu.Items.Add("Варианты без повторов",null,(sender,args) => SetImageMode(2)); menu.Items.Add("Удалить объект",null,(sender,args) => RemoveObject(at)); b.ContextMenuStrip=menu; b.Disposed+=(sender,args) => menu.Dispose(); packChips.Controls.Add(b);
             }
             if (SelectedScene.Layers.Count>3) packChips.Controls.Add(Button("⋯",ObjectList));
@@ -221,7 +221,7 @@ namespace VideoBatch {
             return menu;
         }
         void SceneMenu() { var menu=CreateSceneMenu(sceneIndex); menu.Closed += (sender,args) => menu.Dispose(); menu.Show(Cursor.Position); }
-        static string ImageModeLabel(AssemblyLayer layer) { return layer.Fixed ? "Закреплена" : layer.Unique ? "Без повторов" : "Меняется"; }
+        static string ImageModeLabel(AssemblyLayer layer) { return layer.Fixed ? "Постоянный" : layer.Unique ? "Без повторов" : "Меняется"; }
         void ImageModeMenu() {
             if (SelectedLayer == null) return; var menu=Theme.MakeContextMenu();
             menu.Items.Add("Меняется в каждом ролике",null,(sender,args) => SetImageMode(0));
