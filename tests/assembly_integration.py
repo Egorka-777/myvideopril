@@ -171,7 +171,7 @@ def main():
             assert red[0] > 230 and red[1] < 25 and red[2] < 25, red
             assert min(pixel(frame(file, 2.6), 100, 520)) > 210
             recipe = ET.parse(file + '.assembly.xml').getroot()
-            music_file = recipe.findtext('Music'); assert Path(music_file).parent == songs
+            music_file = recipe.findtext('Music'); assert Path(music_file).parent.samefile(songs), (music_file, str(songs))
             nodes = recipe.findall('Scenes/AssemblyScenePlan')
             assert len(nodes) == 4 and not nodes[1].findall('Layers/AssemblyLayerPlan') and not nodes[3].findall('Layers/AssemblyLayerPlan')
             assert len({n.findtext('Video/Path') for n in nodes}) == 1
