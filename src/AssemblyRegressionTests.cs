@@ -113,48 +113,48 @@ namespace VideoBatch {
                 AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),t);
                 using (var window = new AssemblyWindow(true)) {
                     window.Show(); window.SetBounds(0,0,1180,790); System.Windows.Forms.Application.DoEvents();
-                    if (window.BackColor != Theme.Background || All(window).Any(c => c is System.Windows.Forms.TabControl || c is System.Windows.Forms.TextBox)) return false;
-                    var current = (AssemblyTemplate)Field(window,"template"); if (current.Scenes.Count != 4) return false;
+                    if (window.BackColor != Theme.Background || All(window).Any(c => c.Visible && (c is System.Windows.Forms.TabControl || c is System.Windows.Forms.TextBox))) throw new Exception("Studio checkpoint 1 failed");
+                    var current = (AssemblyTemplate)Field(window,"template"); if (current.Scenes.Count != 4) throw new Exception("Studio checkpoint 2 failed");
                     Invoke(window,"ImportPool",2,new string[] {asset,other},false);
                     var l = current.Scenes[0].Layers[0]; string source = l.Source;
-                    if (AssemblyFiles.Pool(current.Resolve(source),AssemblyFiles.PictureExtensions).Count != 2 || !File.Exists(asset)) return false;
-                    Invoke(window,"SetImageMode",2); if (!l.Unique || l.Fixed) return false;
+                    if (AssemblyFiles.Pool(current.Resolve(source),AssemblyFiles.PictureExtensions).Count != 2 || !File.Exists(asset)) throw new Exception("Studio checkpoint 3 failed");
+                    Invoke(window,"SetImageMode",2); if (!l.Unique || l.Fixed) throw new Exception("Studio checkpoint 4 failed");
                     var size = (System.Windows.Forms.NumericUpDown)Field(window,"width"); double ratio = l.Height/l.Width; size.Value = 70;
-                    if (Math.Abs(l.Height/l.Width-ratio) > .001) return false;
+                    if (Math.Abs(l.Height/l.Width-ratio) > .001) throw new Exception("Studio checkpoint 5 failed");
                     var canvas = (AssemblyCanvas)Field(window,"canvas");
                     var frame = (RectangleF)typeof(AssemblyCanvas).GetProperty("Frame",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(canvas);
                     int px = (int)(frame.X+(l.X+l.Width/2)*frame.Width), py = (int)(frame.Y+(l.Y+l.Height/2)*frame.Height); double before = l.Y;
                     Invoke(canvas,"OnMouseDown",new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,1,px,py,0));
                     Invoke(canvas,"OnMouseMove",new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,0,px+12,py+10,0));
                     Invoke(canvas,"OnMouseUp",new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,1,px+12,py+10,0));
-                    if (l.Y <= before) return false;
-                    var duration = (System.Windows.Forms.NumericUpDown)Field(window,"duration"); l.Start = 4; l.End = 5; duration.Value = .5m; current.Validate(); if (l.Start >= .5 || l.End != 0) return false; duration.Value = 5;
-                    Invoke(window,"SetFormat",1080,1350); Invoke(window,"Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Width != 1080) return false; Invoke(window,"SetFormat",1080,1920);
+                    if (l.Y <= before) throw new Exception("Studio checkpoint 6 failed");
+                    var duration = (System.Windows.Forms.NumericUpDown)Field(window,"duration"); l.Start = 4; l.End = 5; duration.Value = .5m; current.Validate(); if (l.Start >= .5 || l.End != 0) throw new Exception("Studio checkpoint 7 failed"); duration.Value = 5;
+                    Invoke(window,"SetFormat",1080,1350); Invoke(window,"Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Width != 1080) throw new Exception("Studio checkpoint 8 failed"); Invoke(window,"SetFormat",1080,1920);
                     if (screenshots != null) {
                         Directory.CreateDirectory(screenshots); l.Start = 0; l.Unique = false;
                         var background = new Bitmap(360,640); using (var g = Graphics.FromImage(background)) { g.Clear(Color.FromArgb(16,26,25)); using (var pen = new Pen(Theme.Accent,3)) g.DrawLines(pen,new[] {new Point(0,420),new Point(70,380),new Point(120,430),new Point(190,250),new Point(240,270),new Point(320,130),new Point(360,155)}); } canvas.SetBackground(background);
                         Capture(window,Path.Combine(screenshots,"studio-scenes.png"));
                         using (var pool = (System.Windows.Forms.Form)Invoke(window,"CreatePoolWindow",2)) { pool.Show(window); System.Windows.Forms.Application.DoEvents(); Capture(pool,Path.Combine(screenshots,"studio-files.png")); pool.Close(); }
                         window.SetBounds(0,0,1000,700); System.Windows.Forms.Application.DoEvents();
-                        if (All(window).Where(c => c.Name == "SceneFiles3").Any(c => !c.Visible)) return false;
+                        if (All(window).Where(c => c.Name == "SceneFiles3").Any(c => !c.Visible)) throw new Exception("Studio checkpoint 9 failed");
                         Capture(window,Path.Combine(screenshots,"studio-compact.png"));
                     }
                     // Replacement changes the pool atomically and retains old originals/copies.
                     string old = current.Resolve(source); Invoke(window,"ImportPool",2,new string[] {other},true);
-                    if (l.Source == source || !Directory.Exists(old) || AssemblyFiles.Pool(current.Resolve(l.Source),AssemblyFiles.PictureExtensions).Count != 1) return false;
-                    Invoke(window,"AddPack",new string[] {asset}); if (current.Scenes[0].Layers.Count != 2) return false;
-                    Invoke(window,"InsertScene",1); if (current.Scenes.Count != 5 || !Directory.Exists(current.Resolve(current.Scenes[1].Folder))) return false;
-                    string addedFolder = current.Scenes[1].Folder; Invoke(window,"MoveScene",1); if (current.Scenes[2].Folder != addedFolder) return false;
-                    Invoke(window,"RemoveScene"); if (current.Scenes.Count != 4 || !Directory.Exists(current.Resolve(addedFolder))) return false;
+                    if (l.Source == source || !Directory.Exists(old) || AssemblyFiles.Pool(current.Resolve(l.Source),AssemblyFiles.PictureExtensions).Count != 1) throw new Exception("Studio checkpoint 10 failed");
+                    Invoke(window,"AddPack",(object)new string[] {asset}); if (current.Scenes[0].Layers.Count != 2) throw new Exception("Studio checkpoint 11 failed");
+                    Invoke(window,"InsertScene",1); if (current.Scenes.Count != 5 || !Directory.Exists(current.Resolve(current.Scenes[1].Folder))) throw new Exception("Studio checkpoint 12 failed");
+                    string addedFolder = current.Scenes[1].Folder; Invoke(window,"MoveScene",1); if (current.Scenes[2].Folder != addedFolder) throw new Exception("Studio checkpoint 13 failed");
+                    Invoke(window,"RemoveScene"); if (current.Scenes.Count != 4 || !Directory.Exists(current.Resolve(addedFolder))) throw new Exception("Studio checkpoint 14 failed");
                     Invoke(window,"Save"); window.Close();
                 }
                 using (var reopened = new AssemblyWindow(true)) {
                     var saved = (AssemblyTemplate)Field(reopened,"template");
-                    if (saved.Scenes.Count != 4 || saved.Scenes[0].Layers.Count != 2 || AssemblyFiles.Pool(saved.Resolve(saved.Scenes[0].Layers[0].Source),AssemblyFiles.PictureExtensions).Count != 1) return false;
+                    if (saved.Scenes.Count != 4 || saved.Scenes[0].Layers.Count != 2 || AssemblyFiles.Pool(saved.Resolve(saved.Scenes[0].Layers[0].Source),AssemblyFiles.PictureExtensions).Count != 1) throw new Exception("Studio checkpoint 15 failed");
                 }
                 // Exercise actual legacy load, automatic migration and backup.
                 var legacy = LegacyTemplate(); legacy.Materials = t.Materials; legacy.Output = t.Output; AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),legacy);
-                using (var migrated = new AssemblyWindow(true)) { var saved = (AssemblyTemplate)Field(migrated,"template"); if (saved.PackStudioVersion != 1 || saved.Id != legacy.Id || !Directory.GetFiles(temp,"assembly-template.xml.before-packs-*.xml").Any()) return false; }
+                using (var migrated = new AssemblyWindow(true)) { var saved = (AssemblyTemplate)Field(migrated,"template"); if (saved.PackStudioVersion != 1 || saved.Id != legacy.Id || !Directory.GetFiles(temp,"assembly-template.xml.before-packs-*.xml").Any()) throw new Exception("Studio checkpoint 16 failed"); }
                 var nav = new NavigationService(); int calls = 0; nav.Navigated += _ => calls++; nav.Navigate(NavSection.VideoAssembly); nav.Navigate(NavSection.VideoAssembly); return calls == 2;
             } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp,true); }
         }

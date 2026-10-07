@@ -205,7 +205,7 @@ namespace VideoBatch {
                 if (kind == 1) modes.Controls.Add(new AssemblySlider("Громкость",volume,"%") { Width = 560, Height = 66 });
                 if (kind == 2) {
                     for (int i = 0; i < SelectedScene.Layers.Count; i++) { int at = i; packs.Controls.Add(Button("Пачка " + (i+1), () => { layerIndex = at; LoadLayer(); RefreshChips(); RefreshCanvas(); refresh(); },i == layerIndex)); }
-                    packs.Controls.Add(Button("+ Ещё поверх", () => { var files = PickFiles(kind); if (files == null) return; AddPack(files); refresh(); }));
+                    packs.Controls.Add(Button("+ Ещё поверх", () => { var picked = PickFiles(kind); if (picked == null) return; AddPack(picked); refresh(); }));
                     modes.Controls.Add(Button("Перемешивать", () => { SetImageMode(0); refresh(); },!SelectedLayer.Fixed && !SelectedLayer.Unique)); modes.Controls.Add(Button("Одна картинка", () => { SetImageMode(1); refresh(); },SelectedLayer.Fixed)); modes.Controls.Add(Button("Без повторов", () => { SetImageMode(2); refresh(); },SelectedLayer.Unique));
                 } else packs.Controls.Add(new Label { Text = kind == 0 ? "Видео само заполняет кадр. Короткое видео повторится до конца сцены." : kind == 1 ? "На каждый ролик выбирается один трек из этой пачки." : "Пустая пачка — используются общие видео.", ForeColor = Theme.TextSecondary, AutoSize = true, Margin = new Padding(0,8,0,0) });
                 foreach (Control c in filesView.Controls.Cast<Control>().ToArray()) c.Dispose(); filesView.Controls.Clear();
