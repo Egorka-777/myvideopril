@@ -11,7 +11,8 @@ using System.Xml.Serialization;
 namespace VideoBatch {
     public class AssemblyLayer {
         public string Name = "Изображение", Source = "";
-        public bool Enabled = true, Unique = false, Fixed = false;
+        public bool Enabled = true, Unique = false, Fixed = false, PlacementConfigured = false;
+        public string FixedAssetHash = "";
         public double X = .08, Y = .35, Width = .84, Height = .25, Opacity = 1;
         public double Start = 0, End = 0; // End=0 means until the end of this scene.
         public string Font = "Arial";
@@ -82,7 +83,7 @@ namespace VideoBatch {
         internal static void Check(double value, double min, double max, string label) {
             if (double.IsNaN(value) || double.IsInfinity(value) || value < min || value > max) throw new Exception(label + ": значение вне допустимых границ.");
         }
-        public static readonly string[] Transitions = { "cut", "fade", "fadeblack", "fadewhite", "slideleft", "slideright", "smoothleft", "hblur", "zoomin" };
+        public static readonly string[] Transitions = { "cut", "fade", "fadeblack", "fadewhite", "slideleft", "slideright", "smoothleft", "hblur", "zoomin", "zoomsoft", "zoomout", "pull", "swipe" };
     }
     public static class AssemblyFiles {
         public static readonly string[] VideoExtensions = { ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v" };
@@ -166,6 +167,8 @@ namespace VideoBatch {
                     if (migrate) l.Name = "Пачка " + (j + 1);
                     if (string.IsNullOrWhiteSpace(l.Source)) l.Source = Path.Combine(scene.Folder, j == 0 ? "Изображения" : "Пачка-" + (j + 1));
                     MakeFolder(t.Resolve(l.Source));
+                    var files=AssemblyFiles.Pool(t.Resolve(l.Source),t.PictureExtensions);
+                    if (files.Count>0) { l.PlacementConfigured=true; if (l.Fixed && string.IsNullOrWhiteSpace(l.FixedAssetHash)) l.FixedAssetHash=AssemblyFiles.Hash(files[0]); }
                 }
             }
             if (string.IsNullOrWhiteSpace(t.Videos)) t.Videos = "Видео";
@@ -222,7 +225,7 @@ namespace VideoBatch {
     public class AssemblyPlan {
         public List<AssemblyScenePlan> Scenes = new List<AssemblyScenePlan>();
         public List<string> UniqueImages = new List<string>();
-        public string Signature, Music;
+        public string Signature, Music, MusicHash;
     }
     public class AssemblyPlanBatch {
         public List<AssemblyPlan> Plans = new List<AssemblyPlan>();
@@ -231,6 +234,9 @@ namespace VideoBatch {
     public static class AssemblyPlanner {
         public static AssemblyPlanBatch Create(AssemblyTemplate t, IList<AssemblyVideo> videos, AssemblyHistory history, Random random, int count) {
             t.Validate();
+            var inventory = new AssemblyInventory(t, videos, history);
+            var candidates = inventory.Enumerate();
+            if (candidates != null) return inventory.Take(candidates, random, count);
             var used = new HashSet<string>(history.UsedImages);
             var combinations = new HashSet<string>(history.Combinations);
             var pools = new Dictionary<AssemblyLayer, List<AssemblyAsset>>();
@@ -262,7 +268,7 @@ namespace VideoBatch {
                             if (pools[l].Count == 0) continue; // An empty pack is a scene without a picture.
                             var pool = pools[l].Where(a => !l.Unique || (!used.Contains(a.Hash) && !selectedImages.Contains(a.Hash))).ToList();
                             if (pool.Count == 0) { reason = "Закончились материалы без повторов: «" + l.Name + "» (" + l.Source + ")."; failed = true; break; }
-                            var asset = l.Fixed ? pool[0] : pool[random.Next(pool.Count)];
+                            var asset = l.Fixed ? AssemblyInventory.FixedAsset(l, pool) : pool[random.Next(pool.Count)];
                             sp.Layers.Add(new AssemblyLayerPlan { Layer = l, Asset = asset });
                             if (l.Unique) { selectedImages.Add(asset.Hash); p.UniqueImages.Add(asset.Hash); }
                         }
@@ -273,10 +279,10 @@ namespace VideoBatch {
                     string signature = string.Join("|", p.Scenes.Select(s => s.Video.Hash + ":" + string.Join(",", s.Layers.Select(l => l.Asset.Hash))));
                     string legacySignature = AssemblyFiles.HashText(signature);
                     if (t.PackStudioVersion > 0) signature += "|music:" + (p.Music == "" ? "" : musicHashes[p.Music]);
-                    p.Signature = AssemblyFiles.HashText(signature);
+                    p.Signature = AssemblyFiles.HashText(signature); p.MusicHash=p.Music=="" ? "" : musicHashes[p.Music];
                     if (!combinations.Contains(p.Signature) && !(t.PackStudioVersion > 0 && combinations.Contains(legacySignature))) accepted = p;
                 }
-                if (accepted == null) { batch.Limit = reason; break; }
+                if (accepted == null) { batch.Limit = reason == "Исчерпаны разные сочетания материалов." ? "Не удалось подобрать следующую новую связку. Уменьши пачку или добавь материалы." : reason; break; }
                 foreach (string h in accepted.UniqueImages) used.Add(h);
                 combinations.Add(accepted.Signature); batch.Plans.Add(accepted);
             }

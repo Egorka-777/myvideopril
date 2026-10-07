@@ -7,6 +7,21 @@ using System.Threading.Tasks;
 
 namespace VideoBatch {
     public static class AssemblyEngine {
+        // The inputs here are fully composited scene clips, so every image moves with its video.
+        public static string TransitionFilter(string key) {
+            if (key == "swipe") return "transition=smoothleft";
+            if (key != "zoomsoft" && key != "zoomout" && key != "pull") return "transition=" + key;
+            string progress="(1-P)", outgoing, incoming;
+            if (key == "zoomout") { outgoing="(1-.22*"+progress+"*"+progress+")"; incoming="(1+.22*P*P)"; }
+            else { string strength=key=="pull" ? "1.4" : ".28"; outgoing="(1+"+strength+"*"+progress+"*"+progress+")"; incoming="(1+"+strength+"*P*P)"; }
+            string a=Sample("a",outgoing), b=Sample("b",incoming), weight="(P*P*(3-2*P))";
+            return "transition=custom:expr='"+a+"*"+weight+"+"+b+"*(1-"+weight+")'";
+        }
+        static string Sample(string source,string scale) {
+            string x="((X-W/2)/"+scale+"+W/2)", y="((Y-H/2)/"+scale+"+H/2)";
+            string coordinates="min(W-1,max(0,"+x+")),min(H-1,max(0,"+y+"))";
+            return "if(eq(PLANE,0),"+source+"0("+coordinates+"),if(eq(PLANE,1),"+source+"1("+coordinates+"),"+source+"2("+coordinates+")))";
+        }
         public static async Task<List<AssemblyVideo>> ReadVideos(AssemblyTemplate t, string probe, CancellationToken ct) {
             var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(t.VideoSource(s)), AssemblyFiles.VideoExtensions)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (paths.Count == 0) throw new Exception("Не найдены видео. Нажми «Видео» слева и добавь хотя бы один файл.");
@@ -56,7 +71,7 @@ namespace VideoBatch {
                 current = "s0"; double offset = 0;
                 for (int i = 1; i < scenes.Count; i++) {
                     offset += p.Scenes[i - 1].Scene.Duration; string next = "joined" + i;
-                    graph.Add("[" + current + "][s" + i + "]xfade=transition=" + t.Transition + ":duration=" + Core.N(t.TransitionDuration) + ":offset=" + Core.N(offset) + "[" + next + "]"); current = next;
+                    graph.Add("[" + current + "][s" + i + "]xfade=" + TransitionFilter(t.Transition) + ":duration=" + Core.N(t.TransitionDuration) + ":offset=" + Core.N(offset) + "[" + next + "]"); current = next;
                 }
             }
             if (music) {
@@ -92,7 +107,7 @@ namespace VideoBatch {
             if (string.IsNullOrWhiteSpace(t.Output)) throw new Exception("Выберите папку готовых роликов.");
             Directory.CreateDirectory(t.Output); Directory.CreateDirectory(historyFolder);
             string historyPath = Path.Combine(historyFolder, t.Id + ".xml");
-            var result = new BatchResult(); string work = Path.Combine(t.Output, ".assembly-" + Guid.NewGuid().ToString("N"));
+            var result = new BatchResult(); string work = Path.Combine(t.Output, ".assembly-" + Guid.NewGuid().ToString("N")), limitNote="";
             try {
                 // A second process may not allocate the same headlines while the batch is rendering.
                 using (var gate = new FileStream(historyPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
@@ -118,13 +133,13 @@ namespace VideoBatch {
                         } catch (OperationCanceledException) { throw; }
                         catch (Exception e) { result.Errors.Add("Ролик " + (i + 1) + ": " + e.Message); break; }
                     }
-                    if (batch.Limit != "") result.Errors.Add("Собрано меньше запрошенного: " + batch.Limit);
+                    if (batch.Limit != "") limitNote = " Запрошено " + t.Count + ": " + batch.Limit;
                 }
             } catch (OperationCanceledException) { result.Cancelled = true; }
             catch (IOException e) { result.Errors.Add("Не удалось открыть файлы или историю. Проверьте, не запущена ли другая сборка этого шаблона. " + e.Message); }
             catch (Exception e) { result.Errors.Add(e.Message); }
             finally { if (Directory.Exists(work)) try { Directory.Delete(work, true); } catch { } }
-            progress.Report(new Update((result.Cancelled ? "Остановлено. " : "Готово. ") + "Роликов: " + result.Outputs.Count + (result.Errors.Count > 0 ? ". " + result.Errors[0] : ""), 100));
+            progress.Report(new Update((result.Cancelled ? "Остановлено. " : "Готово. ") + "Роликов: " + result.Outputs.Count + (result.Errors.Count > 0 ? ". " + result.Errors[0] : limitNote), 100));
             return result;
         }
     }

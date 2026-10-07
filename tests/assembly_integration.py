@@ -114,9 +114,13 @@ def main():
         stopped = call(); assert not stopped['Outputs'] and any('Закончились' in e for e in stopped['Errors']), stopped
         state = ET.parse(history / 'integration.xml').getroot()
         assert len(state.findall('UsedImages/string')) == 6, 'history did not consume headlines'
-        for effect in ['cut', 'slideleft', 'hblur']:
+        for effect in ['cut', 'slideleft', 'hblur', 'zoomsoft', 'zoomout', 'pull', 'swipe']:
             template(path, root, effect, 1, 'effect-' + effect)
             result = call(); assert len(result['Outputs']) == 1 and not result['Errors'], result; verify(result['Outputs'][0])
+            if effect in ['zoomsoft', 'pull']:
+                # Both headlines share a rectangle. At transition midpoint its top expands
+                # beyond y=32; a static overlay or a plain fade would leave this pixel dark.
+                assert min(pixel(frame(result['Outputs'][0], 1.65), 180, 10 if effect == 'pull' else 20)) > 160, 'overlay did not move with the zoom transition'
         # Timed overlay: visible in the middle, absent before/after its interval.
         template(path, root, 'cut', 1, 'timed', True); result = call(); assert result['Outputs'] and not result['Errors'], result
         early = pixel(frame(result['Outputs'][0], .1), 100, 60); late = pixel(frame(result['Outputs'][0], 1.2), 100, 60)
@@ -190,7 +194,7 @@ def main():
         cancelled = call(['100']); assert cancelled['Cancelled'] and not cancelled['Outputs'], cancelled
         assert not (history / 'cancel.xml').exists(), 'cancelled batch consumed headlines'
         assert not list((root / 'out').glob('.assembly-*')), 'temporary render folders leaked'
-    print('PASS: 3/4-scene MP4, scene insertion, two headlines, fixed bot + CTA, continuous music, fade/cut/slide/blur, timing, history, cancellation, optional empty packs, short video loops, music pools and one scene')
+    print('PASS: 3/4-scene MP4, scene insertion, two headlines, fixed bot + CTA, continuous music, fade/cut/slide/blur/zoom/pull/swipe, overlay motion, timing, history, cancellation, optional empty packs, short video loops, music pools and one scene')
 
 
 if __name__ == '__main__':
