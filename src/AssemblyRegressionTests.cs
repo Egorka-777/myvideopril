@@ -91,6 +91,12 @@ namespace VideoBatch {
                 if (legacy.Id != id || legacy.Scenes.Count != 3 || !legacy.Scenes[0].Layers[0].Unique || legacy.Scenes[0].Layers[0].Source != "Заголовки") return false;
                 batch = AssemblyPlanner.Create(legacy,videos,new AssemblyHistory(),new Random(1),1); if (batch.Plans.Count != 1) return false;
                 string folder = t.Scenes[1].Folder; AssemblyWorkspace.Insert(t,1); if (t.Scenes[2].Folder != folder) return false;
+                string longStem = "ССЫЛКА НА AI БОТ — В ПРОФИЛЕ " + new string('X', 180);
+                string musicFolder = t.Resolve("Музыка"); Directory.CreateDirectory(musicFolder);
+                string safeDest = AssemblyFiles.SafeImportDestination(musicFolder, Path.Combine(musicFolder, longStem + ".mp3"));
+                if (safeDest.Length > 259 || Path.GetFileName(safeDest).Length >= longStem.Length) return false;
+                File.WriteAllText(safeDest, "music-long-name");
+                if (!File.Exists(safeDest)) return false;
                 return true;
             } finally { if (Directory.Exists(temp)) Directory.Delete(temp,true); }
         }

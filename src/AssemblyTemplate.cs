@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Serialization;
 
@@ -102,6 +103,38 @@ namespace VideoBatch {
         }
         public static string HashText(string text) { using (var sha = SHA256.Create()) return Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(text))); }
         static string Hex(byte[] bytes) { return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant(); }
+        public static string SafeImportDestination(string folder, string sourcePath, int maxPathLen = 259) {
+            string ext = Path.GetExtension(sourcePath);
+            if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
+            string stem = SanitizeImportStem(Path.GetFileNameWithoutExtension(sourcePath));
+            string destination = FitImportPath(folder, stem, ext, "", maxPathLen);
+            if (!File.Exists(destination)) return destination;
+            for (int n = 2; n < 1000; n++) {
+                destination = FitImportPath(folder, stem, ext, " (" + n + ")", maxPathLen);
+                if (!File.Exists(destination)) return destination;
+            }
+            return FitImportPath(folder, "import-" + Guid.NewGuid().ToString("N").Substring(0, 12), ext, "", maxPathLen);
+        }
+        static string SanitizeImportStem(string stem) {
+            stem = (stem ?? "").Trim();
+            foreach (char ch in Path.GetInvalidFileNameChars()) stem = stem.Replace(ch, ' ');
+            stem = Regex.Replace(stem, @"\s+", " ").Trim().TrimEnd('.');
+            return string.IsNullOrWhiteSpace(stem) ? "file" : stem;
+        }
+        static string FitImportPath(string folder, string stem, string ext, string suffix, int maxPathLen) {
+            string name = stem + suffix + ext;
+            string dest = Path.Combine(folder, name);
+            while (dest.Length > maxPathLen && stem.Length > 8) {
+                stem = stem.Substring(0, stem.Length - 4).TrimEnd('.', ' ');
+                name = stem + suffix + ext;
+                dest = Path.Combine(folder, name);
+            }
+            if (dest.Length > maxPathLen) {
+                name = "import-" + Guid.NewGuid().ToString("N").Substring(0, 12) + ext;
+                dest = Path.Combine(folder, name);
+            }
+            return dest;
+        }
         public static T Load<T>(string path) {
             using (var reader = XmlReader.Create(path, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null }))
                 return (T)new XmlSerializer(typeof(T)).Deserialize(reader);
@@ -156,13 +189,16 @@ namespace VideoBatch {
             bool newFolder = replace || string.IsNullOrWhiteSpace(source) || File.Exists(path);
             if (newFolder) path = t.Resolve(fallback + "-" + Guid.NewGuid().ToString("N").Substring(0, 6));
             Directory.CreateDirectory(path); int added = 0;
-            if (newFolder && !replace && File.Exists(t.Resolve(oldSource))) File.Copy(t.Resolve(oldSource),Path.Combine(path,Path.GetFileName(oldSource)));
+            if (newFolder && !replace && File.Exists(t.Resolve(oldSource))) {
+                string oldFile = t.Resolve(oldSource);
+                string oldCopy = AssemblyFiles.SafeImportDestination(path, oldFile);
+                if (!Path.GetFullPath(oldFile).Equals(Path.GetFullPath(oldCopy), StringComparison.OrdinalIgnoreCase)) File.Copy(oldFile, oldCopy);
+            }
             try {
                 foreach (string file in files.Where(File.Exists).Where(p => extensions.Contains(Path.GetExtension(p).ToLowerInvariant()))) {
-                    string destination = Path.Combine(path, Path.GetFileName(file));
+                    string destination = AssemblyFiles.SafeImportDestination(path, file);
                     if (Path.GetFullPath(file).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) continue;
                     if (File.Exists(destination) && AssemblyFiles.Hash(file) == AssemblyFiles.Hash(destination)) continue;
-                    while (File.Exists(destination)) destination = Path.Combine(path, Path.GetFileNameWithoutExtension(file) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + Path.GetExtension(file));
                     File.Copy(file, destination); added++;
                 }
                 if (newFolder && added > 0) source = path; // Keep the old pack intact on cancel/failure.
