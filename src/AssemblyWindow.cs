@@ -344,7 +344,7 @@ namespace VideoBatch {
             menu.Items.Add("Открыть сохранённую студию…",null,(s,e) => Safe(() => { using (var d = new OpenFileDialog { Filter = "Студия|*.xml" }) if (d.ShowDialog(this) == DialogResult.OK) { var t = AssemblyFiles.Load<AssemblyTemplate>(d.FileName); t.Validate(); AssemblyWorkspace.Prepare(t); template = t; BindTemplateValues(); previewImages.Clear(); BuildScenes(); SelectScene(0); Save(); } }));
             menu.Items.Add("Новая студия · 4 сцены",null,(s,e) => Safe(() => { Save(); AssemblyFiles.Save(templatePath + ".saved-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".xml",template); string folder = Path.Combine(template.Materials,"Студия-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); template = AssemblyTemplate.Defaults(); template.Materials = folder; template.Output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch","Assembled"); AssemblyWorkspace.Prepare(template); previewImages.Clear(); BindTemplateValues(); BuildScenes(); SelectScene(0); Save(); })); menu.Show(Cursor.Position);
         }
-        void BindTemplateValues() { loading=true; count.Maximum=int.MaxValue; count.Value=template.Count; volume.Value=(decimal)(template.MusicVolume*100); loading=false; }
+        void BindTemplateValues() { capacityKey=null; batchMaximum=0; UpdateCountControls(); loading=true; count.Maximum=int.MaxValue; count.Value=template.Count; volume.Value=(decimal)(template.MusicVolume*100); loading=false; }
         async void RequestBackground() {
             if (canvas == null || !IsHandleCreated || cancellation != null) return;
             previewCancellation?.Cancel(); int version = ++previewVersion; var ct = new CancellationTokenSource(); previewCancellation = ct;
