@@ -965,19 +965,36 @@ namespace VideoBatch {
             }
             return dest;
         }
-        static string MoveFileReplacing(string source,string dest){
+        static string AppendNumericSuffixToFileStem(string stem,int n){
+            string baseStem=System.Text.RegularExpressions.Regex.Replace(stem??"",@"\s*\(\d+\)\s*$","").Trim();
+            if(string.IsNullOrWhiteSpace(baseStem))baseStem="video";
+            return baseStem+" ("+n+")";
+        }
+        static bool PathsEqual(string a,string b){
+            if(string.IsNullOrWhiteSpace(a)||string.IsNullOrWhiteSpace(b))return false;
+            try{return string.Equals(Path.GetFullPath(a),Path.GetFullPath(b),StringComparison.OrdinalIgnoreCase);}
+            catch{return false;}
+        }
+        static string FindUniqueFilePath(string dir,string stem,string ext,string excludePath=null,int maxLen=259){
+            string dest=FitFilePathLength(dir,stem,ext,maxLen);
+            if(!File.Exists(dest)||PathsEqual(excludePath,dest))return dest;
+            for(int n=2;n<1000;n++){
+                dest=FitFilePathLength(dir,AppendNumericSuffixToFileStem(stem,n),ext,maxLen);
+                if(!File.Exists(dest)||PathsEqual(excludePath,dest))return dest;
+            }
+            throw new IOException("Не удалось подобрать свободное имя файла для «"+stem+ext+"».");
+        }
+        static string MoveFileToUniqueName(string source,string dest){
             ClearReadOnly(source);
-            if(File.Exists(dest)){
-                ClearReadOnly(dest);
-                if(!string.Equals(Path.GetFullPath(source),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))
-                    File.Delete(dest);
-            }
-            try{File.Move(source,dest);return dest;}
-            catch(IOException){
-                File.Copy(source,dest,true);
-                File.Delete(source);
-                return dest;
-            }
+            if(PathsEqual(source,dest))return source;
+            string dir=Path.GetDirectoryName(dest)??"";
+            string ext=Path.GetExtension(dest);
+            if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
+            string stem=Path.GetFileNameWithoutExtension(dest);
+            dest=FindUniqueFilePath(dir,stem,ext,source);
+            if(PathsEqual(source,dest))return source;
+            File.Move(source,dest);
+            return dest;
         }
         static string RenameVideoFile(string path,string title,int index1Based,int total){
             if(string.IsNullOrWhiteSpace(path)||!File.Exists(path))return path;
@@ -989,20 +1006,9 @@ namespace VideoBatch {
             string ext=Path.GetExtension(path);
             if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
             string stem=FileNameFromTitle(finalTitle);
-            string dest=FitFilePathLength(dir,stem,ext);
-            if(string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))return path;
-            if(File.Exists(dest)&&!string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase)){
-                int n=2;
-                while(n<100){
-                    string dupTitle=AppendDuplicateSuffix(finalTitle,n);
-                    stem=FileNameFromTitle(dupTitle);
-                    dest=FitFilePathLength(dir,stem,ext);
-                    if(!File.Exists(dest)||string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))break;
-                    n++;
-                }
-            }
-            if(string.Equals(Path.GetFullPath(path),Path.GetFullPath(dest),StringComparison.OrdinalIgnoreCase))return path;
-            try{return MoveFileReplacing(path,dest);}
+            string dest=FindUniqueFilePath(dir,stem,ext,path);
+            if(PathsEqual(path,dest))return path;
+            try{return MoveFileToUniqueName(path,dest);}
             catch(Exception ex){
                 throw new Exception("Не удалось переименовать «"+Path.GetFileName(path)+"» в «"+Path.GetFileName(dest)+"»: "+ex.Message);
             }

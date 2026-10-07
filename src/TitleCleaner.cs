@@ -8,6 +8,7 @@ namespace VideoBatch {
     /// <summary>Clean upload titles: remove leading junk only; preserve words and meaningful digits.</summary>
     public static class TitleCleaner {
         static readonly Regex LeadingIndex = new Regex(@"^\s*(?:\[\s*\d+\s*\]|\(\s*\d+\s*\)|\d+\s*[\._\-]\s*|\d+\.\s*|\d+\s+)", RegexOptions.Compiled);
+        static readonly Regex TrailingDuplicateIndex = new Regex(@"\s*\(\d+\)\s*$", RegexOptions.Compiled);
         static readonly Regex ExtSuffix = new Regex(@"\.(mp4|mov|mkv|webm|m4v|avi|mts|m2ts|ts|wmv)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         static readonly Regex MultiSpace = new Regex(@"\s+", RegexOptions.Compiled);
         static readonly Regex DotUnderscoreGap = new Regex(@"(?<=\S)[\._]+(?=\S)", RegexOptions.Compiled);
@@ -23,6 +24,7 @@ namespace VideoBatch {
             }
             t = DotUnderscoreGap.Replace(t, " ");
             t = MultiSpace.Replace(t, " ").Trim();
+            t = TrailingDuplicateIndex.Replace(t, "").Trim();
             t = t.Trim(' ', '.', '_', '-');
             return t;
         }
@@ -51,6 +53,8 @@ namespace VideoBatch {
             if (got.StartsWith("001")) return false;
             if (CleanForUpload("12.34 стратегия 2024").IndexOf("2024") < 0) return false;
             if (CleanForUpload("[01] Тест").StartsWith("[01]")) return false;
+            if (!string.Equals(CleanForUpload("Хороший сигнал (2)"), "Хороший сигнал", StringComparison.Ordinal)) return false;
+            if (!string.Equals(CleanForUpload("Good Signal. Bad Entry (3)"), "Good Signal. Bad Entry", StringComparison.Ordinal)) return false;
             return true;
         }
     }
