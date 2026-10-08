@@ -79,6 +79,7 @@ namespace VideoBatch {
             header.Controls.Add(new Label { Text = "Один объект — одна картинка в кадре. Загрузи варианты и расставь объекты.", AutoSize = true, ForeColor = Theme.TextSecondary, Location = new Point(2,36) });
             var settings = Button("⋯", SettingsMenu); settings.AutoSize = false; settings.Size = new Size(46,36); settings.MinimumSize = settings.Size; header.Controls.Add(settings);
             header.SizeChanged += (s,e) => settings.Location = new Point(header.Width - settings.Width,4);
+            Shown += (s,e) => settings.Location = new Point(header.Width - settings.Width,4);
             workspace = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(workspace,0,1);
             var columns = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
             columns.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 310)); columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); workspace.Controls.Add(columns);

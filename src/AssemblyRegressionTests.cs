@@ -298,6 +298,7 @@ namespace VideoBatch {
                     if (saved.Scenes.Count != 4 || saved.Scenes[0].Layers.Count != 2 || AssemblyFiles.Pool(saved.Resolve(saved.Scenes[0].Layers[0].Source),AssemblyFiles.PictureExtensions).Count != 1) throw new Exception("Studio checkpoint 15 failed");
                     if (!saved.Scenes[0].Layers[0].Fixed || saved.Scenes[0].Layers[0].FixedAssetHash!=AssemblyFiles.Hash(other) || saved.Transition!="pull" || !saved.Scenes[0].Layers[0].PlacementConfigured) throw new Exception("Studio modes and transition did not persist");
                     reopened.Show();System.Windows.Forms.Application.DoEvents();var preserved=saved.Scenes.Select(scene => saved.Resolve(scene.Folder)).ToArray();
+                    var headerPanel=(System.Windows.Forms.Panel)Field(reopened,"header");var settingsButton=headerPanel.Controls.Cast<System.Windows.Forms.Control>().First(control => control is System.Windows.Forms.Button);if (settingsButton.Left<headerPanel.Width/2 || settingsButton.Right>headerPanel.Width) throw new Exception("Settings overlap the title on initial open");
                     while (saved.Scenes.Count>0) {
                         int before=saved.Scenes.Count;Invoke(reopened,"SelectScene",before-1);
                         System.Windows.Forms.ContextMenuStrip menu;
