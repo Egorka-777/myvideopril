@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Xml;
 using System.Xml.Serialization;
 
 namespace VideoBatch {
@@ -122,7 +123,10 @@ namespace VideoBatch {
             byte[] plain = null;
             string temp = Path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try {
-                using (var stream = new MemoryStream()) { Serializer.Serialize(stream, data); plain = stream.ToArray(); }
+                using (var stream = new MemoryStream()) {
+                    using (var writer = XmlWriter.Create(stream, new XmlWriterSettings { Encoding = new UTF8Encoding(false), NewLineHandling = NewLineHandling.Entitize })) Serializer.Serialize(writer, data);
+                    plain = stream.ToArray();
+                }
                 var encrypted = ProtectedData.Protect(plain, null, DataProtectionScope.CurrentUser);
                 using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                     stream.Write(Header, 0, Header.Length); stream.Write(encrypted, 0, encrypted.Length); stream.Flush(true);
