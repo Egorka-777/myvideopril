@@ -20,7 +20,7 @@ namespace VideoBatch {
     }
     public class AssemblyScene {
         public string Folder = "";
-        public string Name = "Сцена", Videos = ""; // Empty: use the common video folder.
+        public string Name = "Сцена", Videos = "", VideoMode = ""; // Empty mode preserves legacy folder fallback.
         public double Duration = 4;
         public List<AssemblyLayer> Layers = new List<AssemblyLayer>();
         public override string ToString() { return Name + " · " + Duration.ToString("0.##") + " с"; }
@@ -51,6 +51,8 @@ namespace VideoBatch {
             return t;
         }
         public string VideoSource(AssemblyScene scene) {
+            if (scene == null || scene.VideoMode == "shared") return Videos;
+            if (scene.VideoMode == "own") return scene.Videos;
             if (string.IsNullOrWhiteSpace(scene.Videos)) return Videos;
             if (PackStudioVersion > 0 && AssemblyFiles.Pool(Resolve(scene.Videos), AssemblyFiles.VideoExtensions).Count == 0) return Videos;
             return scene.Videos;
@@ -59,12 +61,14 @@ namespace VideoBatch {
         public void Validate() {
             if (Version != 1) throw new Exception("Неизвестная версия шаблона.");
             if (string.IsNullOrWhiteSpace(Id) || Id.Length > 100 || Id.Any(c => !char.IsLetterOrDigit(c) && c != '-')) throw new Exception("Некорректный ID шаблона.");
-            if (Scenes == null || Scenes.Count < 1 || Scenes.Count > 12) throw new Exception("В шаблоне должно быть от 1 до 12 сцен.");
+            if (Scenes == null || Scenes.Count > 12) throw new Exception("В студии допустимо до 12 сцен.");
             if (Width < 180 || Width > 2160 || Height < 180 || Height > 3840 || Width % 2 != 0 || Height % 2 != 0) throw new Exception("Размер кадра должен быть чётным, от 180 до 2160 × 3840.");
             if (Fps < 15 || Fps > 60 || Count < 1) throw new Exception("FPS: 15–60. Количество роликов должно быть положительным.");
             Check(MusicVolume, 0, 2, "Громкость музыки"); Check(TransitionDuration, 0, 2, "Длительность перехода");
             if (!Transitions.Contains(Transition)) throw new Exception("Неизвестный переход.");
             foreach (var scene in Scenes) {
+                if (scene.VideoMode != "" && scene.VideoMode != "shared" && scene.VideoMode != "own") throw new Exception("Неизвестный источник видео сцены.");
+                if (scene.VideoMode == "own" && string.IsNullOrWhiteSpace(scene.Videos)) throw new Exception("Укажи папку своих видео для сцены.");
                 Check(scene.Duration, .5, 60, "Длительность сцены");
                 if (Transition != "cut" && TransitionDuration >= scene.Duration / 2) throw new Exception("Переход должен быть короче половины каждой сцены.");
                 if (scene.Layers == null || scene.Layers.Count > 8) throw new Exception("Допустимо до 8 изображений в сцене.");
@@ -161,6 +165,7 @@ namespace VideoBatch {
                 if (string.IsNullOrWhiteSpace(scene.Folder)) scene.Folder = NewFolder(t, i + 1);
                 Directory.CreateDirectory(t.Resolve(scene.Folder));
                 Directory.CreateDirectory(t.Resolve(Path.Combine(scene.Folder, "Видео")));
+                if (scene.VideoMode == "") scene.VideoMode = !string.IsNullOrWhiteSpace(scene.Videos) && AssemblyFiles.Pool(t.Resolve(scene.Videos),AssemblyFiles.VideoExtensions).Count > 0 ? "own" : "shared";
                 if (scene.Layers.Count == 0 && (migrate || objects)) scene.Layers.Add(new AssemblyLayer { Name = "Объект 1", Source = Path.Combine(scene.Folder, "Изображения") });
                 for (int j = 0; j < scene.Layers.Count; j++) {
                     var l = scene.Layers[j];

@@ -1,7 +1,7 @@
 name: Video assembly Windows kit
 on:
   push:
-    branches: [feat/template-video-assembly-20261006, feat/assembly-game-ui-20261006, feat/assembly-simple-packs-20261007, feat/assembly-polish-transitions-20261007, feat/assembly-objects-mixing-20261007]
+    branches: [feat/template-video-assembly-20261006, feat/assembly-game-ui-20261006, feat/assembly-simple-packs-20261007, feat/assembly-polish-transitions-20261007, feat/assembly-objects-mixing-20261007, feat/assembly-scene-video-routing-20261008]
   pull_request:
     paths:
       - 'src/Assembly*.cs'
@@ -29,7 +29,7 @@ jobs:
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
-          foreach ($method in @('RunPlannerTests','RunRasterTests','RunPackTests','RunCapacityTests','RunObjectsTests','RunUiTests','RunStudioUiTests')) {
+          foreach ($method in @('RunPlannerTests','RunRasterTests','RunPackTests','RunCapacityTests','RunObjectsTests','RunRoutingTests','RunUiTests','RunStudioUiTests')) {
             Write-Host "Starting $method"
             $ok = $asm.GetType('VideoBatch.AssemblyRegressionTests').GetMethod($method).Invoke($null,@())
             Write-Host "$method = $ok"

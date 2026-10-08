@@ -132,6 +132,30 @@ namespace VideoBatch {
                 return true;
             } finally {if (Directory.Exists(temp)) Directory.Delete(temp,true);}
         }
+        public static bool RunRoutingTests() {
+            string temp=Path.Combine(Path.GetTempPath(),"assembly-routing-"+Guid.NewGuid().ToString("N"));
+            try {
+                var t=AssemblyTemplate.Defaults();t.Materials=temp;t.Output=Path.Combine(temp,"out");t.Scenes.RemoveRange(2,2);AssemblyWorkspace.Prepare(t);
+                var videos=new System.Collections.Generic.List<AssemblyVideo>();
+                Action<string,string> video=(source,content) => {Directory.CreateDirectory(Path.GetDirectoryName(t.Resolve(source)));File.WriteAllText(t.Resolve(source),content);videos.Add(new AssemblyVideo {Path=t.Resolve(source),Hash=AssemblyFiles.Hash(t.Resolve(source)),Duration=12});};
+                video("Видео/shared.mp4","shared");
+                var first=t.Scenes[0];var second=t.Scenes[1]; first.Videos=Path.Combine(first.Folder,"Видео");second.Videos=Path.Combine(second.Folder,"Видео");first.VideoMode=second.VideoMode="own";
+                video(Path.Combine(first.Videos,"a.mp4"),"first-a");video(Path.Combine(first.Videos,"b.mp4"),"first-b");video(Path.Combine(second.Videos,"a.mp4"),"second-a");video(Path.Combine(second.Videos,"b.mp4"),"second-b");
+                var h=new AssemblyHistory();var c=new AssemblyInventory(t,videos,h).Calculate();if (!c.Exact || c.Variants!=4 || c.BatchLimit!=4) throw new Exception("Two independent video pools should produce four combinations");
+                var batch=AssemblyPlanner.Create(t,videos,h,new Random(6),2);
+                if (batch.Plans.Count!=2 || batch.Plans.Any(p => Path.GetDirectoryName(p.Scenes[0].Video.Path)!=t.Resolve(first.Videos) || Path.GetDirectoryName(p.Scenes[1].Video.Path)!=t.Resolve(second.Videos))) throw new Exception("Scene-specific backgrounds escaped their assigned scenes");
+                foreach (var scene in new[] {0,1}) if (batch.Plans.Select(p => p.Scenes[scene].Video.Hash).Distinct().Count()!=2) throw new Exception("Own video alternatives did not rotate");
+                AssemblyWorkspace.Insert(t,0);t.Scenes[0].Layers.Clear(); if (t.Scenes[1]!=first || t.VideoSource(first)!=first.Videos) throw new Exception("Insertion shifted a video assignment");
+                t.Scenes.RemoveAt(0);t.Scenes.Reverse(); var saved=Path.Combine(temp,"studio.xml");AssemblyFiles.Save(saved,t); t=AssemblyFiles.Load<AssemblyTemplate>(saved);AssemblyWorkspace.Prepare(t);
+                if (t.Scenes[0].Videos!=second.Videos || t.Scenes[1].Videos!=first.Videos || t.Scenes.Any(scene => scene.VideoMode!="own")) throw new Exception("Reorder or save lost own video sources");
+                var own=t.Scenes[0];string retained=own.Videos;own.VideoMode="shared";if (t.VideoSource(own)!=t.Videos) throw new Exception("Shared mode did not use the common pool");own.VideoMode="own";
+                foreach (string path in Directory.GetFiles(t.Resolve(retained))) File.Delete(path);
+                if (t.VideoSource(own)!=retained || AssemblyPlanner.Create(t,videos,h,new Random(1),1).Plans.Count!=0) throw new Exception("Empty own videos silently fell back to shared backgrounds");
+                t.Scenes.Clear();t.Validate();AssemblyWorkspace.Prepare(t);AssemblyFiles.Save(saved,t);t=AssemblyFiles.Load<AssemblyTemplate>(saved);t.Validate();
+                c=new AssemblyInventory(t,videos,h).Calculate(); if (t.Scenes.Count!=0 || c.Variants!=0 || c.BatchLimit!=0 || AssemblyPlanner.Create(t,videos,h,new Random(1),1).Plans.Count!=0) throw new Exception("An empty studio could generate phantom outputs");
+                AssemblyWorkspace.Insert(t,0);t.Validate();if (t.Scenes.Count!=1) throw new Exception("Could not add a scene back to an empty studio");return true;
+            } finally {if (Directory.Exists(temp)) Directory.Delete(temp,true);}
+        }
         public static bool RunCapacityTests() {
             string temp=Path.Combine(Path.GetTempPath(),"assembly-capacity-"+Guid.NewGuid().ToString("N"));
             try {
@@ -177,6 +201,7 @@ namespace VideoBatch {
         public static bool WriteStudioScreenshots(string folder) { return StudioCheck(folder); }
         static bool StudioCheck(string screenshots) {
             string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(),"assembly-studio-" + Guid.NewGuid().ToString("N"));
+            Exception uiFailure=null;System.Threading.ThreadExceptionEventHandler errors=(sender,args) => uiFailure=args.Exception;System.Windows.Forms.Application.ThreadException+=errors;
             try {
                 Directory.CreateDirectory(temp); Store.Root = temp;
                 var t = AssemblyTemplate.Defaults(); t.Materials = Path.Combine(temp,"materials"); t.Output = Path.Combine(temp,"output");
@@ -241,6 +266,13 @@ namespace VideoBatch {
                         Invoke(window,"SelectScene",3); Invoke(window,"SetImageMode",1); var finalBackground=new Bitmap(360,640); using (var g=Graphics.FromImage(finalBackground)) g.Clear(Color.FromArgb(16,26,25)); canvas.SetBackground(finalBackground);
                         WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Доступно 144 "),"Final card capacity did not refresh");
                         Capture(window,Path.Combine(screenshots,"studio-final-cta.png")); Invoke(window,"SelectScene",0);
+                        var firstScene=current.Scenes[0];var secondScene=current.Scenes[1];
+                        Invoke(window,"ImportPool",3,new string[] {current.Resolve("Видео/darkgreen.mp4")},false);string ownPath=firstScene.Videos;
+                        Invoke(window,"SelectScene",1);Invoke(window,"ImportPool",3,new string[] {current.Resolve("Видео/darkblue.mp4")},false);
+                        Invoke(window,"SelectScene",0);Invoke(window,"MoveScene",1);if (current.Scenes[1]!=firstScene || firstScene.Videos!=ownPath || firstScene.VideoMode!="own" || secondScene.VideoMode!="own") throw new Exception("Moving a scene lost its video assignment");Invoke(window,"MoveScene",-1);
+                        WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Доступно "),"Own video capacity did not finish");
+                        Capture(window,Path.Combine(screenshots,"studio-own-videos.png"));Invoke(window,"SceneVideoMenu");System.Windows.Forms.Application.DoEvents();var videoChoice=window.OwnedForms.First(f => f.Name=="StudioChoice");Capture(videoChoice,Path.Combine(screenshots,"studio-video-source-choice.png"));videoChoice.Close();
+                        Invoke(window,"SetSceneVideoMode","shared");if (firstScene.Videos!=ownPath || current.VideoSource(firstScene)!=current.Videos) throw new Exception("Switching to shared discarded the own pack");Invoke(window,"SelectScene",1);Invoke(window,"SetSceneVideoMode","shared");Invoke(window,"SelectScene",0);
                     }
                     // Replacement changes the pool atomically and retains old originals/copies.
                     double oldWidth=l.Width, oldHeight=l.Height, oldX=l.X, oldY=l.Y;
@@ -252,12 +284,12 @@ namespace VideoBatch {
                     Invoke(window,"AddObject"); var empty=current.Scenes[0].Layers[2]; Invoke(window,"Place",.72); double emptyY=empty.Y; Invoke(window,"ImportPool",2,new string[] {asset,other},false);
                     if (current.Scenes[0].Layers.Count!=3 || empty.Y!=emptyY || empty.Fixed) throw new Exception("Import created separate objects or reset prepared placement");
                     string removed=empty.Source; var objectCard=All(window).First(c => c.Name=="Object2"); objectCard.ContextMenuStrip.Show(objectCard,new Point(0,objectCard.Height)); System.Windows.Forms.Application.DoEvents();
-                    ((System.Windows.Forms.ToolStripMenuItem)objectCard.ContextMenuStrip.Items.Cast<System.Windows.Forms.ToolStripItem>().First(item => item.Text=="Удалить объект")).PerformClick(); if (!Directory.Exists(current.Resolve(removed)) || current.Scenes[0].Layers.Count!=2) throw new Exception("Object removal deleted its files");
+                    ((System.Windows.Forms.ToolStripMenuItem)objectCard.ContextMenuStrip.Items.Cast<System.Windows.Forms.ToolStripItem>().First(item => item.Text=="Удалить объект")).PerformClick(); WaitFor(() => current.Scenes[0].Layers.Count==2,"Object context removal did not complete"); if (!Directory.Exists(current.Resolve(removed)) || current.Scenes[0].Layers.Count!=2) throw new Exception("Object removal deleted its files");
                     Invoke(window,"InsertScene",1); if (current.Scenes.Count != 5 || !Directory.Exists(current.Resolve(current.Scenes[1].Folder))) throw new Exception("Studio checkpoint 12 failed");
                     string addedFolder = current.Scenes[1].Folder; Invoke(window,"MoveScene",1); if (current.Scenes[2].Folder != addedFolder) throw new Exception("Studio checkpoint 13 failed");
                     var moved=All(window).First(c => c.Name=="SceneCard2"); moved.ContextMenuStrip.Show(moved,new Point(0,moved.Height)); System.Windows.Forms.Application.DoEvents();
                     ((System.Windows.Forms.ToolStripMenuItem)moved.ContextMenuStrip.Items.Cast<System.Windows.Forms.ToolStripItem>().First(item => item.Name=="DeleteScene")).PerformClick();
-                    if (current.Scenes.Count != 4 || !Directory.Exists(current.Resolve(addedFolder))) throw new Exception("Scene context deletion failed");
+                    WaitFor(() => current.Scenes.Count==4,"Scene context deletion did not complete"); if (!Directory.Exists(current.Resolve(addedFolder)) || uiFailure!=null) throw new Exception("Scene context deletion failed",uiFailure);
                     Invoke(window,"Save"); window.Close();
                     WaitFor(() => Field(window,"capacityCancellation")==null && Field(window,"previewCancellation")==null,"Media checks did not stop when the studio closed");
                 }
@@ -265,12 +297,28 @@ namespace VideoBatch {
                     var saved = (AssemblyTemplate)Field(reopened,"template");
                     if (saved.Scenes.Count != 4 || saved.Scenes[0].Layers.Count != 2 || AssemblyFiles.Pool(saved.Resolve(saved.Scenes[0].Layers[0].Source),AssemblyFiles.PictureExtensions).Count != 1) throw new Exception("Studio checkpoint 15 failed");
                     if (!saved.Scenes[0].Layers[0].Fixed || saved.Scenes[0].Layers[0].FixedAssetHash!=AssemblyFiles.Hash(other) || saved.Transition!="pull" || !saved.Scenes[0].Layers[0].PlacementConfigured) throw new Exception("Studio modes and transition did not persist");
+                    reopened.Show();System.Windows.Forms.Application.DoEvents();var preserved=saved.Scenes.Select(scene => saved.Resolve(scene.Folder)).ToArray();
+                    while (saved.Scenes.Count>0) {
+                        int before=saved.Scenes.Count;Invoke(reopened,"SelectScene",before-1);
+                        System.Windows.Forms.ContextMenuStrip menu;
+                        if (before%2==0) {Invoke(reopened,"SceneMenu");menu=(System.Windows.Forms.ContextMenuStrip)Field(reopened,"activeSceneMenu");}
+                        else {var card=All(reopened).First(control => control.Name=="SceneCard"+(before-1));menu=card.ContextMenuStrip;menu.Show(card,new Point(0,card.Height));}
+                        System.Windows.Forms.Application.DoEvents();((System.Windows.Forms.ToolStripMenuItem)menu.Items.Cast<System.Windows.Forms.ToolStripItem>().First(item => item.Name=="DeleteScene")).PerformClick();
+                        WaitFor(() => saved.Scenes.Count==before-1,"Could not delete a scene down to an empty studio");System.Windows.Forms.Application.DoEvents();if (uiFailure!=null) throw new Exception("A menu was disposed during scene deletion",uiFailure);
+                    }
+                    Invoke(reopened,"Save");if (preserved.Any(path => !Directory.Exists(path)) || All(reopened).First(control => control.Name=="Assemble").Enabled) throw new Exception("Deleting the final scene removed files or left assembly enabled");
+                    if (screenshots!=null) Capture(reopened,Path.Combine(screenshots,"studio-empty.png"));reopened.Close();
+                }
+                using (var emptyWindow=new AssemblyWindow(true)) {
+                    emptyWindow.Show();System.Windows.Forms.Application.DoEvents();var empty=(AssemblyTemplate)Field(emptyWindow,"template");if (empty.Scenes.Count!=0) throw new Exception("An empty saved studio was replaced on reopen");
+                    Invoke(emptyWindow,"SetTransition","fade");Invoke(emptyWindow,"InsertScene",0);if (empty.Scenes.Count!=1) throw new Exception("Could not restore a scene in an empty studio");emptyWindow.Close();
+                    WaitFor(() => Field(emptyWindow,"capacityCancellation")==null && Field(emptyWindow,"previewCancellation")==null,"Empty-studio checks did not stop");
                 }
                 // Exercise actual legacy load, automatic migration and backup.
                 var legacy = LegacyTemplate(); legacy.Materials = t.Materials; legacy.Output = t.Output; AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),legacy);
                 using (var migrated = new AssemblyWindow(true)) { var saved = (AssemblyTemplate)Field(migrated,"template"); if (saved.PackStudioVersion != 1 || saved.Id != legacy.Id || !Directory.GetFiles(temp,"assembly-template.xml.before-packs-*.xml").Any()) throw new Exception("Studio checkpoint 16 failed"); }
                 var nav = new NavigationService(); int calls = 0; nav.Navigated += _ => calls++; nav.Navigate(NavSection.VideoAssembly); nav.Navigate(NavSection.VideoAssembly); return calls == 2;
-            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp,true); }
+            } finally { System.Windows.Forms.Application.ThreadException-=errors; Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp,true); }
         }
         static void Capture(System.Windows.Forms.Form form, string path) {
             form.PerformLayout(); System.Windows.Forms.Application.DoEvents();

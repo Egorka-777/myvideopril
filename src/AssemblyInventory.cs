@@ -76,6 +76,7 @@ namespace VideoBatch {
             p.Signature = AssemblyFiles.HashText(raw + (template.PackStudioVersion > 0 ? "|music:" + song.Hash : ""));
         }
         public List<AssemblyPlan> Enumerate() {
+            if (template.Scenes.Count==0) return new List<AssemblyPlan>();
             if (RawBound() > EnumerationLimit) return null;
             var output = new List<AssemblyPlan>();
             WalkScenes(0,new AssemblyPlan(),new HashSet<string>(),new HashSet<string>(),output);
@@ -115,6 +116,7 @@ namespace VideoBatch {
             }
         }
         public AssemblyPlanBatch CreateBatch(Random random,int count,AssemblyMixTracker mix,CancellationToken ct) {
+            if (template.Scenes.Count == 0) return new AssemblyPlanBatch {Limit="Добавь хотя бы одну сцену перед сборкой."};
             var candidates=Enumerate();
             if (candidates!=null) return Take(candidates,random,count,mix,ct);
             var batch=new AssemblyPlanBatch(); var used=new HashSet<string>(history.UsedImages); var combinations=new HashSet<string>(history.Combinations);
@@ -214,6 +216,7 @@ namespace VideoBatch {
             return false;
         }
         public AssemblyCapacity Calculate() {
+            if (template.Scenes.Count == 0) return new AssemblyCapacity {Exact=true,Variants=0,BatchLimit=0};
             var list = Enumerate(); var result = new AssemblyCapacity { Exact=list != null,Variants=list == null ? RawBound() : list.Count,BatchLimit=UniqueLimit(new HashSet<string>(history.UsedImages)) };
             if (list == null) {
                 // The usual studio uses a common video pool. Count its ordered choices exactly.

@@ -23,6 +23,8 @@ namespace VideoBatch {
             return "if(eq(PLANE,0),"+source+"0("+coordinates+"),if(eq(PLANE,1),"+source+"1("+coordinates+"),"+source+"2("+coordinates+")))";
         }
         public static async Task<List<AssemblyVideo>> ReadVideos(AssemblyTemplate t, string probe, CancellationToken ct) {
+            if (t.Scenes.Count == 0) return new List<AssemblyVideo>();
+            for (int i=0;i<t.Scenes.Count;i++) if (AssemblyFiles.Pool(t.Resolve(t.VideoSource(t.Scenes[i])),AssemblyFiles.VideoExtensions).Count==0) throw new Exception("Нет видео для сцены "+(i+1)+". Выбери общие видео или загрузи свои для этой сцены.");
             var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(t.VideoSource(s)), AssemblyFiles.VideoExtensions)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (paths.Count == 0) throw new Exception("Не найдены видео. Нажми «Видео» слева и добавь хотя бы один файл.");
             var result = new List<AssemblyVideo>();
@@ -104,6 +106,7 @@ namespace VideoBatch {
         }
         public static async Task<BatchResult> Run(AssemblyTemplate t, string ffmpeg, string ffprobe, string historyFolder, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, IProgress<Update> progress, CancellationToken ct) {
             t.Validate();
+            if (t.Scenes.Count==0) throw new Exception("Добавь хотя бы одну сцену перед сборкой.");
             if (string.IsNullOrWhiteSpace(t.Output)) throw new Exception("Выберите папку готовых роликов.");
             Directory.CreateDirectory(t.Output); Directory.CreateDirectory(historyFolder);
             string historyPath = Path.Combine(historyFolder, t.Id + ".xml");

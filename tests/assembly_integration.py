@@ -205,6 +205,39 @@ def main():
             samples = struct.unpack('<' + 'h' * (len(audio)//2), audio)
             crossings = sum(a <= 0 < b for a,b in zip(samples,samples[1:])); frequency = crossings / (len(samples)/48000)
             assert abs(frequency - int(Path(music_file).stem)) < 25, (frequency, music_file)
+        # User case: remove the third scene, two independent background pools,
+        # shared stock is retained but must not enter either own scene.
+        own_first=root/'own-first'; own_first.mkdir()
+        for name in ['0.mp4', '1.mp4']:
+            (own_first/name).write_bytes((root/'Видео'/name).read_bytes())
+        template(path,root,'pull',2,'two-own-scenes')
+        doc=ET.parse(path); top=doc.getroot();value(top,'PackStudioVersion',1);value(top,'ObjectStudioVersion',1)
+        scenes=top.find('Scenes');scenes.remove(scenes[-1]);value(scenes[0],'Videos',own_first)
+        for scene in scenes:
+            value(scene,'VideoMode','own')
+            scene.find('Layers/AssemblyLayer/Unique').text='false'
+        doc.write(path,encoding='utf-8',xml_declaration=True)
+        result=call();assert len(result['Outputs'])==2 and not result['Errors'],result
+        routes=[]
+        for file in result['Outputs']:
+            recipe=ET.parse(file+'.assembly.xml').getroot();nodes=recipe.findall('Scenes/AssemblyScenePlan')
+            assert len(nodes)==2 and Path(nodes[0].findtext('Video/Path')).parent.samefile(own_first) and Path(nodes[1].findtext('Video/Path')).parent.samefile(root/'Торговля')
+            routes.append(nodes)
+            probe=json.loads(run([args.ffprobe,'-v','error','-show_streams','-of','json',file]))
+            assert abs(float(next(s for s in probe['streams'] if s['codec_type']=='video')['duration'])-3)<.12
+            assert min(pixel(frame(file,.75),100,60))>190 and min(pixel(frame(file,2.25),100,60))>190
+            assert min(pixel(frame(file,1.65),180,10))>160,'own-scene image did not transition with the background'
+        for index in [0,1]:
+            assert len({nodes[index].findtext('Video/Hash') for nodes in routes})==2,'own backgrounds did not change between outputs'
+        # Own-empty is a material error, not implicit use of shared videos.
+        empty_own=root/'empty-own';empty_own.mkdir();top.find('Id').text='own-empty';scenes[0].find('Videos').text=str(empty_own);doc.write(path,encoding='utf-8',xml_declaration=True)
+        result=call();assert not result['Outputs'] and any('сцены 1' in e for e in result['Errors']),result
+        # An empty saved studio is legal, but may not generate a music-only video.
+        top.find('Id').text='zero-scenes';scenes.clear();doc.write(path,encoding='utf-8',xml_declaration=True)
+        rejected=subprocess.run([str(x) for x in [args.dotnet,host,'render',path,args.ffmpeg,args.ffprobe,history,'portable' if args.portable else 'native']],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
+        assert rejected.returncode!=0 and 'Добавь хотя бы одну сцену' in rejected.stderr,'empty studio produced a phantom output'
+        # Restore the existing short-video scenario before its single-scene check.
+        template(path,root,'cut',1,'one-scene');doc=ET.parse(path);top=doc.getroot();scenes=top.find('Scenes');value(top,'PackStudioVersion',1);value(top,'LoopShortVideos','true');top.find('Videos').text=str(short)
         # A single scene with no images or music is allowed and correctly joined.
         top.find('Id').text = 'one-scene'; top.find('Count').text = '1'; top.find('Music').text = str(root / 'empty-music')
         scenes.clear(); scene = ET.SubElement(scenes, 'AssemblyScene'); value(scene, 'Name', 'Only video'); value(scene, 'Duration', 1)
@@ -216,7 +249,7 @@ def main():
         cancelled = call(['100']); assert cancelled['Cancelled'] and not cancelled['Outputs'], cancelled
         assert not (history / 'cancel.xml').exists(), 'cancelled batch consumed headlines'
         assert not list((root / 'out').glob('.assembly-*')), 'temporary render folders leaked'
-    print('PASS: 3/4-scene MP4, scene insertion, two headlines, fixed bot + CTA, continuous music, fade/cut/slide/blur/zoom/pull/swipe, whole-frame overlay motion with saved scene-end timing, ordinary object rotation, one image per object, timing, history, cancellation, optional empty packs, short video loops, music pools and one scene')
+    print('PASS: 3/4-scene MP4, scene insertion, two headlines, fixed bot + CTA, continuous music, fade/cut/slide/blur/zoom/pull/swipe, whole-frame overlay motion with saved scene-end timing, ordinary object rotation, one image per object, timing, history, cancellation, optional empty packs, short video loops, music pools, two independent scene video pools, strict own-empty validation, an empty studio and one scene')
 
 
 if __name__ == '__main__':

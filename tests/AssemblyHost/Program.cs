@@ -8,7 +8,7 @@ class Program {
     sealed class Quiet : IProgress<Update> { public void Report(Update update) { } }
     static int Main(string[] args) {
         try {
-            if (args[0] == "self-test") { bool ok = AssemblyRegressionTests.RunPlannerTests() && AssemblyRegressionTests.RunCapacityTests() && AssemblyRegressionTests.RunObjectsTests(); Console.WriteLine(ok); return ok ? 0 : 1; }
+            if (args[0] == "self-test") { bool ok = AssemblyRegressionTests.RunPlannerTests() && AssemblyRegressionTests.RunCapacityTests() && AssemblyRegressionTests.RunObjectsTests() && AssemblyRegressionTests.RunRoutingTests(); Console.WriteLine(ok); return ok ? 0 : 1; }
             var t = AssemblyFiles.Load<AssemblyTemplate>(args[1]);
             Action<AssemblyTemplate, AssemblyLayerPlan, string> raster = args.Length > 5 && args[5] == "portable" ? CopyRaster : AssemblyRaster.Save;
             using (var ct = new CancellationTokenSource()) {
