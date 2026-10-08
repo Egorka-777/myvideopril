@@ -27,6 +27,7 @@ namespace VideoBatch {
         TikTokBackend tiktokBackend;
         HomePanel homePanel;
         ProfilesPanel profilesPanel;
+        AccountLibraryPanel accountLibraryPanel;
         ProxyPanel proxyPanel;
         YouTubeWorkspacePanel youtubeWorkspace;
         TikTokWorkspacePanel tiktokWorkspace;
@@ -90,7 +91,7 @@ namespace VideoBatch {
             var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Sidebar, Padding = new Padding(8, 12, 8, 12), AutoScroll = true };
             int y = 0;
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
-            y = AddNavGroup(panel, "Аккаунты", y, NavItem("Профили", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
+            y = AddNavGroup(panel, "Аккаунты", y, NavItem("Аккаунты", NavSection.AccountLibrary), NavItem("Профили", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
             y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok));
             y = AddNavGroup(panel, "Автоматизация", y, NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
@@ -189,6 +190,8 @@ namespace VideoBatch {
             tiktokBackend = new TikTokBackend(settings);
             homePanel = new HomePanel(settings, navigation);
             profilesPanel = new ProfilesPanel(settings, navigation, youtubeBackend, tiktokBackend);
+            accountLibraryPanel = new AccountLibraryPanel();
+            Deactivate += (s, e) => accountLibraryPanel.HideSecrets();
             proxyPanel = new ProxyPanel(settings, navigation, youtubeBackend, tiktokBackend);
             youtubeWorkspace = new YouTubeWorkspacePanel(settings, youtubeBackend, navigation);
             tiktokWorkspace = new TikTokWorkspacePanel(settings, tiktokBackend);
@@ -199,6 +202,7 @@ namespace VideoBatch {
             settingsPanel = new SettingsPanel(settings, () => SaveSettings());
             AddPanel(homePanel);
             AddPanel(profilesPanel);
+            AddPanel(accountLibraryPanel);
             AddPanel(proxyPanel);
             AddPanel(youtubeWorkspace);
             AddPanel(tiktokWorkspace);
@@ -236,6 +240,7 @@ namespace VideoBatch {
                 case NavSection.Tasks: next = tasksPanel; tasksPanel.RefreshData(); break;
                 case NavSection.Statistics: next = statsPanel; statsPanel.RefreshData(); break;
                 case NavSection.Profiles: next = profilesPanel; profilesPanel.RefreshData(); break;
+                case NavSection.AccountLibrary: next = accountLibraryPanel; accountLibraryPanel.RefreshData(); break;
                 case NavSection.Proxy: next = proxyPanel; proxyPanel.RefreshData(); break;
                 case NavSection.YouTube: next = youtubeWorkspace; youtubeWorkspace.OnNavigated(); break;
                 case NavSection.TikTok: next = tiktokWorkspace; tiktokWorkspace.OnNavigated(); break;
@@ -274,6 +279,7 @@ namespace VideoBatch {
         void ApplyGlobalSearch() {
             string q = (globalSearch.Text ?? "").Trim();
             profilesPanel?.ApplySearch(q);
+            accountLibraryPanel?.ApplySearch(q);
             tasksPanel?.ApplySearch(q);
         }
 
