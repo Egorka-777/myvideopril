@@ -1,0 +1,58 @@
+name: Accounts library Windows
+on:
+  push:
+    branches: [feat/accounts-library-20261008]
+  pull_request:
+    paths: ['src/Account*.cs', '.github/workflows/accounts-library.yml']
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile desktop
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Native encrypted storage, Excel and UI checks
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          foreach ($method in @('RunStoreTests','RunWorkbookTests','RunUiTests')) {
+            Write-Host "Starting accounts $method"
+            $ok = $asm.GetType('VideoBatch.AccountLibraryTests').GetMethod($method).Invoke($null,@())
+            Write-Host "$method = $ok"
+            if (!$ok) { throw "Failed: $method" }
+          }
+          foreach ($method in @('RunSelfTests','RunUiSelfTests')) {
+            if (!$asm.GetType('VideoBatch.ProcessingRegressionTests').GetMethod($method).Invoke($null,@())) { throw "Processing: $method" }
+          }
+          foreach ($method in @('RunPlannerTests','RunCapacityTests','RunUiTests')) {
+            if (!$asm.GetType('VideoBatch.AssemblyRegressionTests').GetMethod($method).Invoke($null,@())) { throw "Assembly: $method" }
+          }
+      - name: Real Windows screenshots
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          New-Item -ItemType Directory -Force artifacts/accounts-preview | Out-Null
+          if (!$asm.GetType('VideoBatch.AccountLibraryTests').GetMethod('WriteScreenshots').Invoke($null,@((Resolve-Path artifacts/accounts-preview).Path))) { throw 'Screenshot capture failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoBatch-Accounts-Preview
+          path: artifacts/accounts-preview/*.png
+          if-no-files-found: error
+      - name: Package testing build
+        shell: pwsh
+        run: |
+          $target = 'artifacts/VideoBatch-Accounts-Test'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item bin/Release/net48/VideoBatch.exe $target
+          Copy-Item bin/Release/net48/VideoBatch.exe.config $target
+          Copy-Item docs/ACCOUNTS_RU.md $target
+          git rev-parse HEAD | Set-Content "$target/SOURCE_COMMIT.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoBatch-Accounts-Test-Build
+          path: artifacts/VideoBatch-Accounts-Test/*
+          if-no-files-found: error
