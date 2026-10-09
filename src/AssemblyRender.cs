@@ -18,6 +18,8 @@ namespace VideoBatch {
     public sealed class AssemblyRenderContext {
         internal string Encoder;
         internal string CacheDirectory;
+        internal string GraphFileOption = "-filter_complex_script";
+        internal bool GraphSupportChecked;
         internal readonly Dictionary<string, string> Rasters = new Dictionary<string, string>();
         public AssemblyRenderReport LastReport;
         public int EncoderThreads => Math.Min(8, Math.Max(1, Environment.ProcessorCount - 1));
@@ -84,7 +86,7 @@ namespace VideoBatch {
                     + ",afade=t=out:st=" + Core.N(t.Duration - fade) + ":d=" + Core.N(fade) + ",apad,atrim=duration=" + Core.N(t.Duration) + "[audio]");
             }
             File.WriteAllText(script, string.Join(";\n", graph), new UTF8Encoding(false));
-            args.AddRange(new[] { "-filter_complex_script", script, "-map", "[vout]" });
+            args.AddRange(new[] { context.GraphFileOption, script, "-map", "[vout]" });
             if (music) args.AddRange(new[] { "-map", "[audio]", "-c:a", "aac", "-b:a", "192k" }); else args.Add("-an");
             args.AddRange(EncoderArguments(encoder, context.EncoderThreads));
             args.AddRange(new[] { "-t", Core.N(t.Duration), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output });
@@ -124,6 +126,13 @@ namespace VideoBatch {
             }
             report.RasterSeconds = stage.Elapsed.TotalSeconds; stage.Restart();
             progress?.Invoke("Проверяю ускорение…");
+            if (!context.GraphSupportChecked) {
+                // New FFmpeg removed filter_complex_script in favour of the generic
+                // file-valued option syntax. Inspect the actual installed binary once.
+                string help = await Core.Tool(ffmpeg, new[] { "-hide_banner", "-h", "full" }, ct, null, 15).ConfigureAwait(false);
+                context.GraphFileOption = help.Contains("-filter_complex_script") ? "-filter_complex_script" : "-/filter_complex";
+                context.GraphSupportChecked = true;
+            }
             await SelectEncoder(t, ffmpeg, work, context, ct).ConfigureAwait(false);
             report.EncoderCheckSeconds = stage.Elapsed.TotalSeconds; stage.Restart();
             async Task Encode() {
