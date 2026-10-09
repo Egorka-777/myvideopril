@@ -245,7 +245,7 @@ namespace VideoBatch {
             menu.Items.Add("Проверить IP", null, async (s, ev) => { grid.Rows[e.RowIndex].Selected = true; await CheckSelectedIp(); });
             menu.Items.Add("Dolphin Profile ID", null, (s, ev) => CopyProfileId(p));
             menu.Items.Add("Изменить имя", null, (s, ev) => RenameProfile(p));
-            menu.Items.Add("Удалить из приложения", null, (s, ev) => RemoveProfile(p));
+            menu.Items.Add("Убрать из всех рабочих списков…", null, (s, ev) => RemoveProfile(p));
             menu.Items.Add("Прокси", null, (s, ev) => navigation.Navigate(NavSection.Proxy));
             menu.Items.Add("Журнал", null, (s, ev) => navigation.Navigate(NavSection.Logs));
             menu.Show(Cursor.Position);
@@ -267,7 +267,7 @@ namespace VideoBatch {
             }
             if (MessageBox.Show(this, "Удалить «" + p.DisplayName + "» из списков YouTube и TikTok в приложении?\nПрофиль в Dolphin, публикации и файлы на ПК сохранятся.",
                 "Удаление профиля", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            try { AccountRemoval.Remove(settings, p.YouTubeAccounts, p.TikTokAccounts); }
+            try { AccountLibrarySync.Sync(settings, new AccountLibraryStore()); AccountRemoval.Remove(settings, p.YouTubeAccounts, p.TikTokAccounts); }
             catch (Exception ex) { MessageBox.Show(this, "Профиль не удалён: " + ex.Message, "Профили", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
             youtubeBackend.Reload(); tiktokBackend.Reload(); RefreshData();
             TaskQueueStore.LogEvent(p.DisplayName, "Удаление из приложения", "Удалено", "Профиль Dolphin и файлы сохранены");

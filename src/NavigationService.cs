@@ -33,7 +33,7 @@ namespace VideoBatch {
                 case NavSection.Home: return "Главная";
                 case NavSection.Tasks: return "Задачи";
                 case NavSection.Statistics: return "Статистика";
-                case NavSection.Profiles: return "Профили";
+                case NavSection.Profiles: return "Профили браузера";
                 case NavSection.AccountLibrary: return "Аккаунты";
                 case NavSection.Proxy: return "Прокси";
                 case NavSection.VideoProcessing: return "Обработка видео";

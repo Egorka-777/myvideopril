@@ -1,7 +1,7 @@
 name: Accounts library Windows
 on:
   push:
-    branches: [feat/accounts-library-20261008]
+    branches: [feat/accounts-library-20261008, feat/accounts-sync-lists-20261009]
   pull_request:
     paths: ['src/Account*.cs', '.github/workflows/accounts-library.yml']
 jobs:
@@ -19,12 +19,13 @@ jobs:
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
-          foreach ($method in @('RunStoreTests','RunWorkbookTests','RunUiTests')) {
+          foreach ($method in @('RunStoreTests','RunWorkbookTests','RunUiTests','RunSyncTests','RunScopedRemovalTests','RunLinkedUiTests')) {
             Write-Host "Starting accounts $method"
             $ok = $asm.GetType('VideoBatch.AccountLibraryTests').GetMethod($method).Invoke($null,@())
             Write-Host "$method = $ok"
             if (!$ok) { throw "Failed: $method" }
           }
+          if (!$asm.GetType('VideoBatch.HttpRegressionSelfTests').GetMethod('RunAccountRemovalSelfTest').Invoke($null,@())) { throw 'Existing removal regression' }
           foreach ($method in @('RunSelfTests','RunUiSelfTests')) {
             if (!$asm.GetType('VideoBatch.ProcessingRegressionTests').GetMethod($method).Invoke($null,@())) { throw "Processing: $method" }
           }
@@ -37,6 +38,7 @@ jobs:
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           New-Item -ItemType Directory -Force artifacts/accounts-preview | Out-Null
           if (!$asm.GetType('VideoBatch.AccountLibraryTests').GetMethod('WriteScreenshots').Invoke($null,@((Resolve-Path artifacts/accounts-preview).Path))) { throw 'Screenshot capture failed' }
+          if (!$asm.GetType('VideoBatch.AccountLibraryTests').GetMethod('WriteSyncScreenshots').Invoke($null,@((Resolve-Path artifacts/accounts-preview).Path))) { throw 'Linked screenshot capture failed' }
       - uses: actions/upload-artifact@v4
         with:
           name: VideoBatch-Accounts-Preview

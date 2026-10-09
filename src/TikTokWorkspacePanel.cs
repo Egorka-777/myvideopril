@@ -209,7 +209,8 @@ namespace VideoBatch {
                 if (hit.RowIndex < 0 || !(grid.Rows[hit.RowIndex].Tag is TikTokAccount account)) return;
                 grid.ClearSelection(); grid.Rows[hit.RowIndex].Selected = true;
                 var menu = Theme.MakeContextMenu();
-                menu.Items.Add("Удалить аккаунт из приложения", null, (sender, args) => RemoveAccount(account));
+                string listMarket = NormMarket(account.Market);
+                menu.Items.Add("Убрать из списка " + listMarket, null, (sender, args) => RemoveAccount(account, listMarket));
                 menu.Show(grid.PointToScreen(e.Location));
             };
 
@@ -259,15 +260,15 @@ namespace VideoBatch {
 
         static string NormMarket(string m) { return (m ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU"; }
 
-        void RemoveAccount(TikTokAccount account) {
+        void RemoveAccount(TikTokAccount account, string listMarket) {
             if (account == null || !settings.TikTokAccounts.Contains(account)) return;
             if (backend.Window.IsBusy) { MessageBox.Show(this, "Сначала завершите операцию или нажмите Стоп и дождитесь её завершения.", "TikTok"); return; }
-            if (MessageBox.Show(this, "Удалить аккаунт «" + account.Name + "» из приложения?\nПрофиль Dolphin, аккаунт TikTok, публикации и файлы сохранятся. Автоимпорт из YouTube не вернёт эту строку.",
-                "Удаление аккаунта", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            try { AccountRemoval.Remove(settings, null, new[] { account }); }
+            if (MessageBox.Show(this, "Убрать «" + account.Name + "» из списка TikTok · " + listMarket + "?\nКарточка с данными, другие списки, профиль браузера, публикации и файлы сохранятся. Автоимпорт не вернёт строку в этот список.",
+                "Убрать из списка", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try { AccountRemoval.RemoveFromList(settings, listMarket, null, new[] { account }); }
             catch (Exception ex) { MessageBox.Show(this, "Аккаунт не удалён: " + ex.Message, "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
             backend.Reload(); RefreshGrid(skipSync: true);
-            AppendLog("Удалён аккаунт из списка: «" + account.Name + "».");
+            AppendLog("Убран из списка TikTok · " + listMarket + ": «" + account.Name + "».");
         }
 
 
@@ -308,6 +309,17 @@ namespace VideoBatch {
 
             RefreshGrid(skipSync: true);
 
+        }
+        public void ShowAccount(TikTokAccount account) {
+            if (account == null || !settings.TikTokAccounts.Contains(account)) return;
+            NavigationContext.SelectTikTok(account); marketView = NormMarket(account.Market);
+            settings.TikTokMarketView = marketView; accountSearch.Text = ""; backend.SetMarketView(marketView);
+            marketRu.BackColor = marketView == "RU" ? Theme.Accent : Theme.Elevated;
+            marketEn.BackColor = marketView == "EN" ? Theme.Accent : Theme.Elevated;
+            RefreshGrid(skipSync: true);
+            foreach (DataGridViewRow row in grid.Rows) if (ReferenceEquals(row.Tag, account)) {
+                grid.ClearSelection(); row.Selected = true; grid.CurrentCell = row.Cells["account"]; break;
+            }
         }
 
 

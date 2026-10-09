@@ -10,7 +10,7 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 
 namespace VideoBatch {
-    public static class AccountLibraryTests {
+    public static partial class AccountLibraryTests {
         static void Check(bool ok, string message) { if (!ok) throw new Exception("Accounts regression: " + message); }
         static string Temp() { string root = Path.Combine(Path.GetTempPath(), "vb-accounts-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root); return root; }
         public static bool RunStoreTests() {

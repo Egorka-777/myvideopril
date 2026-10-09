@@ -331,6 +331,19 @@ namespace VideoBatch {
             ApplyNavigationContext();
             RefreshGrid();
         }
+        public void ShowAccount(YouTubeChannel channel) {
+            if (channel == null || !settings.YouTubeChannels.Contains(channel)) return;
+            NavigationContext.SelectYouTube(channel);
+            marketView = NormMarket(channel.Market); kindView = NormKindView(channel.Kind);
+            settings.YouTubeMarketView = marketView; settings.YouTubeKindView = kindView;
+            accountSearch.Text = ""; statusFilterValue = "Все статусы";
+            StyleHeroToggle(marketRu, marketView == "RU"); StyleHeroToggle(marketEn, marketView == "EN");
+            StyleHeroToggle(kindShorts, kindView == "shorts"); StyleHeroToggle(kindLong, kindView == "long");
+            backend.SetMarketView(marketView); backend.SetKindView(kindView); RefreshGrid();
+            foreach (DataGridViewRow row in grid.Rows) if (ReferenceEquals(row.Tag, channel)) {
+                grid.ClearSelection(); row.Selected = true; grid.CurrentCell = row.Cells["account"]; break;
+            }
+        }
 
         void ApplyNavigationContext() {
             string pid = (NavigationContext.SelectedProfileId ?? "").Trim();
@@ -526,24 +539,25 @@ namespace VideoBatch {
             bool on = Convert.ToBoolean(grid.Rows[rowIndex].Cells["on"].Value ?? false);
             menu.Items.Add(on ? "Исключить из загрузки" : "Включить в загрузку", null, (s, e) => ToggleUploadFlag(rowIndex));
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Удалить аккаунт из приложения", null, (s, e) => RemoveAccount(ch));
+            string listMarket = NormMarket(ch.Market);
+            menu.Items.Add("Убрать из списка " + listMarket, null, (s, e) => RemoveAccount(ch, listMarket));
             menu.Show(screen);
         }
 
-        void RemoveAccount(YouTubeChannel ch) {
+        void RemoveAccount(YouTubeChannel ch, string listMarket) {
             if (ch == null || !settings.YouTubeChannels.Contains(ch)) return;
             if (live?.View(ch.ChannelId)?.Busy == true) { MessageBox.Show(this, "Сначала завершите эфир этого канала.", "YouTube"); return; }
             if (backend.Window.IsBusy) {
                 MessageBox.Show(this, "Сначала завершите операцию или нажмите Стоп и дождитесь её завершения.", "YouTube");
                 return;
             }
-            if (MessageBox.Show(this, "Удалить строку аккаунта «" + ch.Name + "» из приложения?\nПрофиль Dolphin, аккаунт YouTube, опубликованные видео и файлы на ПК сохранятся.",
-                "Удаление аккаунта", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            try { AccountRemoval.Remove(settings, new[] { ch }, null); }
+            if (MessageBox.Show(this, "Убрать «" + ch.Name + "» из списка YouTube · " + listMarket + "?\nКарточка с данными, другие списки, профиль браузера, публикации и файлы сохранятся.",
+                "Убрать из списка", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try { AccountRemoval.RemoveFromList(settings, listMarket, new[] { ch }, null); }
             catch (Exception ex) { MessageBox.Show(this, "Аккаунт не удалён: " + ex.Message, "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
             backend.Reload();
             RefreshGrid();
-            AppendLog("Удалён аккаунт из списка: «" + ch.Name + "».");
+            AppendLog("Убран из списка YouTube · " + listMarket + ": «" + ch.Name + "».");
         }
 
         void ToggleUploadFlag(int rowIndex) {

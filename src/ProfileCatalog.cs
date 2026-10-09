@@ -5,6 +5,19 @@ using System.Linq;
 namespace VideoBatch {
     public static class AccountRemoval {
         public static event Action<IEnumerable<YouTubeChannel>> RemovingYouTube;
+        public static void RemoveFromList(Preferences settings, string market, IEnumerable<YouTubeChannel> youtube,
+            IEnumerable<TikTokAccount> tiktok, AccountLibraryStore library = null, Action<Preferences> save = null) {
+            if (market != "RU" && market != "EN") throw new ArgumentException("Выбери список RU или EN.");
+            var yt = (youtube ?? Enumerable.Empty<YouTubeChannel>()).Where(x => x != null).ToList();
+            var tk = (tiktok ?? Enumerable.Empty<TikTokAccount>()).Where(x => x != null).ToList();
+            string norm(string value) => string.Equals(value, "EN", StringComparison.OrdinalIgnoreCase) ? "EN" : "RU";
+            if (yt.Any(x => norm(x.Market) != market || !settings.YouTubeChannels.Contains(x))
+                || tk.Any(x => norm(x.Market) != market || !settings.TikTokAccounts.Contains(x)))
+                throw new InvalidOperationException("Список изменился. Обнови его и выбери аккаунт ещё раз.");
+            // Keep the card and personal data before removing only the selected upload rows.
+            AccountLibrarySync.Sync(settings, library ?? new AccountLibraryStore(), save);
+            Remove(settings, yt, tk, save);
+        }
         // Persist before updating grids. Restore the same objects if saving fails.
         public static void Remove(Preferences settings, IEnumerable<YouTubeChannel> youtube,
             IEnumerable<TikTokAccount> tiktok, Action<Preferences> save = null) {
