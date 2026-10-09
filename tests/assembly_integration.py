@@ -104,6 +104,9 @@ def main():
             for t in [1.5, 3]:
                 samples = struct.unpack('<' + 'h' * 960, audio[int((t - .01) * 48000) * 2:int((t + .01) * 48000) * 2])
                 assert sum(v * v for v in samples) / len(samples) > 100000, 'music gap at scene boundary'
+            metrics = ET.parse(str(file) + '.performance.xml').getroot()
+            assert metrics.findtext('EncodePasses') == '1' and float(metrics.findtext('TotalSeconds')) > 0
+            assert metrics.findtext('Width') == '360' and metrics.findtext('Fps') == '30'
             recipe = ET.parse(str(file) + '.assembly.xml').getroot()
             videos = [n.findtext('Video/Path') for n in recipe.findall('Scenes/AssemblyScenePlan')]
             assert len(set(videos)) == scene_count and Path(videos[1]).parent.name == 'Торговля'

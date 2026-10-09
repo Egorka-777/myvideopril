@@ -281,8 +281,16 @@ namespace VideoBatch {
         void FormatMenu() {
             var choices=new List<Tuple<string,Action,bool>>();
             foreach (var f in new[] {Tuple.Create("9:16 · TikTok / Shorts",1080,1920),Tuple.Create("9:16 · 720p",720,1280),Tuple.Create("4:5 · вертикальный",1080,1350),Tuple.Create("3:4 · вертикальный",1080,1440),Tuple.Create("1:1 · квадрат",1080,1080),Tuple.Create("16:9 · широкий",1920,1080)}) {var format=f; choices.Add(Tuple.Create(format.Item1,(Action)(() => SetFormat(format.Item2,format.Item3)),template.Width==format.Item2 && template.Height==format.Item3));}
+            choices.Add(Tuple.Create("Ускорение · " + (template.RenderMode == "cpu" ? "процессор" : "авто"), (Action)RenderModeMenu, false));
             ShowChoices("Формат ролика",formatButton,choices);
         }
+        void RenderModeMenu() {
+            ShowChoices("Сборка роликов", formatButton, new[] {
+                Tuple.Create("Автоматически", (Action)(() => SetRenderMode("auto")), template.RenderMode == "auto"),
+                Tuple.Create("На процессоре", (Action)(() => SetRenderMode("cpu")), template.RenderMode == "cpu")
+            });
+        }
+        void SetRenderMode(string mode) { template.RenderMode = mode; Save(); status.Text = mode == "auto" ? "Ускорение включено. Видеокарта проверяется перед сборкой." : "Сборка на процессоре. Размер и расположение сохранены."; }
         Form ChoiceFrame(string title,Control anchor,int w,int h) {
             var popup=new Form {Name="StudioChoice",FormBorderStyle=FormBorderStyle.None,ShowInTaskbar=false,StartPosition=FormStartPosition.Manual,ClientSize=new Size(w,h),BackColor=Theme.Card,ForeColor=Theme.TextPrimary,Font=Theme.FontBody,KeyPreview=true};
             var area=Screen.FromControl(this).WorkingArea; var point=anchor.PointToScreen(new Point(0,anchor.Height+6)); popup.Location=new Point(Math.Max(area.Left,Math.Min(point.X,area.Right-w)),Math.Max(area.Top,Math.Min(point.Y,area.Bottom-h)));
