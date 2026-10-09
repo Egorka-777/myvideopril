@@ -14,7 +14,13 @@ namespace VideoBatch {
         public string Name = "", Platform = "YouTube", Language = "RU", Country = "", Status = "Проверить";
         public string Url = "", Login = "", Password = "", AccessNotes = "", Proxy = "", PurchaseUrl = "", Notes = "";
         public DateTime UpdatedUtc = DateTime.UtcNow;
-        public AccountRecord Copy() { return (AccountRecord)MemberwiseClone(); }
+        public string ImportedName = "", ImportedUrl = "", ImportedSourceKey = "";
+        public List<AccountSourceLink> Sources = new List<AccountSourceLink>();
+        public AccountRecord Copy() {
+            var copy = (AccountRecord)MemberwiseClone();
+            copy.Sources = (Sources ?? new List<AccountSourceLink>()).Select(s => s.Copy()).ToList();
+            return copy;
+        }
     }
 
     public sealed class AccountLibraryData {
@@ -22,7 +28,7 @@ namespace VideoBatch {
         public List<AccountRecord> Accounts = new List<AccountRecord>();
     }
 
-    /// <summary>Independent notebook. Never modifies upload profiles, settings.xml or browser sessions.</summary>
+    /// <summary>Encrypted account cards. Browser sessions and credentials are not read automatically.</summary>
     public sealed class AccountLibraryStore {
         static readonly byte[] Header = Encoding.ASCII.GetBytes("VBAC1\n");
         static readonly XmlSerializer Serializer = new XmlSerializer(typeof(AccountLibraryData));
@@ -31,6 +37,9 @@ namespace VideoBatch {
         public AccountLibraryStore(string root = null) { Path = System.IO.Path.Combine(root ?? Store.Root, "accounts.vault"); }
 
         public List<AccountRecord> Load() { return Locked(() => Read().Accounts.Select(a => a.Copy()).ToList()); }
+        internal AccountSyncResult Synchronize(Func<AccountLibraryData, AccountSyncResult> merge) {
+            return Locked(() => { var data = Read(); var result = merge(data); if (result.Changed) Write(data); return result; });
+        }
         public void Upsert(AccountRecord record) {
             Validate(record);
             Change(data => {
@@ -83,6 +92,7 @@ namespace VideoBatch {
         public static bool Matches(AccountRecord a, string query) {
             var words = (query ?? "").Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             string text = string.Join(" ", a.Name, a.Url, a.Country, a.Notes, a.Login, a.Platform, a.Language, a.Status, a.PurchaseUrl);
+            text += " " + string.Join(" ", (a.Sources ?? new List<AccountSourceLink>()).Select(s => s.ProfileId + " " + s.Name + " " + s.Market));
             return words.All(w => text.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
         }
         void Change(Action<AccountLibraryData> mutate) {

@@ -19,6 +19,7 @@ namespace VideoBatch {
         public string LocalJobId="", HttpVideoId="";
     }
     public class TikTokAccount {
+        public string AccountId = "";
         public bool Enabled=true;
         public string Name="",ProfileId="",ExpectedIp="",Video="",Title="",Description="",Caption="",Status="Готов";
         public string Market="RU";

@@ -91,7 +91,7 @@ namespace VideoBatch {
             var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Sidebar, Padding = new Padding(8, 12, 8, 12), AutoScroll = true };
             int y = 0;
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
-            y = AddNavGroup(panel, "Аккаунты", y, NavItem("Аккаунты", NavSection.AccountLibrary), NavItem("Профили", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
+            y = AddNavGroup(panel, "Аккаунты", y, NavItem("Аккаунты", NavSection.AccountLibrary), NavItem("Профили браузера", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
             y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok));
             y = AddNavGroup(panel, "Автоматизация", y, NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
@@ -190,7 +190,7 @@ namespace VideoBatch {
             tiktokBackend = new TikTokBackend(settings);
             homePanel = new HomePanel(settings, navigation);
             profilesPanel = new ProfilesPanel(settings, navigation, youtubeBackend, tiktokBackend);
-            accountLibraryPanel = new AccountLibraryPanel();
+            accountLibraryPanel = new AccountLibraryPanel(null, settings, OpenLibrarySource);
             Deactivate += (s, e) => accountLibraryPanel.HideSecrets();
             proxyPanel = new ProxyPanel(settings, navigation, youtubeBackend, tiktokBackend);
             youtubeWorkspace = new YouTubeWorkspacePanel(settings, youtubeBackend, navigation);
@@ -217,6 +217,16 @@ namespace VideoBatch {
             panel.Dock = DockStyle.Fill;
             panel.Visible = false;
             contentHost.Controls.Add(panel);
+        }
+
+        void OpenLibrarySource(AccountSourceLink link) {
+            if (link.Platform == "YouTube") {
+                var ch = settings.YouTubeChannels.FirstOrDefault(x => x.ChannelId == link.SourceId); if (ch == null) return;
+                navigation.Navigate(NavSection.YouTube); youtubeWorkspace.ShowAccount(ch);
+            } else {
+                var account = settings.TikTokAccounts.FirstOrDefault(x => x.AccountId == link.SourceId); if (account == null) return;
+                navigation.Navigate(NavSection.TikTok); tiktokWorkspace.ShowAccount(account);
+            }
         }
 
         void ShowSection(NavSection section) {

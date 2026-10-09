@@ -8,6 +8,8 @@ using System.Windows.Forms;
 namespace VideoBatch {
     public sealed class AccountLibraryPanel : UserControl {
         readonly AccountLibraryStore store;
+        readonly Preferences settings;
+        readonly Action<AccountSourceLink> openSource;
         readonly ListBox list = new ListBox();
         readonly TextBox search = Theme.MakeSearchBox();
         readonly ComboBox platform = Theme.MakeCombo(new[] { "Все площадки", "YouTube", "TikTok" });
@@ -23,9 +25,11 @@ namespace VideoBatch {
         string copiedSecret;
         bool rebuilding, revealed;
         string loadError = "";
+        int unresolved;
         public AccountRecord SelectedAccount => list.SelectedItem as AccountRecord;
-        public AccountLibraryPanel(AccountLibraryStore accountStore = null) {
+        public AccountLibraryPanel(AccountLibraryStore accountStore = null, Preferences prefs = null, Action<AccountSourceLink> open = null) {
             store = accountStore ?? new AccountLibraryStore();
+            settings = prefs; openSource = open;
             Name = "AccountLibrary"; BackColor = Theme.Background; ForeColor = Theme.TextPrimary; Font = Theme.FontBody;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -69,7 +73,10 @@ namespace VideoBatch {
         static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, string lParam);
         public void ApplySearch(string query) { search.Text = query ?? ""; }
         public void RefreshData() {
-            try { accounts = store.Load(); loadError = ""; add.Enabled = import.Enabled = true; }
+            try {
+                unresolved = settings == null ? 0 : AccountLibrarySync.Sync(settings, store).Unresolved;
+                accounts = store.Load(); loadError = ""; add.Enabled = import.Enabled = true;
+            }
             catch (Exception e) { accounts.Clear(); loadError = e.Message; add.Enabled = import.Enabled = false; }
             Filter();
         }
@@ -78,13 +85,14 @@ namespace VideoBatch {
             rebuilding = true;
             list.BeginUpdate(); list.Items.Clear();
             var visible = accounts.Where(a => (platform.SelectedIndex <= 0 || a.Platform == platform.Text)
-                && (language.SelectedIndex <= 0 || a.Language == language.Text)
+                && (language.SelectedIndex <= 0 || AccountLibrarySync.Markets(a).Contains(language.Text))
                 && (status.SelectedIndex <= 0 || a.Status == status.Text) && AccountLibraryStore.Matches(a, search.Text))
                 .OrderBy(a => a.Status == "Архив").ThenBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
             foreach (var a in visible) list.Items.Add(a);
             int selected = visible.FindIndex(a => a.Id == id); list.SelectedIndex = selected >= 0 ? selected : visible.Count > 0 ? 0 : -1;
             list.EndUpdate(); rebuilding = false;
             count.Text = loadError != "" ? "Не удалось открыть аккаунты" : "Аккаунтов: " + visible.Count + (visible.Count != accounts.Count ? " из " + accounts.Count : "") + " · выбери карточку слева";
+            if (unresolved > 0) count.Text += " · не связаны: " + unresolved;
             ShowCard();
         }
         void DrawAccount(object sender, DrawItemEventArgs e) {
@@ -94,10 +102,10 @@ namespace VideoBatch {
             if (selected) using (var accent = new SolidBrush(Theme.Accent)) e.Graphics.FillRectangle(accent, e.Bounds.X, e.Bounds.Y + 12, 3, e.Bounds.Height - 24);
             var name = new Rectangle(e.Bounds.X + 16, e.Bounds.Y + 10, e.Bounds.Width - 30, 26);
             TextRenderer.DrawText(e.Graphics, a.Name, Theme.FontCardTitle, name, Theme.TextPrimary, TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            TextRenderer.DrawText(e.Graphics, a.Platform + " · " + a.Language + (a.Country == "" ? "" : " · " + a.Country), Theme.FontSmall,
+            TextRenderer.DrawText(e.Graphics, a.Platform + " · " + string.Join("/", AccountLibrarySync.Markets(a)) + (a.Country == "" ? "" : " · " + a.Country), Theme.FontSmall,
                 new Rectangle(name.X, name.Y + 27, name.Width, 18), Theme.TextSecondary, TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             Color color = a.Status == "Рабочий" ? Theme.Success : a.Status == "Заблокирован" || a.Status == "Не работает" ? Theme.Error : Theme.TextMuted;
-            TextRenderer.DrawText(e.Graphics, "● " + a.Status, Theme.FontSmall, new Rectangle(name.X, name.Y + 46, name.Width, 18), color, TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(e.Graphics, "● " + a.Status + (AccountLibrarySync.Missing(a).Length > 0 ? " · есть пустые поля" : ""), Theme.FontSmall, new Rectangle(name.X, name.Y + 46, name.Width, 18), color, TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
         void ShowCard() {
             HideSecrets(); secretFields.Clear(); detail.SuspendLayout();
@@ -108,12 +116,19 @@ namespace VideoBatch {
                 AddText(empty, loadError != "" ? loadError : accounts.Count == 0 ? "Название, вход, прокси и покупка — всё будет в одной карточке. Начни с «+ Аккаунт» или перенеси свою вкладку Excel." : "Попробуй другое название или убери фильтры.");
             } else {
                 var hero = Card(a.Name);
-                AddText(hero, a.Platform + " · " + a.Language + (a.Country == "" ? "" : " · " + a.Country));
+                AddText(hero, a.Platform + " · " + string.Join("/", AccountLibrarySync.Markets(a)) + (a.Country == "" ? "" : " · " + a.Country));
+                var missing = AccountLibrarySync.Missing(a);
+                if (missing.Length > 0) { AddText(hero, "Не заполнено: " + string.Join(", ", missing) + "."); hero.Controls[hero.Controls.Count - 1].ForeColor = Theme.Warning; }
                 var tools = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 6, 0, 0) };
                 var quick = Theme.MakeCombo(AccountLibraryStore.Statuses); quick.Width = 150; quick.SelectedItem = a.Status; quick.Name = "AccountStatus";
                 quick.SelectedIndexChanged += (s, e) => Safe(() => { store.SetStatus(a.Id, quick.Text); RefreshData(); });
-                tools.Controls.Add(quick); tools.Controls.Add(Theme.MakeButton("Изменить", ghost: true, action: () => Edit(a)));
-                tools.Controls.Add(Theme.MakeButton("Удалить", ghost: true, action: () => Delete(a))); hero.Controls.Add(tools);
+                tools.Controls.Add(quick); tools.Controls.Add(Theme.MakeButton(missing.Length > 0 ? "Дополнить" : "Изменить", ghost: true, action: () => Edit(a)));
+                var active = (a.Sources ?? new List<AccountSourceLink>()).Where(s => AccountLibrarySync.Sources(settings).Any(x => x.Key == s.Key)).ToList();
+                if (a.Sources?.Count > 0) {
+                    if (openSource != null) foreach (var link in active) { var captured = link; tools.Controls.Add(Theme.MakeButton(link.Platform + " · " + link.Market + (link.Kind == "" ? "" : " · " + link.Kind), ghost: true, action: () => openSource(captured))); }
+                } else tools.Controls.Add(Theme.MakeButton("Удалить", ghost: true, action: () => Delete(a)));
+                hero.Controls.Add(tools);
+                if (a.Sources?.Count > 0) AddText(hero, AccountLibrarySync.DescribeSources(a, settings));
                 var channel = Card("Канал"); ValueRow(channel, "Ссылка", a.Url, false, true);
                 var access = Card("Вход и прокси");
                 var reveal = Theme.MakeButton("Показать данные", ghost: true); reveal.Name = "RevealAccountSecrets";
