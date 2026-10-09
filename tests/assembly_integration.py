@@ -133,6 +133,19 @@ def main():
         for scene in [0, 1]:
             assert len({nodes[scene].findtext('Layers/AssemblyLayerPlan/Asset/Hash') for nodes in recipes}) == 3, 'ordinary headline pool repeated before all alternatives were used'
         assert len({nodes[2].findtext('Layers/AssemblyLayerPlan/Asset/Hash') for nodes in recipes}) == 1, 'fixed final card changed'
+        # Requested user workload: complete 21 outputs, with one recipe/history entry each.
+        template(path,root,'cut',21,'twenty-one')
+        doc=ET.parse(path);top=doc.getroot();value(top,'PackStudioVersion',1);value(top,'ObjectStudioVersion',1);value(top,'RenderMode','cpu')
+        for node in top.findall('Scenes/AssemblyScene/Layers/AssemblyLayer'): node.find('Unique').text='false'
+        doc.write(path,encoding='utf-8',xml_declaration=True)
+        result=call();assert len(result['Outputs'])==21 and not result['Errors'],result
+        verify(result['Outputs'][0]);verify(result['Outputs'][-1])
+        state=ET.parse(history/'twenty-one.xml').getroot()
+        signatures=[n.text for n in state.findall('Combinations/string')]
+        assert len(signatures)==len(set(signatures))==21 and len(state.findall('Outputs/string'))==21
+        assert all(Path(file+'.assembly.xml').exists() and Path(file+'.performance.xml').exists() for file in result['Outputs'])
+        last=ET.parse(result['Outputs'][-1]+'.performance.xml').getroot()
+        assert int(last.findtext('RasterCacheHits'))>=2, 'fixed final images not cached across the batch'
         for effect in ['cut', 'slideleft', 'hblur', 'zoomsoft', 'zoomout', 'pull', 'swipe']:
             template(path, root, effect, 1, 'effect-' + effect)
             # A saved explicit end equal to scene duration must include its outgoing transition.
