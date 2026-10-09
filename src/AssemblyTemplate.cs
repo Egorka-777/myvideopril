@@ -31,7 +31,7 @@ namespace VideoBatch {
         public string Id = Guid.NewGuid().ToString("N"), Name = "Моя студия";
         public string Materials = "", Videos = "Видео", Music = "", Output = "";
         public int Width = 1080, Height = 1920, Fps = 30, Count = 10;
-        public string Transition = "fade";
+        public string Transition = "fade", RenderMode = "auto";
         public double TransitionDuration = .35, MusicVolume = .8;
         public bool RandomVideoStart = true;
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
@@ -65,6 +65,7 @@ namespace VideoBatch {
             if (Width < 180 || Width > 2160 || Height < 180 || Height > 3840 || Width % 2 != 0 || Height % 2 != 0) throw new Exception("Размер кадра должен быть чётным, от 180 до 2160 × 3840.");
             if (Fps < 15 || Fps > 60 || Count < 1) throw new Exception("FPS: 15–60. Количество роликов должно быть положительным.");
             Check(MusicVolume, 0, 2, "Громкость музыки"); Check(TransitionDuration, 0, 2, "Длительность перехода");
+            if (RenderMode != "auto" && RenderMode != "cpu") throw new Exception("Выбери автоматическую сборку или сборку на процессоре.");
             if (!Transitions.Contains(Transition)) throw new Exception("Неизвестный переход.");
             foreach (var scene in Scenes) {
                 if (scene.VideoMode != "" && scene.VideoMode != "shared" && scene.VideoMode != "own") throw new Exception("Неизвестный источник видео сцены.");

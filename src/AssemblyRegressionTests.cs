@@ -219,6 +219,13 @@ namespace VideoBatch {
                     window.Show(); window.SetBounds(0,0,1180,790); System.Windows.Forms.Application.DoEvents();
                     if (window.BackColor != Theme.Background || All(window).Any(c => c.Visible && (c is System.Windows.Forms.TabControl || c is System.Windows.Forms.TextBox))) throw new Exception("Studio checkpoint 1 failed");
                     var current = (AssemblyTemplate)Field(window,"template"); if (current.Scenes.Count != 4) throw new Exception("Studio checkpoint 2 failed");
+                    Invoke(window,"SetRenderMode","cpu"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).RenderMode!="cpu") throw new Exception("CPU render mode did not persist");
+                    Invoke(window,"RenderModeMenu"); System.Windows.Forms.Application.DoEvents();
+                    var renderChoice=window.OwnedForms.First(f => f.Name=="StudioChoice");
+                    if (screenshots!=null) Capture(renderChoice,Path.Combine(screenshots,"studio-render-mode-choice.png"));
+                    All(renderChoice).OfType<System.Windows.Forms.Button>().Single(b => b.Text=="Автоматически").PerformClick();
+                    WaitFor(() => current.RenderMode=="auto","Actual render-mode button did not change the saved template");
+                    if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).RenderMode!="auto") throw new Exception("Automatic render mode did not persist");
                     if (!All(window).Any(c => c.Name=="Object0") || !All(window).Any(c => c.Name=="AddObject") || All(window).Any(c => c.Text=="10 роликов")) throw new Exception("Object selectors or the single-line footer are incorrect");
                     Invoke(window,"ImportPool",2,new string[] {asset,other},false);
                     var l = current.Scenes[0].Layers[0]; string source = l.Source;

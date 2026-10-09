@@ -1,7 +1,7 @@
 name: Video assembly Windows kit
 on:
   push:
-    branches: [feat/template-video-assembly-20261006, feat/assembly-game-ui-20261006, feat/assembly-simple-packs-20261007, feat/assembly-polish-transitions-20261007, feat/assembly-objects-mixing-20261007, feat/assembly-scene-video-routing-20261008]
+    branches: [feat/template-video-assembly-20261006, feat/assembly-game-ui-20261006, feat/assembly-simple-packs-20261007, feat/assembly-polish-transitions-20261007, feat/assembly-objects-mixing-20261007, feat/assembly-scene-video-routing-20261008, feat/assembly-speed-20261009]
   pull_request:
     paths:
       - 'src/Assembly*.cs'
@@ -10,6 +10,7 @@ on:
       - 'VideoBatch.csproj'
       - 'tests/AssemblyHost/**'
       - 'tests/assembly_integration.py'
+      - 'tests/assembly_speed.py'
       - '.github/workflows/video-assembly.yml'
 jobs:
   verify-and-package:
@@ -69,6 +70,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Test host build failed' }
           python tests/assembly_integration.py --host tests/AssemblyHost/bin/Release/net8.0-windows/AssemblyHost.dll
           if ($LASTEXITCODE -ne 0) { throw 'Video assembly integration failed' }
+      - name: Same-plan render speed and fallback
+        shell: pwsh
+        run: |
+          python tests/assembly_speed.py --host tests/AssemblyHost/bin/Release/net8.0-windows/AssemblyHost.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Speed or fallback regression' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: VideoBatch-Assembly-Speed-Measurements
+          path: artifacts/assembly-speed.json
+          if-no-files-found: warn
       - name: Package runnable application with FFmpeg and workers
         shell: pwsh
         run: |

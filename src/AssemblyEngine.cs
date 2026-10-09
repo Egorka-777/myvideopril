@@ -85,7 +85,11 @@ namespace VideoBatch {
             args.AddRange(new[] { "-t", Core.N(t.Duration), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output });
             return args;
         }
-        public static async Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
+        public static Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress, AssemblyRenderContext context = null, Action<double> fraction = null) {
+            return AssemblyRender.Run(t, p, ffmpeg, ffprobe, output, work, rasterize, ct, progress, context, fraction);
+        }
+        // Retained only as a reference for controlled before/after benchmarks.
+        public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
             Directory.CreateDirectory(work); var paths = new List<string>();
             for (int i = 0; i < p.Scenes.Count; i++) {
                 ct.ThrowIfCancellationRequested(); var scene = p.Scenes[i];
@@ -118,6 +122,7 @@ namespace VideoBatch {
                     progress.Report(new Update("Проверяю материалы…", 0));
                     var videos = await ReadVideos(t, ffprobe, ct).ConfigureAwait(false);
                     var random=new Random(); var mix=new AssemblyMixTracker();
+                    var renderContext = new AssemblyRenderContext { CacheDirectory = Path.Combine(work, "raster-cache") };
                     while (result.Outputs.Count<t.Count) {
                         ct.ThrowIfCancellationRequested();
                         var batch = AssemblyPlanner.Create(t, videos, history, random, Math.Min(256,t.Count-result.Outputs.Count),mix,ct);
@@ -129,13 +134,17 @@ namespace VideoBatch {
                             string partial = Path.Combine(itemWork, "result.mp4");
                             string destination = Path.Combine(t.Output, "assembled-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4");
                             try {
-                                await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct, s => progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + s, 100.0 * global / t.Count))).ConfigureAwait(false);
+                                double renderFraction = 0;
+                                await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct,
+                                    s => progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + s, 100.0 * (global + renderFraction) / t.Count)), renderContext,
+                                    f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / t.Count)); }).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 // Keep an exact, readable recipe next to each completed video.
                                 AssemblyFiles.Save(destination + ".assembly.xml", plan);
+                                AssemblyFiles.Save(destination + ".performance.xml", renderContext.LastReport);
                                 File.Move(partial, destination);
                                 history.UsedImages.AddRange(plan.UniqueImages); history.Combinations.Add(plan.Signature); history.Outputs.Add(destination);
-                                try { AssemblyFiles.Save(historyPath, history); } catch { File.Delete(destination); File.Delete(destination + ".assembly.xml"); throw; }
+                                try { AssemblyFiles.Save(historyPath, history); } catch { File.Delete(destination); File.Delete(destination + ".assembly.xml"); File.Delete(destination + ".performance.xml"); throw; }
                                 result.Outputs.Add(destination); try {Directory.Delete(itemWork,true);} catch (IOException) { }
                             } catch (OperationCanceledException) { throw; }
                             catch (Exception e) { result.Errors.Add("Ролик " + (global + 1) + ": " + e.Message); break; }
