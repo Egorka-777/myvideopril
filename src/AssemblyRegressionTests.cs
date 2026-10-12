@@ -322,6 +322,11 @@ namespace VideoBatch {
                     Invoke(emptyWindow,"SetTransition","fade");Invoke(emptyWindow,"InsertScene",0);if (empty.Scenes.Count!=1) throw new Exception("Could not restore a scene in an empty studio");emptyWindow.Close();
                     WaitFor(() => Field(emptyWindow,"capacityCancellation")==null && Field(emptyWindow,"previewCancellation")==null,"Empty-studio checks did not stop");
                 }
+                using (var metadata=new ProcessingDialog(new ProcessingSettings {DeviceMetadata=true,CaptureDateEnabled=true},true)) {
+                    metadata.Show();System.Windows.Forms.Application.DoEvents();
+                    if (All(metadata).OfType<System.Windows.Forms.TabControl>().Single().TabPages.Count!=1) throw new Exception("Metadata editor exposes unrelated filters");
+                    if (screenshots!=null) Capture(metadata,Path.Combine(screenshots,"studio-metadata.png"));metadata.Close();
+                }
                 // Exercise actual legacy load, automatic migration and backup.
                 var legacy = LegacyTemplate(); legacy.Materials = t.Materials; legacy.Output = t.Output; AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),legacy);
                 using (var migrated = new AssemblyWindow(true)) { var saved = (AssemblyTemplate)Field(migrated,"template"); if (saved.PackStudioVersion != 1 || saved.Id != legacy.Id || !Directory.GetFiles(temp,"assembly-template.xml.before-packs-*.xml").Any()) throw new Exception("Studio checkpoint 16 failed"); }

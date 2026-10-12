@@ -1,7 +1,7 @@
 name: Video assembly Windows kit
 on:
   push:
-    branches: [feat/template-video-assembly-20261006, feat/assembly-game-ui-20261006, feat/assembly-simple-packs-20261007, feat/assembly-polish-transitions-20261007, feat/assembly-objects-mixing-20261007, feat/assembly-scene-video-routing-20261008, feat/assembly-speed-20261009]
+    branches: [feat/template-video-assembly-20261006, feat/assembly-game-ui-20261006, feat/assembly-simple-packs-20261007, feat/assembly-polish-transitions-20261007, feat/assembly-objects-mixing-20261007, feat/assembly-scene-video-routing-20261008, feat/assembly-speed-20261009, feat/assembly-history-metadata-20261012]
   pull_request:
     paths:
       - 'src/Assembly*.cs'
@@ -36,6 +36,7 @@ jobs:
             Write-Host "$method = $ok"
             if (!$ok) { throw "Failed: $method" }
           }
+          if (!$asm.GetType('VideoBatch.AssemblyHistoryTests').GetMethod('RunSelfTests').Invoke($null,@())) { throw 'Durable history regression' }
           foreach ($method in @('RunSelfTests','RunUiSelfTests')) {
             Write-Host "Starting processing $method"
             if (!$asm.GetType('VideoBatch.ProcessingRegressionTests').GetMethod($method).Invoke($null,@())) { throw "Processing regression: $method" }
@@ -70,6 +71,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Test host build failed' }
           python tests/assembly_integration.py --host tests/AssemblyHost/bin/Release/net8.0-windows/AssemblyHost.dll
           if ($LASTEXITCODE -ne 0) { throw 'Video assembly integration failed' }
+      - name: Restart-safe history and embedded device metadata
+        shell: pwsh
+        run: |
+          python tests/assembly_history_metadata.py --host tests/AssemblyHost/bin/Release/net8.0-windows/AssemblyHost.dll
+          if ($LASTEXITCODE -ne 0) { throw 'History or metadata integration failed' }
+          dotnet build tests/ProcessingHost/ProcessingHost.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Processing host build failed' }
+          python tests/processing_integration.py --host tests/ProcessingHost/bin/Release/net8.0/ProcessingHost.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Processing metadata regression failed' }
       - name: Same-plan render speed and fallback
         shell: pwsh
         run: |

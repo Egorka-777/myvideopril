@@ -28,8 +28,9 @@ namespace VideoBatch {
             };
             if (settings.DeviceMetadata) {
                 var device = ProcessingDevices.Sample(settings.Brands, random);
-                s.Brand = device.Brand; s.Model = device.Model; s.Software = device.Software;
+                s.Brand = device.Brand; s.Model = device.Model;
             }
+            s.Software=(settings.MetadataSoftware ?? "").Trim();
             if (settings.CaptureDateEnabled) {
                 s.HasCaptureDate = true;
                 s.CaptureDate = settings.RandomizeCaptureTime ? now.AddSeconds(-random.NextDouble() * settings.CaptureDaysBack * 86400)
@@ -125,15 +126,13 @@ namespace VideoBatch {
             }
             if (p.Metadata == "keep") args.AddRange(new[] { "-map_metadata", "0" });
             else args.AddRange(new[] { "-map_metadata", "-1", "-map_metadata:s:v", "-1", "-map_metadata:s:a", "-1", "-map_chapters", "-1" });
-            if (s.HasCaptureDate || p.Metadata == "now" || p.Metadata == "custom") {
-                DateTime date = s.HasCaptureDate ? s.CaptureDate : p.Metadata == "custom" ? p.CustomDate : DateTime.Now;
-                string stamp = date.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", Core.Inv);
-                args.AddRange(new[] { "-metadata", "creation_time=" + stamp, "-metadata:s:v:0", "creation_time=" + stamp });
-                if (audio) args.AddRange(new[] { "-metadata:s:a:0", "creation_time=" + stamp });
+            // Date modes remain compatible; an offset-bearing textual date accompanies UTC movie/track dates.
+            if (!s.HasCaptureDate && (p.Metadata=="now" || p.Metadata=="custom")) {
+                s.HasCaptureDate=true; s.CaptureDate=p.Metadata=="custom" ? p.CustomDate : DateTime.Now;
             }
-            if (!string.IsNullOrEmpty(s.Brand)) args.AddRange(new[] { "-metadata", "make=" + s.Brand, "-metadata", "model=" + s.Model, "-metadata", "software=" + s.Software });
+            VideoMetadata.Add(args,s,audio);
             args.AddRange(new[] { "-metadata:s:v:0", "rotate=0" });
-            if (p.Format != "mkv") args.AddRange(new[] { "-movflags", string.IsNullOrEmpty(s.Brand) ? "+faststart" : "+faststart+use_metadata_tags" });
+            if (p.Format != "mkv") args.AddRange(new[] { "-movflags", string.IsNullOrEmpty(s.Brand) && !s.HasCaptureDate && string.IsNullOrWhiteSpace(s.Software) ? "+faststart" : "+faststart+use_metadata_tags" });
             args.Add(output); return args;
         }
         static double Fraction(string value) {

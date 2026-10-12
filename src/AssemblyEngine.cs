@@ -113,12 +113,12 @@ namespace VideoBatch {
             if (t.Scenes.Count==0) throw new Exception("Добавь хотя бы одну сцену перед сборкой.");
             if (string.IsNullOrWhiteSpace(t.Output)) throw new Exception("Выберите папку готовых роликов.");
             Directory.CreateDirectory(t.Output); Directory.CreateDirectory(historyFolder);
-            string historyPath = Path.Combine(historyFolder, t.Id + ".xml");
+            string historyPath = AssemblyHistoryStore.PathFor(historyFolder);
             var result = new BatchResult(); string work = Path.Combine(t.Output, ".assembly-" + Guid.NewGuid().ToString("N")), limitNote="";
             try {
                 // A second process may not allocate the same headlines while the batch is rendering.
                 using (var gate = new FileStream(historyPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
-                    var history = File.Exists(historyPath) ? AssemblyFiles.Load<AssemblyHistory>(historyPath) : new AssemblyHistory();
+                    var history = AssemblyHistoryStore.Load(historyFolder);
                     progress.Report(new Update("Проверяю материалы…", 0));
                     var videos = await ReadVideos(t, ffprobe, ct).ConfigureAwait(false);
                     var random=new Random(); var mix=new AssemblyMixTracker();
@@ -140,21 +140,28 @@ namespace VideoBatch {
                                     s => progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + s, 100.0 * (global + renderFraction) / t.Count)), renderContext,
                                     f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / t.Count)); }).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
-                                // Keep an exact, readable recipe next to each completed video.
-                                AssemblyFiles.Save(destination + ".assembly.xml", plan);
-                                AssemblyFiles.Save(destination + ".performance.xml", renderContext.LastReport);
-                                File.Move(partial, destination);
-                                string chosenTitle = AssemblyOutputTags.PickTitle(t.TitleBank, random, usedTitles);
+                                // Tag and validate the private file before making it visible as a result.
+                                string chosenTitle=AssemblyOutputTags.PickTitle(t.TitleBank,random,usedTitles);
+                                var metadata=await AssemblyOutputTags.Apply(ffmpeg,ffprobe,partial,chosenTitle,t.OutputMetadata,random,ct).ConfigureAwait(false);
+                                ct.ThrowIfCancellationRequested();
+                                AssemblyHistoryRecord reservation=null; bool published=false;
                                 try {
-                                    await AssemblyOutputTags.Apply(ffmpeg, destination, chosenTitle, t.OutputMetadata, random, ct).ConfigureAwait(false);
-                                    if (!string.IsNullOrWhiteSpace(chosenTitle)) File.WriteAllText(destination + ".title.txt", chosenTitle, System.Text.Encoding.UTF8);
-                                } catch (Exception tagError) {
-                                    File.Delete(destination); File.Delete(destination + ".assembly.xml"); File.Delete(destination + ".performance.xml");
-                                    throw new Exception("Не удалось записать заголовок и метаданные: " + tagError.Message);
+                                    AssemblyOutputFiles.Prepare(destination);
+                                    AssemblyFiles.Save(AssemblyOutputFiles.Report(destination,".assembly.xml"),plan);
+                                    AssemblyFiles.Save(AssemblyOutputFiles.Report(destination,".performance.xml"),renderContext.LastReport);
+                                    File.WriteAllLines(AssemblyOutputFiles.Report(destination,".metadata.txt"),metadata,System.Text.Encoding.UTF8);
+                                    reservation=AssemblyHistoryStore.Reserve(historyFolder,history,plan,destination,t.Id,partial);
+                                    ct.ThrowIfCancellationRequested();
+                                    File.Move(partial,destination); published=true; result.Outputs.Add(destination);
+                                    AssemblyHistoryStore.Commit(historyFolder,history,reservation);
+                                } finally {
+                                    if (!published) {
+                                        AssemblyOutputFiles.DeleteReports(destination);
+                                        if (reservation!=null) AssemblyHistoryStore.Release(historyFolder,history,reservation);
+                                    }
+                                    // Once published, its durable reservation survives any commit failure.
                                 }
-                                history.UsedImages.AddRange(plan.UniqueImages); history.Combinations.Add(plan.Signature); history.Outputs.Add(destination);
-                                try { AssemblyFiles.Save(historyPath, history); } catch { File.Delete(destination); File.Delete(destination + ".assembly.xml"); File.Delete(destination + ".performance.xml"); throw; }
-                                result.Outputs.Add(destination); try {Directory.Delete(itemWork,true);} catch (IOException) { }
+                                try {Directory.Delete(itemWork,true);} catch (IOException) { }
                             } catch (OperationCanceledException) { throw; }
                             catch (Exception e) { result.Errors.Add("Ролик " + (global + 1) + ": " + e.Message); break; }
                         }

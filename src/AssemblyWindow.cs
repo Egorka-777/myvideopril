@@ -397,10 +397,26 @@ namespace VideoBatch {
             var menu = Theme.MakeContextMenu(); menu.Items.Add("Папка материалов",null,(s,e) => Ui.Open(template.Materials));
             menu.Items.Add("Куда сохранять ролики…",null,(s,e) => Safe(() => { var p = Ui.Folder(this,template.Output); if (p != null) { template.Output = p; Save(); } }));
             menu.Items.Add("Посмотреть пример ролика",null,async (s,e) => await Run(true));
+            menu.Items.Add("Служебные отчёты",null,(s,e) => Safe(() => Ui.Open(AssemblyOutputFiles.Folder(Path.Combine(template.Output,"report.mp4")))));
+            menu.Items.Add("Метаданные роликов…",null,(s,e) => MetadataMenu());
             menu.Items.Add("Переходы…",null,(s,e) => TransitionMenu());
             menu.Items.Add("Сохранить копию студии…",null,(s,e) => Safe(() => { Save(); using (var d = new SaveFileDialog { Filter = "Студия|*.xml", FileName = "Моя-студия.xml" }) if (d.ShowDialog(this) == DialogResult.OK) AssemblyFiles.Save(d.FileName,template); }));
             menu.Items.Add("Открыть сохранённую студию…",null,(s,e) => Safe(() => { using (var d = new OpenFileDialog { Filter = "Студия|*.xml" }) if (d.ShowDialog(this) == DialogResult.OK) { var t = AssemblyFiles.Load<AssemblyTemplate>(d.FileName); t.Validate(); AssemblyWorkspace.Prepare(t); template = t; BindTemplateValues(); previewImages.Clear(); BuildScenes(); SelectScene(0); Save(); } }));
             menu.Items.Add("Новая студия · 4 сцены",null,(s,e) => Safe(() => { Save(); AssemblyFiles.Save(templatePath + ".saved-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".xml",template); string folder = Path.Combine(template.Materials,"Студия-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); template = AssemblyTemplate.Defaults(); template.Materials = folder; template.Output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch","Assembled"); AssemblyWorkspace.Prepare(template); previewImages.Clear(); BindTemplateValues(); BuildScenes(); SelectScene(0); Save(); })); menu.Show(Cursor.Position);
+        }
+        void MetadataMenu() {
+            var source=template.OutputMetadata ?? AssemblyOutputMetadata.Default();
+            using (var dialog=new ProcessingDialog(new ProcessingSettings { DeviceMetadata=source.DeviceMetadata,
+                CaptureDateEnabled=source.CaptureDate,RandomizeCaptureTime=source.RandomizeCaptureTime,
+                CaptureDaysBack=source.CaptureDaysBack,Brands=source.Brands ?? (string[])ProcessingDevices.BrandNames.Clone(),
+                MetadataSoftware=source.Software },true)) {
+                dialog.SelectMetadataTab();
+                if (dialog.ShowDialog(this)!=DialogResult.OK) return;
+                var s=dialog.Settings;
+                template.OutputMetadata=new AssemblyOutputMetadata { DeviceMetadata=s.DeviceMetadata,CaptureDate=s.CaptureDateEnabled,
+                    RandomizeCaptureTime=s.RandomizeCaptureTime,CaptureDaysBack=s.CaptureDaysBack,Brands=s.Brands,Software=s.MetadataSoftware };
+                Save(); status.Text="Метаданные сохранены. Они записываются внутрь каждого готового ролика.";
+            }
         }
         void BindTemplateValues() { capacityKey=null; batchMaximum=0; UpdateCountControls(); loading=true; count.Maximum=int.MaxValue; count.Value=template.Count; volume.Value=(decimal)(template.MusicVolume*100); loading=false; }
         async void RequestBackground() {
@@ -419,14 +435,14 @@ namespace VideoBatch {
         async void RequestCapacity() {
             if (capacityLabel==null || !IsHandleCreated || IsDisposed || cancellation!=null) return;
             try {
-                var t=Store.Clone(template); string hp=Path.Combine(historyFolder,t.Id+".xml");
+                var t=Store.Clone(template); string hp=AssemblyHistoryStore.PathFor(historyFolder);
                 var files=t.Scenes.SelectMany(scene => Pool(t.VideoSource(scene),AssemblyFiles.VideoExtensions).Concat(scene.Layers.Where(l => l.Enabled).SelectMany(l => Pool(l.Source,t.PictureExtensions)))).Concat(Pool(t.Music,AssemblyFiles.MusicExtensions)).Distinct().ToList();
-                string key=AssemblyFiles.HashText(t.Id+"|"+t.LoopShortVideos+"|"+t.AllowVideoReuse+"|"+t.Transition+"|"+t.TransitionDuration+"|"+string.Join("|",t.Scenes.Select(scene => scene.Duration+":"+t.VideoSource(scene)+":"+string.Join(",",scene.Layers.Select(l => l.Enabled+":"+l.Source+":"+l.Unique+":"+l.Fixed+":"+l.FixedAssetHash))))+"|"+string.Join("|",files.Select(file => {var info=new FileInfo(file); return file+":"+info.Length+":"+info.LastWriteTimeUtc.Ticks;}))+"|"+(File.Exists(hp)?File.GetLastWriteTimeUtc(hp).Ticks:0));
+                string key=AssemblyFiles.HashText(t.Id+"|"+t.LoopShortVideos+"|"+t.AllowVideoReuse+"|"+t.Transition+"|"+t.TransitionDuration+"|"+string.Join("|",t.Scenes.Select(scene => scene.Duration+":"+t.VideoSource(scene)+":"+string.Join(",",scene.Layers.Select(l => l.Enabled+":"+l.Source+":"+l.Unique+":"+l.Fixed+":"+l.FixedAssetHash))))+"|"+string.Join("|",files.Select(file => {var info=new FileInfo(file); return file+":"+info.Length+":"+info.LastWriteTimeUtc.Ticks;}))+"|"+(Directory.Exists(historyFolder)?string.Join("|",Directory.GetFiles(historyFolder,"*.xml").Select(f => f+":"+File.GetLastWriteTimeUtc(f).Ticks)):""));
                 if (key==capacityKey) return; capacityKey=key; capacityCancellation?.Cancel(); int version=++capacityVersion;
                 var ct=new CancellationTokenSource(); capacityCancellation=ct; capacityLabel.Text="Считаю новые связки…"; batchMaximum=0; UpdateCountControls();
                 try {
                     if (!ToolsLocator.TryResolve(out string ffmpeg,out string probe,out string hint)) { capacityLabel.Text="Добавь FFmpeg для расчёта связок"; return; }
-                    var capacity=await Task.Run(async () => { var v=await AssemblyEngine.ReadVideos(t,probe,ct.Token); var h=File.Exists(hp)?AssemblyFiles.Load<AssemblyHistory>(hp):new AssemblyHistory(); return new AssemblyInventory(t,v,h).Calculate(); },ct.Token);
+                    var capacity=await Task.Run(async () => { var v=await AssemblyEngine.ReadVideos(t,probe,ct.Token); var h=AssemblyHistoryStore.Load(historyFolder); return new AssemblyInventory(t,v,h).Calculate(); },ct.Token);
                     if (version==capacityVersion && !IsDisposed) ApplyCapacity(capacity);
                 } catch (OperationCanceledException) { }
                 catch (Exception ex) { if (version==capacityVersion && !IsDisposed) { capacityLabel.Text=files.Any(f => AssemblyFiles.VideoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant())) ? "Проверь материалы · расчёт недоступен" : "Добавь видео для расчёта связок"; status.Text=ex.Message; capacityKey=null; } }
@@ -441,7 +457,7 @@ namespace VideoBatch {
                 cancellation = new CancellationTokenSource(); Busy(true); var t = Store.Clone(template);
                 var updates = new Progress<Update>(u => { status.Text = u.Text; progress.Value = (int)Math.Max(0,Math.Min(1000,u.Percent*10)); });
                 if (sample) {
-                    var videos = await AssemblyEngine.ReadVideos(t,probe,cancellation.Token); string hp = Path.Combine(historyFolder,t.Id+".xml"); var history = File.Exists(hp) ? AssemblyFiles.Load<AssemblyHistory>(hp) : new AssemblyHistory();
+                    var videos = await AssemblyEngine.ReadVideos(t,probe,cancellation.Token); string hp = AssemblyHistoryStore.PathFor(historyFolder); var history = AssemblyHistoryStore.Load(historyFolder);
                     var batch = AssemblyPlanner.Create(t,videos,history,new Random(),1,null,cancellation.Token); if (batch.Plans.Count == 0) throw new Exception(batch.Limit);
                     Directory.CreateDirectory(previewFolder); string path = Path.Combine(previewFolder,"example-" + Guid.NewGuid().ToString("N") + ".mp4"), work = Path.Combine(previewFolder,"render-" + Guid.NewGuid().ToString("N"));
                     try { await Task.Run(() => AssemblyEngine.Render(t,batch.Plans[0],ffmpeg,probe,path,work,AssemblyRaster.Save,cancellation.Token,s => ((IProgress<Update>)updates).Report(new Update(s,0)))); }

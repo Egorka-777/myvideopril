@@ -8,6 +8,7 @@ namespace VideoBatch {
         public bool RandomizeCaptureTime = true;
         public int CaptureDaysBack = 30;
         public string[] Brands;
+        public string Software = "";
 
         public static AssemblyOutputMetadata Default() {
             return new AssemblyOutputMetadata {
@@ -34,6 +35,7 @@ namespace VideoBatch {
                 CaptureDateEnabled = CaptureDate,
                 RandomizeCaptureTime = RandomizeCaptureTime,
                 CaptureDaysBack = CaptureDaysBack,
+                MetadataSoftware = Software,
                 Brands = brands
             };
         }

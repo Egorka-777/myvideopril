@@ -226,8 +226,10 @@ namespace VideoBatch {
         }
     }
     public class AssemblyHistory {
+        public int LedgerVersion;
         public List<string> UsedImages = new List<string>(), Combinations = new List<string>();
         public List<string> Outputs = new List<string>();
+        public List<AssemblyHistoryRecord> Records = new List<AssemblyHistoryRecord>();
     }
     public class AssemblyAsset { public string Path, Hash; }
     public class AssemblyVideo { public string Path, Hash; public double Duration; }

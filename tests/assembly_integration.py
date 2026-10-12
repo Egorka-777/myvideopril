@@ -82,7 +82,11 @@ def main():
         png(root / 'cta' / 'cta.png', (36, 480, 324, 590), (240, 240, 240, 255))
         run([args.ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=8', root / 'music.wav'])
         path = root / 'template.xml'; history = root / 'history'
+        def report(file, suffix):
+            return Path(file).parent / '.videobatch-reports' / (Path(file).name + suffix)
         def call(extra=()):
+            nonlocal history
+            history = root / 'history' / ET.parse(path).getroot().findtext('Id')
             cmd = [args.dotnet, host, 'render', path, args.ffmpeg, args.ffprobe, history, 'portable' if args.portable else 'native'] + list(extra)
             return json.loads(run(cmd))
         def frame(file, time):
@@ -104,10 +108,10 @@ def main():
             for t in [1.5, 3]:
                 samples = struct.unpack('<' + 'h' * 960, audio[int((t - .01) * 48000) * 2:int((t + .01) * 48000) * 2])
                 assert sum(v * v for v in samples) / len(samples) > 100000, 'music gap at scene boundary'
-            metrics = ET.parse(str(file) + '.performance.xml').getroot()
+            metrics = ET.parse(report(file, '.performance.xml')).getroot()
             assert metrics.findtext('EncodePasses') == '1' and float(metrics.findtext('TotalSeconds')) > 0
             assert metrics.findtext('Width') == '360' and metrics.findtext('Fps') == '30'
-            recipe = ET.parse(str(file) + '.assembly.xml').getroot()
+            recipe = ET.parse(report(file, '.assembly.xml')).getroot()
             videos = [n.findtext('Video/Path') for n in recipe.findall('Scenes/AssemblyScenePlan')]
             assert len(set(videos)) == scene_count and Path(videos[1]).parent.name == 'Торговля'
         template(path, root)
@@ -115,7 +119,7 @@ def main():
         for file in result['Outputs']:
             verify(file)
         stopped = call(); assert not stopped['Outputs'] and any('Закончились' in e for e in stopped['Errors']), stopped
-        state = ET.parse(history / 'integration.xml').getroot()
+        state = ET.parse(history / 'all-studios.xml').getroot()
         assert len(state.findall('UsedImages/string')) == 6, 'history did not consume headlines'
         # Ordinary object pools must rotate too: one alternative per object, not a stack.
         template(path, root, 'fade', 3, 'ordinary-objects')
@@ -127,7 +131,7 @@ def main():
         recipes = []
         for file in result['Outputs']:
             verify(file)
-            nodes = ET.parse(file + '.assembly.xml').getroot().findall('Scenes/AssemblyScenePlan')
+            nodes = ET.parse(report(file, '.assembly.xml')).getroot().findall('Scenes/AssemblyScenePlan')
             assert [len(n.findall('Layers/AssemblyLayerPlan')) for n in nodes] == [1, 1, 2], 'alternatives were stacked as objects'
             recipes.append(nodes)
         for scene in [0, 1]:
@@ -140,11 +144,11 @@ def main():
         doc.write(path,encoding='utf-8',xml_declaration=True)
         result=call();assert len(result['Outputs'])==21 and not result['Errors'],result
         verify(result['Outputs'][0]);verify(result['Outputs'][-1])
-        state=ET.parse(history/'twenty-one.xml').getroot()
+        state=ET.parse(history/'all-studios.xml').getroot()
         signatures=[n.text for n in state.findall('Combinations/string')]
         assert len(signatures)==len(set(signatures))==21 and len(state.findall('Outputs/string'))==21
-        assert all(Path(file+'.assembly.xml').exists() and Path(file+'.performance.xml').exists() for file in result['Outputs'])
-        last=ET.parse(result['Outputs'][-1]+'.performance.xml').getroot()
+        assert all(Path(report(file, '.assembly.xml')).exists() and Path(report(file, '.performance.xml')).exists() for file in result['Outputs'])
+        last=ET.parse(report(result['Outputs'][-1], '.performance.xml')).getroot()
         assert int(last.findtext('RasterCacheHits'))>=2, 'fixed final images not cached across the batch'
         for effect in ['cut', 'slideleft', 'hblur', 'zoomsoft', 'zoomout', 'pull', 'swipe']:
             template(path, root, effect, 1, 'effect-' + effect)
@@ -172,7 +176,7 @@ def main():
         scenes.insert(2, inserted); doc.write(path, encoding='utf-8', xml_declaration=True)
         result = call(); assert len(result['Outputs']) == 1 and not result['Errors'], result
         verify(result['Outputs'][0], duration=6, bot_time=5, scene_count=4)
-        recipe = ET.parse(result['Outputs'][0] + '.assembly.xml').getroot()
+        recipe = ET.parse(report(result['Outputs'][0], '.assembly.xml')).getroot()
         assert recipe.findall('Scenes/AssemblyScenePlan')[2].findtext('Scene/Name') == 'Inserted'
         assert min(pixel(frame(result['Outputs'][0], 3.7), 100, 520)) > 210, 'inserted overlay missing'
         # New pack studio: four scenes, optional empty pictures, short looping backgrounds,
@@ -212,7 +216,7 @@ def main():
             red = pixel(frame(file, 2.6), 180, 260)
             assert red[0] > 230 and red[1] < 25 and red[2] < 25, red
             assert min(pixel(frame(file, 2.6), 100, 520)) > 210
-            recipe = ET.parse(file + '.assembly.xml').getroot()
+            recipe = ET.parse(report(file, '.assembly.xml')).getroot()
             music_file = recipe.findtext('Music'); assert Path(music_file).parent.samefile(songs), (music_file, str(songs))
             nodes = recipe.findall('Scenes/AssemblyScenePlan')
             assert len(nodes) == 4 and not nodes[1].findall('Layers/AssemblyLayerPlan') and not nodes[3].findall('Layers/AssemblyLayerPlan')
@@ -236,7 +240,7 @@ def main():
         result=call();assert len(result['Outputs'])==2 and not result['Errors'],result
         routes=[]
         for file in result['Outputs']:
-            recipe=ET.parse(file+'.assembly.xml').getroot();nodes=recipe.findall('Scenes/AssemblyScenePlan')
+            recipe=ET.parse(report(file, '.assembly.xml')).getroot();nodes=recipe.findall('Scenes/AssemblyScenePlan')
             assert len(nodes)==2 and Path(nodes[0].findtext('Video/Path')).parent.samefile(own_first) and Path(nodes[1].findtext('Video/Path')).parent.samefile(root/'Торговля')
             routes.append(nodes)
             probe=json.loads(run([args.ffprobe,'-v','error','-show_streams','-of','json',file]))
@@ -263,7 +267,7 @@ def main():
         assert not any(s['codec_type'] == 'audio' for s in info['streams'])
         template(path, root, 'fade', 1, 'cancel')
         cancelled = call(['100']); assert cancelled['Cancelled'] and not cancelled['Outputs'], cancelled
-        assert not (history / 'cancel.xml').exists(), 'cancelled batch consumed headlines'
+        assert not (root / 'history' / 'cancel' / 'all-studios.xml').exists(), 'cancelled batch consumed headlines'
         assert not list((root / 'out').glob('.assembly-*')), 'temporary render folders leaked'
     print('PASS: 3/4-scene MP4, scene insertion, two headlines, fixed bot + CTA, continuous music, fade/cut/slide/blur/zoom/pull/swipe, whole-frame overlay motion with saved scene-end timing, ordinary object rotation, one image per object, timing, history, cancellation, optional empty packs, short video loops, music pools, two independent scene video pools, strict own-empty validation, an empty studio and one scene')
 

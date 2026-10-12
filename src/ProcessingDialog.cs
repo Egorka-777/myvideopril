@@ -14,22 +14,24 @@ namespace VideoBatch {
         CheckBox mirror, device, captureDate, randomTime;
         NumericUpDown days;
         Label preview;
+        TextBox software;
+        TabControl tabs;
         readonly Random random = new Random();
 
-        public ProcessingDialog(ProcessingSettings source) : base("Фильтры и эффекты", 690) {
+        public ProcessingDialog(ProcessingSettings source, bool metadataOnly = false) : base(metadataOnly ? "Метаданные роликов" : "Фильтры и эффекты", 690) {
             ClientSize = new Size(850, 690); MinimumSize = new Size(800, 580);
             Settings = Store.Clone(source ?? new ProcessingSettings()); Settings.Validate();
             var layout = Ui.Table(); layout.RowCount = 3;
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); Body.Controls.Add(layout);
-            var hint = Ui.Label("Для каждого результата выбираются новые значения между «от» и «до». Выключенные параметры сохраняют прежнюю обработку. Панель общая для коротких и длинных видео.", true);
+            var hint = Ui.Label(metadataOnly ? "Метки записываются внутрь ролика. Производитель и модель выбираются заново для каждого результата." : "Для каждого результата выбираются новые значения между «от» и «до». Выключенные параметры сохраняют прежнюю обработку. Панель общая для коротких и длинных видео.", true);
             hint.MaximumSize = new Size(770, 0); layout.Controls.Add(hint, 0, 0);
             var buttons = Ui.Flow(); buttons.WrapContents = true; buttons.Margin = new Padding(0, 0, 0, 12);
-            buttons.Controls.Add(Ui.Button("Случайные настройки", () => Safe(() => { Read(); Settings.RandomizeEnabledRanges(random); LoadValues(); })));
+            if (!metadataOnly) buttons.Controls.Add(Ui.Button("Случайные настройки", () => Safe(() => { Read(); Settings.RandomizeEnabledRanges(random); LoadValues(); })));
             buttons.Controls.Add(Ui.Button("Сохранить пресет", SavePreset)); buttons.Controls.Add(Ui.Button("Загрузить пресет", LoadPreset));
-            buttons.Controls.Add(Ui.Button("Выключить всё", () => { foreach (var row in rows) row.Enabled.Checked = false; mirror.Checked = device.Checked = captureDate.Checked = false; }));
+            buttons.Controls.Add(Ui.Button("Выключить всё", () => { foreach (var row in rows) row.Enabled.Checked = false; mirror.Checked = device.Checked = captureDate.Checked = false; if (software!=null) software.Text=""; }));
             layout.Controls.Add(buttons, 0, 1);
-            var tabs = new TabControl { Dock = DockStyle.Fill }; layout.Controls.Add(tabs, 0, 2);
+            tabs = new TabControl { Dock = DockStyle.Fill }; layout.Controls.Add(tabs, 0, 2);
             var filters = Page(tabs, "Фильтры"); var ft = RangeTable(filters);
             Add(ft, "Обрезка с каждой стороны, %", s => s.Crop, 0, 15);
             Add(ft, "Подрезка по времени — суммарно, %", s => s.Trim, 0, 15);
@@ -59,7 +61,7 @@ namespace VideoBatch {
             Detail(extra, "Период зума, с", "zoom", Settings.ZoomPeriod, .5, 30);
             Hint(effects, "100% зума = без приближения. Пик, период и центр выбираются заново для каждого результата. Затемнения ограничиваются половиной длины ролика, чтобы не перекрывать друг друга.");
             var metadata = Page(tabs, "Метаданные");
-            device = new CheckBox { Text = "Записывать случайные Brand / Model / Software", AutoSize = true };
+            device = new CheckBox { Text = "Случайные производитель и модель", AutoSize = true };
             metadata.Controls.Add(device);
             var brandPanel = new FlowLayoutPanel { AutoSize = true, Width = 730, WrapContents = true };
             foreach (string brand in ProcessingDevices.BrandNames) {
@@ -67,7 +69,12 @@ namespace VideoBatch {
                 brands.Add(brand, check); brandPanel.Controls.Add(check);
             }
             metadata.Controls.Add(brandPanel);
-            Hint(metadata, "Выбор только из отмеченных брендов. Model и Software берутся из одной записи выбранного бренда. Это пользовательские шаблоны метаданных, которые не подтверждают устройство съёмки.");
+            metadata.Controls.Add(Ui.Button("Все бренды", () => {foreach (var check in brands.Values) check.Checked=true;}));
+            Hint(metadata, "Выбор только из отмеченных брендов. Модель выбирается из списка своего бренда. Всего 148 моделей. Это пользовательские шаблоны метаданных, которые не подтверждают устройство съёмки.");
+            var softwareRow=Ui.Fields(); softwareRow.Width=730; softwareRow.Dock=DockStyle.None;
+            software=new TextBox { Text=Settings.MetadataSoftware ?? "", Width=360, MaxLength=120 };
+            Ui.Row(softwareRow,"Программа / версия (необязательно)",software); metadata.Controls.Add(softwareRow);
+            Hint(metadata,"Software — твой текст, например название программы. Оставь пустым, если версия неизвестна. Метки не подтверждают отправку через Telegram или съёмку телефоном.");
             captureDate = new CheckBox { Text = "Случайный сдвиг даты съёмки назад", AutoSize = true, Margin = new Padding(0, 15, 0, 8) };
             metadata.Controls.Add(captureDate);
             var dateRow = Ui.Fields(); dateRow.Width = 730; dateRow.Dock = DockStyle.None;
@@ -79,6 +86,7 @@ namespace VideoBatch {
             Hint(metadata, "Пример — отдельный случайный выбор. При обработке каждого результата значения выбираются заново.");
             device.CheckedChanged += (a, b) => { foreach (var check in brands.Values) check.Enabled = device.Checked; };
             captureDate.CheckedChanged += (a, b) => { days.Enabled = randomTime.Enabled = captureDate.Checked; };
+            if (metadataOnly) { tabs.TabPages.Remove(filters.Parent as TabPage); tabs.TabPages.Remove(audio.Parent as TabPage); tabs.TabPages.Remove(effects.Parent as TabPage); }
             LoadValues(); StandardButtons(Read);
         }
         static FlowLayoutPanel Page(TabControl tabs, string title) {
@@ -112,17 +120,18 @@ namespace VideoBatch {
             foreach (var row in rows) { var p = row.Get(Settings); p.Enabled = row.Enabled.Checked; p.Values = new Range((double)row.Min.Value, (double)row.Max.Value); }
             Settings.GridCell = DetailValue("grid"); Settings.ZoomPeriod = DetailValue("zoom"); Settings.ModulationFrequency = DetailValue("modulation");
             Settings.Mirror = mirror.Checked; Settings.DeviceMetadata = device.Checked; Settings.CaptureDateEnabled = captureDate.Checked;
-            Settings.CaptureDaysBack = (int)days.Value; Settings.RandomizeCaptureTime = randomTime.Checked;
+            Settings.MetadataSoftware=software.Text.Trim(); Settings.CaptureDaysBack = (int)days.Value; Settings.RandomizeCaptureTime = randomTime.Checked;
             Settings.Brands = brands.Where(p => p.Value.Checked).Select(p => p.Key).ToArray(); Settings.Validate();
         }
         void LoadValues() {
             foreach (var row in rows) { var p = row.Get(Settings); row.Min.Value = (decimal)p.Values.Min; row.Max.Value = (decimal)p.Values.Max; row.Enabled.Checked = p.Enabled; row.Min.Enabled = row.Max.Enabled = p.Enabled; }
             Put("grid", Settings.GridCell); Put("zoom", Settings.ZoomPeriod); Put("modulation", Settings.ModulationFrequency);
             mirror.Checked = Settings.Mirror; device.Checked = Settings.DeviceMetadata; captureDate.Checked = Settings.CaptureDateEnabled;
-            randomTime.Checked = Settings.RandomizeCaptureTime; days.Value = Settings.CaptureDaysBack;
+            software.Text=Settings.MetadataSoftware ?? ""; randomTime.Checked = Settings.RandomizeCaptureTime; days.Value = Settings.CaptureDaysBack;
             foreach (var item in brands) { item.Value.Checked = Settings.Brands.Contains(item.Key); item.Value.Enabled = device.Checked; }
             days.Enabled = randomTime.Enabled = captureDate.Checked; preview.Text = "Нажми «Прокрутить пример» для просмотра записи.";
         }
+        public void SelectMetadataTab() { tabs.SelectedIndex=tabs.TabPages.Count-1; }
         void Put(string key, Range range) { details[key][0].Value = (decimal)range.Min; details[key][1].Value = (decimal)range.Max; }
         void Preview() {
             Read(); var p = new Profile(); ProcessingEngine.Apply(p, Settings, new Media { Duration = 60 }, random, DateTime.Now);

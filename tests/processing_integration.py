@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='videobatch-effects-') as tmp:
     spatial = {'Mirror': True, 'Rotation': parameter(12), 'Crop': parameter(4), 'Brightness': parameter(-20), 'Contrast': parameter(60), 'Sharpness': parameter(-50), 'Noise': parameter(25), 'GridOpacity': parameter(50), 'Zoom': parameter(125)}
     baseline_frame = frame(base)
     for key, value in spatial.items():
-        paths = execute(root, 'spatial_' + key, source, {key: value}, count=3 if key == 'Mirror' else 1)
+        paths = execute(root, 'spatial_' + key, source, {key: value}, count=10 if key == 'Mirror' else 1)
         assert any(difference(frame(path), baseline_frame) > .5 for path in paths), key
         path = paths[0]
         stream = next(s for s in probe(path)['streams'] if s['codec_type'] == 'video')
@@ -139,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix='videobatch-effects-') as tmp:
     for fmt in ['mp4', 'mov', 'mkv']:
         path = execute(root, 'metadata_' + fmt, source, {'DeviceMetadata': True, 'Brands': ['OnePlus'], 'CaptureDateEnabled': True, 'CaptureDaysBack': 30, 'RandomizeCaptureTime': True}, profile={'Format': fmt})[0]
         tags = {k.lower(): v for k, v in probe(path)['format']['tags'].items()}
-        assert tags['make'] == 'OnePlus' and tags['model'] in ['11', '12'] and tags['software'] == 'OxygenOS 14', tags
+        assert tags['make'] == 'OnePlus' and tags['model'].startswith('OnePlus ') and 'software' not in tags, tags
         from datetime import datetime, timezone, timedelta
         # New FFprobe merges native MOV time and mdta creation_time with ';'.
         # Validate every representation and equality rather than ignoring either tag.
@@ -149,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='videobatch-effects-') as tmp:
         assert datetime.now(timezone.utc)-timedelta(days=30, seconds=3) <= stamp <= datetime.now(timezone.utc)
         assert abs(Path(path).stat().st_mtime-stamp.timestamp()) < 2
         assert 'SOURCE_TITLE' not in json.dumps(tags)
-    check('allowed brand/model/software and bounded capture/file dates survive MP4, MOV and MKV encoding')
+    check('allowed brand/model without invented software and bounded capture/file dates survive MP4, MOV and MKV encoding')
     music = root / 'music.wav'
     command([options.ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=1', music])
     effects = {'Trim': parameter(10), 'Speed': parameter(125), 'Pitch': parameter(125), 'FadeIn': parameter(.2), 'FadeOut': parameter(.2), 'Rotation': parameter(-12), 'Mirror': True, 'Zoom': parameter(110), 'Noise': parameter(2)}

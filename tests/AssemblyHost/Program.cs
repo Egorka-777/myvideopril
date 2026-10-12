@@ -14,8 +14,13 @@ class Program {
     }
     static int Main(string[] args) {
         try {
-            if (args[0] == "self-test") { bool ok = AssemblyRegressionTests.RunPlannerTests() && AssemblyRegressionTests.RunCapacityTests() && AssemblyRegressionTests.RunObjectsTests() && AssemblyRegressionTests.RunRoutingTests(); Console.WriteLine(ok); return ok ? 0 : 1; }
+            if (args[0] == "self-test") { bool ok = AssemblyRegressionTests.RunPlannerTests() && AssemblyRegressionTests.RunCapacityTests() && AssemblyRegressionTests.RunObjectsTests() && AssemblyRegressionTests.RunRoutingTests() && AssemblyHistoryTests.RunSelfTests(); Console.WriteLine(ok); return ok ? 0 : 1; }
             var t = AssemblyFiles.Load<AssemblyTemplate>(args[1]);
+            if (args[0]=="capacity") {
+                var videos=AssemblyEngine.ReadVideos(t,args[3],CancellationToken.None).GetAwaiter().GetResult();
+                var h=AssemblyHistoryStore.Load(args[4]); var c=new AssemblyInventory(t,videos,h).Calculate();
+                Console.WriteLine(JsonSerializer.Serialize(new {Remaining=c.Variants.ToString(),c.Exact,c.BatchLimit,Used=h.Combinations.Count})); return 0;
+            }
             Action<AssemblyTemplate, AssemblyLayerPlan, string> raster = args.Length > 5 && args[5] == "portable" ? CopyRaster : AssemblyRaster.Save;
             if (args[0] == "benchmark" || args[0] == "fallback") {
                 t.RenderMode = "cpu"; t.Validate(); Directory.CreateDirectory(args[4]);

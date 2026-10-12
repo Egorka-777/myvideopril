@@ -607,7 +607,10 @@ namespace VideoBatch {
             foreach (string arg in arguments) {
                 if (string.IsNullOrEmpty(arg)) { yield return arg; continue; }
                 if (arg.StartsWith("-", StringComparison.Ordinal)) { yield return arg; continue; }
-                if (arg.IndexOf(':') >= 1 || arg.StartsWith("\\\\")) yield return PathUtil.Normalize(arg);
+                // A colon also occurs in stream selectors, filter expressions and date tags.
+                // Only a rooted Windows path may go through the Windows path repair code.
+                bool drivePath=arg.Length>=3 && char.IsLetter(arg[0]) && arg[1]==':' && (arg[2]=='\\' || arg[2]=='/');
+                if (drivePath || arg.StartsWith("\\\\",StringComparison.Ordinal)) yield return PathUtil.Normalize(arg);
                 else yield return arg;
             }
         }
@@ -743,6 +746,9 @@ namespace VideoBatch {
                             progress.Report(new Update(label,100.0*done/total));
                             await Tool(job.FFmpeg,Arguments(input,partial,profile,media,narration),ct,line=>{if(line.StartsWith("out_time_us=")){double value=Parse(line.Substring(12))/1000000/duration;progress.Report(new Update(label,100.0*(baseDone+Math.Min(.99,Math.Max(0,value)))/total));}}).ConfigureAwait(false);
                             ct.ThrowIfCancellationRequested();if(!File.Exists(partial)||new FileInfo(partial).Length==0)throw new Exception("Не создан результат.");
+                            if(profile.Processing!=null && (profile.Processing.HasCaptureDate || !string.IsNullOrEmpty(profile.Processing.Brand) || !string.IsNullOrWhiteSpace(profile.Processing.Software)))
+                                VideoMetadata.Verify(await Probe(job.FFprobe,partial,ct).ConfigureAwait(false),profile.Processing,null,profile.Format!="mkv");
+                            ct.ThrowIfCancellationRequested();
                             File.Move(partial,dest);partial=null;result.Outputs.Add(dest);
                             try {DateTime created=DateTime.Now,modified=created;if(profile.FileDate=="keep"){created=File.GetCreationTime(input);modified=File.GetLastWriteTime(input);}else if(profile.FileDate=="custom")created=modified=profile.CustomDate;File.SetCreationTime(dest,created);File.SetLastWriteTime(dest,modified);}catch(Exception e){result.Errors.Add(filename+": видео создано, дату изменить не удалось. "+e.Message);}
                         }catch(OperationCanceledException){throw;}catch(Exception e){result.Errors.Add(Path.GetFileName(input)+", вариант "+profile.Slot+": "+e.Message);}finally{if(partial!=null&&File.Exists(partial))File.Delete(partial);}

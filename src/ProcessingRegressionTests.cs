@@ -28,10 +28,21 @@ namespace VideoBatch {
                     var profile = new Profile(); ProcessingEngine.Apply(profile, settings, media, random, now); var s = profile.Processing;
                     if (s.Rotation < 0 || s.Rotation > 2 || s.Pitch < .98 || s.Pitch > 1.02 || s.Volume < .85 || s.Volume > 1.1) return false;
                     if (s.TrimStart < 0 || s.TrimEnd < 0 || s.TrimStart + s.TrimEnd < .1 - 1e-8 || s.TrimStart + s.TrimEnd > .2 + 1e-8) return false;
-                    if (s.CaptureDate > now || s.CaptureDate < now.AddDays(-30) || s.Brand != "OnePlus" || s.Software != "OxygenOS 14") return false;
+                    if (s.CaptureDate > now || s.CaptureDate < now.AddDays(-30) || s.Brand != "OnePlus" || s.Software != "") return false;
                     varied |= previous >= 0 && previous != s.Rotation; previous = s.Rotation;
                 }
-                if (!varied) return false;
+                if (!varied || ProcessingDevices.BrandNames.Length!=15 || ProcessingDevices.ModelCount!=148) return false;
+                foreach (string brand in ProcessingDevices.BrandNames) {
+                    var models=new System.Collections.Generic.HashSet<string>();
+                    for (int i=0;i<500;i++) { var d=ProcessingDevices.Sample(new[] {brand},random); if (d.Brand!=brand || d.Software!="") return false; models.Add(d.Model); }
+                    if (models.Count<7) return false;
+                }
+                settings.MetadataSoftware="Telegram (пользовательская метка)";
+                var customSoftware=new Profile(); ProcessingEngine.Apply(customSoftware,settings,media,random,now);
+                if (customSoftware.Processing.Software!=settings.MetadataSoftware) return false;
+                var syntax=new[] {"-map","0:0","-metadata","creation_time=2026-10-12T09:30:00+07:00","-vf","scale=180:320","-metadata","description=https://t.me/example"};
+                var normalized=(System.Collections.Generic.IEnumerable<string>)typeof(Core).GetMethod("NormalizeToolArguments",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[] {syntax});
+                if (!normalized.SequenceEqual(syntax)) return false;
                 // Explicit fixed ranges stay exact; changing date time independently cannot add future dates.
                 var fixedSettings = new ProcessingSettings(); fixedSettings.Speed.Enabled = true;
                 fixedSettings.Speed.Values = new Range(125,125); fixedSettings.CaptureDateEnabled = true;
