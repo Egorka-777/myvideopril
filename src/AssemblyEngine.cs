@@ -155,6 +155,7 @@ namespace VideoBatch {
                                     reservation=AssemblyHistoryStore.Reserve(historyFolder,history,plan,destination,t.Id,partial,historyScope);
                                     ct.ThrowIfCancellationRequested();
                                     File.Move(partial,destination); published=true; result.Outputs.Add(destination);
+                                    AssemblyOutputFiles.DeleteLegacySidecars(destination);
                                     AssemblyHistoryStore.Commit(historyFolder,history,reservation,historyScope);
                                 } finally {
                                     if (!published) {

@@ -44,6 +44,35 @@ namespace VideoBatch {
                 string path=Report(output,suffix); if (File.Exists(path)) File.Delete(path);
             }
         }
+        static readonly string[] SidecarSuffixes = { ".assembly.xml", ".performance.xml", ".metadata.txt", ".title.txt" };
+        /// <summary>Old builds wrote recipe/txt next to the MP4; uploads need only the video file.</summary>
+        public static void DeleteLegacySidecars(string output) {
+            if (string.IsNullOrWhiteSpace(output)) return;
+            string dir = Path.GetDirectoryName(Path.GetFullPath(output)), name = Path.GetFileName(output);
+            if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(name)) return;
+            foreach (string suffix in SidecarSuffixes) {
+                string legacy = Path.Combine(dir, name + suffix);
+                if (!File.Exists(legacy)) continue;
+                string hidden = Report(output, suffix);
+                try {
+                    if (!File.Exists(hidden)) {
+                        Directory.CreateDirectory(Folder(output));
+                        File.Move(legacy, hidden);
+                    } else File.Delete(legacy);
+                } catch { try { File.Delete(legacy); } catch { } }
+            }
+        }
+        public static int CleanupOutputFolder(string outputFolder) {
+            if (string.IsNullOrWhiteSpace(outputFolder) || !Directory.Exists(outputFolder)) return 0;
+            int removed = 0;
+            foreach (string video in Directory.GetFiles(outputFolder, "*.mp4", SearchOption.TopDirectoryOnly)) {
+                int count = SidecarSuffixes.Count(suffix => File.Exists(video + suffix));
+                if (count == 0) continue;
+                DeleteLegacySidecars(video);
+                removed += count;
+            }
+            return removed;
+        }
     }
     public static class AssemblyHistoryStore {
         public static string PathFor(string folder, string scope = null) {

@@ -440,6 +440,11 @@ namespace VideoBatch {
             }));
             menu.Items.Add("Посмотреть пример ролика",null,async (s,e) => await Run(true));
             menu.Items.Add("Служебные отчёты",null,(s,e) => Safe(() => Ui.Open(AssemblyOutputFiles.Folder(Path.Combine(template.Output,"report.mp4")))));
+            menu.Items.Add("Убрать txt/xml рядом с роликами",null,(s,e) => Safe(() => {
+                Directory.CreateDirectory(template.Output);
+                int n = AssemblyOutputFiles.CleanupOutputFolder(template.Output);
+                status.Text = n == 0 ? "В папке результатов только MP4 — лишних файлов не найдено." : ("Убрано служебных файлов: " + n + ". Для загрузки нужны только MP4; рецепты хранятся в .videobatch-reports.");
+            }));
             menu.Items.Add("Метаданные роликов…",null,(s,e) => MetadataMenu());
             menu.Items.Add("Переходы…",null,(s,e) => TransitionMenu());
             menu.Items.Add("Сохранить копию студии…",null,(s,e) => Safe(() => { Save(); using (var d = new SaveFileDialog { Filter = "Студия|*.xml", FileName = "Моя-студия.xml" }) if (d.ShowDialog(this) == DialogResult.OK) AssemblyFiles.Save(d.FileName,template); }));
