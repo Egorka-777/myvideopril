@@ -88,6 +88,23 @@ namespace VideoBatch {
             captureDate.CheckedChanged += (a, b) => { days.Enabled = randomTime.Enabled = captureDate.Checked; };
             if (metadataOnly) { tabs.TabPages.Remove(filters.Parent as TabPage); tabs.TabPages.Remove(audio.Parent as TabPage); tabs.TabPages.Remove(effects.Parent as TabPage); }
             LoadValues(); StandardButtons(Read);
+            if (metadataOnly) {
+                ApplyAsphalt(this);
+                tabs.Appearance=TabAppearance.FlatButtons; tabs.SizeMode=TabSizeMode.Fixed;
+                tabs.ItemSize=new Size(1,1); // One page: the window title already names this section.
+            }
+        }
+        void ApplyAsphalt(Control control) {
+            control.BackColor=control is TextBox || control is NumericUpDown ? Theme.Elevated : Theme.Background;
+            control.ForeColor=control is Label ? Theme.TextSecondary : Theme.TextPrimary;
+            if (control is TabPage page) page.UseVisualStyleBackColor=false;
+            if (control is Button button) {
+                button.UseVisualStyleBackColor=false; button.FlatStyle=FlatStyle.Flat;
+                button.BackColor=ReferenceEquals(button,AcceptButton) ? Theme.Accent : Theme.Elevated;
+                button.ForeColor=Theme.TextPrimary; button.FlatAppearance.BorderColor=Theme.Border;
+                button.FlatAppearance.MouseOverBackColor=Theme.Hover;
+            }
+            foreach (Control child in control.Controls) ApplyAsphalt(child);
         }
         static FlowLayoutPanel Page(TabControl tabs, string title) {
             var page = new TabPage(title) { Padding = new Padding(12) };

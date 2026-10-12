@@ -27,7 +27,8 @@ namespace VideoBatch {
                 var record=AssemblyHistoryStore.Reserve(folder,h,plan,output,t.Id,staged);
                 Check(!AssemblyHistoryStore.Load(folder).Combinations.Contains(plan.Signature),"unpublished crash must release");
                 File.Move(staged,output);
-                // Simulate crash after final rename, before the commit call.
+                // Crash after rename, then an external move/delete before the next launch.
+                File.Delete(output);
                 var recovered=AssemblyHistoryStore.Load(folder);
                 Check(recovered.Combinations.Contains(plan.Signature) && recovered.Records.All(r => !r.Pending),"published crash must commit");
                 AssemblyHistoryStore.Save(folder,recovered); File.Delete(output);

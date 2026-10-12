@@ -324,7 +324,7 @@ namespace VideoBatch {
                 }
                 using (var metadata=new ProcessingDialog(new ProcessingSettings {DeviceMetadata=true,CaptureDateEnabled=true},true)) {
                     metadata.Show();System.Windows.Forms.Application.DoEvents();
-                    if (All(metadata).OfType<System.Windows.Forms.TabControl>().Single().TabPages.Count!=1) throw new Exception("Metadata editor exposes unrelated filters");
+                    if (metadata.BackColor!=Theme.Background || All(metadata).OfType<System.Windows.Forms.TabControl>().Single().TabPages.Count!=1) throw new Exception("Metadata editor exposes unrelated filters");
                     if (screenshots!=null) Capture(metadata,Path.Combine(screenshots,"studio-metadata.png"));metadata.Close();
                 }
                 // Exercise actual legacy load, automatic migration and backup.
