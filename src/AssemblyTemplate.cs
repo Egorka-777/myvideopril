@@ -35,6 +35,8 @@ namespace VideoBatch {
         public double TransitionDuration = .35, MusicVolume = .8;
         public bool RandomVideoStart = true;
         public string HistoryScope = AssemblyHistoryScope.Shared;
+        public bool AssemblyMarketsSeeded;
+        public AssemblyMarketSettings MarketRu = new AssemblyMarketSettings(), MarketEn = new AssemblyMarketSettings();
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();

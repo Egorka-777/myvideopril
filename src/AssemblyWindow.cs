@@ -27,7 +27,9 @@ namespace VideoBatch {
         FlowLayoutPanel options;
         FlowLayoutPanel footer, packChips;
         Label status, selectedCaption, capacityLabel;
-        Button videoButton, musicButton, formatButton, titlesButton, historyScopeButton, stop, imageFiles, transitionButton, imageModeButton, shuffleButton, variantsButton, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
+        Button videoButton, musicButton, formatButton, titlesButton, marketRuBtn, marketEnBtn, stop, imageFiles, transitionButton, imageModeButton, shuffleButton, variantsButton, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
+        string marketView = AssemblyHistoryScope.Ru;
+        Preferences assemblyPrefs;
         ProgressBar progress;
         readonly List<Button> sceneCards = new List<Button>();
         readonly Dictionary<AssemblyLayer, string> previewImages = new Dictionary<AssemblyLayer, string>();
@@ -46,6 +48,10 @@ namespace VideoBatch {
             }
             if (template.ObjectStudioVersion==0 && File.Exists(templatePath)) { File.Copy(templatePath,templatePath+".before-objects-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".xml",true); note="Объекты сохранены. Пачки с несколькими картинками теперь меняются; проверь лишние объекты."; }
             AssemblyWorkspace.Prepare(template);
+            assemblyPrefs = Store.Load();
+            marketView = AssemblyMarketProfiles.NormMarket(assemblyPrefs.AssemblyMarketView);
+            AssemblyMarketProfiles.EnsureSeeded(template);
+            AssemblyMarketProfiles.Apply(template, marketView);
             Text = "Сборка роликов — моя студия"; ClientSize = new Size(1180, 790); MinimumSize = new Size(980, 660);
             StartPosition = FormStartPosition.CenterParent; Font = Theme.FontBody; BackColor = Theme.Background; ForeColor = Theme.TextPrimary;
             var area = Screen.FromControl(this).WorkingArea; ClientSize = new Size(Math.Min(ClientSize.Width, area.Width - 24), Math.Min(ClientSize.Height, area.Height - 60));
@@ -73,13 +79,24 @@ namespace VideoBatch {
         ToolStripItem MenuAction(ContextMenuStrip menu,string caption,Action action) { return menu.Items.Add(caption,null,(sender,args) => {menu.Close(); Later(action);}); }
         void BuildStudio() {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18,12,18,12), RowCount = 3, ColumnCount = 1, BackColor = Theme.Background };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60)); root.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90)); Controls.Add(root); root.BringToFront();
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96)); root.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90)); Controls.Add(root); root.BringToFront();
             header = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(header,0,0);
-            header.Controls.Add(new Label { Text = "Моя студия", Font = Theme.FontPageTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Location = new Point(0,0) });
-            header.Controls.Add(new Label { Text = "Один объект — одна картинка в кадре. Загрузи варианты и расставь объекты.", AutoSize = true, ForeColor = Theme.TextSecondary, Location = new Point(2,36) });
-            var settings = Button("⋯", SettingsMenu); settings.AutoSize = false; settings.Size = new Size(46,36); settings.MinimumSize = settings.Size; header.Controls.Add(settings);
-            header.SizeChanged += (s,e) => settings.Location = new Point(header.Width - settings.Width,4);
-            Shown += (s,e) => settings.Location = new Point(header.Width - settings.Width,4);
+            var headerGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
+            headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize)); headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var titleStack = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0, 0, 8, 0) };
+            titleStack.Controls.Add(new Label { Text = "Моя студия", Font = Theme.FontPageTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 0, 0, 2) });
+            titleStack.Controls.Add(new Label { Text = "RU и EN — отдельные связки, заголовки и папка готовых роликов.", AutoSize = true, ForeColor = Theme.TextSecondary, MaximumSize = new Size(640, 0) });
+            headerGrid.Controls.Add(titleStack, 0, 0);
+            var settings = Button("⋯", SettingsMenu); settings.Name = "AssemblySettings"; settings.AutoSize = false; settings.Size = new Size(46, 36); settings.MinimumSize = settings.Size;
+            headerGrid.Controls.Add(settings, 1, 0);
+            marketRuBtn = Theme.MakeHeroToggle("RU", marketView == AssemblyHistoryScope.Ru, () => SwitchMarket(AssemblyHistoryScope.Ru));
+            marketEnBtn = Theme.MakeHeroToggle("EN", marketView == AssemblyHistoryScope.En, () => SwitchMarket(AssemblyHistoryScope.En));
+            marketRuBtn.Name = "AssemblyMarketRu"; marketEnBtn.Name = "AssemblyMarketEn";
+            var marketRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 8, 0, 0) };
+            marketRow.Controls.Add(Theme.MakeHeroSegmentGroup("Сборка", marketRuBtn, marketEnBtn));
+            headerGrid.Controls.Add(marketRow, 0, 1); headerGrid.SetColumnSpan(marketRow, 2);
+            header.Controls.Add(headerGrid);
             workspace = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(workspace,0,1);
             var columns = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
             columns.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 310)); columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); workspace.Controls.Add(columns);
@@ -118,7 +135,6 @@ namespace VideoBatch {
             footer=Row(); footer.Padding=new Padding(0,6,0,0); options=footer;
             formatButton=Button("",FormatMenu); formatButton.Name="Format"; FooterSize(formatButton,106);
             transitionButton=Button("",TransitionMenu); transitionButton.Name="Transitions"; FooterSize(transitionButton,168);
-            historyScopeButton=Button("",HistoryScopeMenu); historyScopeButton.Name="HistoryScope"; FooterSize(historyScopeButton,118);
             titlesButton=Button("",OpenTitles); titlesButton.Name="AssemblyTitles"; FooterSize(titlesButton,128);
             lessButton=Button("−",() => ChangeCount(-1)); lessButton.Name="CountLess"; FooterSize(lessButton,34);
             countButton=Button("",CountMenu); countButton.Name="AssemblyCount"; FooterSize(countButton,112);
@@ -126,7 +142,7 @@ namespace VideoBatch {
             assembleButton=Button("✦ Собрать",async () => await Run(false),true); assembleButton.Name="Assemble"; FooterSize(assembleButton,140);
             var results=Button("Результаты ↗",() => Safe(() => {Directory.CreateDirectory(template.Output); Ui.Open(template.Output);})); results.Name="Results"; FooterSize(results,132);
             stop=Button("■ Стоп",() => cancellation?.Cancel()); stop.Visible=false; FooterSize(stop,82);
-            footer.Controls.AddRange(new Control[] {formatButton,transitionButton,historyScopeButton,titlesButton,lessButton,countButton,moreButton,assembleButton,results,stop}); bottom.Controls.Add(footer,0,2); UpdateCountControls();
+            footer.Controls.AddRange(new Control[] {formatButton,transitionButton,titlesButton,lessButton,countButton,moreButton,assembleButton,results,stop}); bottom.Controls.Add(footer,0,2); UpdateCountControls();
             SetDrop(videoButton, files => ImportPool(0,files)); SetDrop(musicButton,files => ImportPool(1,files)); SetDrop(imageFiles,files => ImportPool(2,files)); BuildScenes();
         }
         static void FooterSize(Button b,int w) { b.AutoSize=false; b.Size=new Size(w,46); b.MinimumSize=b.Size; b.Padding=new Padding(8,3,8,3); b.Margin=new Padding(0,0,6,0); }
@@ -231,7 +247,27 @@ namespace VideoBatch {
         }
         void Place(double at) { if (SelectedLayer == null) return; var l = SelectedLayer; l.PlacementConfigured = true; l.X = (1 - l.Width)/2; l.Y = at == -1 ? (1 - l.Height)/2 : at == -2 ? Math.Max(0,.92 - l.Height) : Math.Min(at,1 - l.Height); Changed(false); }
         void Changed(bool background) { RefreshInfo(); RefreshCanvas(); saveTimer.Stop(); saveTimer.Start(); if (background) RequestBackground(); }
-        void Save() { template.Validate(); AssemblyFiles.Save(templatePath,template); RequestCapacity(); }
+        void Save() { AssemblyMarketProfiles.Capture(template, marketView); template.Validate(); AssemblyFiles.Save(templatePath, template); RequestCapacity(); }
+        void SwitchMarket(string scope) {
+            Safe(() => {
+                if (cancellation != null) return;
+                scope = AssemblyMarketProfiles.NormMarket(scope);
+                if (scope == marketView) return;
+                AssemblyMarketProfiles.Capture(template, marketView);
+                marketView = scope;
+                assemblyPrefs.AssemblyMarketView = scope;
+                Store.Save(assemblyPrefs);
+                AssemblyMarketProfiles.Apply(template, marketView);
+                RefreshMarketToggles();
+                BindTemplateValues(); RefreshInfo(); Changed(true); Save();
+                status.Text = "Сборка · " + scope + ": свои связки, заголовки и папка результатов.";
+            });
+        }
+        void RefreshMarketToggles() {
+            if (marketRuBtn == null || marketEnBtn == null) return;
+            Theme.ApplyHeroToggleStyle(marketRuBtn, marketView == AssemblyHistoryScope.Ru);
+            Theme.ApplyHeroToggleStyle(marketEnBtn, marketView == AssemblyHistoryScope.En);
+        }
         void InsertScene(int index) { Safe(() => { AssemblyWorkspace.Insert(template,index); BuildScenes(); SelectScene(index); Save(); status.Text = "Сцена добавлена. Папка создана — нажми «+ Изображения» для объекта."; }); }
         void MoveScene(int delta) { Safe(() => { int next = sceneIndex + delta; if (next < 0 || next >= template.Scenes.Count) return; var scene = SelectedScene; template.Scenes.RemoveAt(sceneIndex); template.Scenes.Insert(next,scene); BuildScenes(); SelectScene(next); Save(); }); }
         void RemoveScene() { Safe(() => { if (SelectedScene==null) return; template.Scenes.RemoveAt(sceneIndex); sceneIndex = Math.Min(sceneIndex,template.Scenes.Count - 1); BuildScenes(); SelectScene(sceneIndex); Save(); status.Text = "Сцена убрана. Её файлы сохранены в папке материалов."; }); }
@@ -396,13 +432,18 @@ namespace VideoBatch {
         }
         void SettingsMenu() {
             var menu = Theme.MakeContextMenu(); menu.Items.Add("Папка материалов",null,(s,e) => Ui.Open(template.Materials));
-            menu.Items.Add("Куда сохранять ролики…",null,(s,e) => Safe(() => { var p = Ui.Folder(this,template.Output); if (p != null) { template.Output = p; Save(); } }));
+            menu.Items.Add("Куда сохранять ролики…",null,(s,e) => Safe(() => { var p = Ui.Folder(this,template.Output); if (p != null) { template.Output = p; Save(); RefreshInfo(); } }));
+            menu.Items.Add("Общий журнал связок (как раньше)…",null,(s,e) => Safe(() => {
+                if (MessageBox.Show(this,"Один журнал на RU и EN: связки будут общими для обоих рынков.\nПродолжить?","Сборка роликов",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes) return;
+                AssemblyMarketProfiles.Capture(template, marketView); template.HistoryScope = AssemblyHistoryScope.Shared; Save(); capacityKey = null; RequestCapacity();
+                status.Text = "Включён общий журнал связок. Для раздельных RU/EN снова выберите вкладку RU или EN.";
+            }));
             menu.Items.Add("Посмотреть пример ролика",null,async (s,e) => await Run(true));
             menu.Items.Add("Служебные отчёты",null,(s,e) => Safe(() => Ui.Open(AssemblyOutputFiles.Folder(Path.Combine(template.Output,"report.mp4")))));
             menu.Items.Add("Метаданные роликов…",null,(s,e) => MetadataMenu());
             menu.Items.Add("Переходы…",null,(s,e) => TransitionMenu());
             menu.Items.Add("Сохранить копию студии…",null,(s,e) => Safe(() => { Save(); using (var d = new SaveFileDialog { Filter = "Студия|*.xml", FileName = "Моя-студия.xml" }) if (d.ShowDialog(this) == DialogResult.OK) AssemblyFiles.Save(d.FileName,template); }));
-            menu.Items.Add("Открыть сохранённую студию…",null,(s,e) => Safe(() => { using (var d = new OpenFileDialog { Filter = "Студия|*.xml" }) if (d.ShowDialog(this) == DialogResult.OK) { var t = AssemblyFiles.Load<AssemblyTemplate>(d.FileName); t.Validate(); AssemblyWorkspace.Prepare(t); template = t; BindTemplateValues(); previewImages.Clear(); BuildScenes(); SelectScene(0); Save(); } }));
+            menu.Items.Add("Открыть сохранённую студию…",null,(s,e) => Safe(() => { using (var d = new OpenFileDialog { Filter = "Студия|*.xml" }) if (d.ShowDialog(this) == DialogResult.OK) { var t = AssemblyFiles.Load<AssemblyTemplate>(d.FileName); t.Validate(); AssemblyWorkspace.Prepare(t); AssemblyMarketProfiles.EnsureSeeded(t); template = t; AssemblyMarketProfiles.Apply(template, marketView); BindTemplateValues(); previewImages.Clear(); BuildScenes(); SelectScene(0); Save(); } }));
             menu.Items.Add("Новая студия · 4 сцены",null,(s,e) => Safe(() => { Save(); AssemblyFiles.Save(templatePath + ".saved-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".xml",template); string folder = Path.Combine(template.Materials,"Студия-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); template = AssemblyTemplate.Defaults(); template.Materials = folder; template.Output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch","Assembled"); AssemblyWorkspace.Prepare(template); previewImages.Clear(); BindTemplateValues(); BuildScenes(); SelectScene(0); Save(); })); menu.Show(Cursor.Position);
         }
         void MetadataMenu() {
@@ -419,17 +460,7 @@ namespace VideoBatch {
                 Save(); status.Text="Метаданные сохранены. Они записываются внутрь каждого готового ролика.";
             }
         }
-        void BindTemplateValues() { capacityKey=null; batchMaximum=0; UpdateCountControls(); RefreshHistoryScopeButton(); loading=true; count.Maximum=int.MaxValue; count.Value=template.Count; volume.Value=(decimal)(template.MusicVolume*100); loading=false; }
-        void RefreshHistoryScopeButton() { if (historyScopeButton!=null) historyScopeButton.Text="Журнал "+AssemblyHistoryScope.ShortLabel(template.HistoryScope)+" ▾"; }
-        void HistoryScopeMenu() {
-            var menu=new ContextMenuStrip();
-            foreach (string scope in new[] { AssemblyHistoryScope.Ru, AssemblyHistoryScope.En, AssemblyHistoryScope.Shared }) {
-                string label=AssemblyHistoryScope.MenuLabel(scope);
-                if (string.Equals(template.HistoryScope,scope,StringComparison.OrdinalIgnoreCase)) label="✓ "+label;
-                MenuAction(menu,label,() => { template.HistoryScope=scope; capacityKey=null; RefreshHistoryScopeButton(); Changed(true); RequestCapacity(); status.Text="Журнал связок: "+AssemblyHistoryScope.MenuLabel(scope)+". RU и EN не пересекаются."; });
-            }
-            menu.Show(historyScopeButton,new Point(0,historyScopeButton.Height));
-        }
+        void BindTemplateValues() { capacityKey=null; batchMaximum=0; UpdateCountControls(); RefreshMarketToggles(); loading=true; count.Maximum=int.MaxValue; count.Value=template.Count; volume.Value=(decimal)(template.MusicVolume*100); loading=false; }
         static string HistoryLedgerFingerprint(string folder,string scope) {
             scope=AssemblyHistoryScope.Normalize(scope);
             if (!Directory.Exists(folder)) return "";
