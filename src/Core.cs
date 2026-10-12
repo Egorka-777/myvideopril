@@ -56,7 +56,7 @@ namespace VideoBatch {
     public class Binding { public string Video="",Audio="";public int Slot=1; }
     public class Preferences {
         public bool Shorts=true; public int ShortCount=10,VideoCount=5;
-        public int SettingsVersion=0;public bool AutoProfiles=true;public double BackgroundDb=-12.5;
+        public int SettingsVersion=0;public bool AutoProfiles=true;public double BackgroundDb=-18;
         public List<string> BackgroundMusic=new List<string>();
         public List<string> BackgroundMusicRu=new List<string>(), BackgroundMusicEn=new List<string>();
         public string Output=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch");
@@ -594,7 +594,7 @@ namespace VideoBatch {
     public class BatchResult {public List<string> Outputs=new List<string>(),Errors=new List<string>();public bool Cancelled;}
     public class BatchJob {
         public List<string> Inputs=new List<string>(),Music=new List<string>(); public List<Binding> Narrations=new List<Binding>();
-        public double BackgroundDb=-12.5;
+        public double BackgroundDb=-18;
         public bool Shorts; public int Count=5;public string Output,FFmpeg,FFprobe;public Profile[] Profiles=Profile.Defaults(); public ShortSettings Ranges=new ShortSettings();
         public ProcessingSettings Processing=new ProcessingSettings();
     }
@@ -603,7 +603,16 @@ namespace VideoBatch {
         public static string N(double n){return n.ToString("0.########",Inv);}
         public static double Parse(string s){double v;if(!double.TryParse(s,NumberStyles.Float,Inv,out v)||double.IsNaN(v)||double.IsInfinity(v))return 0;return v;}
         public static string Quote(string s){return "\""+Regex.Replace(Regex.Replace(s,@"(\\*)""","$1$1\\\""),@"(\\+)$","$1$1")+"\"";}
+        static IEnumerable<string> NormalizeToolArguments(IEnumerable<string> arguments) {
+            foreach (string arg in arguments) {
+                if (string.IsNullOrEmpty(arg)) { yield return arg; continue; }
+                if (arg.StartsWith("-", StringComparison.Ordinal)) { yield return arg; continue; }
+                if (arg.IndexOf(':') >= 1 || arg.StartsWith("\\\\")) yield return PathUtil.Normalize(arg);
+                else yield return arg;
+            }
+        }
         public static async Task<string> Tool(string exe,IEnumerable<string> arguments,CancellationToken cancel,Action<string> line=null,int timeout=0) {
+            arguments = NormalizeToolArguments(arguments);
             cancel.ThrowIfCancellationRequested();var info=new ProcessStartInfo(exe,string.Join(" ",arguments.Select(Quote))){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
             using(var process=new Process{StartInfo=info}) using(var linked=CancellationTokenSource.CreateLinkedTokenSource(cancel)) {
                 if(timeout>0)linked.CancelAfter(TimeSpan.FromSeconds(timeout));

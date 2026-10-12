@@ -122,6 +122,7 @@ namespace VideoBatch {
                     progress.Report(new Update("Проверяю материалы…", 0));
                     var videos = await ReadVideos(t, ffprobe, ct).ConfigureAwait(false);
                     var random=new Random(); var mix=new AssemblyMixTracker();
+                    var usedTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var renderContext = new AssemblyRenderContext { CacheDirectory = Path.Combine(work, "raster-cache") };
                     while (result.Outputs.Count<t.Count) {
                         ct.ThrowIfCancellationRequested();
@@ -143,6 +144,14 @@ namespace VideoBatch {
                                 AssemblyFiles.Save(destination + ".assembly.xml", plan);
                                 AssemblyFiles.Save(destination + ".performance.xml", renderContext.LastReport);
                                 File.Move(partial, destination);
+                                string chosenTitle = AssemblyOutputTags.PickTitle(t.TitleBank, random, usedTitles);
+                                try {
+                                    await AssemblyOutputTags.Apply(ffmpeg, destination, chosenTitle, t.OutputMetadata, random, ct).ConfigureAwait(false);
+                                    if (!string.IsNullOrWhiteSpace(chosenTitle)) File.WriteAllText(destination + ".title.txt", chosenTitle, System.Text.Encoding.UTF8);
+                                } catch (Exception tagError) {
+                                    File.Delete(destination); File.Delete(destination + ".assembly.xml"); File.Delete(destination + ".performance.xml");
+                                    throw new Exception("Не удалось записать заголовок и метаданные: " + tagError.Message);
+                                }
                                 history.UsedImages.AddRange(plan.UniqueImages); history.Combinations.Add(plan.Signature); history.Outputs.Add(destination);
                                 try { AssemblyFiles.Save(historyPath, history); } catch { File.Delete(destination); File.Delete(destination + ".assembly.xml"); File.Delete(destination + ".performance.xml"); throw; }
                                 result.Outputs.Add(destination); try {Directory.Delete(itemWork,true);} catch (IOException) { }

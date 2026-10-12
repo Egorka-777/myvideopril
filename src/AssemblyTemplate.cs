@@ -34,11 +34,14 @@ namespace VideoBatch {
         public string Transition = "fade", RenderMode = "auto";
         public double TransitionDuration = .35, MusicVolume = .8;
         public bool RandomVideoStart = true;
+        public List<string> TitleBank = new List<string>();
+        public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
         public double Duration { get { return Scenes.Sum(s => s.Duration); } }
         public string Resolve(string path) {
             if (string.IsNullOrWhiteSpace(path)) return "";
-            return Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Materials, path));
+            string full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Materials, path));
+            return PathUtil.Normalize(full);
         }
         public static AssemblyTemplate Defaults() {
             var t = new AssemblyTemplate { PackStudioVersion = 1, ObjectStudioVersion = 1, LoopShortVideos = true, AllowVideoReuse = true, Music = "Музыка" };
@@ -66,6 +69,7 @@ namespace VideoBatch {
             if (Fps < 15 || Fps > 60 || Count < 1) throw new Exception("FPS: 15–60. Количество роликов должно быть положительным.");
             Check(MusicVolume, 0, 2, "Громкость музыки"); Check(TransitionDuration, 0, 2, "Длительность перехода");
             if (RenderMode != "auto" && RenderMode != "cpu") throw new Exception("Выбери автоматическую сборку или сборку на процессоре.");
+            TitleBank = AssemblyOutputTags.NormalizeBank(TitleBank);
             if (!Transitions.Contains(Transition)) throw new Exception("Неизвестный переход.");
             foreach (var scene in Scenes) {
                 if (scene.VideoMode != "" && scene.VideoMode != "shared" && scene.VideoMode != "own") throw new Exception("Неизвестный источник видео сцены.");
@@ -97,7 +101,7 @@ namespace VideoBatch {
         public static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".txt" };
         public static List<string> Pool(string path, string[] extensions) {
             var items = File.Exists(path) ? new[] { path } : Directory.Exists(path) ? Directory.GetFiles(path) : new string[0];
-            return items.Where(p => extensions.Contains(Path.GetExtension(p).ToLowerInvariant())).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+            return items.Select(PathUtil.Normalize).Where(p => extensions.Contains(Path.GetExtension(p).ToLowerInvariant())).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
         }
         public static string Hash(string path) {
             // Normalize text so that renaming a file or changing line endings does not reuse a headline.
@@ -110,6 +114,8 @@ namespace VideoBatch {
         public static string HashText(string text) { using (var sha = SHA256.Create()) return Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(text))); }
         static string Hex(byte[] bytes) { return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant(); }
         public static string SafeImportDestination(string folder, string sourcePath, int maxPathLen = 259) {
+            folder = PathUtil.Normalize(folder);
+            sourcePath = PathUtil.Normalize(sourcePath);
             string ext = Path.GetExtension(sourcePath);
             if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
             string stem = SanitizeImportStem(Path.GetFileNameWithoutExtension(sourcePath));
@@ -158,6 +164,7 @@ namespace VideoBatch {
     }
     public static class AssemblyWorkspace {
         public static void Prepare(AssemblyTemplate t) {
+            if (t.OutputMetadata == null) t.OutputMetadata = AssemblyOutputMetadata.Default();
             bool migrate = t.PackStudioVersion == 0, objects=t.ObjectStudioVersion==0;
             if (migrate) { t.PackStudioVersion = 1; t.LoopShortVideos = true; t.AllowVideoReuse = true; }
             Directory.CreateDirectory(t.Materials);
@@ -207,11 +214,11 @@ namespace VideoBatch {
                 if (!Path.GetFullPath(oldFile).Equals(Path.GetFullPath(oldCopy), StringComparison.OrdinalIgnoreCase)) File.Copy(oldFile, oldCopy);
             }
             try {
-                foreach (string file in files.Where(File.Exists).Where(p => extensions.Contains(Path.GetExtension(p).ToLowerInvariant()))) {
+                foreach (string file in PathUtil.NormalizeAll(files).Where(PathUtil.Exists).Where(p => extensions.Contains(Path.GetExtension(p).ToLowerInvariant()))) {
                     string destination = AssemblyFiles.SafeImportDestination(path, file);
                     if (Path.GetFullPath(file).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) continue;
                     if (File.Exists(destination) && AssemblyFiles.Hash(file) == AssemblyFiles.Hash(destination)) continue;
-                    File.Copy(file, destination); added++;
+                    PathUtil.CopyFile(file, destination); added++;
                 }
                 if (newFolder && added > 0) source = path; // Keep the old pack intact on cancel/failure.
                 return added;

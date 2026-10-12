@@ -42,7 +42,7 @@ def execute(root, name, source, processing=None, shorts=False, music=None, profi
     folder = root / name; folder.mkdir(); output = folder / 'out'
     job = ET.Element('BatchJob'); add(job, 'Inputs', [str(source)])
     add(job, 'Output', output); add(job, 'FFmpeg', options.ffmpeg); add(job, 'FFprobe', options.ffprobe)
-    add(job, 'Shorts', shorts); add(job, 'Count', count); add(job, 'BackgroundDb', -12.5)
+    add(job, 'Shorts', shorts); add(job, 'Count', count); add(job, 'BackgroundDb', -18)
     if music: add(job, 'Music', [str(music)])
     profiles = ET.SubElement(job, 'Profiles')
     for i in range(count):

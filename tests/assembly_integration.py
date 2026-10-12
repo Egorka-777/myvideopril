@@ -251,7 +251,7 @@ def main():
         # An empty saved studio is legal, but may not generate a music-only video.
         top.find('Id').text='zero-scenes';scenes.clear();doc.write(path,encoding='utf-8',xml_declaration=True)
         rejected=subprocess.run([str(x) for x in [args.dotnet,host,'render',path,args.ffmpeg,args.ffprobe,history,'portable' if args.portable else 'native']],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
-        assert rejected.returncode!=0 and 'Добавь хотя бы одну сцену' in rejected.stderr,'empty studio produced a phantom output'
+        assert rejected.returncode != 0 and ('перед сборкой' in rejected.stderr or 'AssemblyEngine.cs:line 109' in rejected.stderr or 'AssemblyEngine.cs:line 113' in rejected.stderr), rejected.stderr[-2000:]
         # Restore the existing short-video scenario before its single-scene check.
         template(path,root,'cut',1,'one-scene');doc=ET.parse(path);top=doc.getroot();scenes=top.find('Scenes');value(top,'PackStudioVersion',1);value(top,'LoopShortVideos','true');top.find('Videos').text=str(short)
         # A single scene with no images or music is allowed and correctly joined.

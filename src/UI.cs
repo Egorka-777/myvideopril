@@ -22,7 +22,13 @@ namespace VideoBatch {
         public static void Error(IWin32Window owner,Exception e){MessageBox.Show(owner,e.Message,"VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
         public static string File(IWin32Window owner,string filter){using(var d=new OpenFileDialog{Filter=filter})return d.ShowDialog(owner)==DialogResult.OK?d.FileName:null;}
         public static string Folder(IWin32Window owner,string current){using(var d=new FolderBrowserDialog{SelectedPath=current,Description="Выберите папку"})return d.ShowDialog(owner)==DialogResult.OK?d.SelectedPath:null;}
-        public static void Open(string path){Process.Start(new ProcessStartInfo(path){UseShellExecute=true});}
+        public static void Open(string path){
+            if(string.IsNullOrWhiteSpace(path))throw new Exception("Путь не указан.");
+            if(path.StartsWith("http://",StringComparison.OrdinalIgnoreCase)||path.StartsWith("https://",StringComparison.OrdinalIgnoreCase)){Process.Start(new ProcessStartInfo(path){UseShellExecute=true});return;}
+            path=PathUtil.Normalize(path);
+            if(!PathUtil.Exists(path))throw new FileNotFoundException("Файл или папка не найдены. Добавьте видео через «+ Добавить файлы» в студии — они скопируются в материалы.",path);
+            Process.Start(new ProcessStartInfo(path){UseShellExecute=true});
+        }
     }
     public class Dialog:Form {
         protected TableLayoutPanel Root;protected Panel Body;protected new FlowLayoutPanel Bottom;
@@ -35,7 +41,7 @@ namespace VideoBatch {
         public List<string> Paths;public double VolumeDb;public string Market="RU";
         NumericUpDown volume;ListBox list;Button ru,en;Label hint;bool background;
         List<string> pathsRu,pathsEn;
-        public MusicDialog(List<string> ruPaths,List<string> enPaths,string market,bool background=false,double db=-12.5):base(background?"Фоновая музыка":"Музыка",560){
+        public MusicDialog(List<string> ruPaths,List<string> enPaths,string market,bool background=false,double db=-18):base(background?"Фоновая музыка":"Музыка",560){
             this.background=background;VolumeDb=db;Market=(market??"RU").ToUpperInvariant()=="EN"?"EN":"RU";
             pathsRu=new List<string>(ruPaths??new List<string>());pathsEn=new List<string>(enPaths??new List<string>());
             ClientSize=new Size(610,560);

@@ -438,18 +438,73 @@ namespace VideoBatch {
             var card = Theme.MakeCard();
             card.Dock = DockStyle.Top;
             card.AutoSize = true;
-            card.Controls.Add(new Label { Text = "Настройки", Font = Theme.FontPageTitle, ForeColor = Theme.TextPrimary, AutoSize = true, Dock = DockStyle.Top });
+            card.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            var stack = new FlowLayoutPanel {
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock = DockStyle.Top,
+                Width = 820,
+                MaximumSize = new Size(860, 0),
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+            void Add(Control c) { stack.Controls.Add(c); }
 
-            var keep = new CheckBox { Text = "Оставлять профиль Dolphin открытым после загрузки", AutoSize = true, Checked = settings.KeepDolphinProfileOpenAfterUpload, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 16, 0, 8) };
+            Add(new Label { Text = "Настройки", Font = Theme.FontPageTitle, ForeColor = Theme.TextPrimary, AutoSize = true, Margin = new Padding(0, 0, 0, 12) });
+            Add(new Label {
+                Text = "Dolphin Anty — API-токен",
+                Font = new Font(Theme.FontPageTitle.FontFamily, 11f, FontStyle.Bold),
+                ForeColor = Theme.TextPrimary,
+                AutoSize = true,
+                Margin = new Padding(0, 4, 0, 4)
+            });
+            Add(new Label {
+                Text = "Вставьте API-токен из личного кабинета Dolphin на сайте (это не Profile ID канала). После сохранения нажмите ↻ вверху справа — должно стать «Dolphin · доступен».",
+                ForeColor = Theme.TextSecondary,
+                AutoSize = true,
+                MaximumSize = new Size(780, 0),
+                Margin = new Padding(0, 0, 0, 6)
+            });
+            var dolphinToken = Theme.MakeSearchBox();
+            dolphinToken.Width = 560;
+            dolphinToken.UseSystemPasswordChar = true;
+            string savedToken = WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
+            if (!string.IsNullOrWhiteSpace(savedToken)) dolphinToken.Text = savedToken;
+            var saveToken = Theme.MakeButton("Сохранить токен", accent: true, action: () => {
+                var t = dolphinToken.Text.Trim();
+                if (string.IsNullOrWhiteSpace(t)) {
+                    MessageBox.Show(FindForm(), "Вставьте API-токен Dolphin.", "Dolphin", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                settings.ProtectedDolphinToken = WindowsSupport.Protect(t);
+                save();
+                MessageBox.Show(FindForm(), "Токен сохранён. Нажмите ↻ вверху справа для проверки.", "Dolphin", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            });
+            saveToken.Margin = new Padding(0, 4, 0, 8);
+            var tokenRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.TopDown, Width = 780, Margin = new Padding(0, 0, 0, 8) };
+            tokenRow.Controls.Add(dolphinToken);
+            tokenRow.Controls.Add(saveToken);
+            Add(tokenRow);
+            Add(new Label {
+                Text = "YouTube · HTTP и расписание",
+                Font = new Font(Theme.FontPageTitle.FontFamily, 11f, FontStyle.Bold),
+                ForeColor = Theme.TextPrimary,
+                AutoSize = true,
+                Margin = new Padding(0, 12, 0, 4)
+            });
+
+            var keep = new CheckBox { Text = "Оставлять профиль Dolphin открытым после загрузки", AutoSize = true, Checked = settings.KeepDolphinProfileOpenAfterUpload, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 8, 0, 8) };
             Theme.StyleCheckBox(keep);
             keep.CheckedChanged += (s, e) => { settings.KeepDolphinProfileOpenAfterUpload = keep.Checked; save(); };
-            card.Controls.Add(keep);
+            Add(keep);
 
             var port = Theme.MakeSearchBox();
             port.Text = settings.DolphinPort.ToString();
             port.Width = 80;
             port.Leave += (s, e) => { if (int.TryParse(port.Text, out var v) && v > 0 && v < 65536) { settings.DolphinPort = v; save(); } };
-            card.Controls.Add(Labeled("Dolphin порт", port));
+            Add(Labeled("Dolphin порт", port));
 
             var customWorkers = Theme.MakeSearchBox();
             customWorkers.Text = (settings.HttpWorkerCustomCount <= 0 ? HttpWorkerSettings.DefaultWorkers : settings.HttpWorkerCustomCount).ToString();
@@ -463,7 +518,7 @@ namespace VideoBatch {
                 customWorkers.Enabled = settings.HttpWorkerPreset == "custom";
                 save();
             };
-            card.Controls.Add(Labeled("HTTP workers (safe/normal/fast/custom/auto)", workerPreset));
+            Add(Labeled("HTTP workers (safe/normal/fast/custom/auto)", workerPreset));
             customWorkers.Leave += (s, e) => {
                 if (int.TryParse(customWorkers.Text, out var v)) {
                     settings.HttpWorkerCustomCount = Math.Max(1, Math.Min(HttpWorkerSettings.MaxCustomWorkers, v));
@@ -472,17 +527,17 @@ namespace VideoBatch {
                     customWorkers.Text = settings.HttpWorkerCustomCount.ToString();
                 }
             };
-            card.Controls.Add(Labeled("Пользовательский pool (1–10)", customWorkers));
+            Add(Labeled("Пользовательский pool (1–10)", customWorkers));
 
             var publishMode = Theme.MakeCombo(new[] { "scheduled", "immediate", "private" });
             publishMode.SelectedItem = string.IsNullOrWhiteSpace(settings.YouTubeHttpPublishMode) ? "scheduled" : settings.YouTubeHttpPublishMode;
             publishMode.SelectedIndexChanged += (s, e) => { settings.YouTubeHttpPublishMode = publishMode.SelectedItem?.ToString() ?? "scheduled"; save(); };
-            card.Controls.Add(Labeled("YouTube HTTP · Shorts", publishMode));
+            Add(Labeled("YouTube HTTP · Shorts", publishMode));
 
             var longMode = Theme.MakeCombo(new[] { "immediate", "scheduled", "private" });
             longMode.SelectedItem = HttpWorkerSettings.ResolvePublishMode(settings, "long");
             longMode.SelectedIndexChanged += (s, e) => { settings.YouTubeHttpLongPublishMode = longMode.SelectedItem?.ToString() ?? "scheduled"; save(); };
-            card.Controls.Add(Labeled("YouTube HTTP · Long", longMode));
+            Add(Labeled("YouTube HTTP · Long", longMode));
 
             var shortsMin = Theme.MakeSearchBox();
             shortsMin.Text = settings.YouTubeScheduleMinMinutes.ToString(); shortsMin.Width = 80;
@@ -496,10 +551,10 @@ namespace VideoBatch {
                 if (int.TryParse(shortsMax.Text, out var v) && v >= settings.YouTubeScheduleMinMinutes && v <= 1440) { settings.YouTubeScheduleMaxMinutes = v; save(); }
                 shortsMax.Text = settings.YouTubeScheduleMaxMinutes.ToString();
             };
-            card.Controls.Add(Labeled("Shorts · минимум, мин", shortsMin));
-            card.Controls.Add(Labeled("Shorts · максимум, мин", shortsMax));
-            card.Controls.Add(new Label { Text = "Отложенные Shorts используют время и часовой пояс этого ПК. Ранее созданные отложенные ролики не меняются.",
-                ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0) });
+            Add(Labeled("Shorts · минимум, мин", shortsMin));
+            Add(Labeled("Shorts · максимум, мин", shortsMax));
+            Add(new Label { Text = "Отложенные Shorts используют время и часовой пояс этого ПК. Ранее созданные отложенные ролики не меняются.",
+                ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0), Margin = new Padding(0, 4, 0, 4) });
 
             var lead = Theme.MakeSearchBox();
             lead.Text = settings.YouTubeScheduleLeadMinutes.ToString();
@@ -511,12 +566,12 @@ namespace VideoBatch {
                     lead.Text = settings.YouTubeScheduleLeadMinutes.ToString();
                 }
             };
-            card.Controls.Add(Labeled("Запас до 1-й публикации, мин (≥20)", lead));
+            Add(Labeled("Запас до 1-й публикации, мин (≥20)", lead));
 
             var schedMode = Theme.MakeCombo(new[] { "network", "random", "period" });
             schedMode.SelectedItem = string.IsNullOrWhiteSpace(settings.YouTubeScheduleMode) ? "network" : settings.YouTubeScheduleMode;
             schedMode.SelectedIndexChanged += (s, e) => { settings.YouTubeScheduleMode = schedMode.SelectedItem?.ToString() ?? "network"; save(); };
-            card.Controls.Add(Labeled("Режим расписания", schedMode));
+            Add(Labeled("Режим расписания", schedMode));
 
             var netPeriod = Theme.MakeSearchBox();
             netPeriod.Text = settings.YouTubeScheduleNetworkPeriodMinutes.ToString(); netPeriod.Width = 80;
@@ -524,7 +579,7 @@ namespace VideoBatch {
                 if (int.TryParse(netPeriod.Text, out var v) && v >= 60 && v <= 24 * 60) { settings.YouTubeScheduleNetworkPeriodMinutes = v; save(); }
                 netPeriod.Text = settings.YouTubeScheduleNetworkPeriodMinutes.ToString();
             };
-            card.Controls.Add(Labeled("Сеть · круг активности, мин", netPeriod));
+            Add(Labeled("Сеть · круг активности, мин", netPeriod));
 
             var netMin = Theme.MakeSearchBox();
             netMin.Text = settings.YouTubeScheduleNetworkMinMinutes.ToString(); netMin.Width = 80;
@@ -538,21 +593,22 @@ namespace VideoBatch {
                 if (int.TryParse(netMax.Text, out var v) && v >= settings.YouTubeScheduleNetworkMinMinutes && v <= 60) { settings.YouTubeScheduleNetworkMaxMinutes = v; save(); }
                 netMax.Text = settings.YouTubeScheduleNetworkMaxMinutes.ToString();
             };
-            card.Controls.Add(Labeled("Сеть · мин. интервал, мин", netMin));
-            card.Controls.Add(Labeled("Сеть · макс. интервал, мин", netMax));
-            card.Controls.Add(new Label { Text = "Режим network: все аккаунты в одной очереди, перемешаны, ~8 ч на ПК. Новый канал автоматически включается в пересчёт.",
-                ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0) });
+            Add(Labeled("Сеть · мин. интервал, мин", netMin));
+            Add(Labeled("Сеть · макс. интервал, мин", netMax));
+            Add(new Label { Text = "Режим network: все аккаунты в одной очереди, перемешаны, ~8 ч на ПК. Новый канал автоматически включается в пересчёт.",
+                ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0), Margin = new Padding(0, 4, 0, 4) });
 
-            card.Controls.Add(new Label {
+            Add(new Label {
                 Text = "Каталог настроек: " + Store.Config + "\nStaging: " + settings.UploadStagingFolder + "\nДиагностика: " + System.IO.Path.Combine(Store.Root, "diagnostics"),
                 ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0), Margin = new Padding(0, 12, 0, 0)
             });
+            card.Controls.Add(stack);
             Controls.Add(card);
         }
 
         static Control Labeled(string caption, Control c) {
-            var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 8, 0, 0) };
-            row.Controls.Add(new Label { Text = caption, AutoSize = true, ForeColor = Theme.TextSecondary, Width = 180, Margin = new Padding(0, 6, 8, 0) });
+            var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Width = 780, Margin = new Padding(0, 6, 0, 0) };
+            row.Controls.Add(new Label { Text = caption, AutoSize = true, ForeColor = Theme.TextSecondary, Width = 280, Margin = new Padding(0, 6, 8, 0) });
             row.Controls.Add(c);
             return row;
         }

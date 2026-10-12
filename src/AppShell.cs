@@ -296,12 +296,15 @@ namespace VideoBatch {
         async Task CheckDolphinAsync(bool manual) {
             dolphinRefreshBtn.Enabled = false;
             try {
-                string token = WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
+                var live = Store.Load();
+                settings.ProtectedDolphinToken = live.ProtectedDolphinToken;
+                settings.DolphinPort = live.DolphinPort;
+                string token = WindowsSupport.Unprotect(live.ProtectedDolphinToken);
                 if (string.IsNullOrWhiteSpace(token)) { SetDolphinState("fail", "Dolphin · нет токена"); return; }
                 using (var handler = new HttpClientHandler { UseProxy = false })
                 using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) }) {
                     var body = new StringContent("{\"token\":\"" + JsonEscape(token) + "\"}", System.Text.Encoding.UTF8, "application/json");
-                    var resp = await client.PostAsync("http://127.0.0.1:" + settings.DolphinPort + "/v1.0/auth/login-with-token", body).ConfigureAwait(true);
+                    var resp = await client.PostAsync("http://127.0.0.1:" + live.DolphinPort + "/v1.0/auth/login-with-token", body).ConfigureAwait(true);
                     SetDolphinState(resp.IsSuccessStatusCode ? "ok" : "fail", resp.IsSuccessStatusCode ? "Dolphin · доступен" : "Dolphin · HTTP " + (int)resp.StatusCode);
                 }
             } catch { SetDolphinState("fail", "Dolphin · недоступен"); }

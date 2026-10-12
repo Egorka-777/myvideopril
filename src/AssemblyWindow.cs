@@ -27,7 +27,7 @@ namespace VideoBatch {
         FlowLayoutPanel options;
         FlowLayoutPanel footer, packChips;
         Label status, selectedCaption, capacityLabel;
-        Button videoButton, musicButton, formatButton, stop, imageFiles, transitionButton, imageModeButton, shuffleButton, variantsButton, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
+        Button videoButton, musicButton, formatButton, titlesButton, stop, imageFiles, transitionButton, imageModeButton, shuffleButton, variantsButton, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
         ProgressBar progress;
         readonly List<Button> sceneCards = new List<Button>();
         readonly Dictionary<AssemblyLayer, string> previewImages = new Dictionary<AssemblyLayer, string>();
@@ -118,17 +118,18 @@ namespace VideoBatch {
             footer=Row(); footer.Padding=new Padding(0,6,0,0); options=footer;
             formatButton=Button("",FormatMenu); formatButton.Name="Format"; FooterSize(formatButton,106);
             transitionButton=Button("",TransitionMenu); transitionButton.Name="Transitions"; FooterSize(transitionButton,168);
+            titlesButton=Button("",OpenTitles); titlesButton.Name="AssemblyTitles"; FooterSize(titlesButton,128);
             lessButton=Button("−",() => ChangeCount(-1)); lessButton.Name="CountLess"; FooterSize(lessButton,34);
             countButton=Button("",CountMenu); countButton.Name="AssemblyCount"; FooterSize(countButton,112);
             moreButton=Button("+",() => ChangeCount(1)); moreButton.Name="CountMore"; FooterSize(moreButton,34);
             assembleButton=Button("✦ Собрать",async () => await Run(false),true); assembleButton.Name="Assemble"; FooterSize(assembleButton,140);
             var results=Button("Результаты ↗",() => Safe(() => {Directory.CreateDirectory(template.Output); Ui.Open(template.Output);})); results.Name="Results"; FooterSize(results,132);
             stop=Button("■ Стоп",() => cancellation?.Cancel()); stop.Visible=false; FooterSize(stop,82);
-            footer.Controls.AddRange(new Control[] {formatButton,transitionButton,lessButton,countButton,moreButton,assembleButton,results,stop}); bottom.Controls.Add(footer,0,2); UpdateCountControls();
+            footer.Controls.AddRange(new Control[] {formatButton,transitionButton,titlesButton,lessButton,countButton,moreButton,assembleButton,results,stop}); bottom.Controls.Add(footer,0,2); UpdateCountControls();
             SetDrop(videoButton, files => ImportPool(0,files)); SetDrop(musicButton,files => ImportPool(1,files)); SetDrop(imageFiles,files => ImportPool(2,files)); BuildScenes();
         }
         static void FooterSize(Button b,int w) { b.AutoSize=false; b.Size=new Size(w,46); b.MinimumSize=b.Size; b.Padding=new Padding(8,3,8,3); b.Margin=new Padding(0,0,6,0); }
-        void SetDrop(Control c, Action<string[]> action) { c.AllowDrop = true; c.DragEnter += (s,e) => e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; c.DragDrop += (s,e) => Safe(() => action((string[])e.Data.GetData(DataFormats.FileDrop))); }
+        void SetDrop(Control c, Action<string[]> action) { c.AllowDrop = true; c.DragEnter += (s,e) => e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; c.DragDrop += (s,e) => Safe(() => action(PathUtil.NormalizeAll((string[])e.Data.GetData(DataFormats.FileDrop)))); }
         void BuildScenes() {
             foreach (Control c in sceneStack.Controls.Cast<Control>().ToArray()) c.Dispose(); sceneStack.Controls.Clear(); sceneCards.Clear();
             for (int i = 0; i <= template.Scenes.Count; i++) {
@@ -186,8 +187,21 @@ namespace VideoBatch {
             sceneVideoButton.Enabled=SelectedScene!=null;
             sceneVideoButton.Text=SelectedScene!=null && SelectedScene.VideoMode=="own" ? "Свои видео · "+Pool(SelectedScene.Videos,AssemblyFiles.VideoExtensions).Count+" ▾" : "Общие видео ▾";
             int gcd=Gcd(template.Width,template.Height); formatButton.Text="Формат\n"+template.Width/gcd+":"+template.Height/gcd+" ▾";
-            countButton.Text="Роликов\n"+template.Count.ToString("N0"); transitionButton.Text="Переход\n"+TransitionLabel(template.Transition)+" ▾"; UpdateCountControls();
+            countButton.Text="Роликов\n"+template.Count.ToString("N0"); transitionButton.Text="Переход\n"+TransitionLabel(template.Transition)+" ▾";
+            if (titlesButton != null) titlesButton.Text = template.TitleBank.Count == 0 ? "Заголовки\n+ Загрузить ключи" : ("Заголовки\n" + template.TitleBank.Count + " фраз");
+            UpdateCountControls();
 
+        }
+        void OpenTitles() {
+            Safe(() => {
+                using (var dialog = new AssemblyTitleDialog(template.TitleBank)) {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    template.TitleBank = dialog.Titles ?? new List<string>();
+                    Changed(false); Save();
+                    status.Text = template.TitleBank.Count == 0 ? "Заголовки отключены. Метаданные устройства и даты всё равно меняются для каждого ролика." : ("Сохранено заголовков: " + template.TitleBank.Count + ". К каждому ролику — свой заголовок и свои метаданные.");
+                    RefreshInfo();
+                }
+            });
         }
         static int Gcd(int a,int b) { while (b != 0) { int next = a % b; a = b; b = next; } return a; }
         static string SceneLabel(AssemblyScene s,int i) { return s.Name.StartsWith("Сцена ") || s.Name.Contains("Hook") || s.Name.Contains("TG-бот") || s.Name.Contains("Торговля") || s.Name == "Новая сцена" ? "Сцена " + (i + 1) : s.Name; }
@@ -306,9 +320,17 @@ namespace VideoBatch {
         string Source(int kind) { return kind == 0 ? template.Videos : kind == 1 ? template.Music : kind == 3 ? SelectedScene.Videos : SelectedLayer.Source; }
         string[] Extensions(int kind) { return kind == 0 || kind == 3 ? AssemblyFiles.VideoExtensions : kind == 1 ? AssemblyFiles.MusicExtensions : AssemblyFiles.PictureExtensions; }
         void SetSource(int kind,string source) { if (kind == 0) template.Videos = source; else if (kind == 1) template.Music = source; else if (kind == 3) { SelectedScene.Videos = source; SelectedScene.VideoMode="own"; } else SelectedLayer.Source = source; }
-        string[] PickFiles(int kind) { using (var dialog = new OpenFileDialog { Multiselect = true, Filter = "Файлы|" + string.Join(";",Extensions(kind).Select(e => "*" + e)) }) return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileNames : null; }
+        string[] PickFiles(int kind) {
+            using (var dialog = new OpenFileDialog { Multiselect = true, AutoUpgradeEnabled = true, Filter = "Файлы|" + string.Join(";",Extensions(kind).Select(e => "*" + e)) }) {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return null;
+                var paths = PathUtil.NormalizeAll(dialog.FileNames);
+                foreach (string p in paths) if (!PathUtil.Exists(p)) throw new Exception("Не удалось прочитать «" + Path.GetFileName(p) + "». Перетащите файлы в окно «Общие видео» или выберите их ещё раз.");
+                return paths;
+            }
+        }
         void ImportPool(int kind,string[] files,bool replace = false) {
             Safe(() => {
+                files = PathUtil.NormalizeAll(files);
                 if (files == null || files.Length == 0) return;
                 if (kind == 2) foreach (string file in files.Where(File.Exists).Where(p => AssemblyFiles.PictureExtensions.Contains(Path.GetExtension(p).ToLowerInvariant()))) {
                     try { using (var image = Image.FromFile(file)) { if (image.Width <= 0 || image.Height <= 0) throw new Exception("Пустое изображение."); } }
@@ -348,7 +370,12 @@ namespace VideoBatch {
                     var thumb = new PictureBox { Location = new Point(8,6), Size = new Size(86,64), SizeMode = PictureBoxSizeMode.Zoom, BackColor = Theme.Background }; row.Controls.Add(thumb);
                     if (kind == 2) try { using (var img = Image.FromFile(file)) thumb.Image = new Bitmap(img); } catch { }
                     row.Disposed += (s,e) => thumb.Image?.Dispose();
-                    var pick = Button((kind == 2 && SelectedLayer.Fixed && AssemblyFiles.Hash(file) == SelectedLayer.FixedAssetHash ? "✓  " : "") + Path.GetFileName(file), () => { if (kind == 2) { SelectPicture(file); refresh(); } else Ui.Open(file); }); pick.SetBounds(104,12,Math.Max(300,row.Width-116),50); pick.AutoSize = false; pick.TextAlign = ContentAlignment.MiddleLeft; row.Controls.Add(pick); filesView.Controls.Add(row);
+                    var pick = Button((kind == 2 && SelectedLayer.Fixed && AssemblyFiles.Hash(file) == SelectedLayer.FixedAssetHash ? "✓  " : "") + Path.GetFileName(file), () => {
+                        if (kind == 2) { SelectPicture(file); refresh(); return; }
+                        string target = PathUtil.Normalize(file);
+                        if (!PathUtil.Exists(target)) { MessageBox.Show(form, "Файл не найден. Если это было исходное видео с Рабочего стола, сначала нажмите «+ Добавить файлы» — копия появится в материалах.", "Сборка роликов", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+                        Ui.Open(target);
+                    }); pick.SetBounds(104,12,Math.Max(300,row.Width-116),50); pick.AutoSize = false; pick.TextAlign = ContentAlignment.MiddleLeft; row.Controls.Add(pick); filesView.Controls.Add(row);
                 }
             };
             actions.Controls.Add(Button("+ Добавить файлы", () => { ImportPool(kind,PickFiles(kind)); refresh(); },true)); actions.Controls.Add(Button("Заменить пачку", () => { ImportPool(kind,PickFiles(kind),true); refresh(); }));
@@ -634,7 +661,7 @@ namespace VideoBatch {
             folder = Theme.MakeIconButton("⋯", () => FolderClick?.Invoke()); folder.Location = new Point(276, 54); Controls.Add(folder);
             SizeChanged += (s, e) => { title.Width = Detail.Width = Math.Max(80, Width - 106); folder.Left = Width - 48; add.Width = Math.Max(100, Math.Min(170, folder.Left - 102)); };
             DragEnter += (s, e) => e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
-            DragDrop += (s, e) => FilesDropped?.Invoke((string[])e.Data.GetData(DataFormats.FileDrop));
+            DragDrop += (s, e) => FilesDropped?.Invoke(PathUtil.NormalizeAll((string[])e.Data.GetData(DataFormats.FileDrop)));
         }
         public void SetInfo(string caption, string detail, string path) {
             title.Text = caption; Detail.Text = detail; AccessibleName = caption + ". " + detail;
