@@ -25,6 +25,11 @@ def command(items):
 def add(parent, name, text):
     ET.SubElement(parent, name).text = str(text)
 
+def set_scope(scope):
+    node = doc.find('HistoryScope')
+    if node is None: add(doc, 'HistoryScope', scope)
+    else: node.text = scope
+
 def report(file, suffix):
     file = Path(file)
     return file.parent / '.videobatch-reports' / (file.name + suffix)
@@ -93,7 +98,15 @@ with tempfile.TemporaryDirectory(prefix='history-metadata-') as temp:
         return ET.parse(report(file, '.assembly.xml')).getroot().findtext('Signature')
 
     capacity(4)
+    set_scope('RU')
+    ru_first = render(1)[0]; ru_signature = check_tags(ru_first, 'Apple')
+    set_scope('EN')
+    capacity(4)  # EN ledger is independent from RU on the same materials.
+    set_scope('RU')
+    capacity(3)
+    set_scope('Shared')
     first = render(1)[0]; signature = check_tags(first, 'Apple')
+    set_scope('Shared')
     capacity(3)  # New process, same materials.
     second = render(1)[0]; second_signature = check_tags(second, 'Apple')
     assert signature != second_signature
@@ -116,6 +129,8 @@ with tempfile.TemporaryDirectory(prefix='history-metadata-') as temp:
     extra = render(2)
     for file in extra: check_tags(file, 'Samsung', software=False)
     capacity(0)
+    ru_ledger = history / 'markets' / 'ru.xml'
+    assert len(ET.parse(ru_ledger).getroot().findall('Records/AssemblyHistoryRecord')) == 1
     ledger = history / 'all-studios.xml'
     state = ET.parse(ledger).getroot()
     assert len(state.findall('Records/AssemblyHistoryRecord')) == 6

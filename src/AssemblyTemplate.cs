@@ -34,6 +34,7 @@ namespace VideoBatch {
         public string Transition = "fade", RenderMode = "auto";
         public double TransitionDuration = .35, MusicVolume = .8;
         public bool RandomVideoStart = true;
+        public string HistoryScope = AssemblyHistoryScope.Shared;
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
@@ -70,6 +71,7 @@ namespace VideoBatch {
             Check(MusicVolume, 0, 2, "Громкость музыки"); Check(TransitionDuration, 0, 2, "Длительность перехода");
             if (RenderMode != "auto" && RenderMode != "cpu") throw new Exception("Выбери автоматическую сборку или сборку на процессоре.");
             TitleBank = AssemblyOutputTags.NormalizeBank(TitleBank);
+            HistoryScope = AssemblyHistoryScope.Normalize(HistoryScope);
             if (!Transitions.Contains(Transition)) throw new Exception("Неизвестный переход.");
             foreach (var scene in Scenes) {
                 if (scene.VideoMode != "" && scene.VideoMode != "shared" && scene.VideoMode != "own") throw new Exception("Неизвестный источник видео сцены.");

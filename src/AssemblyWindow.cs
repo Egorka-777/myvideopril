@@ -27,7 +27,7 @@ namespace VideoBatch {
         FlowLayoutPanel options;
         FlowLayoutPanel footer, packChips;
         Label status, selectedCaption, capacityLabel;
-        Button videoButton, musicButton, formatButton, titlesButton, stop, imageFiles, transitionButton, imageModeButton, shuffleButton, variantsButton, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
+        Button videoButton, musicButton, formatButton, titlesButton, historyScopeButton, stop, imageFiles, transitionButton, imageModeButton, shuffleButton, variantsButton, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
         ProgressBar progress;
         readonly List<Button> sceneCards = new List<Button>();
         readonly Dictionary<AssemblyLayer, string> previewImages = new Dictionary<AssemblyLayer, string>();
@@ -118,6 +118,7 @@ namespace VideoBatch {
             footer=Row(); footer.Padding=new Padding(0,6,0,0); options=footer;
             formatButton=Button("",FormatMenu); formatButton.Name="Format"; FooterSize(formatButton,106);
             transitionButton=Button("",TransitionMenu); transitionButton.Name="Transitions"; FooterSize(transitionButton,168);
+            historyScopeButton=Button("",HistoryScopeMenu); historyScopeButton.Name="HistoryScope"; FooterSize(historyScopeButton,118);
             titlesButton=Button("",OpenTitles); titlesButton.Name="AssemblyTitles"; FooterSize(titlesButton,128);
             lessButton=Button("−",() => ChangeCount(-1)); lessButton.Name="CountLess"; FooterSize(lessButton,34);
             countButton=Button("",CountMenu); countButton.Name="AssemblyCount"; FooterSize(countButton,112);
@@ -125,7 +126,7 @@ namespace VideoBatch {
             assembleButton=Button("✦ Собрать",async () => await Run(false),true); assembleButton.Name="Assemble"; FooterSize(assembleButton,140);
             var results=Button("Результаты ↗",() => Safe(() => {Directory.CreateDirectory(template.Output); Ui.Open(template.Output);})); results.Name="Results"; FooterSize(results,132);
             stop=Button("■ Стоп",() => cancellation?.Cancel()); stop.Visible=false; FooterSize(stop,82);
-            footer.Controls.AddRange(new Control[] {formatButton,transitionButton,titlesButton,lessButton,countButton,moreButton,assembleButton,results,stop}); bottom.Controls.Add(footer,0,2); UpdateCountControls();
+            footer.Controls.AddRange(new Control[] {formatButton,transitionButton,historyScopeButton,titlesButton,lessButton,countButton,moreButton,assembleButton,results,stop}); bottom.Controls.Add(footer,0,2); UpdateCountControls();
             SetDrop(videoButton, files => ImportPool(0,files)); SetDrop(musicButton,files => ImportPool(1,files)); SetDrop(imageFiles,files => ImportPool(2,files)); BuildScenes();
         }
         static void FooterSize(Button b,int w) { b.AutoSize=false; b.Size=new Size(w,46); b.MinimumSize=b.Size; b.Padding=new Padding(8,3,8,3); b.Margin=new Padding(0,0,6,0); }
@@ -418,7 +419,25 @@ namespace VideoBatch {
                 Save(); status.Text="Метаданные сохранены. Они записываются внутрь каждого готового ролика.";
             }
         }
-        void BindTemplateValues() { capacityKey=null; batchMaximum=0; UpdateCountControls(); loading=true; count.Maximum=int.MaxValue; count.Value=template.Count; volume.Value=(decimal)(template.MusicVolume*100); loading=false; }
+        void BindTemplateValues() { capacityKey=null; batchMaximum=0; UpdateCountControls(); RefreshHistoryScopeButton(); loading=true; count.Maximum=int.MaxValue; count.Value=template.Count; volume.Value=(decimal)(template.MusicVolume*100); loading=false; }
+        void RefreshHistoryScopeButton() { if (historyScopeButton!=null) historyScopeButton.Text="Журнал "+AssemblyHistoryScope.ShortLabel(template.HistoryScope)+" ▾"; }
+        void HistoryScopeMenu() {
+            var menu=new ContextMenuStrip();
+            foreach (string scope in new[] { AssemblyHistoryScope.Ru, AssemblyHistoryScope.En, AssemblyHistoryScope.Shared }) {
+                string label=AssemblyHistoryScope.MenuLabel(scope);
+                if (string.Equals(template.HistoryScope,scope,StringComparison.OrdinalIgnoreCase)) label="✓ "+label;
+                MenuAction(menu,label,() => { template.HistoryScope=scope; capacityKey=null; RefreshHistoryScopeButton(); Changed(true); RequestCapacity(); status.Text="Журнал связок: "+AssemblyHistoryScope.MenuLabel(scope)+". RU и EN не пересекаются."; });
+            }
+            menu.Show(historyScopeButton,new Point(0,historyScopeButton.Height));
+        }
+        static string HistoryLedgerFingerprint(string folder,string scope) {
+            scope=AssemblyHistoryScope.Normalize(scope);
+            if (!Directory.Exists(folder)) return "";
+            var files=new List<string> { AssemblyHistoryStore.PathFor(folder,scope) };
+            string backup=files[0]+".bak"; if (File.Exists(backup)) files.Add(backup);
+            if (scope==AssemblyHistoryScope.Shared) files.AddRange(Directory.GetFiles(folder,"*.xml").Where(p => !p.StartsWith(Path.Combine(folder,"markets"),StringComparison.OrdinalIgnoreCase)));
+            return string.Join("|",files.Where(File.Exists).Select(f => f+":"+File.GetLastWriteTimeUtc(f).Ticks));
+        }
         async void RequestBackground() {
             if (canvas == null || !IsHandleCreated || cancellation != null) return;
             previewCancellation?.Cancel(); int version = ++previewVersion; var ct = new CancellationTokenSource(); previewCancellation = ct;
@@ -435,14 +454,14 @@ namespace VideoBatch {
         async void RequestCapacity() {
             if (capacityLabel==null || !IsHandleCreated || IsDisposed || cancellation!=null) return;
             try {
-                var t=Store.Clone(template); string hp=AssemblyHistoryStore.PathFor(historyFolder);
+                var t=Store.Clone(template); string scope=AssemblyHistoryScope.Normalize(t.HistoryScope);
                 var files=t.Scenes.SelectMany(scene => Pool(t.VideoSource(scene),AssemblyFiles.VideoExtensions).Concat(scene.Layers.Where(l => l.Enabled).SelectMany(l => Pool(l.Source,t.PictureExtensions)))).Concat(Pool(t.Music,AssemblyFiles.MusicExtensions)).Distinct().ToList();
-                string key=AssemblyFiles.HashText(t.Id+"|"+t.LoopShortVideos+"|"+t.AllowVideoReuse+"|"+t.Transition+"|"+t.TransitionDuration+"|"+string.Join("|",t.Scenes.Select(scene => scene.Duration+":"+t.VideoSource(scene)+":"+string.Join(",",scene.Layers.Select(l => l.Enabled+":"+l.Source+":"+l.Unique+":"+l.Fixed+":"+l.FixedAssetHash))))+"|"+string.Join("|",files.Select(file => {var info=new FileInfo(file); return file+":"+info.Length+":"+info.LastWriteTimeUtc.Ticks;}))+"|"+(Directory.Exists(historyFolder)?string.Join("|",Directory.GetFiles(historyFolder,"*.xml").Select(f => f+":"+File.GetLastWriteTimeUtc(f).Ticks)):""));
+                string key=AssemblyFiles.HashText(t.Id+"|"+scope+"|"+t.LoopShortVideos+"|"+t.AllowVideoReuse+"|"+t.Transition+"|"+t.TransitionDuration+"|"+string.Join("|",t.Scenes.Select(scene => scene.Duration+":"+t.VideoSource(scene)+":"+string.Join(",",scene.Layers.Select(l => l.Enabled+":"+l.Source+":"+l.Unique+":"+l.Fixed+":"+l.FixedAssetHash))))+"|"+string.Join("|",files.Select(file => {var info=new FileInfo(file); return file+":"+info.Length+":"+info.LastWriteTimeUtc.Ticks;}))+"|"+HistoryLedgerFingerprint(historyFolder,scope));
                 if (key==capacityKey) return; capacityKey=key; capacityCancellation?.Cancel(); int version=++capacityVersion;
                 var ct=new CancellationTokenSource(); capacityCancellation=ct; capacityLabel.Text="Считаю новые связки…"; batchMaximum=0; UpdateCountControls();
                 try {
                     if (!ToolsLocator.TryResolve(out string ffmpeg,out string probe,out string hint)) { capacityLabel.Text="Добавь FFmpeg для расчёта связок"; return; }
-                    var capacity=await Task.Run(async () => { var v=await AssemblyEngine.ReadVideos(t,probe,ct.Token); var h=AssemblyHistoryStore.Load(historyFolder); return new AssemblyInventory(t,v,h).Calculate(); },ct.Token);
+                    var capacity=await Task.Run(async () => { var v=await AssemblyEngine.ReadVideos(t,probe,ct.Token); var h=AssemblyHistoryStore.Load(historyFolder,scope); return new AssemblyInventory(t,v,h).Calculate(); },ct.Token);
                     if (version==capacityVersion && !IsDisposed) ApplyCapacity(capacity);
                 } catch (OperationCanceledException) { }
                 catch (Exception ex) { if (version==capacityVersion && !IsDisposed) { capacityLabel.Text=files.Any(f => AssemblyFiles.VideoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant())) ? "Проверь материалы · расчёт недоступен" : "Добавь видео для расчёта связок"; status.Text=ex.Message; capacityKey=null; } }
@@ -457,7 +476,7 @@ namespace VideoBatch {
                 cancellation = new CancellationTokenSource(); Busy(true); var t = Store.Clone(template);
                 var updates = new Progress<Update>(u => { status.Text = u.Text; progress.Value = (int)Math.Max(0,Math.Min(1000,u.Percent*10)); });
                 if (sample) {
-                    var videos = await AssemblyEngine.ReadVideos(t,probe,cancellation.Token); string hp = AssemblyHistoryStore.PathFor(historyFolder); var history = AssemblyHistoryStore.Load(historyFolder);
+                    var videos = await AssemblyEngine.ReadVideos(t,probe,cancellation.Token); var history = AssemblyHistoryStore.Load(historyFolder,t.HistoryScope);
                     var batch = AssemblyPlanner.Create(t,videos,history,new Random(),1,null,cancellation.Token); if (batch.Plans.Count == 0) throw new Exception(batch.Limit);
                     Directory.CreateDirectory(previewFolder); string path = Path.Combine(previewFolder,"example-" + Guid.NewGuid().ToString("N") + ".mp4"), work = Path.Combine(previewFolder,"render-" + Guid.NewGuid().ToString("N"));
                     try { await Task.Run(() => AssemblyEngine.Render(t,batch.Plans[0],ffmpeg,probe,path,work,AssemblyRaster.Save,cancellation.Token,s => ((IProgress<Update>)updates).Report(new Update(s,0)))); }

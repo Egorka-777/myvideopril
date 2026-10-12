@@ -57,6 +57,17 @@ namespace VideoBatch {
                 Check(File.ReadAllText(ledger)=="broken XML","corrupt journal must not be overwritten");
                 File.WriteAllText(ledger,exact); File.Delete(ledger);
                 try { AssemblyHistoryStore.Load(folder); throw new Exception("stale backup silently restored"); } catch(IOException) { }
+                var ruPlan=AssemblyPlanner.Create(t,videos,new AssemblyHistory(),new Random(9),1).Plans.Single();
+                var ruHistory=AssemblyHistoryStore.Load(folder,AssemblyHistoryScope.Ru);
+                string ruOutput=Path.Combine(root,"ru.mp4"); File.WriteAllText(ruOutput,"ru");
+                AssemblyHistoryStore.Reserve(folder,ruHistory,ruPlan,ruOutput,t.Id,ruOutput,AssemblyHistoryScope.Ru);
+                AssemblyHistoryStore.Commit(folder,ruHistory,ruHistory.Records.Single(),AssemblyHistoryScope.Ru);
+                var enHistory=AssemblyHistoryStore.Load(folder,AssemblyHistoryScope.En);
+                Check(enHistory.Combinations.Count==0,"EN ledger starts empty");
+                Check(new AssemblyInventory(t,videos,enHistory).Calculate().Variants==47520,"EN capacity ignores RU usage");
+                Check(new AssemblyInventory(t,videos,AssemblyHistoryStore.Load(folder,AssemblyHistoryScope.Ru)).Calculate().Variants==47519,"RU capacity reflects its ledger");
+                using (var ruGate=new FileStream(AssemblyHistoryStore.PathFor(folder,AssemblyHistoryScope.Ru)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None))
+                using (var enGate=new FileStream(AssemblyHistoryStore.PathFor(folder,AssemblyHistoryScope.En)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) { }
                 return true;
             } finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
         }

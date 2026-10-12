@@ -18,7 +18,7 @@ class Program {
             var t = AssemblyFiles.Load<AssemblyTemplate>(args[1]);
             if (args[0]=="capacity") {
                 var videos=AssemblyEngine.ReadVideos(t,args[3],CancellationToken.None).GetAwaiter().GetResult();
-                var h=AssemblyHistoryStore.Load(args[4]); var c=new AssemblyInventory(t,videos,h).Calculate();
+                var h=AssemblyHistoryStore.Load(args[4], t.HistoryScope); var c=new AssemblyInventory(t,videos,h).Calculate();
                 Console.WriteLine(JsonSerializer.Serialize(new {Remaining=c.Variants.ToString(),c.Exact,c.BatchLimit,Used=h.Combinations.Count})); return 0;
             }
             Action<AssemblyTemplate, AssemblyLayerPlan, string> raster = args.Length > 5 && args[5] == "portable" ? CopyRaster : AssemblyRaster.Save;

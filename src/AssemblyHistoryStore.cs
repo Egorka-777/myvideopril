@@ -46,59 +46,92 @@ namespace VideoBatch {
         }
     }
     public static class AssemblyHistoryStore {
-        public static string PathFor(string folder) { return Path.Combine(folder,"all-studios.xml"); }
-        public static AssemblyHistory Load(string folder) {
-            Directory.CreateDirectory(folder); string path=PathFor(folder);
-            // A stale backup cannot establish whether the last published video was used.
-            if (!File.Exists(path) && File.Exists(path+".bak")) throw new IOException("Журнал связок отсутствует, но есть резервная копия. Восстанови историю перед сборкой; повторы не разрешены.");
-            var history=File.Exists(path) ? AssemblyFiles.Load<AssemblyHistory>(path) : new AssemblyHistory();
-            if (File.Exists(path) && history.LedgerVersion!=1) throw new IOException("Неизвестная версия журнала связок. Сборка остановлена, чтобы не допустить повторов.");
-            Validate(history);
-            // Migration is a union: preserve opaque old signatures even without recipes.
-            foreach (string backup in Directory.GetFiles(folder,"*.xml.bak"))
-                if (!File.Exists(backup.Substring(0,backup.Length-4))) throw new IOException("Отсутствует файл старой истории: "+System.IO.Path.GetFileName(backup)+". Восстанови его перед сборкой.");
-            foreach (string legacy in Directory.GetFiles(folder,"*.xml").Where(p => !p.Equals(path,StringComparison.OrdinalIgnoreCase))) {
-                var old=AssemblyFiles.Load<AssemblyHistory>(legacy); Validate(old);
+        public static string PathFor(string folder, string scope = null) {
+            scope = AssemblyHistoryScope.Normalize(scope);
+            if (scope == AssemblyHistoryScope.Shared) return Path.Combine(folder, "all-studios.xml");
+            return Path.Combine(folder, "markets", scope.ToLowerInvariant() + ".xml");
+        }
+
+        public static void EnsureFolder(string folder, string scope = null) {
+            scope = AssemblyHistoryScope.Normalize(scope);
+            Directory.CreateDirectory(folder);
+            if (scope != AssemblyHistoryScope.Shared) Directory.CreateDirectory(Path.Combine(folder, "markets"));
+        }
+
+        public static AssemblyHistory Load(string folder, string scope = null) {
+            scope = AssemblyHistoryScope.Normalize(scope);
+            EnsureFolder(folder, scope);
+            string path = PathFor(folder, scope);
+            if (scope == AssemblyHistoryScope.Shared) return LoadShared(folder, path);
+            return LoadLedger(folder, path, mergeLegacyStudios: false);
+        }
+
+        static AssemblyHistory LoadShared(string folder, string path) {
+            var history = LoadLedger(folder, path, mergeLegacyStudios: true);
+            foreach (string legacy in Directory.GetFiles(folder, "*.xml").Where(p => !p.Equals(path, StringComparison.OrdinalIgnoreCase) && !p.StartsWith(Path.Combine(folder, "markets"), StringComparison.OrdinalIgnoreCase))) {
+                var old = AssemblyFiles.Load<AssemblyHistory>(legacy); Validate(old);
                 history.Combinations.AddRange(old.Combinations); history.UsedImages.AddRange(old.UsedImages); history.Outputs.AddRange(old.Outputs);
                 history.Records.AddRange(old.Records);
                 foreach (string output in old.Outputs) {
-                    string recipe=AssemblyOutputFiles.FindRecipe(output); if (!File.Exists(recipe)) continue;
+                    string recipe = AssemblyOutputFiles.FindRecipe(output); if (!File.Exists(recipe)) continue;
                     try {
-                        var plan=AssemblyFiles.Load<AssemblyPlan>(recipe);
-                        if (old.Combinations.Contains(plan.Signature) && !history.Records.Any(r => r.Signature==plan.Signature))
-                            history.Records.Add(AssemblyHistoryRecord.FromPlan(plan,output,System.IO.Path.GetFileNameWithoutExtension(legacy)));
+                        var plan = AssemblyFiles.Load<AssemblyPlan>(recipe);
+                        if (old.Combinations.Contains(plan.Signature) && !history.Records.Any(r => r.Signature == plan.Signature))
+                            history.Records.Add(AssemblyHistoryRecord.FromPlan(plan, output, System.IO.Path.GetFileNameWithoutExtension(legacy)));
                     } catch { /* Signature stays blocked; only the exact capacity may be unavailable. */ }
                 }
             }
-            // The private staged file survives a crash before the final rename. After
-            // rename it is absent, even if someone has since moved/deleted the result.
-            foreach (var record in history.Records.Where(r => r.Pending).ToList()) {
-                if (!File.Exists(record.Output) && !string.IsNullOrEmpty(record.StagedPath) && File.Exists(record.StagedPath)) history.Records.Remove(record);
-                else { record.Pending=false; Consume(history,record); } // uncertain = block, never silently reuse
-            }
-            history.Combinations=history.Combinations.Distinct().ToList(); history.UsedImages=history.UsedImages.Distinct().ToList();
-            history.Outputs=history.Outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            history.Records=history.Records.GroupBy(r => r.Signature).Select(g => g.First()).ToList(); history.LedgerVersion=1;
+            history.Combinations = history.Combinations.Distinct().ToList(); history.UsedImages = history.UsedImages.Distinct().ToList();
+            history.Outputs = history.Outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            history.Records = history.Records.GroupBy(r => r.Signature).Select(g => g.First()).ToList();
+            history.LedgerVersion = 1;
             return history;
         }
+
+        static AssemblyHistory LoadLedger(string folder, string path, bool mergeLegacyStudios) {
+            // A stale backup cannot establish whether the last published video was used.
+            if (!File.Exists(path) && File.Exists(path + ".bak")) throw new IOException("Журнал связок отсутствует, но есть резервная копия. Восстанови историю перед сборкой; повторы не разрешены.");
+            var history = File.Exists(path) ? AssemblyFiles.Load<AssemblyHistory>(path) : new AssemblyHistory();
+            if (File.Exists(path) && history.LedgerVersion != 1) throw new IOException("Неизвестная версия журнала связок. Сборка остановлена, чтобы не допустить повторов.");
+            Validate(history);
+            if (mergeLegacyStudios) {
+                foreach (string backup in Directory.GetFiles(folder, "*.xml.bak"))
+                    if (!File.Exists(backup.Substring(0, backup.Length - 4))) throw new IOException("Отсутствует файл старой истории: " + System.IO.Path.GetFileName(backup) + ". Восстанови его перед сборкой.");
+            }
+            foreach (var record in history.Records.Where(r => r.Pending).ToList()) {
+                if (!File.Exists(record.Output) && !string.IsNullOrEmpty(record.StagedPath) && File.Exists(record.StagedPath)) history.Records.Remove(record);
+                else { record.Pending = false; Consume(history, record); }
+            }
+            history.Combinations = history.Combinations.Distinct().ToList(); history.UsedImages = history.UsedImages.Distinct().ToList();
+            history.Outputs = history.Outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            history.Records = history.Records.GroupBy(r => r.Signature).Select(g => g.First()).ToList(); history.LedgerVersion = 1;
+            return history;
+        }
+
         static void Validate(AssemblyHistory history) {
-            if (history==null || history.Combinations==null || history.UsedImages==null || history.Outputs==null || history.Records==null ||
-                history.Records.Any(r => r==null || string.IsNullOrWhiteSpace(r.Signature) || string.IsNullOrWhiteSpace(r.Output) || r.Scenes==null || r.UniqueImages==null || r.Scenes.Any(s => s==null || s.Images==null || string.IsNullOrWhiteSpace(s.VideoHash))))
+            if (history == null || history.Combinations == null || history.UsedImages == null || history.Outputs == null || history.Records == null ||
+                history.Records.Any(r => r == null || string.IsNullOrWhiteSpace(r.Signature) || string.IsNullOrWhiteSpace(r.Output) || r.Scenes == null || r.UniqueImages == null || r.Scenes.Any(s => s == null || s.Images == null || string.IsNullOrWhiteSpace(s.VideoHash))))
                 throw new IOException("Повреждена история связок. Сборка остановлена, чтобы не допустить повторов.");
         }
-        public static void Save(string folder, AssemblyHistory history) { Validate(history); history.LedgerVersion=1; AssemblyFiles.Save(PathFor(folder),history); }
-        public static AssemblyHistoryRecord Reserve(string folder, AssemblyHistory history, AssemblyPlan plan, string output, string templateId, string stagedPath) {
-            if (history.Combinations.Contains(plan.Signature) || history.Records.Any(r => r.Signature==plan.Signature)) throw new IOException("Эта связка уже использована. Повторная сборка запрещена.");
-            var record=AssemblyHistoryRecord.FromPlan(plan,output,templateId); record.Pending=true; record.StagedPath=stagedPath; history.Records.Add(record);
-            try { Save(folder,history); } catch { history.Records.Remove(record); throw; }
+
+        public static void Save(string folder, AssemblyHistory history, string scope = null) {
+            Validate(history); history.LedgerVersion = 1; AssemblyFiles.Save(PathFor(folder, scope), history);
+        }
+
+        public static AssemblyHistoryRecord Reserve(string folder, AssemblyHistory history, AssemblyPlan plan, string output, string templateId, string stagedPath, string scope = null) {
+            if (history.Combinations.Contains(plan.Signature) || history.Records.Any(r => r.Signature == plan.Signature)) throw new IOException("Эта связка уже использована. Повторная сборка запрещена.");
+            var record = AssemblyHistoryRecord.FromPlan(plan, output, templateId); record.Pending = true; record.StagedPath = stagedPath; history.Records.Add(record);
+            try { Save(folder, history, scope); } catch { history.Records.Remove(record); throw; }
             return record;
         }
+
         static void Consume(AssemblyHistory history, AssemblyHistoryRecord record) {
             if (!history.Combinations.Contains(record.Signature)) history.Combinations.Add(record.Signature);
             foreach (string hash in record.UniqueImages) if (!history.UsedImages.Contains(hash)) history.UsedImages.Add(hash);
             if (!history.Outputs.Contains(record.Output)) history.Outputs.Add(record.Output);
         }
-        public static void Commit(string folder, AssemblyHistory history, AssemblyHistoryRecord record) { record.Pending=false; Consume(history,record); Save(folder,history); }
-        public static void Release(string folder, AssemblyHistory history, AssemblyHistoryRecord record) { history.Records.Remove(record); Save(folder,history); }
+
+        public static void Commit(string folder, AssemblyHistory history, AssemblyHistoryRecord record, string scope = null) { record.Pending = false; Consume(history, record); Save(folder, history, scope); }
+        public static void Release(string folder, AssemblyHistory history, AssemblyHistoryRecord record, string scope = null) { history.Records.Remove(record); Save(folder, history, scope); }
     }
 }

@@ -112,13 +112,15 @@ namespace VideoBatch {
             t.Validate();
             if (t.Scenes.Count==0) throw new Exception("Добавь хотя бы одну сцену перед сборкой.");
             if (string.IsNullOrWhiteSpace(t.Output)) throw new Exception("Выберите папку готовых роликов.");
-            Directory.CreateDirectory(t.Output); Directory.CreateDirectory(historyFolder);
-            string historyPath = AssemblyHistoryStore.PathFor(historyFolder);
+            Directory.CreateDirectory(t.Output);
+            string historyScope = t.HistoryScope;
+            AssemblyHistoryStore.EnsureFolder(historyFolder, historyScope);
+            string historyPath = AssemblyHistoryStore.PathFor(historyFolder, historyScope);
             var result = new BatchResult(); string work = Path.Combine(t.Output, ".assembly-" + Guid.NewGuid().ToString("N")), limitNote="";
             try {
-                // A second process may not allocate the same headlines while the batch is rendering.
+                // One lock per ledger so RU and EN batches can run without clobbering each other.
                 using (var gate = new FileStream(historyPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
-                    var history = AssemblyHistoryStore.Load(historyFolder);
+                    var history = AssemblyHistoryStore.Load(historyFolder, historyScope);
                     progress.Report(new Update("Проверяю материалы…", 0));
                     var videos = await ReadVideos(t, ffprobe, ct).ConfigureAwait(false);
                     var random=new Random(); var mix=new AssemblyMixTracker();
@@ -150,14 +152,14 @@ namespace VideoBatch {
                                     AssemblyFiles.Save(AssemblyOutputFiles.Report(destination,".assembly.xml"),plan);
                                     AssemblyFiles.Save(AssemblyOutputFiles.Report(destination,".performance.xml"),renderContext.LastReport);
                                     File.WriteAllLines(AssemblyOutputFiles.Report(destination,".metadata.txt"),metadata,System.Text.Encoding.UTF8);
-                                    reservation=AssemblyHistoryStore.Reserve(historyFolder,history,plan,destination,t.Id,partial);
+                                    reservation=AssemblyHistoryStore.Reserve(historyFolder,history,plan,destination,t.Id,partial,historyScope);
                                     ct.ThrowIfCancellationRequested();
                                     File.Move(partial,destination); published=true; result.Outputs.Add(destination);
-                                    AssemblyHistoryStore.Commit(historyFolder,history,reservation);
+                                    AssemblyHistoryStore.Commit(historyFolder,history,reservation,historyScope);
                                 } finally {
                                     if (!published) {
                                         AssemblyOutputFiles.DeleteReports(destination);
-                                        if (reservation!=null) AssemblyHistoryStore.Release(historyFolder,history,reservation);
+                                        if (reservation!=null) AssemblyHistoryStore.Release(historyFolder,history,reservation,historyScope);
                                     }
                                     // Once published, its durable reservation survives any commit failure.
                                 }
