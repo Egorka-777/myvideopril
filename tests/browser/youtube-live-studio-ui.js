@@ -36,8 +36,8 @@ function html(url) {
     const select=document.createElement('button');select.id='stream-key-select';select.setAttribute('aria-label','Stream key');select.textContent=state.keyName||'Default';select.onclick=()=>button('Create new stream key',()=>{const d=dialog(),i=document.createElement('input');i.name='name';d.append(i);button('Create',async()=>{state.keyName=i.value;await save();select.textContent=state.keyName;d.remove();},d);});main.append(select);
     for(const [label,value] of [['Stream key (paste in encoder)','fixture-key-1234'],['Stream URL','rtmp://a.rtmp.youtube.com/live2']]){const row=document.createElement('div');const l=document.createElement('span');l.textContent=label;row.append(l);button('Copy',()=>navigator.clipboard.writeText(value),row);main.append(row);}
     if(state.ended){main.append('Stream finished');return;}
-    if(state.live)button('End stream',()=>{const d=dialog();button('End stream',async()=>{state.live=false;state.ended=true;await save();d.remove();render();},d);});
-    else button('Go live',async()=>{state.live=true;await save();render();});
+    if(state.live)button('End stream',()=>{const d=dialog();button('End stream',async()=>{state.live=false;state.ended=true;await save();d.remove();main.innerHTML='Updating stream status';setTimeout(render,250);},d);});
+    else button('Go live',()=>{main.innerHTML='Waiting for confirmation';setTimeout(()=>{const d=dialog();button('Go live',async()=>{state.live=true;await save();d.remove();main.innerHTML='Updating stream status';setTimeout(render,250);},d);},100);});
   }render();
   </script></body></html>`;
 }

@@ -339,7 +339,7 @@ class NativeStudio {
       throw new Error("Studio не подтвердил доступ.");
     await this.click(/^(Cancel|Отмена|Close|Закрыть)$/i, verify);
   }
-  async state() {
+  async readState() {
     await this.assertTarget();
     const text = await this.page.locator("body").innerText();
     const blocker = existing.studioPageState(this.page.url(), text).blocker;
@@ -350,15 +350,22 @@ class NativeStudio {
     if (labels.finished.test(text)) return "complete";
     const go = await this.button(labels.go, this.page, false);
     if (go) return "ready";
-    throw new Error("Studio не подтвердил состояние эфира.");
+    return null; // Native controls can briefly disappear while Studio renders the new state.
   }
+  async state() { return waitUntil(()=>this.readState(),15000); }
   async canStart() { const b = await this.button(labels.go, this.page, false); return !!b && await b.isEnabled(); }
   async start() {
     await this.assertTarget(); await this.click(labels.go);
-    // Some accounts show a confirmation dialog. Only act inside that dialog.
-    const d = await uniqueVisible(this.page.locator('[role="dialog"], ytcp-dialog[opened]'), false);
-    if (d && await this.button(labels.go, d, false)) { await this.click(labels.go, d); await waitUntil(async () => !await d.isVisible()); }
-    await waitUntil(async () => await this.state() === "live", 20000);
+    // The native confirmation can appear after the click has returned.
+    let confirmed=false;
+    await waitUntil(async () => {
+      const d=await uniqueVisible(this.page.locator('[role="dialog"], ytcp-dialog[opened]'),false);
+      if(d && await this.button(labels.go,d,false)) {
+        if(!confirmed){await this.click(labels.go,d);confirmed=true;}
+        return false;
+      }
+      return await this.readState()==="live";
+    },20000);
   }
   async complete(startAttempted) {
     let state = await this.state();
@@ -368,7 +375,7 @@ class NativeStudio {
       const dialog = await this.dialog();
       await this.click(labels.end, dialog);
       await waitUntil(async () => !await dialog.isVisible());
-      await waitUntil(async () => await this.state() === "complete", 30000); return;
+      await waitUntil(async () => await this.readState() === "complete", 30000); return;
     }
     if (startAttempted) throw new Error("Запуск запрашивался, но завершение не подтверждено. Проверьте Studio вручную.");
     // Cancel ONLY the known upcoming video, via its own edit page. Archive/live video deletion is forbidden.
