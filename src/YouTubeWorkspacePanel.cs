@@ -157,14 +157,14 @@ namespace VideoBatch {
             grid.Columns.Add("url", "Ссылка");
             grid.Columns["url"].FillWeight = 70;
             grid.Columns["url"].DefaultCellStyle.ForeColor = Theme.Info;
-            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "live", HeaderText = "Эфир", ReadOnly = true, Width = 180, MinimumWidth = 130, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "live", HeaderText = "Эфир", ReadOnly = true, Visible = false, Width = 180, MinimumWidth = 130, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
             grid.CellClick += OnGridClick;
             grid.CellContentClick += OnGridContentClick;
             grid.CellEndEdit += SaveChannelLink;
             grid.CellFormatting += OnGridCellFormatting;
             grid.CellPainting += OnAccountCellPaint;
             grid.RowPostPaint += OnRowPostPaint;
-            grid.SelectionChanged += (s, e) => RememberSelectedChannel();
+            grid.SelectionChanged += (s, e) => { RememberSelectedChannel(); UpdateLiveRows(); };
             grid.MouseDown += GridMouseDown;
             grid.CellDoubleClick += OnGridCellDoubleClick;
             grid.CurrentCellDirtyStateChanged += (s, e) => { if (grid.IsCurrentCellDirty) grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };

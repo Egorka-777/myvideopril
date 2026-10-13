@@ -14,6 +14,7 @@ namespace VideoBatch {
         readonly LiveAccount account;
         readonly Preferences preferences;
         readonly Func<Dictionary<string, object>, CancellationToken, Task<Dictionary<string, object>>> runner;
+        string expectedUrl = "";
         string operation = Guid.NewGuid().ToString("N");
         public string ChannelName { get; private set; }
         public string ChannelId { get; private set; }
@@ -36,7 +37,7 @@ namespace VideoBatch {
         async Task<Dictionary<string, object>> Call(string command, CancellationToken ct, string broadcast = "", LiveOptions options = null) {
             var job = new Dictionary<string, object> {
                 ["command"] = command, ["operationId"] = operation, ["profileId"] = account.ProfileId,
-                ["expectedChannelId"] = account.RemoteId, ["localPort"] = account.LocalPort,
+                ["expectedChannelId"] = account.RemoteId, ["expectedChannelUrl"]=expectedUrl, ["localPort"] = account.LocalPort,
                 ["stateDirectory"] = Path.Combine(Store.Root, "live-session"), ["broadcastId"] = broadcast
             };
             if (options != null) job["options"] = new Dictionary<string, object> {
@@ -46,6 +47,8 @@ namespace VideoBatch {
             return await runner(job, ct).ConfigureAwait(false);
         }
         public async Task VerifyChannel(string id, string url, CancellationToken ct) {
+            expectedUrl=url ?? "";
+            if(string.IsNullOrWhiteSpace(id) && string.IsNullOrWhiteSpace(expectedUrl))throw new InvalidOperationException("Добавь ссылку на канал в выбранную строку, чтобы проверить точный аккаунт.");
             var match = Regex.Match(url ?? "", @"/channel/(UC[A-Za-z0-9_-]+)");
             if (match.Success && !string.IsNullOrEmpty(id) && match.Groups[1].Value != id)
                 throw new InvalidOperationException("Ссылка канала не совпадает с сохранённой сессией.");

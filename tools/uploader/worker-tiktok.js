@@ -480,7 +480,7 @@ async function fillCaption(page, caption) {
   await dismissTikTokBlockingDialogs(page);
   const captionText = normalizeCaption(caption);
   if (!captionText) throw new Error("Пустая подпись TikTok.");
-  if (captionText.length > 2200) throw new Error("Подпись TikTok длиннее 2200 символов.");
+  if (captionText.length > 4000) throw new Error("Подпись TikTok длиннее 4000 символов.");
   const selectors = [
     '[contenteditable="true"][data-text="true"]',
     '.public-DraftEditor-content[contenteditable="true"]',
@@ -505,11 +505,12 @@ async function fillCaption(page, caption) {
         ((await box.getAttribute("placeholder").catch(() => "")) || "");
       if (/\btitle\b|назван/i.test(label)) continue;
       found = true;
-      try { await box.fill(captionText, { timeout: 5000 }); }
-      catch (_) {
-        await box.click({ timeout: 3000 });
-        await page.keyboard.press("Control+A");
-        await page.keyboard.insertText(captionText);
+      const current=await box.evaluate(el=>el.value!=null?el.value:(el.innerText||el.textContent||""));
+      if(normalizeCaption(current)===captionText)return;
+      await box.click({timeout:3000});await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+      for(const [lineIndex,line] of captionText.split("\n").entries()) {
+        if(lineIndex)await page.keyboard.press("Shift+Enter");
+        await page.keyboard.type(line,{delay:10});
       }
       await page.waitForTimeout(400);
       const actual = await box.evaluate(el => el.value != null ? el.value : (el.innerText || el.textContent || "")).catch(() => "");
@@ -570,55 +571,17 @@ async function waitPersistenceAck(localJobId) {
   }finally{reader.close();}
 }
 
-async function publishAndConfirm(page, item, index, total) {
-  const { postEvidence, confirmStudioRow, jsonShape } = require("./tiktok-studio-evidence.js");
-  await dismissTikTokBlockingDialogs(page);
-  let nativeResult = null, nativeError = null;
-  const pending = new Set();
-  const onResponse = response => {
-    const req = response.request();
-    const u = new URL(response.url());
-    if (!/(^|\.)tiktok\.com$/.test(u.hostname) || req.method() !== "POST" || !/\/(post|publish)(\/|$)/.test(u.pathname)) return;
-    const task = (async () => {
-      try {
-        const body = await response.json();
-        const requestBody = req.postDataJSON();
-        record("native_post", "Ответ native Studio", { httpStatus:response.status(), statusCode:body.status_code,
-          endpoint:u.pathname, responseShape:jsonShape(body), requestShape:jsonShape(requestBody) });
-        if(!/\/project\/post\/v1\/?$/.test(u.pathname)) {
-          nativeError=new Error("Структура нового native post сохранена в диагностике. Проверьте запись Studio перед повтором.");return;
-        }
-        nativeResult = postEvidence(response.status(), body, requestBody, item);
-      }catch(e){nativeError=e;}
-    })();
-    pending.add(task);task.finally(()=>pending.delete(task));
-  };
-  page.on("response", onResponse);
-  try {
-    // Persist uncertain state BEFORE a click that may create an external post.
-    send("item_submitting", "Отправляю native post; повтор до сверки заблокирован.",
-      { packIndex:index, packTotal:total, localJobId:item.localJobId });
-    await waitPersistenceAck(item.localJobId);
-    const posted = await clickPost(page);
-    if (!posted) throw new Error("Не нажалась кнопка публикации. Профиль оставлен открытым.");
-    const deadline = Date.now() + 120000;
-    let confirmationClicked = false;
-    while (Date.now() < deadline) {
-      if(nativeError)throw nativeError;
-      if(nativeResult){
-        send("item_accepted", "Native post принят; проверяю точную запись в Studio.",
-          {packIndex:index,packTotal:total,localJobId:item.localJobId,videoId:nativeResult.id});
-        await confirmStudioRow(page,nativeResult,item);
-        return nativeResult;
-      }
-      if(!confirmationClicked)confirmationClicked=await clickPublishConfirmation(page);
-      await page.waitForTimeout(500);
+async function publishAndConfirm(page,item,index,total) {
+  return require("./tiktok-native-publish").publishNative(page,item,{
+    beforeSubmit:async()=>{
+      send("item_submitting","Публикую через Studio; повтор до подтверждения запрещён.",{packIndex:index,packTotal:total,localJobId:item.localJobId});
+      await waitPersistenceAck(item.localJobId);
+    },
+    accepted:async result=>{
+      send("item_accepted","Новая запись найдена в Studio.",{packIndex:index,packTotal:total,localJobId:item.localJobId,videoId:result.id});
+      if(result.review)send("item_review","Контент проверяется TikTok; повтор запрещён.",{packIndex:index,packTotal:total,localJobId:item.localJobId,videoId:result.id});
     }
-    throw new Error("Нет подтверждения native post за 2 минуты. Автоповтор запрещён; проверьте Studio.");
-  }finally{
-    page.off("response",onResponse);
-    await Promise.allSettled([...pending]);
-  }
+  });
 }
 
 async function clickPost(page) {
@@ -730,9 +693,8 @@ async function uploadOne(page, item, index, total) {
   });
   await waitUploadReady(page);
   await fillCaption(page, caption);
-  const {setNativeSchedule} = require("./tiktok-studio-evidence.js");
-  const schedule = await setNativeSchedule(page,item);
-  if(schedule)record("native_schedule","Дата/время прочитаны обратно из полей",schedule);
+  if(item.publishMode==="scheduled")await require("./tiktok-studio-evidence").setNativeSchedule(page,item);
+  else await require("./tiktok-native-publish").immediatePublic(page);
   // A stale first slot is moved together with the remaining batch by C# before startup.
   // If it expires during this upload, stop instead of silently changing the slot.
   await fillCaption(page, caption);
@@ -740,9 +702,10 @@ async function uploadOne(page, item, index, total) {
   send("tiktok", `Пачка ${index}/${total}: публикую…`, { percent: Math.min(95, 50 + Math.round(index / Math.max(1, total) * 45)) });
   await dismissTikTokBlockingDialogs(page);
   const evidence = await publishAndConfirm(page,item,index,total);
-  send("item_done", `Studio: запись ${index}/${total} подтверждена (${evidence.id}).`,
+  if(evidence.review)job.keepProfileOpen=true;
+  send(evidence.review?"item_review":"item_done", evidence.review?`На проверке TikTok: ${evidence.id}. Повтор запрещён.`:`Опубликовано для всех: ${evidence.id}.`,
     { packIndex: index, packTotal: total, localJobId:item.localJobId, videoId:evidence.id });
-  send("tiktok", `Готово ${index}/${total}: запись Studio подтверждена.`, { percent: Math.min(98, 60 + Math.round(index / Math.max(1, total) * 38)) });
+  send("tiktok", evidence.review?`Ролик ${index}/${total} на проверке TikTok.`:`Ролик ${index}/${total} опубликован для всех.`, { percent: Math.min(98, 60 + Math.round(index / Math.max(1, total) * 38)) });
   return page.url();
 }
 
@@ -789,6 +752,17 @@ async function main() {
     ? `Профиль открыт. Гружу пачку ${pack.length} в TikTok.`
     : "Открываю загрузку TikTok…", { percent: 25 });
 
+  if(job.recheckOnly) {
+    await gotoStable(page,"https://www.tiktok.com/tiktokstudio/upload",{waitUntil:"domcontentloaded",timeout:90000});
+    for(let i=0;i<pack.length;i++) {
+      const item=pack[i];if(!item.publishedVideoId)throw new Error("Нет сохранённого ID ролика. Повтор запрещён.");
+      const status=await require("./tiktok-native-publish").recheckNative(page,item);
+      send(status.review?"item_review":"item_done",status.review?"Ролик ещё на проверке TikTok.":"Опубликовано для всех.",
+        {packIndex:i+1,packTotal:pack.length,localJobId:item.localJobId,videoId:status.id});
+    }
+    await releaseTaskPage(page);await browser.close();browser=null;
+    finished=true;send("done","Статусы TikTok обновлены без повторной загрузки.",{success:true,percent:100});return;
+  }
   let lastUrl = "";
   for (let i = 0; i < pack.length; i++) {
     lastUrl = await uploadOne(page, pack[i], i + 1, pack.length) || lastUrl;
@@ -801,8 +775,8 @@ async function main() {
   markProfileCompleted();
   finished = true;
   send("done", pack.length > 1
-    ? `Пачка ${pack.length} роликов опубликована в TikTok.`
-    : "Опубликовано в TikTok.", { success: true, url: lastUrl, ip: verifiedIp, percent: 100 });
+    ? `Пачка ${pack.length} роликов передана в TikTok; статусы сохранены.`
+    : "Ролик передан в TikTok; статус сохранён.", { success: true, url: lastUrl, ip: verifiedIp, percent: 100 });
 }
 
 if (require.main === module) {
@@ -828,6 +802,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  fillCaption,
   normalizeCaption,
   dismissTikTokBlockingDialogs,
   collectVisibleDialogTexts,

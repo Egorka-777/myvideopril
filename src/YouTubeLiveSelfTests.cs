@@ -21,12 +21,25 @@ namespace VideoBatch {
                 settings.YouTubeChannels.Add(new YouTubeChannel { ChannelId = "ui-test", Name = "Тестовый YouTube-канал", ProfileId = "123456", Market = "RU" });
                 using (var backend = new YouTubeBackend(settings)) using (var host = new System.Windows.Forms.Form { Width = 1500, Height = 950 })
                 using (var panel = new YouTubeWorkspacePanel(settings, backend, new NavigationService())) {
+                    var target=new YouTubeChannel {ChannelId="ui-selected",Name="Выделенный канал",ProfileId="654321",Market="RU",Enabled=false};settings.YouTubeChannels.Add(target);
+                    backend.Reload();panel.RefreshGrid();
                     host.Controls.Add(panel); host.Show(); System.Windows.Forms.Application.DoEvents();
+                    var grid=(System.Windows.Forms.DataGridView)typeof(YouTubeWorkspacePanel).GetField("grid",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(panel);
+                    var row=grid.Rows.Cast<System.Windows.Forms.DataGridViewRow>().Single(r=>ReferenceEquals(r.Tag,target));grid.CurrentCell=row.Cells["account"];grid.ClearSelection();row.Selected=true;
+                    Exception selectionFailure=null;
+                    host.BeginInvoke(new Action(()=>{
+                        var active=System.Windows.Forms.Application.OpenForms.OfType<YouTubeLiveDialog>().Single();
+                        try{Check(active.Text.Contains(target.Name),"live dialog ignored selected row and used checked channel");}catch(Exception e){selectionFailure=e;}finally{active.Close();}
+                    }));
+                    ((System.Windows.Forms.Button)typeof(YouTubeWorkspacePanel).GetField("liveButton",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(panel)).PerformClick();
+                    if(selectionFailure!=null)throw selectionFailure;
+                    Check(!grid.Columns["live"].Visible,"unused live column still visible");
                     using (var bmp = new System.Drawing.Bitmap(host.Width, host.Height)) { host.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(Path.Combine(outputDirectory, "live-youtube.png")); }
                     host.Hide();
                 }
                 using (var dialog = new YouTubeLiveDialog(new YouTubeLiveManager(new LiveStore(root)), settings.YouTubeChannels)) {
                     dialog.Show(); System.Windows.Forms.Application.DoEvents();
+                    Check(dialog.Controls.Cast<System.Windows.Forms.Control>().Count()>0 && typeof(YouTubeLiveDialog).GetField("quality",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)==null,"quality picker still overrides source");
                     using (var bmp = new System.Drawing.Bitmap(dialog.Width, dialog.Height)) { dialog.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(Path.Combine(outputDirectory, "live-dialog.png")); }
                     dialog.Close();
                 }
@@ -34,6 +47,7 @@ namespace VideoBatch {
             } finally { Store.Root = previousRoot; Directory.Delete(root, true); }
         }
         static void Check(bool ok, string message) { if (!ok) throw new InvalidOperationException("Live self-test: " + message); }
+        static void Rejected(Action action,string message) { bool rejected=false;try{action();}catch(InvalidOperationException){rejected=true;}Check(rejected,message); }
         static async Task Until(Func<bool> condition) {
             var deadline = DateTime.UtcNow.AddSeconds(10);
             while (!condition()) { if (DateTime.UtcNow > deadline) throw new TimeoutException("Live self-test timeout"); await Task.Delay(20).ConfigureAwait(false); }
@@ -81,7 +95,7 @@ namespace VideoBatch {
                 }
                 if (path.EndsWith("/liveStreams") && request.Method == HttpMethod.Post) {
                     var payload = LiveJson.Get(LiveJson.Object(body), "cdn");
-                    Check(LiveJson.Text(payload, "resolution") == "720p" && LiveJson.Text(payload, "frameRate") == "30fps", "wrong ingest format");
+                    Check(LiveJson.Text(payload, "resolution") == "variable" && LiveJson.Text(payload, "frameRate") == "variable", "wrong ingest format");
                     return Reply("{\"id\":\"stream\"}");
                 }
                 if (path.EndsWith("/videos") && request.Method == HttpMethod.Get) return Reply("{\"items\":[{\"id\":\"broadcast\",\"snippet\":{\"title\":\"before\",\"description\":\"before\",\"categoryId\":\"22\",\"defaultLanguage\":\"ru\"}}]}");
@@ -108,7 +122,13 @@ namespace VideoBatch {
                 File.WriteAllText(Path.Combine(folder, "02.mp4"), "dummy"); File.WriteAllText(Path.Combine(folder, "01.mp4"), "dummy");
                 var options = new LiveOptions { Folder = folder, Title = "Test", Tags = new[] { "a", "b" } };
                 options.Validate(); Check(Path.GetFileName(options.Files()[0]) == "01.mp4", "playlist order");
-                Console.WriteLine("LIVE TEST: input and playlist order passed");
+                Check(LiveOptions.TagLength(new[]{"a b"})==5,"multiword tag quotes not counted");
+                options.Tags=Enumerable.Range(0,5).Select(i=>new string((char)('a'+i),i==4?100:99)).ToArray();options.Validate();
+                Check(LiveOptions.TagLength(options.Tags)==500,"500-character tag boundary");
+                options.Tags[4]+="x";Rejected(options.Validate,"501-character tag limit ignored");options.Tags=new[]{"a","b"};
+                options.Description=new string('Ж',2500);options.Validate();options.Description+="Ж";
+                Rejected(options.Validate,"description UTF8 byte limit ignored");options.Description="";
+                Console.WriteLine("LIVE TEST: input, playlist order, tags and UTF8 limits passed");
                 var store = new LiveStore(root); store.Config.ClientId = "test";
                 var a = new LiveAccount { LocalId = "a", RemoteId = "UCtest", ProtectedRefreshToken = WindowsSupport.Protect("test-refresh") };
                 var b = new LiveAccount { LocalId = "b", RemoteId = "UCtest2", ProtectedRefreshToken = "fake" };
@@ -211,6 +231,9 @@ namespace VideoBatch {
                 string a = Path.Combine(root, "01.mp4"), b = Path.Combine(root, "02.mp4");
                 await Core.Tool(ffmpeg, new[] { "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-t", "2", "-c:v", "libx264", a }, ct).ConfigureAwait(false);
                 await Core.Tool(ffmpeg, new[] { "-y", "-f", "lavfi", "-i", "color=c=blue:size=360x640:rate=24", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "2", "-c:v", "libx264", "-c:a", "aac", b }, ct).ConfigureAwait(false);
+                try { using(var invalid=await YouTubeLiveMedia.Prepare(new LiveOptions{Folder=root,Title="test"},ffmpeg,ffprobe,_=>{},ct)) { } throw new Exception("mixed geometry was silently normalized"); }
+                catch(InvalidOperationException e) {Check(e.Message.Contains("разным размером"),"unexpected mixed-source error");}
+                await Core.Tool(ffmpeg,new[] {"-y","-f","lavfi","-i","color=c=blue:size=320x240:rate=25","-f","lavfi","-i","sine=frequency=440:sample_rate=44100","-t","2","-c:v","libx264","-c:a","aac",b},ct).ConfigureAwait(false);
                 using (var playlist = await YouTubeLiveMedia.Prepare(new LiveOptions { Folder = root, Title = "test" }, ffmpeg, ffprobe, _ => { }, ct).ConfigureAwait(false)) {
                     string output = Path.Combine(root, "loop.flv");
                     var args = YouTubeLiveMedia.StreamArguments(playlist, true, 0, output).ToList();
@@ -218,11 +241,17 @@ namespace VideoBatch {
                     args.InsertRange(args.Count - 3, new[] { "-t", "13", "-y" });
                     await Core.Tool(ffmpeg, args, ct, null, 60).ConfigureAwait(false);
                     var probe = Core.VideoInfo(await Core.Probe(ffprobe, output, ct).ConfigureAwait(false));
-                    Check(probe.HasAudio && probe.Height == 720 && probe.Width == 1280 && probe.Duration > 12, "normalization/looping mixed sources");
+                    Check(probe.HasAudio && probe.Height == 240 && probe.Width == 320 && Math.Abs(YouTubeLiveMedia.FrameRate(probe.Fps)-25)<.01 && probe.Duration > 12, "normalization/looping mixed sources");
                     string packets = await Core.Tool(ffprobe, new[] { "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=dts_time", "-of", "csv=p=0", output }, ct).ConfigureAwait(false);
                     var times = packets.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s => Core.Parse(s)).ToArray();
-                    Check(times.Length > 350, "not enough video frames across repeats");
+                    Check(times.Length > 315, "not enough video frames across repeats");
                     for (int i = 1; i < times.Length; i++) Check(times[i] > times[i - 1] && times[i] - times[i - 1] < 0.1, "timestamp pause at file or loop boundary");
+                }
+                string portrait=Path.Combine(root,"portrait");Directory.CreateDirectory(portrait);
+                await Core.Tool(ffmpeg,new[]{"-y","-f","lavfi","-i","testsrc2=size=360x640:rate=60000/1001","-t","1","-c:v","libx264",Path.Combine(portrait,"01.mp4")},ct).ConfigureAwait(false);
+                using(var playlist=await YouTubeLiveMedia.Prepare(new LiveOptions{Folder=portrait,Title="portrait"},ffmpeg,ffprobe,_=>{},ct).ConfigureAwait(false)) {
+                    var probe=Core.VideoInfo(await Core.Probe(ffprobe,Path.Combine(playlist.DirectoryPath,"00000.ts"),ct).ConfigureAwait(false));
+                    Check(probe.Width==360 && probe.Height==640 && probe.HasAudio && Math.Abs(YouTubeLiveMedia.FrameRate(probe.Fps)-60000d/1001)<.01,"portrait fractional FPS changed");
                 }
             } finally { Store.Root = previousRoot; Directory.Delete(root, true); }
         }

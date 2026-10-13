@@ -83,7 +83,7 @@ namespace VideoBatch {
     [DataContract] public class UploadJob {
         [DataMember]public string token,profileId,expectedIp,video,title,thumbnail,searchUrl,searchFilter,searchKeys,searchFullTitle,scheduleDate,scheduleTime,channelUrl,todayDate;
         [DataMember]public int localPort,pcUtcOffsetMinutes;
-        [DataMember]public bool checkOnly,searchOnly,watchMesh,watchDirectLinks,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
+        [DataMember]public bool recheckOnly,checkOnly,searchOnly,watchMesh,watchDirectLinks,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
         [DataMember]public UploadItemJob[] items; // пачка в одном профиле без перезапуска
         [DataMember]public WatchTargetJob[] watchTargets;
     }
@@ -362,7 +362,7 @@ namespace VideoBatch {
             for(int i=0;i<lines.Count;i++){
                 string t=lines[i];
                 string oneLine=t.Replace("\r"," ").Replace("\n"," ");
-                preview.Items.Add((i+1)+". "+(oneLine.Length>90?oneLine.Substring(0,90)+"…":oneLine)+(t.Length>2200?" ⚠":""));
+                preview.Items.Add((i+1)+". "+(oneLine.Length>90?oneLine.Substring(0,90)+"…":oneLine)+(t.Length>4000?" ⚠":""));
             }
             preview.EndUpdate();
             counter.Text=lines.Count==0?"База будет пустой":("В базе: "+lines.Count+" подписей");
@@ -370,8 +370,8 @@ namespace VideoBatch {
         }
         void SaveList(){
             Titles=ParseLines(words.Text);
-            var tooLong=Titles.Select((t,i)=>new{t,i}).Where(x=>x.t.Length>2200).ToList();
-            if(tooLong.Count>0)throw new Exception("Подпись №"+(tooLong[0].i+1)+" длиннее 2200 символов.");
+            var tooLong=Titles.Select((t,i)=>new{t,i}).Where(x=>x.t.Length>4000).ToList();
+            if(tooLong.Count>0)throw new Exception("Подпись №"+(tooLong[0].i+1)+" длиннее 4000 символов.");
         }
     }
 
@@ -2154,6 +2154,7 @@ namespace VideoBatch {
                             ch.Status=batchMode=="immediate"?ChannelStatus.Published:ChannelStatus.Scheduled;
                             Status(row,batch.Items.Count>1?(okLabel+" · "+batch.Items.Count):okLabel);
                             MarkChannelUploadDone(ch,row);
+                            if(run!=null&&run.ThumbnailWarning){ch.Status="Видео загружено · превью не подтверждено";Status(row,ch.Status);}
                             if(NormMarket(ch.Market)=="RU")YouTubeMetadata.AdvanceDescriptionCursor(settings,batch.Items.Count);
                             if(run!=null&&run.ThumbnailWarning)metrics.Finish("warning");else metrics.Finish("success");
                             TaskQueueStore.LogEvent(ch.Name,"HTTP загрузка",run!=null&&run.ThumbnailWarning?"Успех с предупреждением":"Успех","");

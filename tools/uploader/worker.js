@@ -310,13 +310,13 @@ async function verifyDraftsSaved(page, expectedCount) {
 }
 
 async function applyDraftThumbnails(page, toUpload) {
-  const need = toUpload.filter(it => it.thumbnail && fs.existsSync(String(it.thumbnail || "")));
+  const need = toUpload.filter(it => it.thumbnail);
   if (!need.length) return;
   send("youtube", `Превью: ${need.length} файл(ов)…`, { percent: 90 });
   await waitForUploadDialog(page).catch(() => {});
   for (let i = 0; i < toUpload.length; i++) {
     const item = toUpload[i];
-    if (!item.thumbnail || !fs.existsSync(String(item.thumbnail))) continue;
+    if (!item.thumbnail) continue;
     const title = cleanUploadTitle(item.title);
     try {
       if (toUpload.length > 1) await selectUploadQueueItem(page, i);
@@ -325,7 +325,7 @@ async function applyDraftThumbnails(page, toUpload) {
       send("youtube", `Превью установлено: «${title.slice(0, 40)}»`, { percent: 91 });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      send("youtube", `Видео загружено, превью не установлено: «${title.slice(0, 40)}» (${msg.slice(0, 60)})`, { percent: 91 });
+      throw new Error(`Черновик загружен, превью не подтверждено: «${title.slice(0,40)}» (${msg}). Не загружайте видео повторно; профиль оставлен открытым.`);
     }
   }
 }
@@ -1680,42 +1680,8 @@ function sendMeshChannel(target, channelUrl) {
   }
 }
 
-async function revealThumbnailFileInput(page) {
-  await page.evaluate(() => {
-    const host = document.querySelector("ytcp-video-thumbnail-editor, ytcp-thumbnails-compact-editor, #thumbnail-editor");
-    if (host && host.scrollIntoView) host.scrollIntoView({ block: "center", inline: "nearest" });
-  }).catch(() => {});
-  await page.waitForTimeout(600);
-  const opened = await page.evaluate(() => {
-    const labels = /upload thumbnail|upload file|загрузить значок|загрузить файл|загрузить/i;
-    const nodes = Array.from(document.querySelectorAll("button, ytcp-button, tp-yt-paper-button, [role='button']"));
-    for (const node of nodes) {
-      const text = `${node.getAttribute("aria-label") || ""} ${node.innerText || ""}`.trim();
-      if (!text || text.length > 80) continue;
-      if (labels.test(text)) { node.click(); return true; }
-    }
-    return false;
-  }).catch(() => false);
-  if (opened) await page.waitForTimeout(900);
-}
-
-async function setThumbnail(page, path) {
-  if (!path) return;
-  if (!fs.existsSync(path)) throw new Error("Файл превью не найден: " + path);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const inputs = page.locator("input[type=file]");
-    const count = await inputs.count();
-    for (let i = 0; i < count; i++) {
-      const accept = (await inputs.nth(i).getAttribute("accept").catch(() => "")) || "";
-      if (/image|jpeg|png|webp/i.test(accept)) {
-        await setInputFilesRobust(page, inputs.nth(i), path, "youtube");
-        await page.waitForTimeout(1500);
-        return;
-      }
-    }
-    await revealThumbnailFileInput(page);
-  }
-  throw new Error("YouTube не показал поле превью. Проверьте верификацию канала и право на пользовательские превью.");
+async function setThumbnail(page, thumbPath) {
+  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{});
 }
 
 async function progressText(page) {

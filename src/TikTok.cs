@@ -12,7 +12,7 @@ using System.Windows.Forms;
 namespace VideoBatch {
     public class TikTokItem {
         public string Video="",Title="",Description="",Caption=""; // Title/Description остаются для старых settings.xml
-        public bool Published, Scheduled;
+        public bool Published, Scheduled, ContentReview;
         public long ScheduledUnixSeconds;
         // HTTP acknowledgement is not evidence of a visible or scheduled post.
         public bool HttpSubmitted, HttpNeedsReview;
@@ -27,7 +27,7 @@ namespace VideoBatch {
     }
 
     public class TikTokUploadWindow:Form {
-        static readonly bool TikTokHttpMainEnabled=true;
+        static readonly bool TikTokHttpMainEnabled=false;
         const int COn=0,CName=1,CLang=2,CProfile=3,CIp=4,CVideo=5,CVideoPick=6,CCaption=7,CStatus=8,CRemove=9;
         static readonly string[] LangLabels=new[]{"RU","EN"};
         Preferences settings;DataGridView grid;RichTextBox log;
@@ -103,11 +103,11 @@ namespace VideoBatch {
             var bottom=Ui.Flow();bottom.WrapContents=false;
             uploadHttp=Ui.Button("Быстрая загрузка (HTTP beta)",null,false);uploadHttp.MinimumSize=new Size(240,42);
             uploadHttp.Click+=async(s,e)=>await UploadAll(null,"http");
-            uploadStudio=Ui.Button("Запланировать через Studio",null,true);uploadStudio.MinimumSize=new Size(160,42);
+            uploadStudio=Ui.Button("Опубликовать через Dolphin",null,true);uploadStudio.MinimumSize=new Size(160,42);
             uploadStudio.Click+=async(s,e)=>await UploadAll(null,"studio");
             stop=Ui.Button("Стоп",()=>{stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка…");});stop.Visible=false;
             var openLog=Ui.Button("Лог",()=>{try{if(File.Exists(logFile))Ui.Open(logFile);else throw new Exception("Лог ещё не создан.");}catch(Exception e){Ui.Error(this,e);}});
-            bottom.Controls.Add(uploadStudio);bottom.Controls.Add(uploadHttp);bottom.Controls.Add(modeHint);bottom.Controls.Add(stop);bottom.Controls.Add(openLog);root.Controls.Add(bottom,0,6);
+            bottom.Controls.Add(uploadStudio);uploadHttp.Visible=false;bottom.Controls.Add(modeHint);bottom.Controls.Add(stop);bottom.Controls.Add(openLog);root.Controls.Add(bottom,0,6);
 
             LoadGrid();RefreshMarketUi();
             FormClosing+=(s,e)=>{SaveGrid();if(cancellation!=null||uploadsInFlight>0){e.Cancel=true;MessageBox.Show(this,"Сначала остановите операцию (Стоп).","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);}};
@@ -116,7 +116,7 @@ namespace VideoBatch {
 
         public void ReconcileUploadResults(IReadOnlyList<TikTokAccount> accounts){
             if(uploadsInFlight>0||cancellation!=null)throw new Exception("Сначала остановите загрузку.");
-            foreach(var account in accounts)foreach(var item in account.Items.Where(it=>it.HttpNeedsReview||it.HttpSubmitted)){
+            foreach(var account in accounts)foreach(var item in account.Items.Where(it=>!it.ContentReview && (it.HttpNeedsReview||it.HttpSubmitted))){
                 var answer=MessageBox.Show(this,"Проверьте ролик во всех разделах Studio: запланированные, на проверке, опубликованные.\n"+
                     Path.GetFileName(item.Video)+"\nJob ID: "+item.LocalJobId+"\nPost/upload ID: "+item.HttpVideoId+
                     "\nДа — точный ролик найден, повтор не нужен.\nНет — я проверил отсутствие ролика.\nОтмена — результат неизвестен, оставить блокировку.",
@@ -302,15 +302,12 @@ namespace VideoBatch {
         }
         public void ApplyNavigationContext(){SelectProfileById(NavigationContext.SelectedProfileId,NavigationContext.SelectedMarket);}
         public Task RunUploadAsync()=>TrackOperation(()=>UploadAll(null,"studio"));
-        public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>TrackOperation(()=>UploadAll(accountsFilter,"http"));
+        public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>TrackOperation(()=>UploadAll(accountsFilter,"studio"));
         public Task RunUploadStudioAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>TrackOperation(()=>UploadAll(accountsFilter,"studio"));
-        public Task RunUploadHttpAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>TrackOperation(()=>UploadAll(accountsFilter,"http"));
+        public Task RunUploadHttpAsync(IReadOnlyList<TikTokAccount> accountsFilter)=>Task.FromException(new InvalidOperationException("TikTok HTTP отключён. Используйте загрузку через Dolphin."));
         void RefreshModeHint(string mode){
             if(modeHint==null)return;
-            if(string.Equals(mode,"studio",StringComparison.OrdinalIgnoreCase))modeHint.Text="Режим: Studio";
-            else if(!TikTokHttpMainEnabled)modeHint.Text="HTTP: сначала живой тест v5 EXE";
-            else if(!string.IsNullOrWhiteSpace(lastHttpBlockReason))modeHint.Text="HTTP недоступен — "+lastHttpBlockReason;
-            else modeHint.Text="Режим: HTTP (beta)";
+            modeHint.Text="Загрузка через браузер Dolphin · сейчас · для всех";
         }
         public Task RunCheckProfilesAsync()=>TrackOperation(()=>CheckProfiles());
         public void RequestStopUpload(){stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
@@ -548,25 +545,43 @@ namespace VideoBatch {
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}
             finally{Finish();}
         }
+        public Task RecheckContentAsync(IReadOnlyList<TikTokAccount> accounts)=>TrackOperation(async()=>{
+            if(uploadsInFlight>0 || cancellation!=null)throw new Exception("Дождись завершения текущей операции.");
+            cancellation=new CancellationTokenSource();Busy(true);
+            try {
+                string token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
+                foreach(var account in accounts) {
+                    var items=account.Items.Where(it=>it.ContentReview).ToList();if(items.Count==0)continue;
+                    var row=grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r=>ReferenceEquals(r.Tag,account));
+                    var job=new UploadJob {profileId=account.ProfileId,localPort=settings.DolphinPort,token=token,expectedIp=account.ExpectedIp,
+                        recheckOnly=true,skipQueueDelay=true,keepProfileOpen=true,
+                        items=items.Select(it=>new UploadItemJob {localJobId=it.LocalJobId,caption=it.Caption,publishedVideoId=it.HttpVideoId,publishMode="immediate"}).ToArray()};
+                    await RunUploadWithRetry(job,account,row,items,cancellation.Token,token).ConfigureAwait(true);
+                    account.Status=items.Any(it=>it.ContentReview)?"TikTok · на проверке":"TikTok · опубликовано для всех";
+                    if(row!=null)Status(row,account.Status);SafeSave();
+                }
+            }finally{Finish();}
+        });
         async Task<UploadRunResult> RunUploadWithRetry(UploadJob job,TikTokAccount acc,DataGridViewRow row,List<TikTokItem> items,CancellationToken ct,string token){
             // No automatic restart after entering Studio: a lost response may hide a successful post.
             return await DolphinRunner.RunTikTok(job,m=>{
                 if(!string.IsNullOrWhiteSpace(m.ip))PropagateIp(acc.ProfileId,m.ip);
-                if(m.stage=="item_submitting"||m.stage=="item_accepted"||m.stage=="item_done"){
+                if(m.stage=="item_submitting"||m.stage=="item_accepted"||m.stage=="item_done"||m.stage=="item_review"){
                     if(m.packIndex<1||m.packIndex>items.Count)throw new Exception("Studio: неверный packIndex.");
                     var item=items[m.packIndex-1];
                     if(!string.Equals(m.localJobId,item.LocalJobId,StringComparison.Ordinal))
                         throw new Exception("Studio: localJobId не соответствует заданию.");
                     if(m.stage=="item_submitting")item.HttpNeedsReview=true;
                     if(m.stage=="item_accepted"){item.HttpSubmitted=true;item.HttpVideoId=m.videoId??"";}
+                    if(m.stage=="item_review"){if(string.IsNullOrWhiteSpace(m.videoId))throw new Exception("Studio: нет ID ролика на проверке.");item.ContentReview=true;item.Published=false;item.Scheduled=false;item.HttpNeedsReview=false;item.HttpSubmitted=true;item.HttpVideoId=m.videoId??"";}
                     if(m.stage=="item_done"){
                         if(string.IsNullOrWhiteSpace(m.videoId))throw new Exception("Studio: нет ID подтверждённой записи.");
-                        item.Published=true;item.Scheduled=true;
+                        item.Published=true;item.Scheduled=item.ScheduledUnixSeconds>0;item.ContentReview=false;
                         item.HttpNeedsReview=false;item.HttpSubmitted=false;item.HttpVideoId=m.videoId;
                     }
                     lock(saveLock)Store.Save(settings); // Callback failure prevents persistence ACK and aborts worker.
                 }
-                if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
+                if(row!=null&&!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
             },ct).ConfigureAwait(false);
         }
         async Task<HttpTikTokUploadRunResult> RunHttpUploadWithRetry(HttpTikTokUploadJob job,TikTokAccount acc,DataGridViewRow row,List<TikTokItem> items,CancellationToken ct,string token){
@@ -598,8 +613,7 @@ namespace VideoBatch {
             }
         }
         async Task UploadAll(IReadOnlyList<TikTokAccount> accountsFilter,string transport){
-            transport=(transport??"http").Trim().ToLowerInvariant();
-            if(transport!="studio")transport="http";
+            if(transport!="studio")throw new InvalidOperationException("TikTok HTTP отключён. Используйте Dolphin.");
             RefreshModeHint(transport);
             if(cancellation!=null){MessageBox.Show(this,"Сначала дождитесь проверки или нажмите Стоп.","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             string token="";bool uiStarted=false;
@@ -620,7 +634,7 @@ namespace VideoBatch {
                         if(string.IsNullOrWhiteSpace(it.LocalJobId))it.LocalJobId=Guid.NewGuid().ToString("N");
                         it.Caption=(it.Caption??"").Trim();it.Description=it.Caption;
                         if(string.IsNullOrWhiteSpace(it.Caption))throw new Exception(a.Name+": пустая подпись.");
-                        if(it.Caption.Length>2200)throw new Exception(a.Name+": подпись длиннее 2200 символов — сократите её в базе подписей.");
+                        if(it.Caption.Length>4000)throw new Exception(a.Name+": подпись длиннее 4000 символов — сократите её в базе подписей.");
                     }
                     PrepareTikTokUploadFiles(a,items);
                     packs.Add((row,a,items));
@@ -685,24 +699,24 @@ namespace VideoBatch {
                                 if(!string.IsNullOrWhiteSpace(httpResult.Ip))PropagateIp(a.ProfileId,httpResult.Ip);
                                 SafeSave();
                             }else{
-                                var slots=TikTokScheduleGenerator.GenerateStudioUnixSlots(pack.items.Count);
+                                var slots=Enumerable.Repeat(0L,pack.items.Count).ToList();
                                 for(int i=0;i<items.Length;i++){
                                     items[i].localJobId=pack.items[i].LocalJobId;
-                                    items[i].publishMode="scheduled";
+                                    items[i].publishMode="immediate";
                                     items[i].scheduledUnixSeconds=slots[i];
                                     pack.items[i].ScheduledUnixSeconds=slots[i];
                                 }
                                 lock(saveLock)Store.Save(settings);
-                                Write(a.Name+" · Studio: "+string.Join(" · ",slots.Select(t=>DateTimeOffset.FromUnixTimeSeconds(t).LocalDateTime.ToString("dd.MM.yyyy HH:mm:ss"))));
+                                Write(a.Name+" · публикация сейчас, доступ для всех");
                                 var job=new UploadJob{
                                     token=token,localPort=settings.DolphinPort,profileId=a.ProfileId,expectedIp=a.ExpectedIp,
                                     items=items,skipQueueDelay=true,checkOnly=false,
                                     video=items[0].video
                                 };
                                 var result=await RunUploadWithRetry(job,a,row,pack.items,ct,token).ConfigureAwait(false);
-                                if(pack.items.Any(it=>!it.Published))throw new Exception("Studio: нет подтверждения для каждого ролика пачки.");
-                                a.Status="Studio · запланировано";
-                                Status(row,pack.items.Count>1?("Studio · запланировано "+pack.items.Count+"/"+pack.items.Count+" ✓"):(string.IsNullOrWhiteSpace(result.Url)?"Studio · запланировано ✓":"Studio · запланировано ✓ "+result.Url));
+                                if(pack.items.Any(it=>!it.Published&&!it.ContentReview))throw new Exception("Studio: нет подтверждения для каждого ролика пачки.");
+                                a.Status=pack.items.Any(it=>it.ContentReview)?"TikTok · на проверке":"TikTok · опубликовано для всех";
+                                Status(row,a.Status);
                                 if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(a.ProfileId,result.Ip);
                                 SafeSave();
                             }

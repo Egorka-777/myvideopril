@@ -28,7 +28,7 @@ namespace VideoBatch {
         public string Folder = "", Title = "", Description = "", Thumbnail = "", Privacy = "public";
         public string[] Tags = new string[0];
         public bool MadeForKids;
-        public int Height = 720;
+        public int Height; // Legacy field retained for saved/test callers; new streams use source geometry.
         public string[] Files() {
             if (!Directory.Exists(Folder)) throw new InvalidOperationException("Выберите существующую папку с видео.");
             var extensions = new[] { ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi" };
@@ -37,23 +37,24 @@ namespace VideoBatch {
             if (files.Length == 0) throw new InvalidOperationException("В выбранной папке нет видео. Подпапки не включаются.");
             return files;
         }
+        public static int TagLength(IEnumerable<string> values) { var tags=values.Select(t => (t ?? "").Trim()).Where(t => t.Length>0).Distinct().ToArray(); return tags.Sum(t => t.Length+(t.Contains(" ")?2:0))+Math.Max(0,tags.Length-1); }
         public void Validate() {
             Files();
             Title = (Title ?? "").Trim();
             if (Title.Length < 1 || Title.Length > 100 || Title.Contains("<") || Title.Contains(">"))
                 throw new InvalidOperationException("Название: от 1 до 100 символов, без < и >.");
-            if ((Description ?? "").Length > 4500 || (Description ?? "").Contains("<") || (Description ?? "").Contains(">"))
-                throw new InvalidOperationException("Описание: до 4500 символов, без < и >.");
-            if (!new[] { "public", "unlisted", "private" }.Contains(Privacy) || !new[] { 720, 1080 }.Contains(Height))
+            if (Encoding.UTF8.GetByteCount(Description ?? "") > 5000 || (Description ?? "").Contains("<") || (Description ?? "").Contains(">"))
+                throw new InvalidOperationException("Описание: до 5000 байт UTF-8, без < и >.");
+            if (!new[] { "public", "unlisted", "private" }.Contains(Privacy) || !new[] { 0, 720, 1080 }.Contains(Height))
                 throw new InvalidOperationException("Неверные параметры эфира.");
             Tags = (Tags ?? new string[0]).Select(t => (t ?? "").Trim()).Where(t => t.Length > 0).Distinct().ToArray();
-            int tagLength = Tags.Sum(t => t.Length + (t.Contains(" ") ? 2 : 0)) + Math.Max(0, Tags.Length - 1);
+            int tagLength = TagLength(Tags);
             if (tagLength > 500 || Tags.Any(t => t.Contains("<") || t.Contains(">")))
                 throw new InvalidOperationException("Теги: до 500 символов суммарно (с разделителями и кавычками для пробелов), без < и >.");
             if (!string.IsNullOrWhiteSpace(Thumbnail)) {
                 if (!File.Exists(Thumbnail) || !new[] { ".jpg", ".jpeg", ".png" }.Contains(Path.GetExtension(Thumbnail).ToLowerInvariant()))
                     throw new InvalidOperationException("Превью должно быть существующим JPG или PNG.");
-                if (new FileInfo(Thumbnail).Length > 2 * 1024 * 1024) throw new InvalidOperationException("Превью должно быть не больше 2 МБ.");
+                if (new FileInfo(Thumbnail).Length > 50 * 1024 * 1024) throw new InvalidOperationException("Превью должно быть не больше 50 МБ.");
                 using (var image = System.Drawing.Image.FromFile(Thumbnail)) { if (image.Width < 1 || image.Height < 1) throw new InvalidOperationException("Не удалось прочитать превью."); }
             }
         }

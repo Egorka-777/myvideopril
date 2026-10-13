@@ -16,17 +16,19 @@ namespace VideoBatch {
     }
     public static class YouTubeLiveMedia {
         public static string ConcatEntry(string path) => "file '" + path.Replace('\\', '/').Replace("'", "'\\''") + "'";
-        public static IEnumerable<string> NormalizeArguments(string input, string output, int height, bool hasAudio) {
-            var args = new List<string> { "-hide_banner", "-v", "error", "-nostdin", "-y", "-i", input };
-            if (!hasAudio) args.AddRange(new[] { "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000" });
-            int width = height == 1080 ? 1920 : 1280;
-            string rate = height == 1080 ? "6000k" : "4000k";
-            args.AddRange(new[] { "-map", "0:v:0", "-map", hasAudio ? "0:a:0" : "1:a:0", "-vf",
-                "scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease,pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30",
-                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-b:v", rate, "-minrate", rate, "-maxrate", rate,
-                "-bufsize", height == 1080 ? "12000k" : "8000k", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
-                "-x264-params", "nal-hrd=cbr:force-cfr=1", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
-                "-af", "aresample=async=1:first_pts=0,apad", "-shortest", "-map_metadata", "-1", "-f", "mpegts", output });
+        public static double FrameRate(string fps) { var parts=(fps ?? "").Split('/'); return parts.Length==2 && Core.Parse(parts[1])>0 ? Core.Parse(parts[0])/Core.Parse(parts[1]) : Core.Parse(fps); }
+        public static IEnumerable<string> SourceArguments(string input, string output, Media media) {
+            double fps=FrameRate(media.Fps);
+            if(fps<1 || fps>120 || media.Width%2!=0 || media.Height%2!=0) throw new InvalidOperationException("Не удалось определить подходящий размер/FPS исходного видео.");
+            var args=new List<string> {"-hide_banner","-v","error","-nostdin","-y","-i",input};
+            if(!media.HasAudio) args.AddRange(new[] {"-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000"});
+            int gop=(int)Math.Round(fps*2);
+            args.AddRange(new[] {"-map","0:v:0","-map",media.HasAudio?"0:a:0":"1:a:0","-vf",
+                "scale="+media.Width+":"+media.Height+",setsar=1,fps="+media.Fps,
+                "-c:v","libx264","-preset","veryfast","-crf","20","-threads","2","-pix_fmt","yuv420p",
+                "-g",gop.ToString(Core.Inv),"-keyint_min",gop.ToString(Core.Inv),"-sc_threshold","0",
+                "-c:a","aac","-b:a","128k","-ar","48000","-ac","2",
+                "-af","aresample=async=1:first_pts=0,apad","-shortest","-map_metadata","-1","-f","mpegts",output});
             return args;
         }
         public static async Task<LivePlaylist> Prepare(LiveOptions options, string ffmpeg, string ffprobe, Action<string> log, CancellationToken ct) {
@@ -35,13 +37,20 @@ namespace VideoBatch {
             try {
                 string[] files = options.Files();
                 var entries = new List<string> { "ffconcat version 1.0" };
+                var sources=new List<Media>();
+                foreach(string file in files) sources.Add(Core.VideoInfo(await Core.Probe(ffprobe,file,ct).ConfigureAwait(false)));
+                var first=sources[0];
+                if(sources.Any(m => m.Width!=first.Width || m.Height!=first.Height || Math.Abs(FrameRate(m.Fps)-FrameRate(first.Fps))>.01))
+                    throw new InvalidOperationException("В папке видео с разным размером или FPS. Для непрерывного эфира выбери видео с одинаковыми параметрами; качество автоматически не меняется.");
+                log("Эфир с ПК · "+first.Width+"×"+first.Height+" · "+Core.N(FrameRate(first.Fps))+" fps (из видео)");
                 for (int i = 0; i < files.Length; i++) {
                     ct.ThrowIfCancellationRequested();
-                    var info = Core.VideoInfo(await Core.Probe(ffprobe, files[i], ct).ConfigureAwait(false));
+                    var info = sources[i];
                     log("Подготовка " + (i + 1) + "/" + files.Length + ": " + System.IO.Path.GetFileName(files[i]));
                     string output = System.IO.Path.Combine(result.DirectoryPath, i.ToString("D5") + ".ts");
-                    await Core.Tool(ffmpeg, NormalizeArguments(files[i], output, options.Height, info.HasAudio), ct).ConfigureAwait(false);
+                    await Core.Tool(ffmpeg, SourceArguments(files[i], output, info), ct).ConfigureAwait(false);
                     var prepared = Core.VideoInfo(await Core.Probe(ffprobe, output, ct).ConfigureAwait(false));
+                    if(prepared.Width!=first.Width || prepared.Height!=first.Height || Math.Abs(FrameRate(prepared.Fps)-FrameRate(first.Fps))>.01) throw new InvalidOperationException("Подготовка изменила размер или FPS видео.");
                     result.Duration += prepared.Duration;
                     entries.Add(ConcatEntry(output));
                 }

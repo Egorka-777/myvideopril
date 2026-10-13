@@ -51,11 +51,11 @@ namespace VideoBatch {
                 return MessageBox.Show(this, "Передача видео остановлена, но YouTube не подтвердил завершение всех эфиров.\n" + e.Message + "\n\nЗакрыть приложение? Данные для повторного завершения сохранены.", "Прямые эфиры", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
             }
         }
-        async Task LiveButtonClick() { if (live?.HasBusy == true) await StopLive(null); else StartLive(); }
+        async Task LiveButtonClick() { var channel=SelectedChannel(); if(channel!=null && live?.View(channel.ChannelId)?.Busy==true) await StopLive(channel.ChannelId); else StartLive(); }
         void StartLive() {
             if (live == null || stoppingLive) return;
-            var channels = GetCheckedChannels();
-            if (channels.Count == 0) { MessageBox.Show(this, "Отметьте галочками каналы для эфира.", "YouTube"); return; }
+            var selected=SelectedChannel(); var channels=selected==null ? new List<YouTubeChannel>() : new List<YouTubeChannel>{selected};
+            if (channels.Count == 0) { MessageBox.Show(this, "Выдели строку канала для эфира.", "YouTube"); return; }
             try {
                 EnsureChannelIds();
                 using (var dialog = new YouTubeLiveDialog(live, channels)) if (dialog.ShowDialog(FindForm()) == DialogResult.OK) live.Start(channels, dialog.Options);
@@ -63,7 +63,8 @@ namespace VideoBatch {
         }
         void ConfigureLive(YouTubeChannel channel = null) {
             if (live == null || stoppingLive) return;
-            var channels = channel == null ? GetCheckedChannels() : new List<YouTubeChannel> { channel };
+            channel=channel ?? SelectedChannel();
+            var channels=channel==null ? new List<YouTubeChannel>() : new List<YouTubeChannel>{channel};
             if (channels.Count == 0) { MessageBox.Show(this, "Отметьте каналы, сессии которых нужно проверить.", "YouTube"); return; }
             try { using (var dialog = new YouTubeLiveDialog(live, channels)) {
                 if (dialog.ShowDialog(FindForm()) == DialogResult.OK) live.Start(channels, dialog.Options);
@@ -90,11 +91,12 @@ namespace VideoBatch {
         }
         void UpdateLiveRows() {
             if (grid == null || liveButton == null) return;
-            liveButton.Text = live?.HasBusy == true ? "Завершить все эфиры" : "Запустить эфир";
+            var selected=SelectedChannel();
+            liveButton.Text = selected!=null && live?.View(selected.ChannelId)?.Busy==true ? "Завершить эфир" : "Запустить эфир";
             foreach (DataGridViewRow row in grid.Rows) if (row.Tag is YouTubeChannel ch) {
                 var state = live?.View(ch.ChannelId);
                 row.Cells["live"].Value = state?.Label ?? "—";
-                row.Cells["live"].ToolTipText = state == null ? "" : state.Detail + "\n" + state.Url;
+                row.Cells["account"].ToolTipText = row.Cells["live"].ToolTipText = state == null ? "" : state.Detail + "\n" + state.Url;
                 row.Cells["live"].Style.ForeColor = state?.Phase == LivePhase.Live ? Color.Red : state?.Phase == LivePhase.Error || state?.Phase == LivePhase.NeedsCleanup ? Theme.Warning : Theme.TextSecondary;
             }
             grid.Invalidate();

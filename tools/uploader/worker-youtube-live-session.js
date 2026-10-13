@@ -36,6 +36,8 @@ function validateJob(job) {
     const o = job.options;
     if (!o || !o.title || o.title.length > 100 || /[<>]/.test(o.title) || !labels[o.privacy] || typeof o.madeForKids !== "boolean"
       || !Array.isArray(o.tags) || o.tags.some(t => typeof t !== "string" || /[<>]/.test(t))) throw new Error("Некорректные параметры эфира.");
+    const tagLength=o.tags.reduce((n,t)=>n+t.length+(t.includes(" ")?2:0),Math.max(0,o.tags.length-1));
+    if(tagLength>500 || Buffer.byteLength(o.description || "","utf8")>5000 || /[<>]/.test(o.description || "")) throw new Error("Описание или теги эфира превышают лимит YouTube.");
     if (o.thumbnail && !fs.existsSync(o.thumbnail)) throw new Error("Превью не найдено.");
   }
   return job;
@@ -83,7 +85,7 @@ function operationTitle(id) { return "VideoBatch live " + id; }
 class SessionEngine {
   constructor(job, ui, store = new OperationStore(job)) { this.job = validateJob(job); this.ui = ui; this.store = store; }
   async execute() {
-    const j = this.job, identity = await this.ui.verify();
+    const j = this.job, identity = await this.ui.verify(this.job.expectedChannelUrl || "");
     if (!CHANNEL.test(identity.channelId || "") || (j.expectedChannelId && j.expectedChannelId !== identity.channelId)) throw new Error("В Dolphin открыт другой канал. Изменения не выполнялись.");
     if (j.command === "verify") return identity;
     let saved = this.store.read();
@@ -153,10 +155,23 @@ class NativeStudio {
     return waitUntil(async () => await uniqueVisible(this.page.getByRole("dialog"), false)
       || await uniqueVisible(this.page.locator('ytcp-dialog[opened], tp-yt-paper-dialog[opened]').filter({ hasNot: this.page.getByRole("dialog") }), false));
   }
-  async verify() {
+  async verify(expectedUrl = "") {
     await this.page.goto(ORIGIN, { waitUntil: "domcontentloaded", timeout: 90000 });
     await existing.waitForStudioChannel(this.page, 90000);
     const data = existing.parseStudioBootstrap(await this.page.content(), this.page.url());
+    if(expectedUrl) {
+      const u=new URL(expectedUrl);
+      if(!/^(www\.)?youtube\.com$/.test(u.hostname) || !/^\/(?:@[^/]+|channel\/UC[A-Za-z0-9_-]+)(?:\/|$)/.test(u.pathname))throw new Error("Нужна ссылка на YouTube-канал, а не видео.");
+      let expected="";const direct=u.pathname.match(/^\/channel\/(UC[A-Za-z0-9_-]+)/);
+      if(direct)expected=direct[1];
+      else {
+        const tab=await this.page.context().newPage();
+        try { await tab.goto(u.href,{waitUntil:"domcontentloaded",timeout:90000});
+          expected=await waitUntil(()=>tab.evaluate(()=>window.ytInitialData?.metadata?.channelMetadataRenderer?.externalId || document.querySelector('meta[itemprop="channelId"]')?.content || ""),30000);
+        }finally{await tab.close();}
+      }
+      if(expected!==data.channelId)throw new Error("В Dolphin открыт другой YouTube-канал, чем в выделенной строке.");
+    }
     this.channelId = data.channelId;
     // Name is informational; channel ID is the binding authority.
     const name = await this.page.locator("#channel-name").first().innerText({ timeout: 1000 }).catch(() => "");
@@ -205,15 +220,7 @@ class NativeStudio {
     await radio.click({ timeout: 10000 });
     if (!extras) return;
     if (options.thumbnail) {
-      const before = await scope.locator('img[src*="ytimg"], #thumbnail-editor img, ytcp-thumbnails-compact-editor img').evaluateAll(nodes => nodes.map(n => n.src));
-      const input = scope.locator('input[type="file"][accept*="image"], input[type="file"][accept*="png"], input[type="file"][accept*="jpeg"]');
-      const count = await input.count();
-      if (count !== 1) throw new Error("Не найдено однозначное поле загрузки превью.");
-      await input.setInputFiles(options.thumbnail);
-      this.thumbnailEvidence = await waitUntil(async () => {
-        const after = await scope.locator('img[src*="ytimg"], #thumbnail-editor img, ytcp-thumbnails-compact-editor img').evaluateAll(nodes => nodes.map(n => n.src));
-        return after.find(src => /^https:\/\//.test(src) && !before.includes(src));
-      }, 30000);
+      this.thumbnailEvidence = await require("./youtube-thumbnail").uploadThumbnail(this.page, options.thumbnail, {scope});
     }
     let tag = await uniqueVisible(scope.locator('ytcp-free-text-chip-bar#tags-container input, #tags-container input, input[name="tags"]'), false);
     if (!tag && options.tags.length) {

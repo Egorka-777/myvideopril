@@ -25,7 +25,8 @@ assert.ok(studioMod.dialogTextMatches("Turn on automatic content checks?", studi
 // HTTP vs Studio separation
 assert.match(uploaderCs, /WorkerTikTokHttp/);
 assert.match(tiktokCs, /Быстрая загрузка \(HTTP beta\)/);
-assert.match(panelCs, /RunUploadHttpAsync/);
+assert.doesNotMatch(panelCs, /RunUploadHttpAsync/);
+assert.match(panelCs,/RunUploadStudioAsync/);
 
 // HTTP worker must not use Studio DOM upload
 const httpCode = httpWorker.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
@@ -250,8 +251,8 @@ assert.match(scheduleCs, /MinLeadSeconds = 900/);
 assert.match(scheduleCs, /MinGapSeconds = 300/);
 assert.match(scheduleCs, /MaxGapSeconds = 900/);
 
-// C# HTTP enabled in main app (no test-exe gate)
-assert.match(tiktokCs, /TikTokHttpMainEnabled\s*=\s*true/);
+// Production UI now uses native Studio; legacy HTTP helpers remain testable.
+assert.match(tiktokCs, /TikTokHttpMainEnabled\s*=\s*false/);
 assert.doesNotMatch(tiktokCs, /HTTP-загрузка TikTok временно отключена/);
 
 // Runner checks sigv4 module

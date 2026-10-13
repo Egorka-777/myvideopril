@@ -125,7 +125,7 @@ namespace VideoBatch {
             return id;
         }
         public Task<Dictionary<string, object>> CreateStream(LiveOptions options, string marker, CancellationToken ct) => Request(HttpMethod.Post, "liveStreams?part=snippet,cdn,contentDetails", new {
-            snippet = new { title = options.Title, description = marker }, cdn = new { ingestionType = "rtmp", resolution = options.Height + "p", frameRate = "30fps" }, contentDetails = new { isReusable = false }
+            snippet = new { title = options.Title, description = marker }, cdn = new { ingestionType = "rtmp", resolution = "variable", frameRate = "variable" }, contentDetails = new { isReusable = false }
         }, ct);
         public async Task Configure(string broadcastId, string streamId, LiveOptions options, CancellationToken ct) {
             await Request(HttpMethod.Post, "liveBroadcasts/bind?part=id,contentDetails&id=" + LiveJson.Escape(broadcastId) + "&streamId=" + LiveJson.Escape(streamId), null, ct).ConfigureAwait(false);

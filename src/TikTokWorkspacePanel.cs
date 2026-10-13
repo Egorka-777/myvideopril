@@ -230,14 +230,14 @@ namespace VideoBatch {
 
             stopBtn.ForeColor = Theme.Warning;
 
-            modeHint = new Label { AutoSize = true, ForeColor = Theme.TextMuted, Text = "Режим: Studio · HTTP экспериментальный", Margin = new Padding(8, 10, 8, 0) };
+            modeHint = new Label { AutoSize = true, ForeColor = Theme.TextMuted, Text = "Загрузка через браузер Dolphin", Margin = new Padding(8, 10, 8, 0) };
 
             var bottom = Theme.MakeBottomBar(
 
-                (Theme.MakeButton("Запланировать через Studio", accent: true, action: async () => await RunUpload("studio")), true),
+                (Theme.MakeButton("Опубликовать через Dolphin", accent: true, action: async () => await RunUpload("studio")), true),
 
-                (Theme.MakeButton("Быстрая загрузка (HTTP beta)", accent: false, action: async () => await RunUpload("http")), false),
 
+                (Theme.MakeButton("Обновить статусы",ghost:true,action:async()=>{try{SyncWorkspaceToBackend();await backend.RecheckContentAsync(GetCheckedAccounts());RefreshGrid(skipSync:true);}catch(Exception e){AppendLog(e.Message);}}),false),
                 (stopBtn, false));
 
             bottom.Controls.Add(modeHint);
@@ -572,11 +572,11 @@ namespace VideoBatch {
 
         async Task RunUpload(string transport) {
 
-            transport = (transport ?? "http").Trim().ToLowerInvariant();
+            transport = "studio";
 
-            if (transport != "studio") transport = "http";
 
-            if (modeHint != null) modeHint.Text = transport == "studio" ? "Режим: Studio" : "Режим: HTTP (beta)";
+
+            if (modeHint != null) modeHint.Text = "Загрузка через браузер Dolphin";
 
             var checkedAccounts = GetCheckedAccounts();
 
@@ -600,13 +600,7 @@ namespace VideoBatch {
 
                 SyncWorkspaceToBackend();
 
-                if (transport == "studio")
-
-                    await backend.RunUploadStudioAsync(checkedAccounts);
-
-                else
-
-                    await backend.RunUploadHttpAsync(checkedAccounts);
+                await backend.RunUploadStudioAsync(checkedAccounts);
 
                 RefreshGrid(skipSync: true);
 

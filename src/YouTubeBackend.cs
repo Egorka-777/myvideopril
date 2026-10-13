@@ -77,6 +77,7 @@ namespace VideoBatch {
         public void SelectProfileById(string profileId, string market) { Window.SelectProfileById(profileId, market); }
         public Task RunUploadAsync() { return Window.RunUploadAsync(); }
         public Task RunUploadAsync(IReadOnlyList<TikTokAccount> accounts) { return Window.RunUploadStudioAsync(accounts); }
+        public Task RecheckContentAsync(IReadOnlyList<TikTokAccount> accounts) { return Window.RecheckContentAsync(accounts); }
         public void ReconcileUploads(IReadOnlyList<TikTokAccount> accounts) { Window.ReconcileUploadResults(accounts); }
         public Task RunUploadHttpAsync(IReadOnlyList<TikTokAccount> accounts) { return Window.RunUploadHttpAsync(accounts); }
         public Task RunUploadStudioAsync(IReadOnlyList<TikTokAccount> accounts) { return Window.RunUploadStudioAsync(accounts); }

@@ -566,51 +566,8 @@ async function applyScheduleViaEditPage(page, session, sapisid, data, videoId, p
   return true;
 }
 
-async function revealThumbnailFileInput(page) {
-  await page.evaluate(() => {
-    const host = document.querySelector("ytcp-video-thumbnail-editor, ytcp-thumbnails-compact-editor, #thumbnail-editor");
-    if (host && host.scrollIntoView) host.scrollIntoView({ block: "center", inline: "nearest" });
-  }).catch(() => {});
-  await page.waitForTimeout(600);
-  const opened = await page.evaluate(() => {
-    const labels = /upload thumbnail|upload file|загрузить значок|загрузить файл|загрузить/i;
-    const nodes = Array.from(document.querySelectorAll("button, ytcp-button, tp-yt-paper-button, [role='button']"));
-    for (const node of nodes) {
-      const text = `${node.getAttribute("aria-label") || ""} ${node.innerText || ""}`.trim();
-      if (!text || text.length > 80) continue;
-      if (labels.test(text)) { node.click(); return true; }
-    }
-    return false;
-  }).catch(() => false);
-  if (opened) await page.waitForTimeout(900);
-}
-
 async function setThumbnail(page, thumbPath) {
-  if (!thumbPath) return;
-  if (!fs.existsSync(thumbPath)) throw new Error("Файл превью не найден: " + thumbPath);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const inputs = page.locator("input[type=file]");
-    const count = await inputs.count();
-    for (let i = 0; i < count; i++) {
-      const accept = (await inputs.nth(i).getAttribute("accept").catch(() => "")) || "";
-      if (/image|jpeg|png|webp/i.test(accept)) {
-        await inputs.nth(i).setInputFiles(thumbPath);
-        await page.waitForTimeout(2000);
-        await page.evaluate(() => {
-          const labels = /^save$|^сохранить$|save changes|сохранить изменения/i;
-          const nodes = Array.from(document.querySelectorAll("button, ytcp-button, tp-yt-paper-button, [role='button']"));
-          for (const node of nodes) {
-            const text = `${node.getAttribute("aria-label") || ""} ${node.innerText || ""}`.trim();
-            if (labels.test(text)) { node.click(); return; }
-          }
-        }).catch(() => {});
-        await page.waitForTimeout(1200);
-        return;
-      }
-    }
-    await revealThumbnailFileInput(page);
-  }
-  throw new Error("YouTube не показал поле превью. Проверьте верификацию канала и право на пользовательские превью.");
+  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{save:true,verifyReload:true});
 }
 
 async function applyItemThumbnail(page, item, videoId, packIndex, packTotal) {
@@ -626,12 +583,6 @@ async function applyItemThumbnail(page, item, videoId, packIndex, packTotal) {
   if (!thumb) {
     item.thumbnailStatus = "skipped";
     return { status: "skipped" };
-  }
-  const kind = String(item.contentKind || "long").toLowerCase();
-  if (kind === "shorts" || kind === "short") {
-    item.thumbnailStatus = "skipped";
-    send("thumbnail", "Shorts: произвольное изображение не применяется — используйте кадр из видео.", Object.assign({ thumbnailStatus: "skipped" }, base));
-    return { status: "skipped", reason: "Shorts не поддерживают произвольное превью через HTTP" };
   }
   try {
     const editUrl = `${STUDIO_ORIGIN}/video/${encodeURIComponent(videoId)}/edit`;
