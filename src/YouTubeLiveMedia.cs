@@ -25,7 +25,7 @@ namespace VideoBatch {
             int gop=(int)Math.Round(fps*2);
             args.AddRange(new[] {"-map","0:v:0","-map",media.HasAudio?"0:a:0":"1:a:0","-vf",
                 "scale="+media.Width+":"+media.Height+",setsar=1,fps="+media.Fps,
-                "-c:v","libx264","-preset","veryfast","-crf","20","-threads","2","-pix_fmt","yuv420p",
+                "-c:v","libx264","-preset","veryfast","-tune","zerolatency","-bf","0","-crf","20","-threads","2","-pix_fmt","yuv420p",
                 "-g",gop.ToString(Core.Inv),"-keyint_min",gop.ToString(Core.Inv),"-sc_threshold","0",
                 "-c:a","aac","-b:a","128k","-ar","48000","-ac","2",
                 "-af","aresample=async=1:first_pts=0,apad","-shortest","-map_metadata","-1","-f","mpegts",output});
