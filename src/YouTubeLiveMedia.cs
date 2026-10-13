@@ -51,8 +51,10 @@ namespace VideoBatch {
                     await Core.Tool(ffmpeg, SourceArguments(files[i], output, info), ct).ConfigureAwait(false);
                     var prepared = Core.VideoInfo(await Core.Probe(ffprobe, output, ct).ConfigureAwait(false));
                     if(prepared.Width!=first.Width || prepared.Height!=first.Height || Math.Abs(FrameRate(prepared.Fps)-FrameRate(first.Fps))>.01) throw new InvalidOperationException("Подготовка изменила размер или FPS видео.");
-                    result.Duration += prepared.Duration;
+                    // Container duration may include AAC padding. Use video duration to keep file/loop boundaries on the frame timeline.
+                    result.Duration += prepared.VideoDuration;
                     entries.Add(ConcatEntry(output));
+                    entries.Add("duration " + Core.N(prepared.VideoDuration));
                 }
                 result.Path = System.IO.Path.Combine(result.DirectoryPath, "playlist.ffconcat");
                 File.WriteAllLines(result.Path, entries, new UTF8Encoding(false));

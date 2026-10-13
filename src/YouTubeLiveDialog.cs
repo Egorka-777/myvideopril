@@ -117,10 +117,11 @@ namespace VideoBatch {
                     Tags = tags.Text.Split(','), Privacy = new[] { "public", "unlisted", "private" }[privacy.SelectedIndex], MadeForKids = kids.Checked };
                 Options.Validate();
                 for(int i=0;i<channels.Count;i++) { var a=manager.Store.Account(channels[i].ChannelId); if(a==null || a.Transport!="studio" || a.ProfileId!=channels[i].ProfileId || a.LocalPort!=(manager.Preferences?.DolphinPort ?? 3001)) {accounts.SelectedIndex=i; await Connect(true);} }
+                if(IsDisposed || lifetime.IsCancellationRequested)return;
                 if (channels.Any(c => manager.Store.Account(c.ChannelId)?.Transport != "studio" || manager.Store.Account(c.ChannelId)?.ProfileId != c.ProfileId))
                     throw new InvalidOperationException("Проверьте сессию Dolphin каждого выбранного канала.");
                 DialogResult = DialogResult.OK; Close();
-            } catch (Exception e) { MessageBox.Show(this, e.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            } catch (Exception e) { if(!IsDisposed && !lifetime.IsCancellationRequested)MessageBox.Show(this, e.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
         protected override void Dispose(bool disposing) { if (disposing) lifetime.Cancel(); base.Dispose(disposing); }
     }

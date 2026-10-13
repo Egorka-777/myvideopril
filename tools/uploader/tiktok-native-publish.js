@@ -7,7 +7,19 @@ async function ready(locator){return await locator.isVisible().catch(()=>false);
 async function immediatePublic(page) {
   const now=page.getByRole("radio",{name:NOW}).first();
   if(await ready(now))await now.check();
-  else if(!await ready(page.getByText(NOW,{exact:true}).first()))throw new Error("TikTok не показывает режим «Сейчас». Публикация не начиналась.");
+  else {
+    let region=page.getByText(NOW,{exact:true}).first(),selected=false;
+    if(await ready(region))for(let i=0;i<4;i++) {
+      region=region.locator("xpath=..");
+      const radio=region.locator('input[type="radio"], [role="radio"]');
+      if(await radio.count()!==1)continue;
+      const label=await radio.evaluate(e=>e.getAttribute("aria-label") || [...(e.labels||[])].map(l=>l.innerText).join(" ") || e.closest("label")?.innerText || (e.getAttribute("role")==="radio"?e.innerText:e.parentElement.innerText));
+      if(!NOW.test(String(label||"").trim()))continue;
+      await radio.check({force:true});
+      selected=await radio.isChecked();if(selected)break;
+    }
+    if(!selected)throw new Error("TikTok не подтвердил переключатель «Сейчас». Публикация не начиналась.");
+  }
   const label=page.getByText(/^(Who can (?:watch|view).*|Кто может видеть эту публикацию)$/i).first();
   if(!await ready(label))throw new Error("Не найдена настройка видимости TikTok. Публикация не начиналась.");
   let region=label;

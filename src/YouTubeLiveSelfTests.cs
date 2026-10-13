@@ -242,10 +242,10 @@ namespace VideoBatch {
                     await Core.Tool(ffmpeg, args, ct, null, 60).ConfigureAwait(false);
                     var probe = Core.VideoInfo(await Core.Probe(ffprobe, output, ct).ConfigureAwait(false));
                     Check(probe.HasAudio && probe.Height == 240 && probe.Width == 320 && Math.Abs(YouTubeLiveMedia.FrameRate(probe.Fps)-25)<.01 && probe.Duration > 12, "normalization/looping mixed sources");
-                    string packets = await Core.Tool(ffprobe, new[] { "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=dts_time", "-of", "csv=p=0", output }, ct).ConfigureAwait(false);
-                    var times = packets.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(s => Core.Parse(s)).ToArray();
+                    string packets = await Core.Tool(ffprobe, new[] { "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=dts_time", "-of", "json", output }, ct).ConfigureAwait(false);
+                    var times = LiveJson.Array(LiveJson.Get(LiveJson.Object(packets),"packets")).Select(p=>Core.Parse(LiveJson.Text(p,"dts_time"))).ToArray();
                     Check(times.Length > 315, "not enough video frames across repeats");
-                    for (int i = 1; i < times.Length; i++) Check(times[i] > times[i - 1] && times[i] - times[i - 1] < 0.1, "timestamp pause at file or loop boundary");
+                    for (int i = 1; i < times.Length; i++) Check(times[i] > times[i - 1] && times[i] - times[i - 1] < 0.1, "timestamp pause at file or loop boundary: "+i+" · "+Core.N(times[i-1])+" → "+Core.N(times[i]));
                 }
                 string portrait=Path.Combine(root,"portrait");Directory.CreateDirectory(portrait);
                 await Core.Tool(ffmpeg,new[]{"-y","-f","lavfi","-i","testsrc2=size=360x640:rate=60000/1001","-t","1","-c:v","libx264",Path.Combine(portrait,"01.mp4")},ct).ConfigureAwait(false);

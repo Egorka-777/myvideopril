@@ -72,6 +72,8 @@ const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
       await assert.rejects(native.recheckNative(page,{caption},{timeout:1000}),/ID публикации/);
       await context.close();
     }
+    const invalid=await browser.newPage();await invalid.setContent('<span>Now</span><label><input type=radio aria-label=Schedule>Schedule</label><section><h2>Who can watch this video</h2><button>Everyone</button></section>');
+    await assert.rejects(native.immediatePublic(invalid),/переключатель/);await invalid.close();
     assert.equal(native.matchRow([{id:'7',text:'same caption Все',caption:'same caption'}],'','same caption',new Set(['7'])),null,"old same caption was mistaken for a new post");
     assert.throws(()=>native.matchRow([{id:'7',text:'wrong Only me',caption:'wrong'}],'7','wrong',new Set()),/доступ/);
     console.log("PASS: real Chromium RU/EN keyboard captions, Now/Everyone, review confirmation, new-row identity, pending→public/pending timeout, ID-only duplicate-free recheck, YouTube image-input targeting/save/reload/rejection");
