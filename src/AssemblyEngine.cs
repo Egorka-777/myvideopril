@@ -22,7 +22,7 @@ namespace VideoBatch {
             string coordinates="min(W-1,max(0,"+x+")),min(H-1,max(0,"+y+"))";
             return "if(eq(PLANE,0),"+source+"0("+coordinates+"),if(eq(PLANE,1),"+source+"1("+coordinates+"),"+source+"2("+coordinates+")))";
         }
-        public static async Task<List<AssemblyVideo>> ReadVideos(AssemblyTemplate t, string probe, CancellationToken ct) {
+        public static async Task<List<AssemblyVideo>> ReadVideos(AssemblyTemplate t, string ffmpeg, string probe, CancellationToken ct) {
             if (t.Scenes.Count == 0) return new List<AssemblyVideo>();
             for (int i=0;i<t.Scenes.Count;i++) if (AssemblyFiles.Pool(t.Resolve(t.VideoSource(t.Scenes[i])),AssemblyFiles.VideoExtensions).Count==0) throw new Exception("Нет видео для сцены "+(i+1)+". Выбери общие видео или загрузи свои для этой сцены.");
             var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(t.VideoSource(s)), AssemblyFiles.VideoExtensions)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -30,8 +30,9 @@ namespace VideoBatch {
             var result = new List<AssemblyVideo>();
             foreach (var path in paths) {
                 ct.ThrowIfCancellationRequested();
-                var m = Core.VideoInfo(await Core.Probe(probe, path, ct).ConfigureAwait(false));
-                result.Add(new AssemblyVideo { Path = path, Duration = m.VideoDuration, Hash = AssemblyFiles.Hash(path) });
+                string ready = await VideoSdr.EnsureReady(ffmpeg, probe, path, ct).ConfigureAwait(false);
+                var m = Core.VideoInfo(await Core.Probe(probe, ready, ct).ConfigureAwait(false));
+                result.Add(new AssemblyVideo { Path = ready, Duration = m.VideoDuration, Hash = AssemblyFiles.Hash(ready) });
             }
             foreach (string path in AssemblyFiles.Pool(t.Resolve(t.Music), AssemblyFiles.MusicExtensions)) {
                 try { Core.AudioDuration(await Core.Probe(probe, path, ct).ConfigureAwait(false)); }
@@ -122,7 +123,7 @@ namespace VideoBatch {
                 using (var gate = new FileStream(historyPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
                     var history = AssemblyHistoryStore.Load(historyFolder, historyScope);
                     progress.Report(new Update("Проверяю материалы…", 0));
-                    var videos = await ReadVideos(t, ffprobe, ct).ConfigureAwait(false);
+                    var videos = await ReadVideos(t, ffmpeg, ffprobe, ct).ConfigureAwait(false);
                     var random=new Random(); var mix=new AssemblyMixTracker();
                     var usedTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var renderContext = new AssemblyRenderContext { CacheDirectory = Path.Combine(work, "raster-cache") };

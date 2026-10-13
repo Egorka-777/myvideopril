@@ -37,8 +37,12 @@ namespace VideoBatch {
             try {
                 string[] files = options.Files();
                 var entries = new List<string> { "ffconcat version 1.0" };
-                var sources=new List<Media>();
-                foreach(string file in files) sources.Add(Core.VideoInfo(await Core.Probe(ffprobe,file,ct).ConfigureAwait(false)));
+                var sources=new List<Media>(); var readyFiles=new List<string>();
+                foreach(string file in files) {
+                    string ready = await VideoSdr.EnsureReady(ffmpeg, ffprobe, file, ct).ConfigureAwait(false);
+                    readyFiles.Add(ready);
+                    sources.Add(Core.VideoInfo(await Core.Probe(ffprobe, ready, ct).ConfigureAwait(false)));
+                }
                 var first=sources[0];
                 if(sources.Any(m => m.Width!=first.Width || m.Height!=first.Height || Math.Abs(FrameRate(m.Fps)-FrameRate(first.Fps))>.01))
                     throw new InvalidOperationException("В папке видео с разным размером или FPS. Для непрерывного эфира выбери видео с одинаковыми параметрами; качество автоматически не меняется.");
@@ -48,7 +52,7 @@ namespace VideoBatch {
                     var info = sources[i];
                     log("Подготовка " + (i + 1) + "/" + files.Length + ": " + System.IO.Path.GetFileName(files[i]));
                     string output = System.IO.Path.Combine(result.DirectoryPath, i.ToString("D5") + ".ts");
-                    await Core.Tool(ffmpeg, SourceArguments(files[i], output, info), ct).ConfigureAwait(false);
+                    await Core.Tool(ffmpeg, SourceArguments(readyFiles[i], output, info), ct).ConfigureAwait(false);
                     var prepared = Core.VideoInfo(await Core.Probe(ffprobe, output, ct).ConfigureAwait(false));
                     if(prepared.Width!=first.Width || prepared.Height!=first.Height || Math.Abs(FrameRate(prepared.Fps)-FrameRate(first.Fps))>.01) throw new InvalidOperationException("Подготовка изменила размер или FPS видео.");
                     // Container duration may include AAC padding. Use video duration to keep file/loop boundaries on the frame timeline.

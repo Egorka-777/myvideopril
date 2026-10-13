@@ -646,7 +646,7 @@ namespace VideoBatch {
         public static Media VideoInfo(ProbeResult raw) {
             var v=(raw.streams??new ProbeStream[0]).FirstOrDefault(x=>x.codec_type=="video"&&(x.disposition==null||x.disposition.attached_pic!=1));
             if(v==null)throw new Exception("В файле нет видеодорожки.");
-            if(v.color_transfer=="smpte2084"||v.color_transfer=="arib-std-b67")throw new Exception("Этот ролик в HDR. Сначала экспортируйте его в SDR.");
+            if(v.color_transfer=="smpte2084"||v.color_transfer=="arib-std-b67")throw new Exception("HDR-видео ещё не переведено в SDR.");
             double w=v.width,h=v.height,sar=1;var r=Regex.Match(v.sample_aspect_ratio??"",@"^(\d+):(\d+)$");if(r.Success&&Parse(r.Groups[2].Value)>0)sar=Parse(r.Groups[1].Value)/Parse(r.Groups[2].Value);
             double rotate=(v.side_data_list??new SideData[0]).Select(x=>x.rotation).FirstOrDefault();if(v.tags!=null&&v.tags.ContainsKey("rotate"))rotate=Parse(v.tags["rotate"]);
             if(Math.Abs(rotate)%180==90){double t=w;w=h;h=t;sar=1/sar;}
@@ -731,7 +731,7 @@ namespace VideoBatch {
                 if(job.Shorts&&tracks.Count==0)throw new Exception("Добавьте музыку.");
                 foreach(string input in job.Inputs) {
                     ct.ThrowIfCancellationRequested();Media media;List<Profile> profiles;
-                    try{media=VideoInfo(await Probe(job.FFprobe,input,ct).ConfigureAwait(false));if(job.Shorts){media.Duration=media.VideoDuration;profiles=RandomProfiles(job.Ranges,job.Count,tracks,media.Duration,random,job.Processing!=null&&job.Processing.IsEnabled);}else {profiles=Store.Clone(job.Profiles).Take(job.Count).ToList();foreach(var p in profiles){p.Short=false;p.MusicPath="";}
+                    try{string ready=await VideoSdr.EnsureReady(job.FFmpeg,job.FFprobe,input,ct).ConfigureAwait(false);media=VideoInfo(await Probe(job.FFprobe,ready,ct).ConfigureAwait(false));if(job.Shorts){media.Duration=media.VideoDuration;profiles=RandomProfiles(job.Ranges,job.Count,tracks,media.Duration,random,job.Processing!=null&&job.Processing.IsEnabled);}else {profiles=Store.Clone(job.Profiles).Take(job.Count).ToList();foreach(var p in profiles){p.Short=false;p.MusicPath="";}
                         if(tracks.Count>0){var pool=tracks.OrderBy(t=>random.Next()).ToList();var used=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
                             for(int i=0;i<profiles.Count;i++){var p=profiles[i];var t=pool[i%pool.Count];int visit=used.ContainsKey(t.Path)?used[t.Path]:0;used[t.Path]=visit+1;double room=Math.Max(0,t.Duration-media.Duration/p.Speed);int uses=(profiles.Count-1-i%pool.Count)/pool.Count+1;
                                 p.MusicPath=t.Path;p.MusicStart=room>0?(uses==1?random.NextDouble()*room:room*visit/(uses-1)):t.Duration*visit/uses;p.MusicVolume=Math.Pow(10,job.BackgroundDb/20);

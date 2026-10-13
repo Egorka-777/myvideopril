@@ -72,7 +72,7 @@ namespace VideoBatch {
             BuildStudio(); SelectScene(0); Save();
             if (note != null) status.Text = note;
             saveTimer.Tick += (s,e) => { saveTimer.Stop(); Safe(Save); };
-            Shown += (s,e) => { RequestBackground(); RequestCapacity(); };
+            Shown += (s,e) => { RequestBackground(); RequestCapacity(); WarmMaterialsSilent(); };
             Activated += (s,e) => { RefreshInfo(); RefreshCanvas(); RequestCapacity(); };
             FormClosing += (s,e) => {
                 if (Embedded) {
@@ -502,6 +502,12 @@ namespace VideoBatch {
             } catch (OperationCanceledException) { } catch (Exception e) { if (version == previewVersion && !IsDisposed) status.Text = "Не удалось показать видео: " + e.Message; }
             finally { if (previewCancellation == ct) previewCancellation = null; ct.Dispose(); }
         }
+        void WarmMaterialsSilent() {
+            if (string.IsNullOrWhiteSpace(template?.Materials)) return;
+            if (!ToolsLocator.TryResolve(out string ffmpeg, out string probe, out _)) return;
+            string root = template.Materials;
+            _ = Task.Run(async () => { try { await VideoSdr.WarmFolder(ffmpeg, probe, root, CancellationToken.None).ConfigureAwait(false); if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(RequestCapacity)); } catch { } });
+        }
         async void RequestCapacity() {
             if (capacityLabel==null || !IsHandleCreated || IsDisposed || cancellation!=null) return;
             try {
@@ -512,7 +518,7 @@ namespace VideoBatch {
                 var ct=new CancellationTokenSource(); capacityCancellation=ct; capacityLabel.Text="Считаю новые связки…"; batchMaximum=0; UpdateCountControls();
                 try {
                     if (!ToolsLocator.TryResolve(out string ffmpeg,out string probe,out string hint)) { capacityLabel.Text="Добавь FFmpeg для расчёта связок"; return; }
-                    var capacity=await Task.Run(async () => { var v=await AssemblyEngine.ReadVideos(t,probe,ct.Token); var h=AssemblyHistoryStore.Load(historyFolder,scope); return new AssemblyInventory(t,v,h).Calculate(); },ct.Token);
+                    var capacity=await Task.Run(async () => { var v=await AssemblyEngine.ReadVideos(t,ffmpeg,probe,ct.Token); var h=AssemblyHistoryStore.Load(historyFolder,scope); return new AssemblyInventory(t,v,h).Calculate(); },ct.Token);
                     if (version==capacityVersion && !IsDisposed) ApplyCapacity(capacity);
                 } catch (OperationCanceledException) { }
                 catch (Exception ex) { if (version==capacityVersion && !IsDisposed) { capacityLabel.Text=files.Any(f => AssemblyFiles.VideoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant())) ? "Проверь материалы · расчёт недоступен" : "Добавь видео для расчёта связок"; status.Text=ex.Message; capacityKey=null; } }
@@ -527,7 +533,7 @@ namespace VideoBatch {
                 cancellation = new CancellationTokenSource(); Busy(true); var t = Store.Clone(template);
                 var updates = new Progress<Update>(u => { status.Text = u.Text; progress.Value = (int)Math.Max(0,Math.Min(1000,u.Percent*10)); });
                 if (sample) {
-                    var videos = await AssemblyEngine.ReadVideos(t,probe,cancellation.Token); var history = AssemblyHistoryStore.Load(historyFolder,t.HistoryScope);
+                    var videos = await AssemblyEngine.ReadVideos(t,ffmpeg,probe,cancellation.Token); var history = AssemblyHistoryStore.Load(historyFolder,t.HistoryScope);
                     var batch = AssemblyPlanner.Create(t,videos,history,new Random(),1,null,cancellation.Token); if (batch.Plans.Count == 0) throw new Exception(batch.Limit);
                     Directory.CreateDirectory(previewFolder); string path = Path.Combine(previewFolder,"example-" + Guid.NewGuid().ToString("N") + ".mp4"), work = Path.Combine(previewFolder,"render-" + Guid.NewGuid().ToString("N"));
                     try { await Task.Run(() => AssemblyEngine.Render(t,batch.Plans[0],ffmpeg,probe,path,work,AssemblyRaster.Save,cancellation.Token,s => ((IProgress<Update>)updates).Report(new Update(s,0)))); }
