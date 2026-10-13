@@ -26,6 +26,8 @@ namespace VideoBatch {
         string kindView = "shorts";
         string searchQuery = "";
         string statusFilterValue = "Все статусы";
+        Button httpUploadBtn, studioUploadBtn;
+        int uploadRuns;
 
         public YouTubeWorkspacePanel(Preferences prefs, YouTubeBackend be, NavigationService nav) {
             settings = prefs;
@@ -175,9 +177,11 @@ namespace VideoBatch {
 
             var stopBtn = Theme.MakeButton("Стоп", ghost: true, action: () => backend.Stop());
             stopBtn.ForeColor = Theme.Warning;
+            httpUploadBtn = Theme.MakeButton("Быстрая загрузка", accent: true, action: () => QueueUpload(true));
+            studioUploadBtn = Theme.MakeButton("Через Studio", ghost: true, action: () => QueueUpload(false));
             var bottom = Theme.MakeBottomBar(
-                (Theme.MakeButton("Быстрая загрузка", accent: true, action: async () => await RunUpload(true)), true),
-                (Theme.MakeButton("Через Studio", ghost: true, action: async () => await RunUpload(false)), false),
+                (httpUploadBtn, true),
+                (studioUploadBtn, false),
                 (Theme.MakeButton("Смотреть ссылки", ghost: true, action: async () => await RunLinkWatch()), false),
                 (crossWatchBtn = Theme.MakeButton(CrossWatchButtonLabel(), ghost: true, action: async () => await RunCrossLinkWatch()), false),
                 (stopBtn, false));
@@ -705,6 +709,7 @@ namespace VideoBatch {
             if (ch.Items.Count == 0 && (!string.IsNullOrWhiteSpace(ch.Video) || !string.IsNullOrWhiteSpace(ch.Title)))
                 ch.Items.Add(new YouTubeItem { Video = ch.Video ?? "", Title = ch.Title ?? "", Thumbnail = ch.Thumbnail ?? "" });
             if (ch.Items.Count > 0) { ch.Video = ch.Items[0].Video; ch.Title = ch.Items[0].Title; ch.Thumbnail = ch.Items[0].Thumbnail ?? ch.Thumbnail; }
+            YouTubeThumbnailSync.Apply(ch);
         }
 
         static string Clean(string t) { return (t ?? "").Trim(); }
@@ -906,6 +911,11 @@ namespace VideoBatch {
             }catch(Exception ex){ch.ChannelUrl=previous;row.Cells["url"].Value=previous;AppendLog("ОШИБКА: "+ex.Message);}
         }
 
+        void QueueUpload(bool http) {
+            if (uploadRuns > 0) { AppendLog("Загрузка уже идёт — можно перейти в другой раздел, прогресс пишется в лог YouTube."); return; }
+            _ = RunUpload(http);
+        }
+
         async Task RunUpload(bool http) {
             var checkedChannels = GetCheckedChannels();
             if (checkedChannels.Count == 0) {
@@ -915,13 +925,26 @@ namespace VideoBatch {
                     "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
+            uploadRuns++;
+            SetUploadBusy(true);
             try {
+                foreach (var ch in checkedChannels) YouTubeThumbnailSync.Apply(ch);
+                try { Store.Save(settings); } catch { }
                 SyncWorkspaceToBackend();
-                if (http) await backend.RunHttpUploadAsync(checkedChannels);
-                else await backend.RunStudioUploadAsync(checkedChannels);
-                RefreshGrid();
+                if (http) await backend.RunHttpUploadAsync(checkedChannels).ConfigureAwait(true);
+                else await backend.RunStudioUploadAsync(checkedChannels).ConfigureAwait(true);
+                if (!IsDisposed) RefreshGrid();
                 AppendLog("Загрузка завершена · было отмечено: " + checkedChannels.Count);
             } catch (Exception ex) { AppendLog("ОШИБКА: " + ex.Message); }
+            finally {
+                uploadRuns = Math.Max(0, uploadRuns - 1);
+                if (!IsDisposed) SetUploadBusy(false);
+            }
+        }
+
+        void SetUploadBusy(bool busy) {
+            if (httpUploadBtn != null) httpUploadBtn.Enabled = !busy;
+            if (studioUploadBtn != null) studioUploadBtn.Enabled = !busy;
         }
 
         async Task RunCheck() {

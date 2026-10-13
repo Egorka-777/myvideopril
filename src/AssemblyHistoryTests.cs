@@ -18,9 +18,9 @@ namespace VideoBatch {
                     videos.Add(new AssemblyVideo {Path=file,Hash=AssemblyFiles.Hash(file),Duration=10});
                 }
                 for (int i=0;i<4;i++) File.WriteAllText(t.Resolve("Музыка/"+i+".wav"),"music-"+i);
-                // 12*11*10*9*4 = 47,520; raw bound exceeds enumeration limit.
+                // P(12,4) = 12*11*10*9 = 11,880 visual combinations (music excluded); raw bound exceeds enumeration limit.
                 var initial=new AssemblyInventory(t,videos,new AssemblyHistory()).Calculate();
-                Check(initial.Exact && initial.Variants==47520,"large capacity");
+                Check(initial.Exact && initial.Variants==11880,"large capacity");
                 var plan=AssemblyPlanner.Create(t,videos,new AssemblyHistory(),new Random(3),1).Plans.Single();
                 string output=Path.Combine(root,"published.mp4"); var h=AssemblyHistoryStore.Load(folder);
                 string staged=Path.Combine(root,"private.mp4"); File.WriteAllText(staged,"completed private output");
@@ -37,15 +37,16 @@ namespace VideoBatch {
                 File.Move(videos[0].Path,renamed); videos[0].Path=renamed;
                 recovered=AssemblyHistoryStore.Load(folder);
                 var remaining=new AssemblyInventory(t,videos,recovered).Calculate();
-                Check(remaining.Exact && remaining.Variants==47519,"count depends on durable record, not output recipe");
+                Check(remaining.Exact && remaining.Variants==11879,"count depends on durable record, not output recipe");
                 Check(AssemblyPlanner.Create(t,videos,recovered,new Random(3),1).Plans.Single().Signature!=plan.Signature,"repeated seed must not repeat");
                 // Old opaque signatures migrate intact even when their external recipe has disappeared.
-                var old=new AssemblyHistory(); old.Combinations.Add("opaque-old-signature"); old.UsedImages.Add("old-image");
+                string opaqueSig="opaque-unresolved-"+Guid.NewGuid().ToString("N");
+                var old=new AssemblyHistory(); old.Combinations.Add(opaqueSig); old.UsedImages.Add("old-image");
                 AssemblyFiles.Save(Path.Combine(folder,"old-studio.xml"),old);
                 recovered=AssemblyHistoryStore.Load(folder);
-                Check(recovered.Combinations.Contains("opaque-old-signature") && recovered.UsedImages.Contains("old-image"),"legacy migration");
+                Check(recovered.Combinations.Contains(opaqueSig) && recovered.UsedImages.Contains("old-image"),"legacy migration");
                 var conservative=new AssemblyInventory(t,videos,recovered).Calculate();
-                Check(!conservative.Exact && conservative.Variants==47519,"unknown old recipe requires an explicit upper bound");
+                Check(!conservative.Exact && conservative.Variants==11879,"unknown old recipe requires an explicit upper bound");
                 // The global gate serializes different studios, not just the same template ID.
                 using (var gate=new FileStream(AssemblyHistoryStore.PathFor(folder)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) {
                     try { using(var other=new FileStream(AssemblyHistoryStore.PathFor(folder)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) { } throw new Exception("gate allowed a second writer"); }
@@ -64,8 +65,8 @@ namespace VideoBatch {
                 AssemblyHistoryStore.Commit(folder,ruHistory,ruHistory.Records.Single(),AssemblyHistoryScope.Ru);
                 var enHistory=AssemblyHistoryStore.Load(folder,AssemblyHistoryScope.En);
                 Check(enHistory.Combinations.Count==0,"EN ledger starts empty");
-                Check(new AssemblyInventory(t,videos,enHistory).Calculate().Variants==47520,"EN capacity ignores RU usage");
-                Check(new AssemblyInventory(t,videos,AssemblyHistoryStore.Load(folder,AssemblyHistoryScope.Ru)).Calculate().Variants==47519,"RU capacity reflects its ledger");
+                Check(new AssemblyInventory(t,videos,enHistory).Calculate().Variants==11880,"EN capacity ignores RU usage");
+                Check(new AssemblyInventory(t,videos,AssemblyHistoryStore.Load(folder,AssemblyHistoryScope.Ru)).Calculate().Variants==11879,"RU capacity reflects its ledger");
                 using (var ruGate=new FileStream(AssemblyHistoryStore.PathFor(folder,AssemblyHistoryScope.Ru)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None))
                 using (var enGate=new FileStream(AssemblyHistoryStore.PathFor(folder,AssemblyHistoryScope.En)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) { }
                 return true;

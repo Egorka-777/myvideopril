@@ -5,7 +5,7 @@ using System.Linq;
 
 namespace VideoBatch {
     // Stored independently of MP4s and diagnostic recipes. Identity is the ordered
-    // material hashes + music, never a filename, title, timestamp or device label.
+    // Scene video + image content hashes only (music/title/device metadata are not part of the signature).
     public class AssemblyHistoryScene {
         public string VideoHash;
         public List<string> Images = new List<string>();

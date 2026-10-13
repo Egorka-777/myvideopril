@@ -440,7 +440,10 @@ namespace VideoBatch {
                     var hm=Regex.Match(c.Name??"",@"@([A-Za-z0-9._-]+)");
                     if(hm.Success)c.ChannelUrl=NormalizeChannelVideosUrl("https://www.youtube.com/@"+hm.Groups[1].Value);
                 }
-                if(c.Items.Count>0){c.Video=c.Items[0].Video??"";c.Title=c.Items[0].Title??"";c.Thumbnail=c.Items[0].Thumbnail??"";}
+                if(c.Items.Count>0){
+                    if(string.IsNullOrWhiteSpace(c.Items[0].Thumbnail)&&!string.IsNullOrWhiteSpace(c.Thumbnail))c.Items[0].Thumbnail=c.Thumbnail;
+                    c.Video=c.Items[0].Video??"";c.Title=c.Items[0].Title??"";c.Thumbnail=c.Items[0].Thumbnail??c.Thumbnail??"";
+                }
                 else c.Title=CleanStoredTitle(c.Title);
             }
             // Схлопываем дубликаты одного канала (раньше пачка создавала клоны строк).

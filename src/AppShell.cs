@@ -36,6 +36,8 @@ namespace VideoBatch {
         LogsPanel logsPanel;
         StatisticsPanel statsPanel;
         SettingsPanel settingsPanel;
+        AssemblyWindow assemblyStudio;
+        MainWindow processingWindow;
         Control currentContent;
 
         public AppShell(Preferences prefs) {
@@ -211,6 +213,14 @@ namespace VideoBatch {
             AddPanel(logsPanel);
             AddPanel(statsPanel);
             AddPanel(settingsPanel);
+            assemblyStudio = new AssemblyWindow(embedded: true);
+            assemblyStudio.Visible = false;
+            contentHost.Controls.Add(assemblyStudio);
+            if (ToolsLocator.TryResolve(out _, out _, out _)) {
+                processingWindow = new MainWindow(settings, embedded: true);
+                processingWindow.Visible = false;
+                contentHost.Controls.Add(processingWindow);
+            }
         }
 
         void AddPanel(Control panel) {
@@ -232,16 +242,14 @@ namespace VideoBatch {
         void ShowSection(NavSection section) {
             pageTitleLabel.Text = NavigationService.Title(section);
             HighlightNav(section);
-            if (section == NavSection.VideoAssembly) {
-                using (var w = new AssemblyWindow()) w.ShowDialog(this);
-                return;
-            }
             if (section == NavSection.VideoProcessing) {
-                if (!ToolsLocator.TryResolve(out _, out _, out var hint)) {
-                    MessageBox.Show(this, hint, "Обработка видео", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (processingWindow == null) {
+                    if (!ToolsLocator.TryResolve(out _, out _, out var hint))
+                        MessageBox.Show(this, hint, "Обработка видео", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                using (var w = new MainWindow(settings)) w.ShowDialog(this);
+                ShowContent(processingWindow);
+                tasksLabel.Text = "Задач: " + TaskQueueStore.ActiveCount();
                 return;
             }
             Control next;
@@ -252,6 +260,7 @@ namespace VideoBatch {
                 case NavSection.Profiles: next = profilesPanel; profilesPanel.RefreshData(); break;
                 case NavSection.AccountLibrary: next = accountLibraryPanel; accountLibraryPanel.RefreshData(); break;
                 case NavSection.Proxy: next = proxyPanel; proxyPanel.RefreshData(); break;
+                case NavSection.VideoAssembly: next = assemblyStudio; break;
                 case NavSection.YouTube: next = youtubeWorkspace; youtubeWorkspace.OnNavigated(); break;
                 case NavSection.TikTok: next = tiktokWorkspace; tiktokWorkspace.OnNavigated(); break;
                 case NavSection.ViewsSearch: next = viewsSearchPanel; viewsSearchPanel.RefreshData(); break;
@@ -259,10 +268,14 @@ namespace VideoBatch {
                 case NavSection.Settings: next = settingsPanel; break;
                 default: next = homePanel; break;
             }
-            if (currentContent != null) currentContent.Visible = false;
+            ShowContent(next);
+            tasksLabel.Text = "Задач: " + TaskQueueStore.ActiveCount();
+        }
+
+        void ShowContent(Control next) {
+            if (currentContent != null && currentContent != next) currentContent.Visible = false;
             currentContent = next;
             if (next != null) { next.Visible = true; next.BringToFront(); }
-            tasksLabel.Text = "Задач: " + TaskQueueStore.ActiveCount();
         }
 
         void HighlightNav(NavSection section) {

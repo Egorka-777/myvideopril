@@ -33,7 +33,7 @@ namespace VideoBatch {
                 items=Items.Select(it=>new UploadItemJob{
                     video=it.StagedVideo,
                     title=it.UploadTitle,
-                    thumbnail=it.Source.Thumbnail,
+                    thumbnail=YouTubeThumbnailSync.ForItem(Channel,it.Source,it.Index-1),
                     scheduleDate=it.ScheduleDate,
                     scheduleTime=it.ScheduleTime,
                     publishedVideoId=it.Source.PublishedVideoId??"",
@@ -44,7 +44,7 @@ namespace VideoBatch {
                 draftOnly=false,
                 video=first.StagedVideo,
                 title=first.UploadTitle,
-                thumbnail=first.Source.Thumbnail,
+                thumbnail=YouTubeThumbnailSync.ForItem(Channel,first.Source,first.Index-1),
                 scheduleDate=first.ScheduleDate,
                 scheduleTime=first.ScheduleTime
             };

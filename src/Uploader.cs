@@ -671,6 +671,7 @@ namespace VideoBatch {
                 var primary=batch.Count>0?batch[batch.Count-1]:c.Items[c.Items.Count-1];
                 c.Video=primary.Video??"";c.Title=primary.Title??"";c.Thumbnail=primary.Thumbnail??c.Thumbnail??"";
             }
+            YouTubeThumbnailSync.Apply(c);
         }
         static string Short(string path){return string.IsNullOrWhiteSpace(path)?"":Path.GetFileName(path);}
         /// <summary>Убирает мусор вида « · +3», который раньше попадал в заголовок из сводки пачки в таблице.</summary>
@@ -1422,14 +1423,14 @@ namespace VideoBatch {
         }
         List<DataGridViewRow> ResolveUploadRows(IReadOnlyList<YouTubeChannel> channelsFilter){
             if(channelsFilter!=null&&channelsFilter.Count>0){
-                SaveGrid();
+                foreach(var ch in channelsFilter)if(ch!=null)YouTubeThumbnailSync.Apply(ch);
+                SaveGrid();LoadGrid();
                 var rows=new List<DataGridViewRow>();
                 foreach(var ch in channelsFilter){
                     if(ch==null)continue;
                     var row=FindChannelRow(ch);
                     if(row!=null&&!rows.Contains(row))rows.Add(row);
                 }
-                if(rows.Count==0)LoadGrid();
                 return rows;
             }
             return UploadTargets();
@@ -1442,11 +1443,14 @@ namespace VideoBatch {
         List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> ExpandUploadJobs(List<DataGridViewRow> rows){
             var jobs=new List<(DataGridViewRow,YouTubeChannel,YouTubeItem,int,int)>();
             foreach(var row in rows){
-                var c=(YouTubeChannel)row.Tag;SyncChannelPrimary(c);
+                var c=(YouTubeChannel)row.Tag;SyncChannelPrimary(c);YouTubeThumbnailSync.Apply(c);
                 var items=(c.Items??new List<YouTubeItem>()).Where(it=>!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Title)).ToList();
                 if(items.Count==0&&!string.IsNullOrWhiteSpace(c.Video)&&!string.IsNullOrWhiteSpace(c.Title))
-                    items.Add(new YouTubeItem{Video=c.Video,Title=c.Title,Thumbnail=c.Thumbnail});
-                for(int i=0;i<items.Count;i++)jobs.Add((row,c,items[i],i+1,items.Count));
+                    items.Add(new YouTubeItem{Video=c.Video,Title=c.Title,Thumbnail=YouTubeThumbnailSync.ForItem(c,null,0)});
+                for(int i=0;i<items.Count;i++){
+                    if(string.IsNullOrWhiteSpace(items[i].Thumbnail))items[i].Thumbnail=YouTubeThumbnailSync.ForItem(c,items[i],i);
+                    jobs.Add((row,c,items[i],i+1,items.Count));
+                }
             }
             return jobs;
         }
@@ -2236,7 +2240,7 @@ namespace VideoBatch {
                     return new HttpUploadItemJob{
                         localJobId=id,video=it.StagedVideo,title=it.UploadTitle,description=meta.description,
                         scheduleDate=it.ScheduleDate,scheduleTime=it.ScheduleTime,
-                        scheduledUnixSeconds=unix,thumbnail=it.Source?.Thumbnail??"",tags=meta.tags,contentKind=itemKind,publishMode=itemMode,thumbnailStatus="pending"
+                        scheduledUnixSeconds=unix,thumbnail=YouTubeThumbnailSync.ForItem(batch.Channel,it.Source,it.Index-1),tags=meta.tags,contentKind=itemKind,publishMode=itemMode,thumbnailStatus="pending"
                     };
                 }).ToArray()
             };

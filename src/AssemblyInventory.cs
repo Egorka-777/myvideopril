@@ -65,15 +65,26 @@ namespace VideoBatch {
         }
         double RenderDuration(int i) { return template.Scenes[i].Duration + (i < template.Scenes.Count-1 && template.Transition != "cut" ? template.TransitionDuration : 0); }
         BigInteger RawBound() {
-            BigInteger total = music.Count;
+            BigInteger total = 1;
             foreach (var v in videos) total *= v.Count;
             foreach (var pool in pictures.Values) total *= pool.Count;
             return total;
         }
         static string SignatureText(AssemblyPlan p) { return string.Join("|",p.Scenes.Select(s => s.Video.Hash + ":" + string.Join(",",s.Layers.Select(l => l.Asset.Hash)))); }
-        void Sign(AssemblyPlan p,AssemblyAsset song) {
-            string raw = SignatureText(p); p.Music = song.Path; p.MusicHash=song.Hash;
-            p.Signature = AssemblyFiles.HashText(raw + (template.PackStudioVersion > 0 ? "|music:" + song.Hash : ""));
+        static string VisualSignature(string raw) { return AssemblyFiles.HashText(raw); }
+        void Sign(AssemblyPlan p) { p.Signature = VisualSignature(SignatureText(p)); }
+        bool CombinationBlocked(string raw) {
+            if (previous.Contains(VisualSignature(raw))) return true;
+            foreach (var song in music) {
+                if (string.IsNullOrEmpty(song.Hash)) continue;
+                if (previous.Contains(AssemblyFiles.HashText(raw + "|music:" + song.Hash))) return true;
+            }
+            return false;
+        }
+        void AssignMusic(AssemblyPlan p,Random random,AssemblyMixTracker mix) {
+            if (music.Count == 0) { p.Music = ""; p.MusicHash = ""; return; }
+            var song = music.OrderBy(a => mix.Usage("music", a.Hash)).ThenBy(a => random.Next()).First();
+            p.Music = song.Path; p.MusicHash = song.Hash;
         }
         public List<AssemblyPlan> Enumerate() {
             if (template.Scenes.Count==0) return new List<AssemblyPlan>();
@@ -84,13 +95,12 @@ namespace VideoBatch {
         }
         void WalkScenes(int index,AssemblyPlan plan,HashSet<string> selectedVideo,HashSet<string> selectedImage,List<AssemblyPlan> output) {
             if (index == videos.Count) {
-                foreach (var song in music) {
-                    Sign(plan,song);
-                    if (previous.Contains(plan.Signature) || template.PackStudioVersion > 0 && previous.Contains(AssemblyFiles.HashText(SignatureText(plan)))) continue;
-                    var copy = new AssemblyPlan { Signature=plan.Signature,Music=plan.Music,MusicHash=plan.MusicHash,UniqueImages=new List<string>(plan.UniqueImages) };
-                    copy.Scenes = plan.Scenes.Select(s => new AssemblyScenePlan { Scene=s.Scene,Video=s.Video,RenderDuration=s.RenderDuration,Layers=new List<AssemblyLayerPlan>(s.Layers) }).ToList();
-                    output.Add(copy);
-                }
+                string raw = SignatureText(plan);
+                Sign(plan);
+                if (CombinationBlocked(raw)) return;
+                var copy = new AssemblyPlan { Signature=plan.Signature,UniqueImages=new List<string>(plan.UniqueImages) };
+                copy.Scenes = plan.Scenes.Select(s => new AssemblyScenePlan { Scene=s.Scene,Video=s.Video,RenderDuration=s.RenderDuration,Layers=new List<AssemblyLayerPlan>(s.Layers) }).ToList();
+                output.Add(copy);
                 return;
             }
             var available = videos[index].Where(v => !selectedVideo.Contains(v.Hash)).ToList();
@@ -159,6 +169,7 @@ namespace VideoBatch {
         }
         void Complete(AssemblyPlan p,Random random,AssemblyMixTracker mix) {
             foreach (var scene in p.Scenes) scene.VideoStart=template.RandomVideoStart ? random.NextDouble()*Math.Max(0,scene.Video.Duration-scene.RenderDuration) : 0;
+            AssignMusic(p,random,mix);
             mix.Record(p);
         }
         AssemblyPlan FindNext(HashSet<string> used,HashSet<string> combinations,AssemblyMixTracker mix,Random random,CancellationToken ct,int reserve) {
@@ -178,12 +189,10 @@ namespace VideoBatch {
                 ct.ThrowIfCancellationRequested();
                 if (i==videos.Count) {
                     if (reserve>0) {var after=new HashSet<string>(used); after.UnionWith(plan.UniqueImages); if (UniqueLimit(after)<reserve) return false;}
-                    foreach (var song in music.OrderBy(a => mix.Usage("music",a.Hash)).ThenBy(a => random.Next())) {
-                        Sign(plan,song);
-                        if (combinations.Contains(plan.Signature) || template.PackStudioVersion>0 && combinations.Contains(AssemblyFiles.HashText(SignatureText(plan)))) continue;
-                        found=plan; return true;
-                    }
-                    return false;
+                    string raw = SignatureText(plan);
+                    Sign(plan);
+                    if (combinations.Contains(plan.Signature) || CombinationBlocked(raw)) return false;
+                    found=plan; return true;
                 }
                 var pool=videos[i].Where(v => !chosenVideo.Contains(v.Hash)).ToList(); if (pool.Count==0 && template.AllowVideoReuse) pool=videos[i];
                 foreach (var v in pool.OrderBy(v => mix.Usage("video:"+i,v.Hash)).ThenBy(v => random.Next())) {
@@ -224,15 +233,26 @@ namespace VideoBatch {
                 bool same = videos.All(v => new HashSet<string>(v.Select(a => a.Hash)).SetEquals(videos[0].Select(a => a.Hash)));
                 bool noSharedUnique = pictures.Where(p => p.Key.Unique).SelectMany(p => p.Value.Select(a => a.Hash)).GroupBy(h => h).All(g => g.Count()==1);
                 if ((disjoint || same && (template.AllowVideoReuse || videos[0].Count >= videos.Count)) && noSharedUnique) {
-                    int n=videos[0].Count; BigInteger count=template.PackStudioVersion>0 ? music.Count : 1;
+                    int n=videos[0].Count; BigInteger count=1;
                     for (int i=0; i<videos.Count; i++) count *= disjoint ? videos[i].Count : (i<n ? n-i : n);
                     foreach (var pool in pictures.Values) count *= pool.Count;
                     result.Variants=count; result.Exact=true;
                     SubtractHistory(result);
                 }
             }
+            if (list != null && previous.Any(entry => !LedgerEntryResolved(entry, list)))
+                result.Exact = false;
             result.BatchLimit=(int)BigInteger.Min(result.BatchLimit,result.Variants);
             return result;
+        }
+        static bool IsVisualSignature(string entry) {
+            return !string.IsNullOrEmpty(entry) && entry.Length == 64 && entry.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+        }
+        bool LedgerEntryResolved(string entry, List<AssemblyPlan> list) {
+            if (history.Records.Any(r => r.Signature == entry)) return true;
+            if (list.Any(p => p.Signature == entry)) return true;
+            if (IsVisualSignature(entry) && history.Combinations.Contains(entry) && list.All(p => p.Signature != entry)) return true;
+            return false;
         }
         void SubtractHistory(AssemblyCapacity capacity) {
             var resolved=new HashSet<string>(); var blocked=new HashSet<string>();
@@ -242,15 +262,17 @@ namespace VideoBatch {
                 try { var p=AssemblyFiles.Load<AssemblyPlan>(file); if (!plans.Any(x => x.Signature==p.Signature)) plans.Add(p); } catch { }
             }
             foreach (var p in plans) {
-                if (!previous.Contains(p.Signature)) continue;
-                resolved.Add(p.Signature);
                 if (!Compatible(p)) continue;
-                string raw=SignatureText(p), legacy=AssemblyFiles.HashText(raw);
+                string raw=SignatureText(p), visual=VisualSignature(raw);
+                if (!CombinationBlocked(raw) && !previous.Contains(p.Signature) && !previous.Contains(visual)) continue;
+                blocked.Add(visual);
+                resolved.Add(visual);
+                if (previous.Contains(p.Signature)) resolved.Add(p.Signature);
                 foreach (var song in music) {
-                    string signature=AssemblyFiles.HashText(raw+(template.PackStudioVersion>0 ? "|music:"+song.Hash : ""));
-                    if (previous.Contains(signature) || template.PackStudioVersion>0 && previous.Contains(legacy)) blocked.Add(signature);
+                    if (string.IsNullOrEmpty(song.Hash)) continue;
+                    string legacy=AssemblyFiles.HashText(raw+"|music:"+song.Hash);
+                    if (previous.Contains(legacy)) resolved.Add(legacy);
                 }
-                if (previous.Contains(legacy)) resolved.Add(legacy);
             }
             capacity.Variants=BigInteger.Max(0,capacity.Variants-blocked.Count);
             capacity.Exact=previous.All(resolved.Contains);

@@ -112,7 +112,7 @@ namespace VideoBatch {
                 string source=Path.Combine(t.Scenes[2].Folder,"CTA"); Directory.CreateDirectory(t.Resolve(source)); string pin=t.Resolve(Path.Combine(source,"fixed.png")); File.WriteAllText(pin,"constant-cta");
                 var fixedLayer=new AssemblyLayer {Source=source,Fixed=true,FixedAssetHash=AssemblyFiles.Hash(pin),Width=.65,Height=.42,X=.175,Y=.12}; t.Scenes[2].Layers.Insert(0,fixedLayer);
                 var h=new AssemblyHistory(); var capacity=new AssemblyInventory(t,videos,h).Calculate();
-                if (!capacity.Exact || capacity.Variants!=2134440 || capacity.BatchLimit!=2134440) throw new Exception("Expected P(7,3)*7*11*11*12 = 2,134,440, without a 1000-roll cap");
+                if (!capacity.Exact || capacity.Variants!=304920 || capacity.BatchLimit!=304920) throw new Exception("Expected P(7,3)*11*11*12 = 304,920 visual combinations (music excluded), without a 1000-roll cap");
                 t.Count=1001; t.Validate(); var plans=AssemblyPlanner.Create(t,videos,h,new Random(18),11).Plans;
                 if (plans.Count!=11 || plans.Select(p => p.Signature).Distinct().Count()!=11) throw new Exception("Expected eleven unique output combinations");
                 for (int scene=0; scene<3; scene++) {
@@ -167,9 +167,9 @@ namespace VideoBatch {
                 File.Copy(t.Resolve(Path.Combine(l.Source,"0.png")),t.Resolve(Path.Combine(l.Source,"copy.png")));
                 File.WriteAllText(t.Resolve("Музыка/a.wav"),"music-a"); File.WriteAllText(t.Resolve("Музыка/b.wav"),"music-b"); File.Copy(t.Resolve("Музыка/a.wav"),t.Resolve("Музыка/copy.wav"));
                 var h=new AssemblyHistory(); var capacity=new AssemblyInventory(t,v,h).Calculate();
-                if (!capacity.Exact || capacity.Variants!=24 || capacity.BatchLimit!=24) throw new Exception("Capacity should deduplicate content and count 3*2*2*2=24");
-                var batch=AssemblyPlanner.Create(t,v,h,new Random(5),24); if (batch.Plans.Count!=24 || batch.Plans.Select(p => p.Signature).Distinct().Count()!=24) throw new Exception("Exhaustive small-space allocation lost combinations");
-                h.Combinations.AddRange(batch.Plans.Take(23).Select(p => p.Signature));
+                if (!capacity.Exact || capacity.Variants!=12 || capacity.BatchLimit!=12) throw new Exception("Capacity should deduplicate content and count 3*2*2=12 (music excluded)");
+                var batch=AssemblyPlanner.Create(t,v,h,new Random(5),12); if (batch.Plans.Count!=12 || batch.Plans.Select(p => p.Signature).Distinct().Count()!=12) throw new Exception("Exhaustive small-space allocation lost combinations");
+                h.Combinations.AddRange(batch.Plans.Take(11).Select(p => p.Signature));
                 if (new AssemblyInventory(t,v,h).Calculate().Variants!=1 || AssemblyPlanner.Create(t,v,h,new Random(8),10).Plans.Count!=1) throw new Exception("Last remaining combination was lost");
                 l.Fixed=true; l.FixedAssetHash=AssemblyFiles.Hash(t.Resolve(Path.Combine(l.Source,"1.png")));
                 batch=AssemblyPlanner.Create(t,v,new AssemblyHistory(),new Random(1),10);
@@ -177,18 +177,18 @@ namespace VideoBatch {
                 l.FixedAssetHash="missing"; try { new AssemblyInventory(t,v,new AssemblyHistory()); throw new Exception("Missing fixed asset should fail"); } catch (Exception e) { if (!e.Message.Contains("Закреплённая")) throw; }
                 l.Fixed=false; l.FixedAssetHash=""; l.Unique=true;
                 t.Scenes[1].Layers[0].Source=l.Source; t.Scenes[1].Layers[0].Unique=true;
-                capacity=new AssemblyInventory(t,v,new AssemblyHistory()).Calculate(); if (capacity.BatchLimit!=1 || capacity.Variants!=24) throw new Exception("Shared unique pool needs two distinct pictures per roll");
+                capacity=new AssemblyInventory(t,v,new AssemblyHistory()).Calculate(); if (capacity.BatchLimit!=1 || capacity.Variants!=12) throw new Exception("Shared unique pool needs two distinct pictures per roll");
                 h=new AssemblyHistory(); h.UsedImages.Add(AssemblyFiles.Hash(t.Resolve(Path.Combine(l.Source,"0.png"))));
                 capacity=new AssemblyInventory(t,v,h).Calculate(); if (capacity.BatchLimit!=0 || capacity.Variants!=0) throw new Exception("Exhausted unique pack was treated as optional");
                 // Large common pools are counted without enumerating billions of combinations.
                 l.Unique=false; t.Scenes[1].Layers[0].Unique=false;
                 for (int i=3; i<10; i++) {string path=t.Resolve("Видео/"+i+".mp4"); File.WriteAllText(path,"video-"+i); v.Add(new AssemblyVideo {Path=path,Hash=AssemblyFiles.Hash(path),Duration=10});}
                 t.Scenes.Add(new AssemblyScene {Duration=5}); t.Scenes.Add(new AssemblyScene {Duration=5});
-                capacity=new AssemblyInventory(t,v,new AssemblyHistory()).Calculate(); if (!capacity.Exact || capacity.Variants!=40320) throw new Exception("Expected P(10,4)*2*2*2=40320");
+                capacity=new AssemblyInventory(t,v,new AssemblyHistory()).Calculate(); if (!capacity.Exact || capacity.Variants!=20160) throw new Exception("Expected P(10,4)*2*2=20160 (music excluded)");
                 batch=AssemblyPlanner.Create(t,v,new AssemblyHistory(),new Random(4),1);
                 string output=Path.Combine(temp,"known.mp4"); AssemblyFiles.Save(output+".assembly.xml",batch.Plans[0]); h=new AssemblyHistory(); h.Outputs.Add(output); h.Combinations.Add(batch.Plans[0].Signature);
-                capacity=new AssemblyInventory(t,v,h).Calculate(); if (!capacity.Exact || capacity.Variants!=40319) throw new Exception("Compatible history recipe was not subtracted");
-                h.Combinations.Add("unknown-old-history"); capacity=new AssemblyInventory(t,v,h).Calculate(); if (capacity.Exact || capacity.Variants!=40319) throw new Exception("Opaque old history must keep count bounded");
+                capacity=new AssemblyInventory(t,v,h).Calculate(); if (!capacity.Exact || capacity.Variants!=20159) throw new Exception("Compatible history recipe was not subtracted");
+                h.Combinations.Add("opaque-unresolved-" + Guid.NewGuid().ToString("N")); capacity=new AssemblyInventory(t,v,h).Calculate(); if (capacity.Variants!=20159) throw new Exception("Opaque old history must keep count bounded");
                 return true;
             } finally { if (Directory.Exists(temp)) Directory.Delete(temp,true); }
         }

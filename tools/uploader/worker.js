@@ -1680,18 +1680,42 @@ function sendMeshChannel(target, channelUrl) {
   }
 }
 
+async function revealThumbnailFileInput(page) {
+  await page.evaluate(() => {
+    const host = document.querySelector("ytcp-video-thumbnail-editor, ytcp-thumbnails-compact-editor, #thumbnail-editor");
+    if (host && host.scrollIntoView) host.scrollIntoView({ block: "center", inline: "nearest" });
+  }).catch(() => {});
+  await page.waitForTimeout(600);
+  const opened = await page.evaluate(() => {
+    const labels = /upload thumbnail|upload file|загрузить значок|загрузить файл|загрузить/i;
+    const nodes = Array.from(document.querySelectorAll("button, ytcp-button, tp-yt-paper-button, [role='button']"));
+    for (const node of nodes) {
+      const text = `${node.getAttribute("aria-label") || ""} ${node.innerText || ""}`.trim();
+      if (!text || text.length > 80) continue;
+      if (labels.test(text)) { node.click(); return true; }
+    }
+    return false;
+  }).catch(() => false);
+  if (opened) await page.waitForTimeout(900);
+}
+
 async function setThumbnail(page, path) {
   if (!path) return;
-  const inputs = page.locator("input[type=file]");
-  const count = await inputs.count();
-  for (let i = 0; i < count; i++) {
-    const accept = (await inputs.nth(i).getAttribute("accept").catch(() => "")) || "";
-    if (/image|jpeg|png/i.test(accept)) {
-      await setInputFilesRobust(page, inputs.nth(i), path, "youtube");
-      return;
+  if (!fs.existsSync(path)) throw new Error("Файл превью не найден: " + path);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const inputs = page.locator("input[type=file]");
+    const count = await inputs.count();
+    for (let i = 0; i < count; i++) {
+      const accept = (await inputs.nth(i).getAttribute("accept").catch(() => "")) || "";
+      if (/image|jpeg|png|webp/i.test(accept)) {
+        await setInputFilesRobust(page, inputs.nth(i), path, "youtube");
+        await page.waitForTimeout(1500);
+        return;
+      }
     }
+    await revealThumbnailFileInput(page);
   }
-  throw new Error("YouTube не показал поле превью. Проверьте, доступно ли пользовательское превью на канале.");
+  throw new Error("YouTube не показал поле превью. Проверьте верификацию канала и право на пользовательские превью.");
 }
 
 async function progressText(page) {

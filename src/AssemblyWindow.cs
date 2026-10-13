@@ -33,8 +33,10 @@ namespace VideoBatch {
         ProgressBar progress;
         readonly List<Button> sceneCards = new List<Button>();
         readonly Dictionary<AssemblyLayer, string> previewImages = new Dictionary<AssemblyLayer, string>();
-        public AssemblyWindow(bool throwErrors = false) {
+        public bool Embedded { get; private set; }
+        public AssemblyWindow(bool throwErrors = false, bool embedded = false) {
             this.throwErrors = throwErrors;
+            Embedded = embedded;
             templatePath = Path.Combine(Store.Root, "assembly-template.xml"); historyFolder = Path.Combine(Store.Root, "assembly-history");
             previewFolder = Path.Combine(Path.GetTempPath(), "videobatch-preview-" + Guid.NewGuid().ToString("N"));
             string note = null;
@@ -52,9 +54,15 @@ namespace VideoBatch {
             marketView = AssemblyMarketProfiles.NormMarket(assemblyPrefs.AssemblyMarketView);
             AssemblyMarketProfiles.EnsureSeeded(template);
             AssemblyMarketProfiles.Apply(template, marketView);
-            Text = "Сборка роликов — моя студия"; ClientSize = new Size(1180, 790); MinimumSize = new Size(980, 660);
-            StartPosition = FormStartPosition.CenterParent; Font = Theme.FontBody; BackColor = Theme.Background; ForeColor = Theme.TextPrimary;
-            var area = Screen.FromControl(this).WorkingArea; ClientSize = new Size(Math.Min(ClientSize.Width, area.Width - 24), Math.Min(ClientSize.Height, area.Height - 60));
+            Text = "Сборка роликов — моя студия"; Font = Theme.FontBody; BackColor = Theme.Background; ForeColor = Theme.TextPrimary;
+            if (embedded) {
+                TopLevel = false; FormBorderStyle = FormBorderStyle.None; Dock = DockStyle.Fill; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
+            } else {
+                ClientSize = new Size(1180, 790); MinimumSize = new Size(980, 660);
+                StartPosition = FormStartPosition.CenterParent;
+                var area = Screen.FromControl(this).WorkingArea;
+                ClientSize = new Size(Math.Min(ClientSize.Width, area.Width - 24), Math.Min(ClientSize.Height, area.Height - 60));
+            }
             var bindings = new Panel { Visible = false }; Controls.Add(bindings);
             duration = Value(.5m, 60, 1); width = Value(2, 100, 1); count = Value(1, int.MaxValue, 0); volume = Value(0, 200, 0);
             bindings.Controls.AddRange(new Control[] { duration, width, count, volume }); count.Value = template.Count; volume.Value = (decimal)(template.MusicVolume * 100);
@@ -66,7 +74,14 @@ namespace VideoBatch {
             saveTimer.Tick += (s,e) => { saveTimer.Stop(); Safe(Save); };
             Shown += (s,e) => { RequestBackground(); RequestCapacity(); };
             Activated += (s,e) => { RefreshInfo(); RefreshCanvas(); RequestCapacity(); };
-            FormClosing += (s,e) => { if (cancellation != null) { e.Cancel = true; closeAfter = true; cancellation.Cancel(); } else { saveTimer.Stop(); Safe(Save); previewCancellation?.Cancel(); capacityCancellation?.Cancel(); } };
+            FormClosing += (s,e) => {
+                if (Embedded) {
+                    if (e.CloseReason == CloseReason.UserClosing && cancellation != null) { e.Cancel = true; closeAfter = true; cancellation.Cancel(); }
+                    else if (e.CloseReason == CloseReason.UserClosing) e.Cancel = true;
+                    return;
+                }
+                if (cancellation != null) { e.Cancel = true; closeAfter = true; cancellation.Cancel(); } else { saveTimer.Stop(); Safe(Save); previewCancellation?.Cancel(); capacityCancellation?.Cancel(); }
+            };
         }
         static NumericUpDown Value(decimal min, decimal max, int decimals) { return new NumericUpDown { Minimum = min, Maximum = max, DecimalPlaces = decimals, Increment = decimals == 0 ? 1 : .1m }; }
         static Button Button(string text, Action action = null, bool accent = false) { var b = new AssemblyStudioButton(text, action, accent); if (text.Length == 1) { b.AutoSize = false; b.MinimumSize = new Size(36,34); b.Size = new Size(36,34); b.Padding = Padding.Empty; } return b; }
