@@ -20,7 +20,7 @@ namespace VideoBatch {
             } catch (Exception ex) { liveButton.Enabled = false; AppendLog(LiveDiagnostics.Append("ЭФИР · инициализация: "+ex.Message)); }
             livePulse = new System.Windows.Forms.Timer { Interval = 100 };
             livePulse.Tick += (s, e) => { pulseStep += 0.25f; if (live != null && live.HasBusy) grid.InvalidateColumn(grid.Columns["account"].Index); };
-            livePulse.Start(); UpdateLiveRows();
+            livePulse.Start(); live?.ReconcileViews(); UpdateLiveRows();
         }
         void PaintLiveIndicator(YouTubeChannel channel, Graphics graphics, ref Rectangle rect) {
             var state = live?.View(channel.ChannelId);
@@ -31,11 +31,11 @@ namespace VideoBatch {
             rect.X += 18; rect.Width -= 18;
         }
         void ValidateLiveAccountRemoval(IEnumerable<YouTubeChannel> channels) {
-            foreach (var channel in channels) if (channel != null && live?.View(channel.ChannelId)?.Busy == true)
+            foreach (var channel in channels) if (channel != null && live?.CanStop(channel.ChannelId) == true)
                 throw new InvalidOperationException("Сначала завершите эфир канала «" + channel.Name + "».");
         }
         void AddLiveContextMenu(ContextMenuStrip menu, YouTubeChannel channel) {
-            menu.Items.Add("Завершить эфир этого канала", null, async (s, e) => await StopLive(channel.ChannelId)).Enabled = live?.View(channel.ChannelId)?.Busy == true;
+            menu.Items.Add("Завершить эфир этого канала", null, async (s, e) => await StopLive(channel.ChannelId)).Enabled = live?.CanStop(channel.ChannelId) == true;
             menu.Items.Add("Завершить все эфиры", null, async (s, e) => await StopLive(null)).Enabled = live?.HasBusy == true;
             menu.Items.Add("Открыть лог эфиров",null,(s,e)=>OpenLiveLog());
             menu.Items.Add("Настроить эфир / проверить сессию", null, (s, e) => ConfigureLive(channel));
@@ -52,7 +52,7 @@ namespace VideoBatch {
                 return MessageBox.Show(this, "Передача видео остановлена, но YouTube не подтвердил завершение всех эфиров.\n" + e.Message + "\n\nЗакрыть приложение? Данные для повторного завершения сохранены.", "Прямые эфиры", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
             }
         }
-        async Task LiveButtonClick() { var channel=SelectedChannel(); if(channel!=null && live?.View(channel.ChannelId)?.Busy==true) await StopLive(channel.ChannelId); else StartLive(); }
+        async Task LiveButtonClick() { var channel=SelectedChannel(); if(channel!=null && live?.CanStop(channel.ChannelId)==true) await StopLive(channel.ChannelId); else StartLive(); }
         void OpenLiveLog() {try{if(!File.Exists(LiveDiagnostics.LogPath))LiveDiagnostics.Append("ЭФИР · журнал открыт");Ui.Open(LiveDiagnostics.LogPath);}catch(Exception e){MessageBox.Show(this,e.Message,"Лог эфиров");}}
         void StartLive() {
             if(live==null){LiveLog(LiveDiagnostics.Append("ЭФИР · запуск недоступен: менеджер не создан"));return;}
@@ -84,6 +84,7 @@ namespace VideoBatch {
         void LiveChanged() {
             if (IsDisposed || !IsHandleCreated) return;
             if (InvokeRequired) { BeginInvoke(new Action(LiveChanged)); return; }
+            live?.ReconcileViews();
             UpdateLiveRows();
         }
         void LiveLog(string line) {
@@ -95,7 +96,10 @@ namespace VideoBatch {
         void UpdateLiveRows() {
             if (grid == null || liveButton == null) return;
             var selected=SelectedChannel();
-            liveButton.Text = selected!=null && live?.View(selected.ChannelId)?.Busy==true ? "Завершить эфир" : "Запустить эфир";
+            bool stopMode = selected!=null && live?.CanStop(selected.ChannelId)==true;
+            liveButton.Text = stopMode ? "Завершить эфир" : "Запустить эфир";
+            liveButton.BackColor = stopMode ? Theme.Warning : Theme.Accent;
+            liveButton.FlatAppearance.MouseOverBackColor = stopMode ? Theme.Warning : Theme.ColorFromHex("#0E8F6F");
             foreach (DataGridViewRow row in grid.Rows) if (row.Tag is YouTubeChannel ch) {
                 var state = live?.View(ch.ChannelId);
                 row.Cells["live"].Value = state?.Label ?? "—";

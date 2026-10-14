@@ -27,7 +27,16 @@ namespace VideoBatch {
         public LiveStore Store { get; }
         public event Action Changed;
         public event Action<string> LogLine;
-        public bool HasBusy { get { lock (gate) return sessions.Count > 0 || views.Values.Any(v => v.Busy); } }
+        public bool HasBusy {
+            get { lock (gate) return sessions.Count > 0 || Store.PendingSnapshot().Length > 0; }
+        }
+        public bool CanStop(string localId) {
+            if (string.IsNullOrWhiteSpace(localId)) return false;
+            lock (gate) {
+                if (sessions.ContainsKey(localId)) return true;
+                return Store.PendingSnapshot().Any(e => e.LocalId == localId);
+            }
+        }
         public LiveView View(string id) { lock (gate) { LiveView value; return views.TryGetValue(id ?? "", out value) ? value : null; } }
         public static int PollSeconds(int channels) => Math.Max(60, channels * 60);
         int LivePollSeconds() { lock (gate) return PollSeconds(sessions.Count); }
@@ -39,6 +48,21 @@ namespace VideoBatch {
                 LocalId = entry.LocalId, Name = store.Account(entry.LocalId)?.Name ?? entry.LocalId, Phase = LivePhase.NeedsCleanup,
                 Url = string.IsNullOrEmpty(entry.BroadcastId) ? "" : "https://www.youtube.com/watch?v=" + entry.BroadcastId,
                 Detail = "Прошлый запуск не завершён подтверждённо. Нажмите «Завершить эфир»." };
+            ReconcileViews();
+        }
+        public void ReconcileViews() {
+            lock (gate) {
+                var pendingIds = new HashSet<string>(Store.PendingSnapshot().Select(e => e.LocalId));
+                bool changed = false;
+                foreach (string key in views.Keys.ToList()) {
+                    if (sessions.ContainsKey(key) || pendingIds.Contains(key)) continue;
+                    LiveView old = views[key];
+                    if (old.Phase == LivePhase.Finished || old.Phase == LivePhase.Error) continue;
+                    views[key] = new LiveView { LocalId = old.LocalId, Name = old.Name, Phase = LivePhase.Finished, Url = old.Url ?? "", Detail = "" };
+                    changed = true;
+                }
+                if (changed) Changed?.Invoke();
+            }
         }
         void State(Session s, LivePhase phase, string detail = "") {
             lock (gate) views[s.Channel.ChannelId] = new LiveView { LocalId = s.Channel.ChannelId, Name = s.Channel.Name,
@@ -71,7 +95,7 @@ namespace VideoBatch {
                     if (account.Transport == "studio" && Store.PendingSnapshot().Any(e => e.Transport == "studio" && e.ProfileId == account.ProfileId && e.LocalPort == account.LocalPort))
                         throw new InvalidOperationException("Dolphin-профиль требует завершения прежнего эфира: " + channel.Name);
                     if (!remoteIds.Add(account.RemoteId)) throw new InvalidOperationException("Две строки подключены к одному YouTube-каналу. Выберите только одну.");
-                    if (sessions.ContainsKey(channel.ChannelId) || (views.ContainsKey(channel.ChannelId) && views[channel.ChannelId].Busy) || sessions.Values.Any(s => s.Account.RemoteId == account.RemoteId)
+                    if (sessions.ContainsKey(channel.ChannelId) || CanStop(channel.ChannelId) || sessions.Values.Any(s => s.Account.RemoteId == account.RemoteId)
                         || Store.PendingSnapshot().Any(e => e.RemoteId == account.RemoteId)) throw new InvalidOperationException("Эфир уже запускается, работает или требует завершения: " + channel.Name);
                     batch.Add(new Session { Channel = channel, Account = account, Journal = new LiveJournalEntry {
                         LocalId = channel.ChannelId, RemoteId = account.RemoteId, Transport = account.Transport, ProfileId = account.ProfileId, LocalPort = account.LocalPort, OperationId = Guid.NewGuid().ToString("N") } });

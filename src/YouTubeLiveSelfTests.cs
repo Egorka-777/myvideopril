@@ -155,6 +155,11 @@ namespace VideoBatch {
                 await manager.Stop("a").ConfigureAwait(false);
                 Check(manager.View("a").Phase == LivePhase.Finished && manager.View("b").Phase == LivePhase.Live, "point stop affected another channel");
                 await manager.StopAll().ConfigureAwait(false); Check(!manager.HasBusy && store.PendingSnapshot().Length == 0, "stop all / journal");
+                var views = (System.Collections.Generic.Dictionary<string, LiveView>)typeof(YouTubeLiveManager).GetField("views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(manager);
+                views["orphan"] = new LiveView { LocalId = "orphan", Name = "Orphan", Phase = LivePhase.Live };
+                Check(!manager.HasBusy && !manager.CanStop("orphan"), "stale live view must not block UI");
+                manager.ReconcileViews();
+                Check(manager.View("orphan").Phase == LivePhase.Finished, "stale live view reconciled");
                 Console.WriteLine("LIVE TEST: point stop and stop all passed");
                 apis["a"].FailCreate = true; apis["a"].FailComplete = true;
                 manager.Start(new[] { ca }, options);
