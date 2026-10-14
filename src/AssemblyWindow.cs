@@ -53,6 +53,7 @@ namespace VideoBatch {
             assemblyPrefs = Store.Load();
             marketView = AssemblyMarketProfiles.NormMarket(assemblyPrefs.AssemblyMarketView);
             AssemblyMarketProfiles.EnsureSeeded(template);
+            AssemblyMarketProfiles.EnsureWorkspaceMigrated(template, templatePath);
             AssemblyMarketProfiles.Apply(template, marketView);
             Text = "Сборка роликов — моя студия"; Font = Theme.FontBody; BackColor = Theme.Background; ForeColor = Theme.TextPrimary;
             if (embedded) {
@@ -74,6 +75,7 @@ namespace VideoBatch {
             saveTimer.Tick += (s,e) => { saveTimer.Stop(); Safe(Save); };
             Shown += (s,e) => { RequestBackground(); RequestCapacity(); WarmMaterialsSilent(); };
             Activated += (s,e) => { RefreshInfo(); RefreshCanvas(); RequestCapacity(); };
+            VisibleChanged += (s,e) => { if (!Visible && !IsDisposed && !loading) Safe(() => { saveTimer.Stop(); Save(); }); };
             FormClosing += (s,e) => {
                 if (Embedded) {
                     if (e.CloseReason == CloseReason.UserClosing && cancellation != null) { e.Cancel = true; closeAfter = true; cancellation.Cancel(); }
@@ -101,7 +103,7 @@ namespace VideoBatch {
             headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize)); headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var titleStack = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0, 0, 8, 0) };
             titleStack.Controls.Add(new Label { Text = "Моя студия", Font = Theme.FontPageTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 0, 0, 2) });
-            titleStack.Controls.Add(new Label { Text = "RU и EN — отдельные связки, заголовки и папка готовых роликов.", AutoSize = true, ForeColor = Theme.TextSecondary, MaximumSize = new Size(640, 0) });
+            titleStack.Controls.Add(new Label { Text = "RU и EN — отдельные сцены, видео, музыка, заголовки, связки и папка результатов.", AutoSize = true, ForeColor = Theme.TextSecondary, MaximumSize = new Size(640, 0) });
             headerGrid.Controls.Add(titleStack, 0, 0);
             var settings = Button("⋯", SettingsMenu); settings.Name = "AssemblySettings"; settings.AutoSize = false; settings.Size = new Size(46, 36); settings.MinimumSize = settings.Size;
             headerGrid.Controls.Add(settings, 1, 0);
@@ -275,7 +277,7 @@ namespace VideoBatch {
                 AssemblyMarketProfiles.Apply(template, marketView);
                 RefreshMarketToggles();
                 BindTemplateValues(); RefreshInfo(); Changed(true); Save();
-                status.Text = "Сборка · " + scope + ": свои связки, заголовки и папка результатов.";
+                status.Text = "Сборка · " + scope + ": свои материалы, связки, заголовки и папка результатов.";
             });
         }
         void RefreshMarketToggles() {

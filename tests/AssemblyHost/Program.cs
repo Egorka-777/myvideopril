@@ -14,7 +14,7 @@ class Program {
     }
     static int Main(string[] args) {
         try {
-            if (args[0] == "self-test") { bool ok = AssemblyRegressionTests.RunPlannerTests() && AssemblyRegressionTests.RunCapacityTests() && AssemblyRegressionTests.RunObjectsTests() && AssemblyRegressionTests.RunRoutingTests() && AssemblyHistoryTests.RunSelfTests(); Console.WriteLine(ok); return ok ? 0 : 1; }
+            if (args[0] == "self-test") { bool ok = AssemblyRegressionTests.RunPlannerTests() && AssemblyRegressionTests.RunCapacityTests() && AssemblyRegressionTests.RunObjectsTests() && AssemblyRegressionTests.RunRoutingTests() && AssemblyHistoryTests.RunSelfTests() && AssemblyMarketTests.RunSelfTests(); Console.WriteLine(ok); return ok ? 0 : 1; }
             if (args[0] == "warm-sdr") { VideoSdr.WarmFolder(args[1], args[2], args[3], CancellationToken.None).GetAwaiter().GetResult(); Console.WriteLine("OK"); return 0; }
             var t = AssemblyFiles.Load<AssemblyTemplate>(args[1]);
             if (args[0]=="capacity") {

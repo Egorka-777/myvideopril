@@ -36,6 +36,7 @@ namespace VideoBatch {
         public bool RandomVideoStart = true;
         public string HistoryScope = AssemblyHistoryScope.Shared;
         public bool AssemblyMarketsSeeded;
+        public int MarketWorkspaceVersion;
         public AssemblyMarketSettings MarketRu = new AssemblyMarketSettings(), MarketEn = new AssemblyMarketSettings();
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
