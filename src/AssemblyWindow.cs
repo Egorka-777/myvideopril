@@ -96,7 +96,7 @@ namespace VideoBatch {
         ToolStripItem MenuAction(ContextMenuStrip menu,string caption,Action action) { return menu.Items.Add(caption,null,(sender,args) => {menu.Close(); Later(action);}); }
         void BuildStudio() {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18,12,18,12), RowCount = 3, ColumnCount = 1, BackColor = Theme.Background };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96)); root.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90)); Controls.Add(root); root.BringToFront();
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 132)); root.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90)); Controls.Add(root); root.BringToFront();
             header = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(header,0,0);
             var headerGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
             headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));

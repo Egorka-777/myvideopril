@@ -23,7 +23,7 @@ namespace VideoBatch {
         public BigInteger Variants;
         public bool Exact;
         public int BatchLimit;
-        public string Caption { get { return (Exact ? "Осталось " : "До ") + Variants.ToString("N0") + " связок · без повторов · за раз до " + BatchLimit; } }
+        public string Caption { get { return (Exact ? "Осталось " : "До ") + Variants.ToString("N0") + " связок" + (Variants!=BatchLimit ? " · сейчас до "+BatchLimit.ToString("N0")+" роликов" : ""); } }
     }
     // Content identity matters: copies and renamed files do not create new combinations.
     public sealed class AssemblyInventory {
