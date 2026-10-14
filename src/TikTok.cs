@@ -626,8 +626,10 @@ namespace VideoBatch {
                 var packs=new List<(DataGridViewRow row,TikTokAccount acc,List<TikTokItem> items)>();
                 foreach(var row in rows){
                     var a=(TikTokAccount)row.Tag;SyncPrimary(a);
-                    if((a.Items??new List<TikTokItem>()).Any(it=>it.HttpNeedsReview))
-                        throw new Exception(a.Name+": предыдущая попытка требует сверки в Studio. Повтор заблокирован во избежание дублей.");
+                    if((a.Items??new List<TikTokItem>()).Any(it=>it.HttpNeedsReview)){
+                        Write(a.Name+": пропуск — нужна сверка в Studio (Ещё → «Сверить загрузку» или ПКМ по строке).");
+                        continue;
+                    }
                     var items=(a.Items??new List<TikTokItem>()).Where(it=>!it.Published&&!it.HttpSubmitted&&!string.IsNullOrWhiteSpace(it.Video)&&!string.IsNullOrWhiteSpace(it.Caption)).ToList();
                     if(items.Count==0){Write(a.Name+": нет ожидающих публикации видео.");continue;}
                     foreach(var it in items){

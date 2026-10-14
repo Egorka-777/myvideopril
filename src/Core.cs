@@ -99,6 +99,8 @@ namespace VideoBatch {
         public List<string> TitleBankShortsRu=new List<string>(), TitleBankShortsEn=new List<string>();
         public int TitleCursorLongRu, TitleCursorLongEn, TitleCursorShortsRu, TitleCursorShortsEn;
         public bool TitleBanksSeeded;
+        /// <summary>Последняя применённая ревизия youtube-title-banks.json из комплекта.</summary>
+        public int TitleBanksBundleRevision;
         public List<string> YouTubeDescriptionBankRu=new List<string>();
         public int YouTubeDescriptionCursorRu;
         // TikTok: те же Profile ID Dolphin, отдельный список аккаунтов и база подписей.
@@ -368,6 +370,13 @@ namespace VideoBatch {
             if(!p.TitleBanksSeeded||(p.TitleBankLongRu.Count==0&&p.TitleBankLongEn.Count==0&&p.TitleBankShortsRu.Count==0&&p.TitleBankShortsEn.Count==0)){
                 if(TryLoadBundledYouTubeTitleBanks(p))p.TitleBanksSeeded=true;
             }
+            int bundledRevision=GetBundledYouTubeTitleBanksRevision();
+            if(bundledRevision>0&&bundledRevision>p.TitleBanksBundleRevision){
+                if(TryLoadBundledYouTubeTitleBanks(p,overwrite:true)){
+                    p.TitleBanksBundleRevision=bundledRevision;
+                    p.TitleBanksSeeded=true;
+                }
+            }
             if(p.TikTokAccounts==null)p.TikTokAccounts=new List<TikTokAccount>();
             if(string.IsNullOrWhiteSpace(p.TikTokMarketView)||(p.TikTokMarketView!="RU"&&p.TikTokMarketView!="EN"))p.TikTokMarketView="RU";
             if(p.TikTokCaptionBankRu==null)p.TikTokCaptionBankRu=new List<string>();
@@ -503,11 +512,23 @@ namespace VideoBatch {
         public static string BundledYouTubeTitleBanksPath(){
             return Path.Combine(AppPaths.UploaderRoot,"youtube-title-banks.json");
         }
+        public const int CurrentYouTubeTitleBanksBundleRevision=3;
         [DataContract] class YouTubeTitleBanksDto {
+            [DataMember] public int BundleRevision;
             [DataMember] public string[] TitleBankLongRu;
             [DataMember] public string[] TitleBankLongEn;
             [DataMember] public string[] TitleBankShortsRu;
             [DataMember] public string[] TitleBankShortsEn;
+        }
+        public static int GetBundledYouTubeTitleBanksRevision(){
+            try{
+                string path=BundledYouTubeTitleBanksPath();
+                if(!File.Exists(path))return 0;
+                YouTubeTitleBanksDto dto;
+                using(var f=File.OpenRead(path))dto=(YouTubeTitleBanksDto)new DataContractJsonSerializer(typeof(YouTubeTitleBanksDto)).ReadObject(f);
+                if(dto==null)return 0;
+                return dto.BundleRevision>0?dto.BundleRevision:CurrentYouTubeTitleBanksBundleRevision;
+            }catch{return 0;}
         }
         static List<string> CleanTitleList(IEnumerable<string> src){
             return (src??Enumerable.Empty<string>()).Select(x=>(x??"").Trim()).Where(x=>x.Length>0).Select(x=>x.Length>100?x.Substring(0,100).Trim():x).ToList();
