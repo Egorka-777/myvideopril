@@ -167,7 +167,7 @@ namespace VideoBatch {
         void BuildScenes() {
             foreach (Control c in sceneStack.Controls.Cast<Control>().ToArray()) c.Dispose(); sceneStack.Controls.Clear(); sceneCards.Clear();
             for (int i = 0; i <= template.Scenes.Count; i++) {
-                int at = i; var add = new AssemblyInsertButton(() => InsertScene(at)); add.Name = "InsertScene" + i; add.Height = 20; add.Margin = new Padding(0,1,0,1); add.Width = Math.Max(220,sceneStack.Width - 18); sceneStack.Controls.Add(add);
+                int at = i; var add = new AssemblyInsertButton(() => InsertScene(at)); add.Name = "InsertScene" + i; add.Height = 20; add.Margin = Padding.Empty; add.Width = Math.Max(220,sceneStack.Width - 18); sceneStack.Controls.Add(add);
                 if (i == template.Scenes.Count) break;
                 int index = i; var card = new AssemblySceneButton(index+1,() => SelectScene(index)); card.Name = "SceneCard" + i; card.Dock = DockStyle.Fill;
                 var row = new AssemblySceneRow { Width = Math.Max(220,sceneStack.Width - 18), Height = 46, BackColor=Theme.Card, Margin = Padding.Empty };
