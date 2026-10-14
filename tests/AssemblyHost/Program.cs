@@ -14,7 +14,13 @@ class Program {
     }
     static int Main(string[] args) {
         try {
-            if (args[0] == "self-test") { bool ok = AssemblyRegressionTests.RunPlannerTests() && AssemblyRegressionTests.RunCapacityTests() && AssemblyRegressionTests.RunObjectsTests() && AssemblyRegressionTests.RunRoutingTests() && AssemblyHistoryTests.RunSelfTests() && AssemblyMarketTests.RunSelfTests(); Console.WriteLine(ok); return ok ? 0 : 1; }
+            if (args[0] == "self-test") {
+                foreach(string method in new[]{"RunPlannerTests","RunPackTests","RunCapacityTests","RunObjectsTests","RunRoutingTests"}) {
+                    bool ok=(bool)typeof(AssemblyRegressionTests).GetMethod(method).Invoke(null,null);Console.WriteLine(method+": "+ok);if(!ok)return 1;
+                }
+                if(!AssemblyHistoryTests.RunSelfTests()||!AssemblyMarketTests.RunSelfTests())return 1;
+                Console.WriteLine("PASS: planner, packs, capacity, objects, routing, history, markets");return 0;
+            }
             if (args[0] == "warm-sdr") { VideoSdr.WarmFolder(args[1], args[2], args[3], CancellationToken.None).GetAwaiter().GetResult(); Console.WriteLine("OK"); return 0; }
             var t = AssemblyFiles.Load<AssemblyTemplate>(args[1]);
             if (args[0]=="capacity") {
@@ -23,6 +29,15 @@ class Program {
                 Console.WriteLine(JsonSerializer.Serialize(new {Remaining=c.Variants.ToString(),c.Exact,c.BatchLimit,Used=h.Combinations.Count})); return 0;
             }
             Action<AssemblyTemplate, AssemblyLayerPlan, string> raster = args.Length > 5 && args[5] == "portable" ? CopyRaster : AssemblyRaster.Save;
+            if (args[0]=="timing") {
+                var videos=AssemblyEngine.ReadVideos(t,args[2],args[3],CancellationToken.None).GetAwaiter().GetResult();
+                var plan=AssemblyPlanner.Create(t,videos,new AssemblyHistory(),new Random(7),1).Plans.Single();
+                Directory.CreateDirectory(args[4]);
+                string[] outputs={Path.Combine(args[4],"one-pass.mp4"),Path.Combine(args[4],"legacy.mp4")};
+                AssemblyEngine.Render(t,plan,args[2],args[3],outputs[0],Path.Combine(args[4],"work1"),raster,CancellationToken.None,null,new AssemblyRenderContext()).GetAwaiter().GetResult();
+                AssemblyEngine.RenderLegacy(t,plan,args[2],args[3],outputs[1],Path.Combine(args[4],"work2"),raster,CancellationToken.None,null).GetAwaiter().GetResult();
+                Console.WriteLine(JsonSerializer.Serialize(new {Outputs=outputs,Starts=plan.Scenes.Select(s=>s.VideoStart),Effects=plan.Scenes.Select(s=>s.TransitionOut)}));return 0;
+            }
             if (args[0] == "benchmark" || args[0] == "fallback") {
                 t.RenderMode = "cpu"; t.Validate(); Directory.CreateDirectory(args[4]);
                 var videos = AssemblyEngine.ReadVideos(t, args[2], args[3], CancellationToken.None).GetAwaiter().GetResult();

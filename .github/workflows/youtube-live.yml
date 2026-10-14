@@ -4,7 +4,7 @@ concurrency:
   cancel-in-progress: true
 on:
   push:
-    branches: [feature/youtube-live-streams-20261005, feature/youtube-live-dolphin-session-20261006, feat/live-tiktok-thumbnails-20261013, feat/live-diagnostics-tiktok-pacing-20261014]
+    branches: [feature/youtube-live-streams-20261005, feature/youtube-live-dolphin-session-20261006, feat/live-tiktok-thumbnails-20261013, feat/live-diagnostics-tiktok-pacing-20261014, feat/studio-media-thumbnail-fixes-20261014]
   pull_request:
     paths: ['src/YouTubeLive*.cs', 'src/YouTubeWorkspacePanel*.cs', 'src/AppShell.cs', 'VideoBatch.csproj', 'tools/uploader/*live*', 'tools/uploader/dolphin-session.js', 'tests/*live*', 'tests/browser/*live*', '.github/workflows/youtube-live.yml']
   workflow_dispatch:
@@ -72,10 +72,11 @@ jobs:
       - name: Upload desktop and instructions
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-live-diagnostics-tiktok-pacing-20261014
+          name: desktop-studio-media-thumbnail-fixes-20261014
           path: |
             bin/Release/net48/VideoBatch.exe
             bin/Release/net48/VideoBatch.exe.config
+            docs/AGENT_STUDIO_MEDIA_FIX_20261014_RU.md
             docs/AGENT_LIVE_FIX_20261014_RU.md
             docs/AGENT_PUBLISHING_20261013_RU.md
             docs/AGENT_YOUTUBE_LIVE_20261005_RU.md

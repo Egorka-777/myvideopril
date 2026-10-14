@@ -19,7 +19,7 @@ namespace VideoBatch {
             return value.Replace("\r"," ").Replace("\n"," ").Trim();
         }
         public static string Append(string text) {
-            string safe=Sanitize(text);
+            string safe=Sanitize(text); AppDiagnostics.Write("YouTube","","","live",safe);
             lock(gate)try{Directory.CreateDirectory(Store.Root);File.AppendAllText(LogPath,DateTime.Now.ToString("o")+" "+safe+Environment.NewLine,Encoding.UTF8);}
             catch(Exception e) when(e is IOException || e is UnauthorizedAccessException){safe+=" · Лог не записан: "+e.Message;}
             return safe;

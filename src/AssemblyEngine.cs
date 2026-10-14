@@ -44,19 +44,19 @@ namespace VideoBatch {
         }
         public static List<string> SceneArguments(AssemblyTemplate t, AssemblyScenePlan s, string output) {
             var args = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-filter_complex_threads", "1" };
-            if (t.LoopShortVideos && s.Video.Duration + .001 < s.RenderDuration) args.AddRange(new[] { "-stream_loop", "-1" });
-            args.AddRange(new[] { "-ss", Core.N(s.VideoStart), "-t", Core.N(s.RenderDuration), "-i", s.Video.Path });
+            if (AssemblyTimeline.LoopInput(t,s)) args.AddRange(new[] { "-stream_loop", "-1" });
+            args.AddRange(new[] { "-ss", Core.N(AssemblyTimeline.SourceStart(t,s)), "-t", Core.N(AssemblyTimeline.ContentDuration(t,s)), "-i", s.Video.Path });
             foreach (var layer in s.Layers) args.AddRange(new[] { "-loop", "1", "-framerate", t.Fps.ToString(), "-i", layer.Raster });
             var graph = new List<string>();
-            graph.Add("[0:v:0]setpts=PTS-STARTPTS,scale=" + t.Width + ":" + t.Height + ":force_original_aspect_ratio=increase,crop=" + t.Width + ":" + t.Height + ",setsar=1,fps=" + t.Fps + ",format=yuv420p,trim=duration=" + Core.N(s.RenderDuration) + "[base]");
+            graph.Add("[0:v:0]setpts=PTS-STARTPTS,scale=" + t.Width + ":" + t.Height + ":force_original_aspect_ratio=increase,crop=" + t.Width + ":" + t.Height + ",setsar=1,fps=" + t.Fps + ",format=yuv420p,"+(t.SceneTimingVersion>0?"tpad=stop_mode=clone:stop_duration="+Core.N(s.Scene.Duration)+",":"")+"trim=duration=" + Core.N(AssemblyTimeline.ContentDuration(t,s)) + "[base]");
             string current = "base";
             for (int i = 0; i < s.Layers.Count; i++) {
                 var layer = s.Layers[i]; string next = "v" + i;
-                double end = layer.Layer.End == 0 || Math.Abs(layer.Layer.End-s.Scene.Duration)<.001 ? s.RenderDuration : layer.Layer.End;
+                double end = layer.Layer.End == 0 || Math.Abs(layer.Layer.End-s.Scene.Duration)<.001 ? AssemblyTimeline.ContentDuration(t,s) : layer.Layer.End;
                 graph.Add("[" + current + "][" + (i + 1) + ":v:0]overlay=0:0:format=auto:enable='between(t," + Core.N(layer.Layer.Start) + "," + Core.N(end) + ")'[" + next + "]");
                 current = next;
             }
-            graph.Add("[" + current + "]format=yuv420p[out]");
+            graph.Add("[" + current + "]"+AssemblyTimeline.Padding(t,s)+"format=yuv420p[out]");
             args.AddRange(new[] { "-filter_complex", string.Join(";", graph), "-map", "[out]", "-an", "-t", Core.N(s.RenderDuration), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output });
             return args;
         }
@@ -73,8 +73,8 @@ namespace VideoBatch {
             } else {
                 current = "s0"; double offset = 0;
                 for (int i = 1; i < scenes.Count; i++) {
-                    offset += p.Scenes[i - 1].Scene.Duration; string next = "joined" + i;
-                    graph.Add("[" + current + "][s" + i + "]xfade=" + TransitionFilter(t.Transition) + ":duration=" + Core.N(t.TransitionDuration) + ":offset=" + Core.N(offset) + "[" + next + "]"); current = next;
+                    offset += p.Scenes[i - 1].Scene.Duration+(t.SceneTimingVersion>0?p.Scenes[i-1].IncomingPad:0); string next = "joined" + i;
+                    graph.Add("[" + current + "][s" + i + "]xfade=" + TransitionFilter(AssemblyTimeline.Transition(t,p.Scenes[i-1])) + ":duration=" + Core.N(t.TransitionSeconds) + ":offset=" + Core.N(offset) + "[" + next + "]"); current = next;
                 }
             }
             if (music) {

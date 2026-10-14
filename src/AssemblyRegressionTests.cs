@@ -69,14 +69,15 @@ namespace VideoBatch {
             string temp = Path.Combine(Path.GetTempPath(),"assembly-packs-" + Guid.NewGuid().ToString("N"));
             try {
                 var t = AssemblyTemplate.Defaults(); t.Materials = temp; t.Output = Path.Combine(temp,"out"); AssemblyWorkspace.Prepare(t); t.Validate();
-                if (t.Scenes.Count != 4 || t.Duration != 20 || t.Scenes.Select(s => s.Folder).Distinct().Count() != 4) return false;
+                if (t.Scenes.Count != 4 || Math.Abs(t.Duration-(20+3*t.TransitionSeconds))>.001 || t.Scenes.Select(s => s.Folder).Distinct().Count() != 4) return false;
                 if (t.Scenes.Any(s => !Directory.Exists(t.Resolve(s.Layers[0].Source)))) return false;
                 File.WriteAllText(t.Resolve("Видео/a.mp4"),"a"); File.WriteAllText(t.Resolve("Музыка/a.wav"),"music-a"); File.WriteAllText(t.Resolve("Музыка/b.wav"),"music-b");
                 var videos = new[] { new AssemblyVideo { Path = t.Resolve("Видео/a.mp4"), Hash = "video-a", Duration = 1 } };
                 // Four empty image packs and one short video must still produce a usable plan.
                 var batch = AssemblyPlanner.Create(t,videos,new AssemblyHistory(),new Random(31),2);
-                if (batch.Plans.Count != 2 || batch.Plans.Any(p => p.Scenes.Count != 4 || p.Scenes.Any(s => s.Layers.Count != 0))) return false;
-                if (batch.Plans.Select(p => p.Music).Distinct().Count() != 2) return false;
+                if (batch.Plans.Count != 1 || batch.Plans.Any(p => p.Scenes.Count != 4 || p.Scenes.Any(s => s.Layers.Count != 0))) return false;
+                // Music alone must not create a second identical visual combination.
+                if(batch.Plans.Select(p => p.Signature).Distinct().Count()!=1)return false;
                 var history = new AssemblyHistory(); history.Combinations.AddRange(batch.Plans.Select(p => p.Signature));
                 if (AssemblyPlanner.Create(t,videos,history,new Random(13),1).Plans.Count != 0) return false;
                 // Empty packs are optional, but populated packs marked unique still honor history.

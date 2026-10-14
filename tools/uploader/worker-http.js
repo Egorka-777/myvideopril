@@ -567,7 +567,7 @@ async function applyScheduleViaEditPage(page, session, sapisid, data, videoId, p
 }
 
 async function setThumbnail(page, thumbPath) {
-  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{save:true,verifyReload:true});
+  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{save:true,verifyReload:true,progress:text=>send("thumbnail",text)});
 }
 
 async function applyItemThumbnail(page, item, videoId, packIndex, packTotal) {

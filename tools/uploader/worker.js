@@ -1681,7 +1681,7 @@ function sendMeshChannel(target, channelUrl) {
 }
 
 async function setThumbnail(page, thumbPath) {
-  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{});
+  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{progress:text=>send("thumbnail",text)});
 }
 
 async function progressText(page) {
@@ -2786,7 +2786,7 @@ async function selectUploadQueueItem(page, index) {
     return 0;
   }, index).catch(() => 0);
   if (!selected) {
-    send("youtube", `Очередь: не нашёл пункт ${index + 1} — продолжаю с текущим роликом.`, { percent: 40 });
+    throw new Error(`Очередь: не найден ролик ${index+1}. Редактирование остановлено, чтобы не заменить превью другого видео.`);
   } else {
     send("youtube", `Очередь: ролик ${index + 1} выбран.`, { percent: 40 });
   }
@@ -2907,6 +2907,17 @@ async function uploadPackBulk(page, pack) {
     if (i < toUpload.length - 1) await ensureUploadDialogOpen(page);
   }
   await dismissAfterPublish(page);
+  // Fresh editor readback happens only after publishing, never inside the upload wizard.
+  const checkPage=await page.context().newPage();
+  try { for(let i=0;i<results.length;i++) {
+    const item=toUpload[i];if(!item.thumbnail)continue;
+    const id=extractVideoId(results[i].url||"");
+    try {
+      if(!id)throw new Error("YouTube не вернул ID ролика для проверки превью");
+      await checkPage.goto(`https://studio.youtube.com/video/${id}/edit`,{waitUntil:"domcontentloaded",timeout:90000});
+      await require("./youtube-thumbnail").uploadThumbnail(checkPage,item.thumbnail,{save:true,verifyReload:true,progress:text=>send("thumbnail",text,{packIndex:results[i].packIndex,url:results[i].url})});
+    } catch(e) { send("thumbnail_warning",`Видео уже загружено. Превью не подтверждено: ${e.message}. Не загружай видео повторно.`,{packIndex:results[i].packIndex,url:results[i].url}); }
+  }} finally {await checkPage.close();}
   return results;
 }
 

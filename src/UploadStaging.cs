@@ -6,7 +6,7 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 
 namespace VideoBatch {
-    /// <summary>Stable upload copies: source paths from Downloads/UI must not be passed directly to workers.</summary>
+    /// <summary>Validate and reuse the selected source. Legacy staging paths remain resolvable without new copies.</summary>
     public static class UploadStaging {
         static readonly Regex DuplicateSuffix = new Regex(@"\s*\(\d+\)\s*$", RegexOptions.Compiled);
 
@@ -104,38 +104,8 @@ namespace VideoBatch {
             int total,
             string plannedFileName,
             string uploadTitle) {
-            EnsureDir(stagingRoot);
-            string profileDir = Path.Combine(stagingRoot, platformFolder ?? "", SanitizeDirName(profileId));
-            if (!Directory.Exists(profileDir)) Directory.CreateDirectory(profileDir);
-
-            string name = (plannedFileName ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(name)) {
-                string ext = Path.GetExtension(sourcePath ?? "");
-                if (string.IsNullOrWhiteSpace(ext)) ext = ".mp4";
-                string safeTitle = MakeSafeFileStem(uploadTitle, index, total);
-                name = safeTitle + ext;
-            }
-
-            ValidateReady(sourcePath, "Подготовка видео");
-            string dest = Path.Combine(profileDir, name);
-            if (PathsEqual(sourcePath, dest)) return dest;
-            if (File.Exists(dest)) {
-                if (SameFileContents(sourcePath, dest)) return dest;
-                string ext = Path.GetExtension(name);
-                string stem = Path.GetFileNameWithoutExtension(name);
-                bool available = false;
-                for (int n = 2; n < 100; n++) {
-                    string tryDest = Path.Combine(profileDir, stem + " (" + n + ")" + ext);
-                    if (File.Exists(tryDest)) {
-                        if (SameFileContents(sourcePath, tryDest)) return tryDest;
-                        continue;
-                    }
-                    dest = tryDest; available = true; break;
-                }
-                if (!available) throw new IOException("Заняты все имена подготовленного видео: " + name);
-            }
-            File.Copy(sourcePath, dest, false);
-            return dest;
+            ValidateReady(sourcePath,"Подготовка видео");
+            return PathUtil.Normalize(Path.GetFullPath(sourcePath));
         }
 
         static bool SameFileContents(string a, string b) {
@@ -183,18 +153,11 @@ namespace VideoBatch {
                 string resolved = TryResolveVideo(missing, "tiktok", tmp, "pid1");
                 if (!string.Equals(resolved, src, StringComparison.OrdinalIgnoreCase)) return false;
 
-                string staged = StageVideo(tmp, "tiktok", src, "pid1", 1, 1, "test.mp4", "caption");
-                if (!File.Exists(staged)) return false;
-                ValidateReady(staged, "test");
-
-                string again = StageVideo(tmp, "tiktok", src, "pid1", 1, 1, "test.mp4", "caption");
-                if (!string.Equals(staged, again, StringComparison.OrdinalIgnoreCase)) return false;
-                File.WriteAllBytes(src, new byte[] { 5, 6, 7, 8 });
-                string changed = StageVideo(tmp, "tiktok", src, "pid1", 1, 1, "test.mp4", "caption");
-                if (string.Equals(staged, changed, StringComparison.OrdinalIgnoreCase)) return false;
-                if (!File.ReadAllBytes(staged).SequenceEqual(new byte[] { 1, 2, 3, 4 })) return false;
-                if (!File.ReadAllBytes(changed).SequenceEqual(new byte[] { 5, 6, 7, 8 })) return false;
-                if (StageVideo(tmp, "tiktok", src, "pid1", 1, 1, "test.mp4", "caption") != changed) return false;
+                string folder=Path.Combine(tmp,"unused-upload");
+                string staged=StageVideo(folder,"tiktok",src,"pid1",1,1,"renamed.mp4","caption");
+                if(!PathsEqual(staged,src) || Directory.Exists(folder))return false;
+                for(int i=0;i<5;i++)if(!PathsEqual(StageVideo(folder,"",src,"other"+i,i,5,"different.mp4","title"),src))return false;
+                if(Directory.GetFiles(tmp,"*.mp4",SearchOption.AllDirectories).Length!=1 || !File.Exists(src))return false;
                 return true;
             } catch {
                 return false;

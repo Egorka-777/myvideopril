@@ -40,7 +40,7 @@ namespace VideoBatch {
             for (int i = 0; i < t.Scenes.Count; i++) {
                 var scene = t.Scenes[i]; double duration = RenderDuration(i);
                 var allowed = new HashSet<string>(AssemblyFiles.Pool(t.Resolve(t.VideoSource(scene)),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
-                videos.Add(source.Where(v => allowed.Contains(v.Path) && (v.Duration + .001 >= duration || t.LoopShortVideos && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
+                videos.Add(source.Where(v => allowed.Contains(v.Path) && (v.Duration + .001 >= duration || (t.LoopShortVideos || t.SceneTimingVersion>0 && scene.VideoMode=="own") && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
                 foreach (var l in scene.Layers.Where(l => l.Enabled)) {
                     var pool = Assets(t.Resolve(l.Source),t.PictureExtensions);
                     if (pool.Count == 0) {
@@ -63,7 +63,7 @@ namespace VideoBatch {
             if (asset == null) throw new Exception("Закреплённая картинка «" + layer.Name + "» отсутствует. Выбери новую в её пачке или включи «Меняется».");
             return asset;
         }
-        double RenderDuration(int i) { return template.Scenes[i].Duration + (i < template.Scenes.Count-1 && template.Transition != "cut" ? template.TransitionDuration : 0); }
+        double RenderDuration(int i) { return template.Scenes[i].Duration + (template.SceneTimingVersion==0 && i < template.Scenes.Count-1 && template.Transition != "cut" ? template.TransitionDuration : 0); }
         BigInteger RawBound() {
             BigInteger total = 1;
             foreach (var v in videos) total *= v.Count;
@@ -168,7 +168,7 @@ namespace VideoBatch {
             return batch;
         }
         void Complete(AssemblyPlan p,Random random,AssemblyMixTracker mix) {
-            foreach (var scene in p.Scenes) scene.VideoStart=template.RandomVideoStart ? random.NextDouble()*Math.Max(0,scene.Video.Duration-scene.RenderDuration) : 0;
+            AssemblyTimeline.Complete(template,p,random);
             AssignMusic(p,random,mix);
             mix.Record(p);
         }

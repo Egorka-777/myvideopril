@@ -394,8 +394,7 @@ class NativeStudio {
     const savedTags = await verify.locator("#tags-container ytcp-chip, #tags-container [role='listitem']").evaluateAll(nodes => nodes.map(n =>
       (n.getAttribute("text") || n.querySelector("#text, #label, .chip-text")?.textContent || Array.from(n.childNodes).filter(c => c.nodeType === Node.TEXT_NODE).map(c => c.textContent).join("")).trim()));
     if (JSON.stringify(savedTags.slice().sort()) !== JSON.stringify(options.tags.slice().sort())) throw new Error("Studio не подтвердил сохранение точного списка тегов.");
-    if (options.thumbnail && !(await verify.locator('img[src*="ytimg"], #thumbnail-editor img, ytcp-thumbnails-compact-editor img').evaluateAll(nodes => nodes.map(n => n.src))).includes(this.thumbnailEvidence))
-      throw new Error("Studio не подтвердил сохранение выбранного превью.");
+    if(options.thumbnail)await require("./youtube-thumbnail").verifyThumbnail(this.page,options.thumbnail,{scope:verify});
     const checkedPrivacy = await uniqueVisible(verify.getByRole("radio", { name: labels[options.privacy] }), false);
     if (checkedPrivacy && await checkedPrivacy.getAttribute("aria-checked") !== "true" && !await checkedPrivacy.isChecked().catch(() => false)) throw new Error("Studio не подтвердил доступ.");
     if (!checkedPrivacy && !labels[options.privacy].test((await verify.locator('#privacy-select, [aria-label="Visibility"], [aria-label="Доступ"]').innerText()).trim()))

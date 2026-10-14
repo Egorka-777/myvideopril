@@ -45,17 +45,17 @@ function html(url) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vb-studio-ui-"));
   const browser = await chromium.launch({ headless: true });
   try {
-    const page = await browser.newPage(); page.setDefaultTimeout(3000);
+    const page = await (await browser.newContext()).newPage(); page.setDefaultTimeout(3000);
     await page.route("**/*", async route => {
       const u = new URL(route.request().url());
-      if (u.hostname !== "studio.youtube.com") return route.fulfill({ status: 200, body: "" });
+      if (u.hostname !== "studio.youtube.com") return route.fulfill({ status: 200,contentType:"image/png",body:Buffer.from(u.pathname.includes("selected")?"iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAA2ElEQVR4nO3QMRHAIADAQEBDZ/yLQkwV9DLS4V9BLvM8e/Bt3Q74O4OCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUXmVXAc6VBGjVAAAAAElFTkSuQmCC":"iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAA2UlEQVR4nO3QQRHAIADAMEDDROBfD2KmYNcneyQKep3PPoNv63bA3xkUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGg8AKfuQHYOECCawAAAABJRU5ErkJggg==","base64") });
       if(u.pathname==="/fixture/signal"){state.signal=true;return route.fulfill({body:"{}"});}
       if (u.pathname === "/fixture/save") { Object.assign(state, JSON.parse(route.request().postData())); return route.fulfill({ status: 200, body: "{}" }); }
       return route.fulfill({ contentType: "text/html", body: html(u.pathname) });
     });
     const ui = new NativeStudio(page, channel);
     const options = { title: "Эфир — проверка", description: "Описание эфира", tags: ["one", "два"], privacy: "unlisted", madeForKids: false, thumbnail: path.join(root, "thumb.png") };
-    fs.writeFileSync(options.thumbnail, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX0AAAAASUVORK5CYII=", "base64"));
+    fs.writeFileSync(options.thumbnail, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAA2ElEQVR4nO3QMRHAIADAQEBDZ/yLQkwV9DLS4V9BLvM8e/Bt3Q74O4OCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUXmVXAc6VBGjVAAAAAElFTkSuQmCC", "base64"));
     assert.equal(await ui.create("VideoBatch live " + "a".repeat(32), options), video);
     assert.equal(state.privacy, "private");
     await ui.open(video); const ingest = await ui.ingest("VideoBatch live unique-key"); assert.equal(ingest.key, "fixture-key-1234");

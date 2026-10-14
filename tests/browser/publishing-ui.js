@@ -5,29 +5,31 @@ const {chromium}=require("../../tools/uploader/node_modules/playwright-core");
 const {uploadThumbnail}=require("../../tools/uploader/youtube-thumbnail");
 const native=require("../../tools/uploader/tiktok-native-publish");
 const {fillCaption}=require("../../tools/uploader/worker-tiktok");
-const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX0AAAAASUVORK5CYII=","base64");
+const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAA2ElEQVR4nO3QMRHAIADAQEBDZ/yLQkwV9DLS4V9BLvM8e/Bt3Q74O4OCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUXmVXAc6VBGjVAAAAAElFTkSuQmCC","base64"),oldPixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAA2UlEQVR4nO3QQRHAIADAMEDDROBfD2KmYNcneyQKep3PPoNv63bA3xkUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGgYFAwKBgUDAoGBYOCQcGg8AKfuQHYOECCawAAAABJRU5ErkJggg==","base64");
 (async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"publishing-dom-"));const image=path.join(root,"cover.png");fs.writeFileSync(image,pixel);
   const browser=await chromium.launch({headless:true});
   try{
-    const page=await browser.newPage();let saved=false, selected=false, reject=false;
+    const page=await (await browser.newContext()).newPage();let saved=false, selected=false, reject=false,discard=false;
     await page.route("**/*",route=>{
       const u=new URL(route.request().url());
-      if(u.hostname!=="studio.youtube.com")return route.fulfill({contentType:"image/png",body:pixel});
+      if(u.hostname!=="studio.youtube.com")return route.fulfill({contentType:"image/png",body:u.pathname.includes("original")?oldPixel:pixel});
       return route.fulfill({contentType:"text/html; charset=utf-8",body:`<main><input id="video" type="file" accept="video/mp4">
-        <div id="thumbnail-editor"><img width="80" height="80" src="https://i.ytimg.com/${saved?'custom':'original'}.jpg">
+        <div id="thumbnail-editor"><img width="80" height="80" src="https://i.ytimg.com/${saved?'custom?revision='+Date.now():'original'}.jpg">
         <input id="cover" type="file" accept="image/png" hidden><div role="alert"></div></div>
         <button ${saved?'disabled':''}>${u.searchParams.get('lang')==='ru'?'Сохранить':'Save'}</button></main><script>
         cover.onchange=()=>{if(${reject}){document.querySelector('[role=alert]').textContent='Upload rejected';return;}
-          document.querySelector('img').src='https://i.ytimg.com/custom.jpg';};
+          document.querySelector('img').src=URL.createObjectURL(cover.files[0]);};
         document.querySelector('button').onclick=async function(){await fetch('/saved',{method:'POST'});this.disabled=true;};</script>`});
     });
-    await page.route("**/saved",async route=>{saved=true;await route.fulfill({body:"ok"});});
+    await page.route("**/saved",async route=>{saved=!discard;await route.fulfill({body:"ok"});});
     for(const lang of ["en","ru"]){saved=false;await page.goto("https://studio.youtube.com/video/abcdefghijk/edit?lang="+lang);
       const result=await uploadThumbnail(page,image,{save:true,verifyReload:true,timeout:2000});assert(result.includes("custom"));assert(saved);
       assert.equal(await page.locator('#video').evaluate(e=>e.files.length),0,"thumbnail went to video input");
     }
-    reject=true;saved=false;await page.goto("https://studio.youtube.com/video/abcdefghijk/edit");
+    discard=true;saved=false;await page.goto("https://studio.youtube.com/video/abcdefghijk/edit");
+    await assert.rejects(uploadThumbnail(page,image,{save:true,verifyReload:true,timeout:1000}),/не подтвердил/);assert(!saved);
+    discard=false;reject=true;saved=false;await page.goto("https://studio.youtube.com/video/abcdefghijk/edit");
     await assert.rejects(uploadThumbnail(page,image,{save:true,timeout:1000}),/отклонил/);assert(!saved);
     await page.close();
 

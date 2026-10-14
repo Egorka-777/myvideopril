@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.Drawing;
 using System.IO;
@@ -103,6 +104,8 @@ namespace VideoBatch {
 
             logList = new ListBox { Dock = DockStyle.Fill, BackColor = Theme.Card, ForeColor = Theme.TextPrimary, BorderStyle = BorderStyle.None, Font = new Font("Consolas", 9f) };
             Controls.Add(logList);
+            accountFilter.TextChanged+=(s,e)=>RefreshData(); taskFilter.TextChanged+=(s,e)=>RefreshData();
+            platformFilter.SelectedIndexChanged+=(s,e)=>RefreshData(); levelFilter.SelectedIndexChanged+=(s,e)=>RefreshData();
             RefreshData();
         }
 
@@ -112,8 +115,10 @@ namespace VideoBatch {
             string task = (taskFilter.Text ?? "").Trim().ToLowerInvariant();
             string platform = platformFilter.SelectedItem?.ToString() ?? "Все";
 
-            foreach (var ev in TaskQueueStore.RecentEvents(100)) {
+            foreach (var ev in TaskQueueStore.RecentEvents(1000)) {
+                if (!string.IsNullOrEmpty(task) && (ev.Action??" ").ToLowerInvariant().IndexOf(task)<0) continue;
                 if (!string.IsNullOrEmpty(acc) && (ev.Account ?? "").ToLowerInvariant().IndexOf(acc) < 0) continue;
+                if ((levelFilter.SelectedItem?.ToString()??"Все")!="Все") continue;
                 if (!platform.StartsWith("Все") && (ev.Action ?? "").IndexOf(platform, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 logList.Items.Add(string.Format("[{0}] {1} · {2} → {3} {4}", ev.Time, ev.Account, ev.Action, ev.Result, ev.Url));
             }
@@ -122,9 +127,17 @@ namespace VideoBatch {
             if (Directory.Exists(diagDir)) {
                 foreach (var file in Directory.GetFiles(diagDir, "*.jsonl").OrderByDescending(File.GetLastWriteTimeUtc).Take(20)) {
                     try {
-                        foreach (var line in File.ReadLines(file).Take(50)) {
-                            if (line.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0 || line.IndexOf("manual_check", StringComparison.OrdinalIgnoreCase) >= 0)
-                                logList.Items.Add(Path.GetFileName(file) + ": " + line.Substring(0, Math.Min(180, line.Length)));
+                        foreach (var line in File.ReadLines(file).Reverse().Take(1000)) {
+                            if(Path.GetFileName(file).StartsWith("app-")) {
+                                var record=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,string>>(line);
+                                Func<string,string> get=k=>record.ContainsKey(k)?record[k]:"";
+                                if(acc!="" && get("account").ToLowerInvariant().IndexOf(acc)<0)continue;
+                                if(task!="" && (get("task")+" "+get("stage")).ToLowerInvariant().IndexOf(task)<0)continue;
+                                if(platform!="Все" && get("platform").IndexOf(platform,StringComparison.OrdinalIgnoreCase)<0)continue;
+                                string level=levelFilter.SelectedItem?.ToString()??"Все";
+                                if(level!="Все" && get("level")!=level)continue;
+                                logList.Items.Add(get("time")+" · "+get("platform")+" · "+get("account")+" · "+get("task")+" · "+get("level")+" · "+get("stage")+" → "+get("message"));
+                            } else if(acc=="" && task=="" && platform=="Все")logList.Items.Add(Path.GetFileName(file)+": "+AppDiagnostics.Clean(line));
                         }
                     } catch { }
                 }

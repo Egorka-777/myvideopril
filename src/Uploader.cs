@@ -93,7 +93,7 @@ namespace VideoBatch {
         [DataMember]public int packIndex,packTotal;
         [DataMember]public bool success,keptOpen;
     }
-    public class UploadRunResult { public bool Success,KeptOpen;public string Ip="",Url="",Error=""; }
+    public class UploadRunResult { public bool Success,KeptOpen,ThumbnailWarning;public string Ip="",Url="",Error=""; }
 
     public static class DolphinRunner {
         static readonly DataContractJsonSerializer JobSerializer=new DataContractJsonSerializer(typeof(UploadJob));
@@ -143,11 +143,13 @@ namespace VideoBatch {
                         UploadMessage msg;
                         try{using(var m=new MemoryStream(Encoding.UTF8.GetBytes(line))){msg=(UploadMessage)MessageSerializer.ReadObject(m);}}
                         catch(SerializationException){if(update!=null)update(new UploadMessage{stage="log",text="Нечитаемое сообщение worker."});continue;}
+                        AppDiagnostics.Write(label,job.profileId,Path.GetFileNameWithoutExtension(file),msg.stage,msg.text??msg.error,AppDiagnostics.Level(msg.stage));
                         if(update!=null)update(msg);
                         if(msg.stage=="item_submitting"){
                             await process.StandardInput.WriteLineAsync("ack:"+msg.localJobId).ConfigureAwait(false);
                             await process.StandardInput.FlushAsync().ConfigureAwait(false);
                         }
+                        if(msg.stage=="thumbnail_warning")result.ThumbnailWarning=true;
                         if(msg.ip!=null)result.Ip=msg.ip;
                         if(msg.url!=null)result.Url=msg.url;
                         if(msg.stage=="done"){result.Success=msg.success;if(!msg.success&&string.IsNullOrWhiteSpace(result.Error))result.Error=msg.text;}
@@ -985,34 +987,9 @@ namespace VideoBatch {
             }
             throw new IOException("Не удалось подобрать свободное имя файла для «"+stem+ext+"».");
         }
-        static string MoveFileToUniqueName(string source,string dest){
-            ClearReadOnly(source);
-            if(PathsEqual(source,dest))return source;
-            string dir=Path.GetDirectoryName(dest)??"";
-            string ext=Path.GetExtension(dest);
-            if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
-            string stem=Path.GetFileNameWithoutExtension(dest);
-            dest=FindUniqueFilePath(dir,stem,ext,source);
-            if(PathsEqual(source,dest))return source;
-            File.Move(source,dest);
-            return dest;
-        }
         static string RenameVideoFile(string path,string title,int index1Based,int total){
-            if(string.IsNullOrWhiteSpace(path)||!File.Exists(path))return path;
-            title=StripLeadingTitleIndex(title);
-            if(string.IsNullOrWhiteSpace(title))return path;
-            string finalTitle=PackTitleWithIndex(title,index1Based,total);
-            ValidateTitleLength(finalTitle,"Переименование");
-            string dir=Path.GetDirectoryName(path)??"";
-            string ext=Path.GetExtension(path);
-            if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
-            string stem=FileNameFromTitle(finalTitle);
-            string dest=FindUniqueFilePath(dir,stem,ext,path);
-            if(PathsEqual(path,dest))return path;
-            try{return MoveFileToUniqueName(path,dest);}
-            catch(Exception ex){
-                throw new Exception("Не удалось переименовать «"+Path.GetFileName(path)+"» в «"+Path.GetFileName(dest)+"»: "+ex.Message);
-            }
+            // Titles are upload metadata. Never move the selected source file.
+            return string.IsNullOrWhiteSpace(path)||!File.Exists(path)?path:PathUtil.Normalize(Path.GetFullPath(path));
         }
         void ClearThumbnail(YouTubeChannel c){
             if(c==null)return;
@@ -1573,7 +1550,7 @@ namespace VideoBatch {
             if(InvokeRequired){BeginInvoke(new Action(()=>Status(row,text)));return;}
             row.Cells[CStatus].Value=text;((YouTubeChannel)row.Tag).Status=text;Write(((YouTubeChannel)row.Tag).Name+": "+text);
         }
-        void Write(string text){if(InvokeRequired){BeginInvoke(new Action<string>(Write),text);return;}string line=DateTime.Now.ToString("HH:mm:ss")+"  "+text;try{LogLine?.Invoke(line);}catch{}log.AppendText(line+Environment.NewLine);log.ScrollToCaret();try{Directory.CreateDirectory(Store.Root);if(string.IsNullOrWhiteSpace(logFile))logFile=Path.Combine(Store.Root,"youtube-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".log");File.AppendAllText(logFile,line+Environment.NewLine,Encoding.UTF8);}catch{}}
+        void Write(string text){if(InvokeRequired){BeginInvoke(new Action<string>(Write),text);return;}AppDiagnostics.Write("YouTube","","","interface",text);string line=DateTime.Now.ToString("HH:mm:ss")+"  "+text;try{LogLine?.Invoke(line);}catch{}log.AppendText(line+Environment.NewLine);log.ScrollToCaret();try{Directory.CreateDirectory(Store.Root);if(string.IsNullOrWhiteSpace(logFile))logFile=Path.Combine(Store.Root,"youtube-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".log");File.AppendAllText(logFile,line+Environment.NewLine,Encoding.UTF8);}catch{}}
         void ValidateExternalChannels(IReadOnlyList<YouTubeChannel> channels,bool forUpload){
             if(channels==null||channels.Count==0){
                 if(forUpload)throw new Exception("Нет готовых строк: укажите видео и заголовок. Рынок: «"+MarketLabel(marketView)+"».");
@@ -1998,7 +1975,7 @@ namespace VideoBatch {
                         }
                         Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
                         ch.Status=ChannelStatus.Scheduled;
-                        Status(row,batch.Items.Count>1?("Отложено "+batch.Items.Count+" ✓"):("Отложено ✓ "+batch.Items[0].ScheduleDate+" "+batch.Items[0].ScheduleTime));
+                        Status(row,result.ThumbnailWarning ? "Видео загружено · превью не подтверждено, см. Логи" : batch.Items.Count>1?("Отложено "+batch.Items.Count+" ✓"):("Отложено ✓ "+batch.Items[0].ScheduleDate+" "+batch.Items[0].ScheduleTime));
                         if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(ch.ProfileId,result.Ip);
                         SafeSave();
                         }finally{launchGate.Exit();}

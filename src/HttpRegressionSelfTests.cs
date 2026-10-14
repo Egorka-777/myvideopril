@@ -18,6 +18,7 @@ namespace VideoBatch {
             if (!UploadStaging.RunSelfTests()) return false;
             if (!RunLog160617Scenario()) return false;
             if (!RunYouTubeChannelUrlSelfTest()) return false;
+            if (!RunThumbnailFallbackSelfTest()) return false;
             if (!RunYouTubeMetadataSelfTest()) return false;
             if (!TaskQueueWriter.RunConcurrentWriteSelfTest(40, 25)) return false;
             return RunWorkerPoolScenario();
@@ -51,6 +52,14 @@ namespace VideoBatch {
                 Store.Root=oldRoot;
                 if (Directory.Exists(temp)) Directory.Delete(temp,true);
             }
+        }
+
+        public static bool RunThumbnailFallbackSelfTest() {
+            var channel=new YouTubeChannel {Thumbnail="channel.png",Items=new List<YouTubeItem>{new YouTubeItem(),new YouTubeItem(),new YouTubeItem {Thumbnail="own.webp"}}};
+            if(YouTubeThumbnailSync.ForItem(channel,channel.Items[0],0)!="channel.png")return false;
+            if(YouTubeThumbnailSync.ForItem(channel,channel.Items[1],1)!="channel.png")return false;
+            if(YouTubeThumbnailSync.ForItem(channel,channel.Items[2],2)!="own.webp")return false;
+            return true;
         }
 
         public static bool RunYouTubeMetadataSelfTest() {

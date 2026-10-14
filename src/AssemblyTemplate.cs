@@ -26,14 +26,14 @@ namespace VideoBatch {
         public override string ToString() { return Name + " · " + Duration.ToString("0.##") + " с"; }
     }
     public class AssemblyTemplate {
-        public int Version = 1, PackStudioVersion = 0, ObjectStudioVersion = 0;
+        public int Version = 1, PackStudioVersion = 0, ObjectStudioVersion = 0, SceneTimingVersion = 0;
         public bool LoopShortVideos = false, AllowVideoReuse = false;
         public string Id = Guid.NewGuid().ToString("N"), Name = "Моя студия";
         public string Materials = "", Videos = "Видео", Music = "", Output = "";
         public int Width = 1080, Height = 1920, Fps = 30, Count = 10;
         public string Transition = "fade", RenderMode = "auto";
         public double TransitionDuration = .35, MusicVolume = .8;
-        public bool RandomVideoStart = true;
+        public bool RandomVideoStart = false;
         public string HistoryScope = AssemblyHistoryScope.Shared;
         public bool AssemblyMarketsSeeded;
         public int MarketWorkspaceVersion;
@@ -41,14 +41,15 @@ namespace VideoBatch {
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
-        public double Duration { get { return Scenes.Sum(s => s.Duration); } }
+        public double TransitionSeconds { get { return SceneTimingVersion>0?Math.Round(TransitionDuration*Fps,MidpointRounding.AwayFromZero)/Fps:TransitionDuration; } }
+        public double Duration { get { return Scenes.Sum(s => s.Duration)+(SceneTimingVersion>0 && Transition!="cut"?Math.Max(0,Scenes.Count-1)*TransitionSeconds:0); } }
         public string Resolve(string path) {
             if (string.IsNullOrWhiteSpace(path)) return "";
             string full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Materials, path));
             return PathUtil.Normalize(full);
         }
         public static AssemblyTemplate Defaults() {
-            var t = new AssemblyTemplate { PackStudioVersion = 1, ObjectStudioVersion = 1, LoopShortVideos = true, AllowVideoReuse = true, Music = "Музыка" };
+            var t = new AssemblyTemplate { PackStudioVersion = 1, ObjectStudioVersion = 1, SceneTimingVersion=1,Transition="random", LoopShortVideos = true, AllowVideoReuse = true, Music = "Музыка" };
             for (int i = 1; i <= 4; i++) {
                 string folder = Path.Combine("Сцены", "Сцена-" + i.ToString("00"));
                 t.Scenes.Add(new AssemblyScene { Name = "Сцена " + i, Folder = folder, Duration = 5, Layers = new List<AssemblyLayer> {
@@ -97,7 +98,7 @@ namespace VideoBatch {
         internal static void Check(double value, double min, double max, string label) {
             if (double.IsNaN(value) || double.IsInfinity(value) || value < min || value > max) throw new Exception(label + ": значение вне допустимых границ.");
         }
-        public static readonly string[] Transitions = { "cut", "fade", "fadeblack", "fadewhite", "slideleft", "slideright", "smoothleft", "hblur", "zoomin", "zoomsoft", "zoomout", "pull", "swipe" };
+        public static readonly string[] Transitions = { "random", "cut", "fade", "fadeblack", "fadewhite", "slideleft", "slideright", "smoothleft", "hblur", "zoomin", "zoomsoft", "zoomout", "pull", "swipe" };
     }
     public static class AssemblyFiles {
         public static readonly string[] VideoExtensions = { ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v" };
@@ -187,10 +188,12 @@ namespace VideoBatch {
                     if (string.IsNullOrWhiteSpace(l.Source)) l.Source = Path.Combine(scene.Folder, j == 0 ? "Изображения" : "Пачка-" + (j + 1));
                     MakeFolder(t.Resolve(l.Source));
                     var files=AssemblyFiles.Pool(t.Resolve(l.Source),t.PictureExtensions);
-                    if (files.Count>0) { l.PlacementConfigured=true; if (objects && l.Fixed && files.Select(AssemblyFiles.Hash).Distinct().Count()>1) { l.Fixed=false; l.FixedAssetHash=""; } if (l.Fixed && string.IsNullOrWhiteSpace(l.FixedAssetHash)) l.FixedAssetHash=AssemblyFiles.Hash(files[0]); }
+                    if (files.Count>0) { l.PlacementConfigured=true; l.Fixed=files.Select(AssemblyFiles.Hash).Distinct().Count()==1; l.FixedAssetHash=l.Fixed?AssemblyFiles.Hash(files[0]):""; }
                     if (objects) l.ModeExplicit=l.Fixed || l.Unique;
                 }
             }
+            if(t.SceneTimingVersion==0){if(t.Transition!="cut")t.Transition="random";t.SceneTimingVersion=1;}
+            t.RandomVideoStart=false;
             t.ObjectStudioVersion=1;
             if (string.IsNullOrWhiteSpace(t.Videos)) t.Videos = "Видео";
             if (string.IsNullOrWhiteSpace(t.Music)) t.Music = "Музыка";
@@ -230,6 +233,28 @@ namespace VideoBatch {
             } catch { source = oldSource; throw; }
         }
     }
+    public static class AssemblyTimeline {
+        public static readonly string[] RandomTransitions={"fade","zoomsoft","zoomout","pull","swipe"};
+        public static double ContentDuration(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?s.Scene.Duration:s.RenderDuration;
+        public static bool LoopInput(AssemblyTemplate t,AssemblyScenePlan s) => t.LoopShortVideos && !(t.SceneTimingVersion>0 && s.Scene.VideoMode=="own") && s.Video.Duration+.001<ContentDuration(t,s);
+        public static double SourceStart(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?0:s.VideoStart;
+        public static string Transition(AssemblyTemplate t,AssemblyScenePlan s) => string.IsNullOrEmpty(s.TransitionOut)?(t.Transition=="random"?"fade":t.Transition):s.TransitionOut;
+        public static string Padding(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?"tpad=start_mode=clone:start_duration="+Core.N(s.IncomingPad)+":stop_mode=clone:stop_duration="+Core.N(s.OutgoingPad)+",":"";
+        public static void Complete(AssemblyTemplate t,AssemblyPlan p,Random random) {
+            string previous="";
+            for(int i=0;i<p.Scenes.Count;i++) {
+                var s=p.Scenes[i];s.VideoStart=t.SceneTimingVersion>0?0:t.RandomVideoStart?random.NextDouble()*Math.Max(0,s.Video.Duration-s.RenderDuration):0;
+                string effect=t.Transition;
+                if(effect=="random") {var choices=RandomTransitions.Where(k=>k!=previous).ToArray();effect=choices[random.Next(choices.Length)];}
+                s.TransitionOut=i<p.Scenes.Count-1?effect:"cut";previous=effect;
+                if(t.SceneTimingVersion>0) {
+                    s.IncomingPad=i>0 && t.Transition!="cut"?t.TransitionSeconds:0;
+                    s.OutgoingPad=i<p.Scenes.Count-1 && t.Transition!="cut"?t.TransitionSeconds:0;
+                    s.RenderDuration=s.Scene.Duration+s.IncomingPad+s.OutgoingPad;
+                }
+            }
+        }
+    }
     public class AssemblyHistory {
         public int LedgerVersion;
         public List<string> UsedImages = new List<string>(), Combinations = new List<string>();
@@ -242,7 +267,8 @@ namespace VideoBatch {
     public class AssemblyScenePlan {
         public AssemblyScene Scene;
         public AssemblyVideo Video;
-        public double VideoStart, RenderDuration;
+        public double VideoStart, RenderDuration, IncomingPad, OutgoingPad;
+        public string TransitionOut="";
         public List<AssemblyLayerPlan> Layers = new List<AssemblyLayerPlan>();
     }
     public class AssemblyPlan {

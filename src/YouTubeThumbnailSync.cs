@@ -6,7 +6,7 @@ namespace VideoBatch {
     public static class YouTubeThumbnailSync {
         public static string ForItem(YouTubeChannel channel, YouTubeItem item, int itemIndexZeroBased) {
             if (item != null && !string.IsNullOrWhiteSpace(item.Thumbnail)) return item.Thumbnail.Trim();
-            if (itemIndexZeroBased == 0 && channel != null && !string.IsNullOrWhiteSpace(channel.Thumbnail)) return channel.Thumbnail.Trim();
+            if (channel != null && !string.IsNullOrWhiteSpace(channel.Thumbnail)) return channel.Thumbnail.Trim();
             return "";
         }
 

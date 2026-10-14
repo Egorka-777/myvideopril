@@ -122,6 +122,7 @@ namespace VideoBatch {
                         try {
                             using (var m = new MemoryStream(Encoding.UTF8.GetBytes(line))) {
                                 var msg = (UploadMessage)messageSerializer.ReadObject(m);
+                                AppDiagnostics.Write("YouTube",job.profileId,job.runId,msg.stage,msg.text??msg.error,AppDiagnostics.Level(msg.stage));
                                 update?.Invoke(msg);
                                 if (!string.IsNullOrWhiteSpace(msg.stage)) result.LastStage = msg.stage;
                                 if (msg.ip != null) result.Ip = msg.ip;
