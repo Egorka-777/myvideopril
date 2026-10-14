@@ -110,7 +110,7 @@ namespace VideoBatch {
         }
         public async Task Complete(LiveJournalEntry entry, CancellationToken ct) {
             operation = entry.OperationId;
-            if (!entry.BroadcastAttempted && !entry.StreamAttempted && string.IsNullOrEmpty(entry.BroadcastId)) return;
+            if (string.IsNullOrWhiteSpace(entry.BroadcastId) && string.IsNullOrWhiteSpace(entry.StreamId)) return;
             await Call("complete", ct, entry.BroadcastId).ConfigureAwait(false);
         }
         async Task<Dictionary<string, object>> RunWorker(Dictionary<string, object> job, CancellationToken ct) {

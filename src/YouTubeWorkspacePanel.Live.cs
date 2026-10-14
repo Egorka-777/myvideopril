@@ -20,7 +20,7 @@ namespace VideoBatch {
             } catch (Exception ex) { liveButton.Enabled = false; AppendLog(LiveDiagnostics.Append("ЭФИР · инициализация: "+ex.Message)); }
             livePulse = new System.Windows.Forms.Timer { Interval = 100 };
             livePulse.Tick += (s, e) => { pulseStep += 0.25f; if (live != null && live.HasBusy) grid.InvalidateColumn(grid.Columns["account"].Index); };
-            livePulse.Start(); live?.ReconcileViews(); UpdateLiveRows();
+            livePulse.Start(); live?.Store?.PruneAbandonedPending(); live?.ReconcileViews(); UpdateLiveRows();
         }
         void PaintLiveIndicator(YouTubeChannel channel, Graphics graphics, ref Rectangle rect) {
             var state = live?.View(channel.ChannelId);

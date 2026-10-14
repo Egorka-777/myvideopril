@@ -18,6 +18,9 @@ namespace VideoBatch {
         public string Transport = "", ProfileId = "";
         public int LocalPort = 3001;
         public bool BroadcastAttempted, StreamAttempted;
+        public bool RequiresConfirmedCleanup() {
+            return !string.IsNullOrWhiteSpace(BroadcastId) || !string.IsNullOrWhiteSpace(StreamId);
+        }
     }
     public sealed class LiveConfiguration {
         public string ClientId = "", ProtectedClientSecret = "";
@@ -94,6 +97,13 @@ namespace VideoBatch {
         }
         public LiveAccount Account(string localId) { lock (gate) return Config.Accounts.FirstOrDefault(a => a.LocalId == localId); }
         public LiveJournalEntry[] PendingSnapshot() { lock (gate) return Config.Pending.ToArray(); }
+        public void PruneAbandonedPending() {
+            lock (gate) {
+                foreach (var entry in Config.Pending.ToArray()) {
+                    if (!entry.RequiresConfirmedCleanup()) Journal(entry, true);
+                }
+            }
+        }
         public void SaveAccount(LiveAccount account) {
             lock (gate) {
                 var previous = Config.Accounts;

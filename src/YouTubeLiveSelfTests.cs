@@ -160,6 +160,9 @@ namespace VideoBatch {
                 Check(!manager.HasBusy && !manager.CanStop("orphan"), "stale live view must not block UI");
                 manager.ReconcileViews();
                 Check(manager.View("orphan").Phase == LivePhase.Finished, "stale live view reconciled");
+                store.Journal(new LiveJournalEntry { LocalId = "a", RemoteId = "UCtest", OperationId = "abandoned", BroadcastAttempted = true }, false);
+                store.PruneAbandonedPending();
+                Check(store.PendingSnapshot().Length == 0 && !manager.CanStop("a"), "cancelled startup journal must not block UI");
                 Console.WriteLine("LIVE TEST: point stop and stop all passed");
                 apis["a"].FailCreate = true; apis["a"].FailComplete = true;
                 manager.Start(new[] { ca }, options);
