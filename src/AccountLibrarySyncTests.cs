@@ -91,9 +91,11 @@ namespace VideoBatch {
                     var panel = Controls(shell).OfType<AccountLibraryPanel>().Single();
                     Check(Find<System.Windows.Forms.ListBox>(panel, "AccountList").Items.Count == 4, "real shell populates cards from existing upload accounts");
                     var card = new AccountLibraryStore().Load().Single(a => a.Sources.Any(s => s.SourceId == "yt-en")); panel.SelectId(card.Id); Pump();
-                    Check(Controls(panel).OfType<Label>().Any(l => l.Text.Contains("Не заполнено:") && l.Text.Contains("прокси")), "actual card displays missing-data checklist");
+                    var hints=(ToolTip)typeof(AccountLibraryPanel).GetField("hints",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(panel);
+                    Check(Controls(panel).OfType<Label>().Any(l => l.Text.StartsWith("Осталось заполнить:") && hints.GetToolTip(l).Contains("прокси")), "compact card retains missing-data checklist in tooltip");
                     Check(Controls(shell).OfType<Button>().Any(b => b.Text == "Профили браузера"), "profile navigation is unambiguous");
-                    Controls(panel).OfType<Button>().Single(b => b.Text == "YouTube · EN · long").PerformClick(); Pump();
+                    Controls(panel).OfType<Button>().Single(b => b.Text == "Открыть раздел ▾").PerformClick(); Pump();
+                    FindOpenMenu("YouTube · EN · long").Items.Cast<ToolStripItem>().Single(i=>i.Text=="YouTube · EN · long").PerformClick(); Pump();
                     var yt = Controls(shell).OfType<YouTubeWorkspacePanel>().Single(); var ytGrid = Controls(yt).OfType<DataGridView>().Single();
                     Check(yt.Visible && ytGrid.CurrentRow?.Tag is YouTubeChannel selected && selected.ChannelId == "yt-en", "card opens exact EN/Long row despite shared browser profile");
                     typeof(YouTubeWorkspacePanel).GetMethod("ShowRowContextMenu", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(yt, new object[] { prefs.YouTubeChannels[1], ytGrid.CurrentRow.Index, new Point(350, 280) }); Pump();
@@ -101,7 +103,8 @@ namespace VideoBatch {
                     var popup = FindOpenMenu("Убрать из списка EN"); Check(popup != null && !popup.Items.Cast<ToolStripItem>().Any(x => x.Text == "Удалить аккаунт из приложения"), "actual YouTube context menu is list-specific"); popup.Close();
                     Controls(shell).OfType<Button>().Single(b => b.Tag is NavSection section && section == NavSection.AccountLibrary).PerformClick(); Pump();
                     var tkCard = new AccountLibraryStore().Load().Single(a => a.Sources.Any(s => s.SourceId == "tk-ru")); panel.SelectId(tkCard.Id); Pump();
-                    Controls(panel).OfType<Button>().Single(b => b.Text == "TikTok · RU").PerformClick(); Pump();
+                    Controls(panel).OfType<Button>().Single(b => b.Text == "Открыть раздел ▾").PerformClick(); Pump();
+                    FindOpenMenu("TikTok · RU").Items.Cast<ToolStripItem>().Single(i=>i.Text=="TikTok · RU").PerformClick(); Pump();
                     var tkPanel = Controls(shell).OfType<TikTokWorkspacePanel>().Single(); var tkGrid = Controls(tkPanel).OfType<DataGridView>().Single();
                     Check(tkPanel.Visible && tkGrid.CurrentRow?.Tag is TikTokAccount tkSelected && tkSelected.AccountId == "tk-ru", "card opens exact TikTok RU row");
                     shell.Close();
@@ -124,7 +127,8 @@ namespace VideoBatch {
                 using (var shell = new AppShell(prefs)) {
                     shell.Show(); Pump(); Controls(shell).OfType<Button>().Single(b => b.Tag is NavSection section && section == NavSection.AccountLibrary).PerformClick(); Pump();
                     var panel = Controls(shell).OfType<AccountLibraryPanel>().Single(); panel.SelectId(new AccountLibraryStore().Load().Single(a => a.Sources.Count == 2).Id); Pump(); Capture(shell, Path.Combine(destination, "accounts-linked-missing.png"));
-                    Controls(panel).OfType<Button>().Single(b => b.Text == "YouTube · EN · long").PerformClick(); Pump(); var yt = Controls(shell).OfType<YouTubeWorkspacePanel>().Single(); var grid = Controls(yt).OfType<DataGridView>().Single();
+                    Controls(panel).OfType<Button>().Single(b => b.Text == "Открыть раздел ▾").PerformClick(); Pump();
+                    FindOpenMenu("YouTube · EN · long").Items.Cast<ToolStripItem>().Single(i=>i.Text=="YouTube · EN · long").PerformClick(); Pump(); var yt = Controls(shell).OfType<YouTubeWorkspacePanel>().Single(); var grid = Controls(yt).OfType<DataGridView>().Single();
                     typeof(YouTubeWorkspacePanel).GetMethod("ShowRowContextMenu", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(yt, new object[] { prefs.YouTubeChannels[1], grid.CurrentRow.Index, new Point(500, 290) }); Pump(); Capture(shell, Path.Combine(destination, "youtube-en-list.png")); FindOpenMenu("Убрать из списка EN")?.Close();
                     shell.Close();
                 }

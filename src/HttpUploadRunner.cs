@@ -89,7 +89,8 @@ namespace VideoBatch {
         }
 
         public static async Task<HttpUploadRunResult> Run(HttpUploadJob job, string token, Action<UploadMessage> update, CancellationToken cancel) {
-            CheckFiles();
+            AppDiagnostics.Write("YouTube",job.profileId,job.runId,"preflight","Проверка HTTP runtime");
+            try{CheckFiles();}catch(Exception e){AppDiagnostics.Write("YouTube",job.profileId,job.runId,"error",e.ToString(),"error");throw;}
             if (string.IsNullOrWhiteSpace(job.runId)) job.runId = Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(Path.Combine(Store.Root, "jobs"));
             string file = Path.Combine(Store.Root, "jobs", "http-" + job.runId + ".json");
@@ -171,7 +172,8 @@ namespace VideoBatch {
                         throw new UploadException(string.IsNullOrWhiteSpace(result.Error) ? "Ошибка HTTP-загрузки." : result.Error, result.KeptOpen);
                     return result;
                 }
-            } catch {
+            } catch(Exception e) {
+                AppDiagnostics.Write("YouTube",job.profileId,job.runId,cancel.IsCancellationRequested?"cancelled":"error",e.ToString(),cancel.IsCancellationRequested?"warning":"error");
                 keepJobFile = true;
                 throw;
             } finally {

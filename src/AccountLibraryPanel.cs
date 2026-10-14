@@ -17,6 +17,7 @@ namespace VideoBatch {
         readonly ComboBox status = Theme.MakeCombo(new[] { "Все статусы" }.Concat(AccountLibraryStore.Statuses).ToArray());
         readonly FlowLayoutPanel detail = new FlowLayoutPanel();
         readonly Label count = new Label();
+        readonly ToolTip hints = new ToolTip();
         readonly Button add, import;
         readonly Timer clipboardTimer = new Timer { Interval = 45000 };
         readonly Timer revealTimer = new Timer { Interval = 60000 };
@@ -108,7 +109,7 @@ namespace VideoBatch {
             TextRenderer.DrawText(e.Graphics, "● " + a.Status + (AccountLibrarySync.Missing(a).Length > 0 ? " · есть пустые поля" : ""), Theme.FontSmall, new Rectangle(name.X, name.Y + 46, name.Width, 18), color, TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
         void ShowCard() {
-            HideSecrets(); secretFields.Clear(); detail.SuspendLayout();
+            HideSecrets(); secretFields.Clear(); hints.RemoveAll(); detail.SuspendLayout();
             foreach (Control child in detail.Controls.Cast<Control>().ToArray()) child.Dispose(); detail.Controls.Clear();
             var a = SelectedAccount;
             if (a == null) {
@@ -118,17 +119,17 @@ namespace VideoBatch {
                 var hero = Card(a.Name);
                 AddText(hero, a.Platform + " · " + string.Join("/", AccountLibrarySync.Markets(a)) + (a.Country == "" ? "" : " · " + a.Country));
                 var missing = AccountLibrarySync.Missing(a);
-                if (missing.Length > 0) { AddText(hero, "Осталось заполнить: " + missing.Length); hero.Controls[hero.Controls.Count - 1].ForeColor = Theme.Warning; }
+                if (missing.Length > 0) { AddText(hero, "Осталось заполнить: " + missing.Length); hero.Controls[hero.Controls.Count - 1].ForeColor = Theme.Warning; hints.SetToolTip(hero.Controls[hero.Controls.Count - 1],"Не заполнено: "+string.Join(", ",missing)); }
                 var tools = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 6, 0, 0) };
                 var quick = Theme.MakeCombo(AccountLibraryStore.Statuses); quick.Width = 150; quick.SelectedItem = a.Status; quick.Name = "AccountStatus";
                 quick.SelectedIndexChanged += (s, e) => Safe(() => { store.SetStatus(a.Id, quick.Text); RefreshData(); });
                 tools.Controls.Add(quick); tools.Controls.Add(Theme.MakeButton(missing.Length > 0 ? "Дополнить" : "Изменить", ghost: true, action: () => Edit(a)));
                 var active = (a.Sources ?? new List<AccountSourceLink>()).Where(s => AccountLibrarySync.Sources(settings).Any(x => x.Key == s.Key)).ToList();
                 if (a.Sources?.Count > 0) {
-                    if (openSource != null && active.Count>0) tools.Controls.Add(Theme.MakeButton("Открыть раздел ▾", ghost: true, action: () => { var menu=Theme.MakeContextMenu(); foreach(var link in active) {var captured=link;menu.Items.Add(link.Platform+" · "+link.Market+(link.Kind==""?"":" · "+link.Kind),null,(sender,args)=>openSource(captured));} menu.Closed+=(sender,args)=>menu.Dispose();menu.Show(Cursor.Position); }));
+                    if (openSource != null && active.Count>0) tools.Controls.Add(Theme.MakeButton("Открыть раздел ▾", ghost: true, action: () => { var menu=Theme.MakeContextMenu(); foreach(var link in active) {var captured=link;menu.Items.Add(link.Platform+" · "+link.Market+(link.Kind==""?"":" · "+link.Kind),null,(sender,args)=>openSource(captured));} menu.Closed+=(sender,args)=>BeginInvoke((Action)(()=>menu.Dispose()));menu.Show(Cursor.Position); }));
                 } else tools.Controls.Add(Theme.MakeButton("Удалить", ghost: true, action: () => Delete(a)));
                 hero.Controls.Add(tools);
-                if (a.Sources?.Count > 0) AddText(hero, "Связано разделов: "+active.Count);
+                if (a.Sources?.Count > 0) {AddText(hero, "Связано разделов: "+active.Count);hints.SetToolTip(hero.Controls[hero.Controls.Count-1],AccountLibrarySync.DescribeSources(a,settings));}
                 var channel = Card("Канал"); ValueRow(channel, "Ссылка", a.Url, false, true);
                 var access = Card("Вход и прокси");
                 var reveal = Theme.MakeButton("Показать данные", ghost: true); reveal.Name = "RevealAccountSecrets";
@@ -211,7 +212,7 @@ namespace VideoBatch {
         static void OpenLink(string value) { AccountLibraryStore.ValidateUrl(value); if (!string.IsNullOrWhiteSpace(value)) Process.Start(new ProcessStartInfo(value.Trim()) { UseShellExecute = true }); }
         void Safe(Action action) { try { action(); } catch (Exception e) { MessageBox.Show(this, e.Message, "Аккаунты", MessageBoxButtons.OK, MessageBoxIcon.Warning); } }
         protected override void Dispose(bool disposing) {
-            if (disposing) { ClearCopiedSecret(); clipboardTimer.Dispose(); revealTimer.Dispose(); secretFields.Clear(); }
+            if (disposing) { ClearCopiedSecret(); clipboardTimer.Dispose(); revealTimer.Dispose(); hints.Dispose(); secretFields.Clear(); }
             base.Dispose(disposing);
         }
     }

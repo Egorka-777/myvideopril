@@ -491,8 +491,8 @@ namespace VideoBatch {
             row.Cells[CStatus].Value=text;((TikTokAccount)row.Tag).Status=text;Write(((TikTokAccount)row.Tag).Name+": "+text);
         }
         void Write(string text){
-            AppDiagnostics.Write("TikTok","","","interface",text);
             if(InvokeRequired){BeginInvoke(new Action<string>(Write),text);return;}
+            AppDiagnostics.Write("TikTok","","","interface",text);
             string line=DateTime.Now.ToString("HH:mm:ss")+"  "+text;
             try{LogLine?.Invoke(line);}catch{}
             log.AppendText(line+Environment.NewLine);log.ScrollToCaret();

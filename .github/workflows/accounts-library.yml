@@ -1,7 +1,7 @@
 name: Accounts library Windows
 on:
   push:
-    branches: [feat/accounts-library-20261008, feat/accounts-sync-lists-20261009]
+    branches: [feat/accounts-library-20261008, feat/accounts-sync-lists-20261009, feat/studio-media-thumbnail-fixes-20261014]
   pull_request:
     paths: ['src/Account*.cs', '.github/workflows/accounts-library.yml']
 jobs:

@@ -119,7 +119,9 @@ namespace VideoBatch {
             return HttpTikTokUploadRunner.Run(job,token,update,cancel);
         }
         static async Task<UploadRunResult> RunWorker(string workerPath,UploadJob job,Action<UploadMessage> update,CancellationToken cancel,string label) {
-            if(string.Equals(workerPath,WorkerTikTok,StringComparison.OrdinalIgnoreCase))CheckFilesTikTok();else CheckFiles();
+            AppDiagnostics.Write(label,job.profileId,"","preflight","Проверка runtime загрузчика");
+            try { if(string.Equals(workerPath,WorkerTikTok,StringComparison.OrdinalIgnoreCase))CheckFilesTikTok();else CheckFiles(); }
+            catch(Exception e){AppDiagnostics.Write(label,job.profileId,"","error",e.ToString(),"error");throw;}
             Directory.CreateDirectory(Path.Combine(Store.Root,"jobs"));
             string file=Path.Combine(Store.Root,"jobs","upload-"+Guid.NewGuid().ToString("N")+".json");
             string protectedToken=job.token;job.token=null;
@@ -161,7 +163,7 @@ namespace VideoBatch {
                     if(!result.Success||process.ExitCode!=0||!string.IsNullOrWhiteSpace(result.Error))throw new UploadException(string.IsNullOrWhiteSpace(result.Error)?"Загрузчик не подтвердил завершение операции. Повторно не публикуйте, сначала проверьте профиль Dolphin.":result.Error,result.KeptOpen);
                     return result;
                 }
-            } finally {try{if(process!=null){if(!process.HasExited)process.Kill();process.Dispose();}}catch{}try{File.Delete(file);}catch{}}
+            } catch(Exception e){AppDiagnostics.Write(label,job.profileId,Path.GetFileNameWithoutExtension(file),cancel.IsCancellationRequested?"cancelled":"error",e.ToString(),cancel.IsCancellationRequested?"warning":"error");throw;} finally {try{if(process!=null){if(!process.HasExited)process.Kill();process.Dispose();}}catch{}try{File.Delete(file);}catch{}}
         }
         public static async Task StopProfile(string token,int port,string profileId) {
             if(string.IsNullOrWhiteSpace(token)||string.IsNullOrWhiteSpace(profileId))return;

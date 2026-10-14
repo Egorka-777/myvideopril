@@ -19,7 +19,7 @@ namespace VideoBatch {
         public static void Row(TableLayoutPanel t,string label,Control c){int r=t.RowCount++;t.RowStyles.Add(new RowStyle(SizeType.AutoSize));var l=Label(label);l.Anchor=AnchorStyles.Left;l.Margin=new Padding(0,10,12,10);c.Margin=new Padding(0,7,0,7);t.Controls.Add(l,0,r);t.Controls.Add(c,1,r);}
         public static TableLayoutPanel Fields(){var t=Table(2);t.Dock=DockStyle.Top;t.AutoSize=true;t.ColumnStyles[0].Width=55;t.ColumnStyles[1].Width=45;return t;}
         public static FlowLayoutPanel Flow(){return new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,WrapContents=false,FlowDirection=FlowDirection.LeftToRight,Margin=new Padding(0),Padding=new Padding(0)};}
-        public static void Error(IWin32Window owner,Exception e){MessageBox.Show(owner,e.Message,"VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
+        public static void Error(IWin32Window owner,Exception e){AppDiagnostics.Write("Приложение","","","error",e.ToString(),"error");MessageBox.Show(owner,e.Message,"VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
         public static string File(IWin32Window owner,string filter){using(var d=new OpenFileDialog{Filter=filter})return d.ShowDialog(owner)==DialogResult.OK?d.FileName:null;}
         public static string Folder(IWin32Window owner,string current){using(var d=new FolderBrowserDialog{SelectedPath=current,Description="Выберите папку"})return d.ShowDialog(owner)==DialogResult.OK?d.SelectedPath:null;}
         public static void Open(string path){
