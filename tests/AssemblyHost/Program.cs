@@ -16,10 +16,10 @@ class Program {
         try {
             if (args[0] == "self-test") {
                 foreach(string method in new[]{"RunPlannerTests","RunPackTests","RunCapacityTests","RunObjectsTests","RunRoutingTests"}) {
-                    bool ok=(bool)typeof(AssemblyRegressionTests).GetMethod(method).Invoke(null,null);Console.WriteLine(method+": "+ok);if(!ok)return 1;
+                    bool ok=(bool)typeof(AssemblyRegressionTests).GetMethod(method).Invoke(null,null);Console.Error.WriteLine(method+": "+ok);if(!ok)return 1;
                 }
                 if(!AssemblyHistoryTests.RunSelfTests()||!AssemblyMarketTests.RunSelfTests())return 1;
-                Console.WriteLine("PASS: planner, packs, capacity, objects, routing, history, markets");return 0;
+                Console.WriteLine("True");return 0;
             }
             if (args[0] == "warm-sdr") { VideoSdr.WarmFolder(args[1], args[2], args[3], CancellationToken.None).GetAwaiter().GetResult(); Console.WriteLine("OK"); return 0; }
             var t = AssemblyFiles.Load<AssemblyTemplate>(args[1]);

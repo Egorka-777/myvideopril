@@ -103,7 +103,7 @@ namespace VideoBatch {
             Controls.Add(filters);
 
             logList = new ListBox { Dock = DockStyle.Fill, BackColor = Theme.Card, ForeColor = Theme.TextPrimary, BorderStyle = BorderStyle.None, Font = new Font("Consolas", 9f) };
-            Controls.Add(logList);
+            Controls.Add(logList); logList.BringToFront();
             accountFilter.TextChanged+=(s,e)=>RefreshData(); taskFilter.TextChanged+=(s,e)=>RefreshData();
             platformFilter.SelectedIndexChanged+=(s,e)=>RefreshData(); levelFilter.SelectedIndexChanged+=(s,e)=>RefreshData();
             RefreshData();

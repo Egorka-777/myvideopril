@@ -18,6 +18,7 @@ namespace VideoBatch {
             if (!UploadStaging.RunSelfTests()) return false;
             if (!RunLog160617Scenario()) return false;
             if (!RunYouTubeChannelUrlSelfTest()) return false;
+            if (!RunDiagnosticsSelfTest()) return false;
             if (!RunThumbnailFallbackSelfTest()) return false;
             if (!RunYouTubeMetadataSelfTest()) return false;
             if (!TaskQueueWriter.RunConcurrentWriteSelfTest(40, 25)) return false;
@@ -52,6 +53,35 @@ namespace VideoBatch {
                 Store.Root=oldRoot;
                 if (Directory.Exists(temp)) Directory.Delete(temp,true);
             }
+        }
+
+        public static bool RunDiagnosticsSelfTest() {
+            string previous=Store.Root,temp=Path.Combine(Path.GetTempPath(),"vb-diagnostics-"+Guid.NewGuid().ToString("N"));
+            try {
+                Store.Root=temp;
+                Parallel.For(0,25,i=>AppDiagnostics.Write(i%2==0?"YouTube":"TikTok","profile-"+i,"job-"+i,"thumbnail_warning","https://name:password@example.com/edit?token=secret", "warning"));
+                var lines=Directory.GetFiles(AppDiagnostics.Folder,"app-*.jsonl");
+                int count=0;
+                foreach(var file in lines)foreach(var line in File.ReadLines(file)) {
+                    var item=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,string>>(line);
+                    if(!item.ContainsKey("task")||!item.ContainsKey("account")||item["level"]!="warning"||item["message"].Contains("password")||item["message"].Contains("secret"))return false;
+                    count++;
+                }
+                if(count!=25)return false;
+                using(var form=new System.Windows.Forms.Form())using(var panel=new LogsPanel(new Preferences())) {
+                    form.Controls.Add(panel);form.Show();System.Windows.Forms.Application.DoEvents();
+                    Func<string,object> field=name=>typeof(LogsPanel).GetField(name,System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance).GetValue(panel);
+                    var list=(System.Windows.Forms.ListBox)field("logList");
+                    ((System.Windows.Forms.ComboBox)field("levelFilter")).SelectedItem="error";panel.RefreshData();if(list.Items.Count!=0)return false;
+                    ((System.Windows.Forms.ComboBox)field("levelFilter")).SelectedItem="warning";
+                    ((System.Windows.Forms.TextBox)field("accountFilter")).Text="profile-24";
+                    ((System.Windows.Forms.ComboBox)field("platformFilter")).SelectedItem="YouTube";
+                    ((System.Windows.Forms.TextBox)field("taskFilter")).Text="job-24";panel.RefreshData();if(list.Items.Count!=1)return false;
+                    if(!list.Items[0].ToString().Contains("thumbnail_warning"))return false;
+                    form.Close();
+                }
+                return true;
+            }finally {Store.Root=previous;if(Directory.Exists(temp))Directory.Delete(temp,true);}
         }
 
         public static bool RunThumbnailFallbackSelfTest() {

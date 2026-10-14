@@ -65,6 +65,8 @@ jobs:
             @{Type='TikTokScheduleGenerator';Method='RunSelfTests';Args=@()},
             @{Type='TikTokCaptionTemplates';Method='RunSelfTests';Args=@()},
             @{Type='UploadStaging';Method='RunSelfTests';Args=@()},
+            @{Type='HttpRegressionSelfTests';Method='RunThumbnailFallbackSelfTest';Args=@()},
+            @{Type='HttpRegressionSelfTests';Method='RunDiagnosticsSelfTest';Args=@()},
             @{Type='HttpRegressionSelfTests';Method='RunLog160617Scenario';Args=@()},
             @{Type='TaskQueueWriter';Method='RunConcurrentWriteSelfTest';Args=@(40,25)},
             @{Type='HttpRegressionSelfTests';Method='RunWorkerPoolScenario';Args=@()}

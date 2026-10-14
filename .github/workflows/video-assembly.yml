@@ -114,7 +114,8 @@ jobs:
           Copy-Item $ffprobe "$kit/tools/ffprobe.exe"
           Copy-Item (Get-Command node).Source "$kit/tools/uploader/node.exe"
           Copy-Item tools/uploader/* "$kit/tools/uploader" -Recurse -Force
-          Copy-Item docs/VIDEO_ASSEMBLY_RU.md "$kit/СНАЧАЛА-ПРОЧИТАЙ.md"
+          Copy-Item docs/AGENT_STUDIO_MEDIA_FIX_20261014_RU.md "$kit/СНАЧАЛА-ПРОЧИТАЙ.md"
+          Copy-Item docs/VIDEO_ASSEMBLY_RU.md "$kit/VIDEO_ASSEMBLY_RU.md"
           git rev-parse HEAD | Set-Content "$kit/SOURCE_COMMIT.txt"
           Get-ChildItem $kit -Recurse -File | ForEach-Object { "$((Get-FileHash $_.FullName).Hash)  $($_.FullName.Substring((Resolve-Path $kit).Path.Length+1))" } | Set-Content "$kit/SHA256_MANIFEST.txt"
           Compress-Archive -Path "$kit/*" -DestinationPath artifacts/VideoBatch-Assembly-Windows.zip
