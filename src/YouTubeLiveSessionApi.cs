@@ -9,18 +9,36 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace VideoBatch {
+    public static class LiveDiagnostics {
+        static readonly object gate=new object();
+        public static string LogPath => Path.Combine(Store.Root,"youtube-live.log");
+        public static string Sanitize(string text) {
+            string value=Regex.Replace(text ?? "",@"rtmps?://\S+","[stream]",RegexOptions.IgnoreCase);
+            value=Regex.Replace(value,@"(?:cookie|authorization|api[-_ ]?token|stream[-_ ]?key|ключ трансляции)\s*[:=]\s*[^\r\n,;]+","[секрет скрыт]",RegexOptions.IgnoreCase);
+            value=Regex.Replace(value,@"Bearer\s+\S+","Bearer [скрыто]",RegexOptions.IgnoreCase);
+            return value.Replace("\r"," ").Replace("\n"," ").Trim();
+        }
+        public static string Append(string text) {
+            string safe=Sanitize(text);
+            lock(gate)try{Directory.CreateDirectory(Store.Root);File.AppendAllText(LogPath,DateTime.Now.ToString("o")+" "+safe+Environment.NewLine,Encoding.UTF8);}
+            catch(Exception e) when(e is IOException || e is UnauthorizedAccessException){safe+=" · Лог не записан: "+e.Message;}
+            return safe;
+        }
+    }
+
     // Adapter to the authenticated Studio browser. No Google OAuth, cookies or stream keys on disk.
     public sealed class YouTubeLiveSessionApi : IYouTubeLiveApi {
         readonly LiveAccount account;
         readonly Preferences preferences;
         readonly Func<Dictionary<string, object>, CancellationToken, Task<Dictionary<string, object>>> runner;
+        readonly Action<string> progress;
         string expectedUrl = "";
         string operation = Guid.NewGuid().ToString("N");
         public string ChannelName { get; private set; }
         public string ChannelId { get; private set; }
         public YouTubeLiveSessionApi(LiveAccount account, Preferences preferences,
-            Func<Dictionary<string, object>, CancellationToken, Task<Dictionary<string, object>>> runner = null) {
-            this.account = account; this.preferences = preferences; this.runner = runner ?? RunWorker;
+            Func<Dictionary<string, object>, CancellationToken, Task<Dictionary<string, object>>> runner = null, Action<string> progress = null) {
+            this.account = account; this.preferences = preferences; this.runner = runner ?? RunWorker; this.progress=progress;
         }
         public static void CheckFiles() {
             if (!File.Exists(DolphinRunner.Node) || !File.Exists(Path.Combine(DolphinRunner.Root, "worker-youtube-live-session.js"))
@@ -44,7 +62,15 @@ namespace VideoBatch {
                 ["title"] = options.Title, ["description"] = options.Description, ["thumbnail"] = options.Thumbnail,
                 ["tags"] = options.Tags, ["privacy"] = options.Privacy, ["madeForKids"] = options.MadeForKids
             };
-            return await runner(job, ct).ConfigureAwait(false);
+            var watch=Stopwatch.StartNew();Report("Studio · "+command+" · начало");
+            try { var result=await runner(job,ct).ConfigureAwait(false);Report("Studio · "+command+" · завершено за "+Core.N(watch.Elapsed.TotalSeconds)+" с");return result; }
+            catch(Exception e){Report("Studio · "+command+" · ошибка: "+e.Message);throw;}
+
+        }
+        void Report(string text) { progress?.Invoke(LiveDiagnostics.Sanitize(text)); }
+        public async Task PrepareChannel(CancellationToken ct) {
+            var result=await Call("prepare",ct).ConfigureAwait(false);
+            if(!object.Equals(LiveJson.Get(result,"ready"),true))throw new InvalidOperationException("Studio не подтвердил готовность видеокодера.");
         }
         public async Task VerifyChannel(string id, string url, CancellationToken ct) {
             expectedUrl=url ?? "";
@@ -88,7 +114,8 @@ namespace VideoBatch {
             await Call("complete", ct, entry.BroadcastId).ConfigureAwait(false);
         }
         async Task<Dictionary<string, object>> RunWorker(Dictionary<string, object> job, CancellationToken ct) {
-            CheckFiles();
+            Report("Проверяю Node, загрузчик эфиров и зависимости…");CheckFiles();
+            Report("Runtime: "+DolphinRunner.Root);
             string token = WindowsSupport.Unprotect(preferences?.ProtectedDolphinToken ?? "");
             if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("Укажите API-токен Dolphin в настройках приложения.");
             var info = new ProcessStartInfo(DolphinRunner.Node, Core.Quote(Path.Combine(DolphinRunner.Root, "worker-youtube-live-session.js"))) {
@@ -116,13 +143,14 @@ namespace VideoBatch {
                         while ((line = await process.StandardOutput.ReadLineAsync().ConfigureAwait(false)) != null) {
                             if (line.Length > 1024 * 1024) throw new InvalidOperationException("Некорректный ответ Studio worker.");
                             var value = LiveJson.Object(line);
+                            if (LiveJson.Text(value, "type") == "progress")Report(LiveJson.Text(value,"text"));
                             if (LiveJson.Text(value, "type") == "result") reply = value;
                         }
-                        await Task.Run(() => process.WaitForExit()).ConfigureAwait(false); await drain.ConfigureAwait(false);
+                        await Task.Run(() => process.WaitForExit()).ConfigureAwait(false); string stderr=await drain.ConfigureAwait(false);
                         ct.ThrowIfCancellationRequested();
                         if (timeout.IsCancellationRequested) throw new TimeoutException("Studio не подтвердил операцию за 5 минут. Проверьте завершение эфира.");
                         if (reply == null || process.ExitCode != 0 || !object.Equals(LiveJson.Get(reply, "ok"), true))
-                            throw new InvalidOperationException(reply == null ? "Сессия Studio не подтвердила операцию. Повторный эфир не создаётся." : LiveJson.Text(reply, "error"));
+                            throw new InvalidOperationException(reply == null ? "Сессия Studio не подтвердила операцию. "+LiveDiagnostics.Sanitize(stderr) : LiveJson.Text(reply, "error"));
                         return LiveJson.Get(reply, "data") as Dictionary<string, object> ?? new Dictionary<string, object>();
                     } finally { try { if (!process.HasExited) process.Kill(); } catch (InvalidOperationException) { } }
                 }

@@ -17,7 +17,7 @@ namespace VideoBatch {
                 live = new YouTubeLiveManager(new LiveStore(), preferences: settings);
                 live.LogLine += LiveLog; live.Changed += LiveChanged;
                 AccountRemoval.RemovingYouTube += ValidateLiveAccountRemoval;
-            } catch (Exception ex) { liveButton.Enabled = false; AppendLog("ЭФИР · " + ex.Message); }
+            } catch (Exception ex) { liveButton.Enabled = false; AppendLog(LiveDiagnostics.Append("ЭФИР · инициализация: "+ex.Message)); }
             livePulse = new System.Windows.Forms.Timer { Interval = 100 };
             livePulse.Tick += (s, e) => { pulseStep += 0.25f; if (live != null && live.HasBusy) grid.InvalidateColumn(grid.Columns["account"].Index); };
             livePulse.Start(); UpdateLiveRows();
@@ -37,6 +37,7 @@ namespace VideoBatch {
         void AddLiveContextMenu(ContextMenuStrip menu, YouTubeChannel channel) {
             menu.Items.Add("Завершить эфир этого канала", null, async (s, e) => await StopLive(channel.ChannelId)).Enabled = live?.View(channel.ChannelId)?.Busy == true;
             menu.Items.Add("Завершить все эфиры", null, async (s, e) => await StopLive(null)).Enabled = live?.HasBusy == true;
+            menu.Items.Add("Открыть лог эфиров",null,(s,e)=>OpenLiveLog());
             menu.Items.Add("Настроить эфир / проверить сессию", null, (s, e) => ConfigureLive(channel));
             var state = live?.View(channel.ChannelId);
             if (!string.IsNullOrEmpty(state?.Url)) menu.Items.Add("Открыть страницу эфира", null, (s, e) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(state.Url) { UseShellExecute = true }));
@@ -52,14 +53,17 @@ namespace VideoBatch {
             }
         }
         async Task LiveButtonClick() { var channel=SelectedChannel(); if(channel!=null && live?.View(channel.ChannelId)?.Busy==true) await StopLive(channel.ChannelId); else StartLive(); }
+        void OpenLiveLog() {try{if(!File.Exists(LiveDiagnostics.LogPath))LiveDiagnostics.Append("ЭФИР · журнал открыт");Ui.Open(LiveDiagnostics.LogPath);}catch(Exception e){MessageBox.Show(this,e.Message,"Лог эфиров");}}
         void StartLive() {
-            if (live == null || stoppingLive) return;
+            if(live==null){LiveLog(LiveDiagnostics.Append("ЭФИР · запуск недоступен: менеджер не создан"));return;}
+            if(stoppingLive)return;
+            live.Trace("Нажат запуск эфира");
             var selected=SelectedChannel(); var channels=selected==null ? new List<YouTubeChannel>() : new List<YouTubeChannel>{selected};
-            if (channels.Count == 0) { MessageBox.Show(this, "Выдели строку канала для эфира.", "YouTube"); return; }
+            if (channels.Count == 0) { live.Trace("Запуск отменён: не выделена строка канала");MessageBox.Show(this, "Выдели строку канала для эфира.", "YouTube"); return; }
             try {
-                EnsureChannelIds();
+                EnsureChannelIds();live.Trace("Выбран канал: "+selected.Name+" · Dolphin "+selected.ProfileId);
                 using (var dialog = new YouTubeLiveDialog(live, channels)) if (dialog.ShowDialog(FindForm()) == DialogResult.OK) live.Start(channels, dialog.Options);
-            } catch (Exception e) { MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            } catch (Exception e) { live.Trace("Ошибка запуска: "+e.Message);MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
         void ConfigureLive(YouTubeChannel channel = null) {
             if (live == null || stoppingLive) return;
@@ -68,7 +72,7 @@ namespace VideoBatch {
             if (channels.Count == 0) { MessageBox.Show(this, "Отметьте каналы, сессии которых нужно проверить.", "YouTube"); return; }
             try { using (var dialog = new YouTubeLiveDialog(live, channels)) {
                 if (dialog.ShowDialog(FindForm()) == DialogResult.OK) live.Start(channels, dialog.Options);
-            } } catch (Exception e) { MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            } } catch (Exception e) { live.Trace("Ошибка запуска: "+e.Message);MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
         async Task StopLive(string id) {
             if (live == null || stoppingLive) return;
@@ -86,8 +90,7 @@ namespace VideoBatch {
             if (IsDisposed || !IsHandleCreated) return;
             if (InvokeRequired) { BeginInvoke(new Action<string>(LiveLog), line); return; }
             AppendLog(line);
-            try { Directory.CreateDirectory(Store.Root); File.AppendAllText(Path.Combine(Store.Root, "youtube-live.log"), DateTime.Now.ToString("o") + " " + line + Environment.NewLine); }
-            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException) { AppendLog("Не удалось записать лог эфира: " + e.Message); }
+
         }
         void UpdateLiveRows() {
             if (grid == null || liveButton == null) return;

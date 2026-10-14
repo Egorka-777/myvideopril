@@ -10,6 +10,7 @@ const dolphin = require("../tools/uploader/dolphin-session");
   let creates = 0, starts = 0, stops = 0, state = "ready", loseCreate = false, loseStart = false, configFail = false;
   const ui = {
     verify: async () => ({ channelId: "UCtest" }),
+    prepare:async()=>{},
     create: async () => { creates++; if (loseCreate) throw new Error("response lost"); return video; },
     discover: async () => video, open: async got => assert.equal(got, video),
     ingest: async () => ({ address: "rtmp://a.rtmp.youtube.com/live2", key: "fixture-key-1234" }),
@@ -26,6 +27,10 @@ const dolphin = require("../tools/uploader/dolphin-session");
     assert(!sanitize(new Error("Cookie: secret123 https://example.com/path?token=private rt m")).includes("secret123"));
     const wrong = { ...ui, verify: async () => ({ channelId: "UCother" }) };
     await assert.rejects(new SessionEngine(base, wrong).execute(), /другой канал/); assert.equal(creates, 0);
+    const notReady={...ui,prepare:async()=>{throw new Error("activation required");}};
+    await assert.rejects(new SessionEngine({...base,command:"prepare"},notReady).execute(),/activation/);
+    assert.equal(creates,0);assert(!fs.existsSync(path.join(base.stateDirectory,id+".json")),"preflight failure reserved an external creation");
+    assert.equal((await call("prepare")).ready,true);
     await call("create"); assert.equal(creates, 1);
     const store = new OperationStore(base); assert.equal(store.read().broadcastId, video);
     const cache = path.join(root, "dolphin-sessions");

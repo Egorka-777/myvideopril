@@ -34,7 +34,7 @@ namespace VideoBatch {
         public YouTubeLiveManager(LiveStore store, Func<LiveAccount, IYouTubeLiveApi> apiFactory = null,
             Func<LiveOptions, CancellationToken, Task<LivePlaylist>> prepare = null, Func<LivePlaylist, double, string, ILiveEncoder> encoder = null, Preferences preferences = null) {
             Store = store; Preferences = preferences;
-            this.apiFactory = apiFactory ?? (a => a.Transport == "studio" ? (IYouTubeLiveApi)new YouTubeLiveSessionApi(a, preferences) : new YouTubeLiveApi(store, a)); prepareOverride = prepare; encoderOverride = encoder;
+            this.apiFactory = apiFactory ?? (a => a.Transport == "studio" ? (IYouTubeLiveApi)new YouTubeLiveSessionApi(a, preferences, progress: text=>Log(a.Name+" · "+text)) : new YouTubeLiveApi(store, a)); prepareOverride = prepare; encoderOverride = encoder;
             foreach (var entry in store.PendingSnapshot()) views[entry.LocalId] = new LiveView {
                 LocalId = entry.LocalId, Name = store.Account(entry.LocalId)?.Name ?? entry.LocalId, Phase = LivePhase.NeedsCleanup,
                 Url = string.IsNullOrEmpty(entry.BroadcastId) ? "" : "https://www.youtube.com/watch?v=" + entry.BroadcastId,
@@ -46,7 +46,8 @@ namespace VideoBatch {
             Log(s.Channel.Name + " · " + View(s.Channel.ChannelId).Label + (string.IsNullOrEmpty(detail) ? "" : " · " + detail));
             Changed?.Invoke();
         }
-        void Log(string line) => LogLine?.Invoke("ЭФИР · " + line);
+        public void Trace(string line) {string safe=LiveDiagnostics.Append("ЭФИР · "+line);LogLine?.Invoke(safe);}
+        void Log(string line) => Trace(line);
         public void Start(IReadOnlyList<YouTubeChannel> channels, LiveOptions options) {
             options.Validate();
             if (channels == null || channels.Count == 0) throw new InvalidOperationException("Отметьте каналы галочками.");
@@ -113,7 +114,8 @@ namespace VideoBatch {
                 api = apiFactory(s.Account);
                 await api.VerifyChannel(s.Account.RemoteId, s.Channel.ChannelUrl, s.Cancel.Token).ConfigureAwait(false);
                 var playlist = await AwaitCancelable(prepared, s.Cancel.Token).ConfigureAwait(false);
-                State(s, LivePhase.Starting);
+                State(s, LivePhase.Starting,"Проверяю готовность YouTube Studio к видеокодеру…");
+                if(api is YouTubeLiveSessionApi studio)await studio.PrepareChannel(s.Cancel.Token).ConfigureAwait(false);
                 s.Journal.BroadcastAttempted = true;
                 Store.Journal(s.Journal); journaled = true;
                 try { s.Journal.BroadcastId = await api.CreateBroadcast(options, YouTubeLiveApi.Marker(s.Journal.OperationId), s.Cancel.Token).ConfigureAwait(false); }
@@ -138,6 +140,7 @@ namespace VideoBatch {
                 int restarts = 0;
                 while (true) {
                     s.Cancel.Token.ThrowIfCancellationRequested();
+                    Log(s.Channel.Name+" · запускаю FFmpeg на ПК; ожидаю сигнал и подтверждение YouTube");
                     s.Encoder = encoderOverride != null ? encoderOverride(playlist, offset, ingestion)
                         : new LiveEncoder(ffmpeg, YouTubeLiveMedia.StreamArguments(playlist, true, offset, ingestion), ingestion);
                     var started = DateTime.UtcNow;

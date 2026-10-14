@@ -116,7 +116,7 @@ namespace VideoBatch {
         }
         static async Task Run() {
             string root = Path.Combine(Path.GetTempPath(), "videobatch-live-tests-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(root);
+            Directory.CreateDirectory(root);string previousRoot=Store.Root;Store.Root=root;
             try {
                 string folder = Path.Combine(root, "videos"); Directory.CreateDirectory(folder);
                 File.WriteAllText(Path.Combine(folder, "02.mp4"), "dummy"); File.WriteAllText(Path.Combine(folder, "01.mp4"), "dummy");
@@ -129,6 +129,11 @@ namespace VideoBatch {
                 options.Description=new string('Ж',2500);options.Validate();options.Description+="Ж";
                 Rejected(options.Validate,"description UTF8 byte limit ignored");options.Description="";
                 Console.WriteLine("LIVE TEST: input, playlist order, tags and UTF8 limits passed");
+                var silentManager=new YouTubeLiveManager(new LiveStore(root));
+                silentManager.Trace("диагностика без окна · rtmps://a.rtmps.youtube.com/live2/test-secret-key");
+                silentManager.Trace("Cookie: test-secret-cookie");
+                string diagnostic=File.ReadAllText(LiveDiagnostics.LogPath);
+                Check(diagnostic.Contains("диагностика без окна") && !diagnostic.Contains("test-secret"),"diagnostics missing before UI or secret leaked");
                 var store = new LiveStore(root); store.Config.ClientId = "test";
                 var a = new LiveAccount { LocalId = "a", RemoteId = "UCtest", ProtectedRefreshToken = WindowsSupport.Protect("test-refresh") };
                 var b = new LiveAccount { LocalId = "b", RemoteId = "UCtest2", ProtectedRefreshToken = "fake" };
@@ -188,7 +193,7 @@ namespace VideoBatch {
                     Check(child.WaitForExit(5000), "encoder ownership must stop children when app/job closes");
                 }
                 Console.WriteLine("LIVE TEST: session adapter and Windows child ownership passed");
-            } finally { Directory.Delete(root, true); }
+            } finally {Store.Root=previousRoot;Directory.Delete(root,true);}
         }
         static async Task SessionContracts() {
             var calls = new List<Dictionary<string, object>>();
@@ -197,6 +202,7 @@ namespace VideoBatch {
                 calls.Add(job);
                 string command = LiveJson.Text(job, "command");
                 var reply = new Dictionary<string, object>();
+                if(command=="prepare")reply["ready"]=true;
                 if (command == "verify") { reply["channelId"] = "UCtest"; reply["channelName"] = "Session test"; }
                 if (command == "create" || command == "ingest") reply["broadcastId"] = "abcdefghijk";
                 if (command == "ingest") { reply["address"] = "rtmps://a.rtmps.youtube.com/live2"; reply["key"] = "test-stream-key"; }
@@ -209,6 +215,7 @@ namespace VideoBatch {
                 string operation = new string('a', 32);
                 await api.VerifyChannel("UCtest", "https://youtube.com/channel/UCtest", ct).ConfigureAwait(false);
                 Check(api.ChannelId == "UCtest", "session binding identity");
+                await api.PrepareChannel(ct).ConfigureAwait(false);
                 string id = await api.CreateBroadcast(options, YouTubeLiveApi.Marker(operation), ct).ConfigureAwait(false);
                 var stream = await api.CreateStream(options, YouTubeLiveApi.Marker(operation), ct).ConfigureAwait(false);
                 Check(LiveJson.Text(stream, "id") == id, "native Studio uses its broadcast handle");
@@ -216,7 +223,7 @@ namespace VideoBatch {
                 Check(await api.BroadcastState(id, ct).ConfigureAwait(false) == "live", "native broadcast status");
                 Check(await api.StreamState(id, ct).ConfigureAwait(false) == "active", "native stream status");
                 await api.Complete(new LiveJournalEntry { OperationId = operation, BroadcastId = id, BroadcastAttempted = true }, ct).ConfigureAwait(false);
-                Check(calls.Skip(1).All(j => LiveJson.Text(j, "operationId") == operation && LiveJson.Text(j, "profileId") == "123" && LiveJson.Text(j, "expectedChannelId") == "UCtest"), "session ownership lost");
+                Check(calls.Where(j=>!new[]{"verify","prepare"}.Contains(LiveJson.Text(j,"command"))).All(j => LiveJson.Text(j, "operationId") == operation && LiveJson.Text(j, "profileId") == "123" && LiveJson.Text(j, "expectedChannelId") == "UCtest"), "session ownership lost");
                 Check(calls.All(j => !j.ContainsKey("token") && !j.ContainsKey("refresh_token") && !j.ContainsKey("cookie")), "credentials in session jobs");
             }
         }

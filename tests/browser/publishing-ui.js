@@ -63,7 +63,7 @@ const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
       });
       const page=await context.newPage();await page.goto("https://www.tiktok.com/tiktokstudio/upload");
       const caption=lang==='ru'?"Бот в профиле 👇\n\n#бинодекс #трейдинг":"Bot in profile 👇\n\n#binodex #trading";
-      await fillCaption(page,caption);assert(await page.evaluate(()=>window.keys)>10,"caption was not typed through keyboard");
+      const typedAt=Date.now();await fillCaption(page,caption);assert(Date.now()-typedAt>=1000,"caption still inserted in a burst");assert(await page.evaluate(()=>window.keys)>10,"caption was not typed through keyboard");
       let persisted=false, accepted=false;
       const result=await native.publishNative(page,{caption},{beforeSubmit:async()=>{persisted=true;},accepted:async r=>{accepted=true;assert(persisted&&r.id==='222');},reviewTimeout:pending?150:5000,pollMs:5});
       assert(pending?result.review&&!result.public:result.public&&!result.review);assert.equal(clicks,1);assert.equal(confirmations,1);assert(accepted);assert.equal(captions,caption);

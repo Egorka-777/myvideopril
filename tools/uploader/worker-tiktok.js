@@ -510,7 +510,7 @@ async function fillCaption(page, caption) {
       await box.click({timeout:3000});await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
       for(const [lineIndex,line] of captionText.split("\n").entries()) {
         if(lineIndex)await page.keyboard.press("Shift+Enter");
-        await page.keyboard.type(line,{delay:10});
+        await page.keyboard.type(line,{delay:70});
       }
       await page.waitForTimeout(400);
       const actual = await box.evaluate(el => el.value != null ? el.value : (el.innerText || el.textContent || "")).catch(() => "");
@@ -687,11 +687,15 @@ async function uploadOne(page, item, index, total) {
 
   const input = await pickFileInput(page);
   if (!input) throw new Error("Input файла исчез до передачи.");
+  const selectedAt=Date.now();
   await setInputFilesRobust(page, input, video);
   send("tiktok", `Пачка ${index}/${total}: файл передан, заполняю подпись…`, {
     percent: Math.min(92, 30 + Math.round(index / Math.max(1, total) * 55))
   });
   await waitUploadReady(page);
+  const remaining=Math.max(0,15000-(Date.now()-selectedAt));
+  if(remaining){send("tiktok","Видео готово · короткая пауза перед вводом подписи…");await page.waitForTimeout(remaining);}
+  send("tiktok","Ввожу подпись по буквам…");
   await fillCaption(page, caption);
   if(item.publishMode==="scheduled")await require("./tiktok-studio-evidence").setNativeSchedule(page,item);
   else await require("./tiktok-native-publish").immediatePublic(page);

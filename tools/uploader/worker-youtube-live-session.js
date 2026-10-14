@@ -6,11 +6,14 @@ const fs = require("fs"), path = require("path"), readline = require("readline")
 const dolphin = require("./dolphin-session");
 const existing = require("./worker-http");
 const ORIGIN = "https://studio.youtube.com";
+const WORKER_BUILD="20261014-live-setup-v1";
+function emitProgress(text) { process.stdout.write(JSON.stringify({type:"progress",text:sanitize(text)})+"\n"); }
 const VIDEO = /^[A-Za-z0-9_-]{11}$/;
 const CHANNEL = /^UC[A-Za-z0-9_-]+$/;
 const labels = {
   schedule: /^(Schedule stream|Schedule live stream|Запланировать трансляцию|Запланировать эфир)$/i,
-  createNew: /^(Create new|Создать|Создать трансляцию)$/i,
+  createNew: /^(Create new|Создать новую|Создать новую трансляцию|Создать трансляцию)$/i,
+  finish: /^(Schedule stream|Schedule live stream|Запланировать трансляцию|Запланировать эфир|Done|Готово)$/i,
   next: /^(Next|Далее)$/i,
   save: /^(Save|Сохранить)$/i,
   edit: /^(Edit|Изменить|Редактировать)$/i,
@@ -20,13 +23,13 @@ const labels = {
   kidsYes: /^Yes, it.s made for kids|^Да, это видео для детей/i,
   kidsNo: /^No, it.s not made for kids|^Нет, это видео не для детей/i,
   software: /^(Streaming software|Encoder|Видеокодер|Программа для трансляций)$/i,
-  public: /^(Public|Открытый доступ)$/i,
-  unlisted: /^(Unlisted|Доступ по ссылке)$/i,
-  private: /^(Private|Ограниченный доступ)$/i
+  public: /^(Public|Открытый доступ|Для всех)$/i,
+  unlisted: /^(Unlisted|Доступ по ссылке|По ссылке)$/i,
+  private: /^(Private|Ограниченный доступ|Только я)$/i
 };
 
 function validateJob(job) {
-  if (!job || !["verify", "create", "ingest", "configure", "status", "stream-status", "complete"].includes(job.command)) throw new Error("Неизвестная операция Studio.");
+  if (!job || !["verify", "prepare", "create", "ingest", "configure", "status", "stream-status", "complete"].includes(job.command)) throw new Error("Неизвестная операция Studio.");
   if (!/^[a-f0-9]{32}$/.test(job.operationId || "") || !/^[A-Za-z0-9_-]+$/.test(job.profileId || "")) throw new Error("Некорректные ID операции/профиля.");
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535 || !path.isAbsolute(job.stateDirectory || "")) throw new Error("Некорректные настройки Dolphin.");
   if (job.expectedChannelId && !CHANNEL.test(job.expectedChannelId)) throw new Error("Некорректный ID канала.");
@@ -88,6 +91,7 @@ class SessionEngine {
     const j = this.job, identity = await this.ui.verify(this.job.expectedChannelUrl || "");
     if (!CHANNEL.test(identity.channelId || "") || (j.expectedChannelId && j.expectedChannelId !== identity.channelId)) throw new Error("В Dolphin открыт другой канал. Изменения не выполнялись.");
     if (j.command === "verify") return identity;
+    if(j.command==="prepare"){await this.ui.prepare();return {ready:true};}
     let saved = this.store.read();
     if (j.command === "create") {
       if (saved) throw new Error("Создание уже запрашивалось. Сначала проверьте/завершите прежний эфир.");
@@ -148,14 +152,17 @@ async function waitUntil(fn, timeout = 15000) {
   throw new Error("Studio не подтвердил изменение состояния.");
 }
 class NativeStudio {
-  constructor(page, channelId = "") { this.page = page; this.channelId = channelId; this.broadcastId = ""; }
+  constructor(page, channelId = "",progress=()=>{}) { this.page = page; this.channelId = channelId; this.broadcastId = "";this.progress=text=>{this.lastStep=text;progress(text);}; }
   async button(name, scope = this.page, required = true) { return uniqueVisible(scope.getByRole("button", { name }), required); }
-  async click(name, scope = this.page) { const b = await waitUntil(() => this.button(name, scope, false)); await b.click({ timeout: 10000 }); }
+  async click(name, scope = this.page) { this.lastAction=name.source;
+    const hint=name===labels.schedule?"Открываю мастер нового эфира":name===labels.finish?"Подтверждаю создание эфира":name===labels.edit?"Открываю настройки эфира":name===labels.save?"Сохраняю настройки":name===labels.go?"Запускаю эфир в Studio":name===labels.end?"Завершаю эфир в Studio":"Ожидаю действие YouTube Studio";
+    this.progress(hint);const b = await waitUntil(() => this.button(name, scope, false)); await b.click({ timeout: 10000 }); }
   async dialog() {
     return waitUntil(async () => await uniqueVisible(this.page.getByRole("dialog"), false)
       || await uniqueVisible(this.page.locator('ytcp-dialog[opened], tp-yt-paper-dialog[opened]').filter({ hasNot: this.page.getByRole("dialog") }), false));
   }
   async verify(expectedUrl = "") {
+    this.progress("Открываю YouTube Studio и проверяю канал");
     await this.page.goto(ORIGIN, { waitUntil: "domcontentloaded", timeout: 90000 });
     await existing.waitForStudioChannel(this.page, 90000);
     const data = existing.parseStudioBootstrap(await this.page.content(), this.page.url());
@@ -182,8 +189,8 @@ class NativeStudio {
     this.broadcastId = id;
     await this.page.goto(`${ORIGIN}/video/${id}/livestreaming`, { waitUntil: "domcontentloaded", timeout: 60000 });
     await this.assertTarget();
-    await waitUntil(async () => await this.button(labels.go, this.page, false) || await this.button(labels.end, this.page, false)
-      || labels.finished.test(await this.page.locator("body").innerText()), 30000);
+    // The Go live control can be absent until the encoder sends its first frames.
+    await waitUntil(()=>this.roomReady(),30000);
   }
   async assertTarget() {
     const url = new URL(this.page.url());
@@ -195,9 +202,55 @@ class NativeStudio {
     });
     if (actual && actual !== this.channelId) throw new Error("Канал сессии изменился. Эфир не изменён.");
   }
+  async roomReady() {
+    return await this.button(labels.edit,this.page,false) || await this.button(labels.go,this.page,false) || await this.button(labels.end,this.page,false)
+      || await uniqueVisible(this.page.getByText(/^(Stream URL|URL трансляции|URL сервера)$/i,{exact:true}),false)
+      || labels.finished.test(await this.page.locator("body").innerText());
+  }
+  async liveSetup() {
+    const when=/when do you want to go live|when would you like to go live|когда вы (?:хотите|планируете) (?:начать|выйти)|когда (?:начать|выйти).*?(?:эфир|трансляц)/i;
+    const how=/how (?:would you like|do you want) to go live|how do you want to stream|как вы (?:хотите|планируете).*?(?:эфир|трансляц)|способ (?:ведения|проведения) трансляции/i;
+    let changed=false;
+    for(let i=0;i<4;i++) {
+      const question=await uniqueVisible(this.page.getByRole("heading").filter({hasText:when}),false)
+        || await uniqueVisible(this.page.getByText(when).filter({hasNot:this.page.locator("button")}),false);
+      if(question) {
+        const later=/^(Later date|At a later date|Later|Позже|В другое время|В другой день)(?:\s|$)/i;
+        const choice=await uniqueVisible(this.page.getByRole("button",{name:later}),false);
+        if(!choice)throw new Error("YouTube показывает первый выбор времени эфира. Выбери «Позже» в профиле Dolphin; автоматическое создание ещё не выполнялось.");
+        this.progress("Первый запуск Studio: выбираю время «Позже» для управления эфирами");await choice.click();changed=true;await this.page.waitForTimeout(500);continue;
+      }
+      const method=await uniqueVisible(this.page.getByRole("heading").filter({hasText:how}),false)
+        || await uniqueVisible(this.page.getByText(how).filter({hasNot:this.page.locator("button")}),false);
+      if(method) {
+        const choice=await uniqueVisible(this.page.getByRole("button",{name:/^(Streaming software|Encoder|Видеокодер|Программа для трансляций)(?:\s|$)/i}),false);
+        if(!choice)throw new Error("YouTube показывает выбор способа трансляции. Выбери «Видеокодер» в профиле Dolphin; эфир ещё не создавался.");
+        this.progress("Первый запуск Studio: выбираю «Видеокодер»");await choice.click();changed=true;await this.page.waitForTimeout(500);continue;
+      }
+      break;
+    }
+    return changed;
+  }
   async manage() {
-    await this.page.goto(`${ORIGIN}/channel/${this.channelId}/livestreaming/manage`, { waitUntil: "domcontentloaded", timeout: 60000 });
-    if (!this.page.url().includes(`/channel/${this.channelId}/`)) throw new Error("Studio не открыл управление нужным каналом.");
+    const target=`${ORIGIN}/channel/${this.channelId}/livestreaming/manage`;
+    this.progress("Открываю управление трансляциями нужного канала");
+    await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});
+    await waitUntil(async()=>{
+      const text=await this.page.locator("body").innerText();
+      const blocker=existing.studioPageState(this.page.url(),text).blocker;if(blocker)throw new Error(blocker);
+      if(/24\s*(?:hours|час)|activate live streaming|включить.*прям.*трансляц|live streaming isn.t available|трансляции недоступны/i.test(text))
+        throw new Error("YouTube требует активации/проверки доступа к эфирам. Заверши этот шаг в Dolphin; первая активация может занять до 24 часов.");
+      if(await this.liveSetup()){await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});return false;}
+      return await this.button(labels.schedule,this.page,false);
+    },45000);
+    const url=new URL(this.page.url());
+    if(url.origin!==ORIGIN || !url.pathname.startsWith(`/channel/${this.channelId}/`))throw new Error("Studio не открыл управление нужным каналом.");
+  }
+  async prepare() {
+    await this.manage();
+    const liveRows=this.page.locator("ytcp-video-row, [role='row']").filter({hasText:/\bLIVE\b|Трансляция ид[её]т|В эфире/});
+    if(await liveRows.count())throw new Error("На канале уже есть эфир. Существующая передача не изменена.");
+    this.progress("YouTube готов к созданию отдельного эфира через видеокодер");
   }
   async discover(title) {
     await this.manage();
@@ -241,7 +294,7 @@ class NativeStudio {
     } else if (options.tags.length) throw new Error("Studio не показал поле тегов.");
   }
   async create(title, options) {
-    await this.manage();
+    await this.prepare();
     const liveRows = this.page.locator("ytcp-video-row, [role='row']").filter({ hasText: /\bLIVE\b|Трансляция ид[её]т|В эфире/ });
     if (await liveRows.count()) throw new Error("На канале уже есть эфир. Существующая передача не изменена.");
     await this.click(labels.schedule);
@@ -262,7 +315,7 @@ class NativeStudio {
       await next.click(); await this.page.waitForTimeout(500);
     }
     if (!await uniqueVisible(dialog.getByRole("radio", { name: labels.private }), false)) throw new Error("Не подтверждён приватный доступ к создаваемому эфиру.");
-    await this.click(labels.schedule, dialog);
+    await this.click(labels.finish, dialog);
     await waitUntil(async () => !await dialog.isVisible());
     const openRoom = await this.button(/^(View in Live Control Room|Open Live Control Room|Открыть панель управления трансляцией|Перейти в панель управления)$/i, this.page, false);
     if (openRoom) await openRoom.click();
@@ -279,26 +332,34 @@ class NativeStudio {
       if (!copy) continue;
       // Capture a native copy action in this task tab. Do not put the secret in the system clipboard.
       await this.page.evaluate(() => {
-        window.__vbCopied = ""; window.__vbOriginalCopy = navigator.clipboard.writeText;
+        window.__vbCopied = ""; window.__vbOriginalCopy = navigator.clipboard.writeText;window.__vbOriginalWrite=navigator.clipboard.write;
         navigator.clipboard.writeText = async text => { window.__vbCopied = String(text); };
-        window.__vbCopyListener = e => { const text = e.clipboardData && e.clipboardData.getData("text/plain"); if (text) { window.__vbCopied = text; e.preventDefault(); } };
-        document.addEventListener("copy", window.__vbCopyListener);
+        navigator.clipboard.write=async items=>{for(const item of items)if(item.types.includes("text/plain")){window.__vbCopied=await (await item.getType("text/plain")).text();break;}};
+        window.__vbCopyListener=e=>{
+          const active=document.activeElement;
+          const selected=window.getSelection()?.toString() || (active && typeof active.selectionStart==="number" ? String(active.value||"").slice(active.selectionStart,active.selectionEnd):"");
+          const text=e.clipboardData?.getData("text/plain") || selected;
+          if(text){window.__vbCopied=text;e.preventDefault();}
+        };
+        document.addEventListener("copy",window.__vbCopyListener,true);
       });
       try {
         await copy.click();
         return await waitUntil(() => this.page.evaluate(() => window.__vbCopied || ""), 5000);
       } finally {
         await this.page.evaluate(() => {
-          navigator.clipboard.writeText = window.__vbOriginalCopy; document.removeEventListener("copy", window.__vbCopyListener);
-          delete window.__vbCopied; delete window.__vbOriginalCopy; delete window.__vbCopyListener;
+          navigator.clipboard.writeText = window.__vbOriginalCopy;navigator.clipboard.write=window.__vbOriginalWrite;
+          document.removeEventListener("copy",window.__vbCopyListener,true);
+          delete window.__vbCopied;delete window.__vbOriginalCopy;delete window.__vbCopyListener;delete window.__vbOriginalWrite;
         }).catch(() => {});
       }
     }
-    throw new Error("Не найдено управление копированием параметра трансляции.");
+    throw new Error("Не найдено управление копированием параметра трансляции: "+pattern.source);
   }
   async ingest(name) {
     await this.assertTarget();
     // A separate key avoids sharing a previous stream's ingest destination.
+    this.progress("Создаю отдельный ключ трансляции для выбранного канала");
     const drop = await uniqueVisible(this.page.locator('#stream-key-select ytcp-dropdown-trigger, #stream-key-select [role="combobox"], [aria-label="Stream key"], [aria-label="Ключ трансляции"]'));
     await drop.click();
     await this.click(/^(Create new stream key|Создать ключ трансляции|Создать новый ключ трансляции)$/i);
@@ -308,9 +369,11 @@ class NativeStudio {
     await waitUntil(async () => (await drop.innerText()).includes(name));
     const key = await this.copySetting(/^(Stream key(?: \(paste in encoder\))?|Ключ трансляции(?: \(вставьте в видеокодер\))?)$/i);
     const address = await this.copySetting(/^(Stream URL|URL трансляции|URL сервера)$/i);
+    this.progress("URL сервера и ключ получены; ключ в лог не записывается");
     return { key: key.trim(), address: address.trim() };
   }
   async configure(options) {
+    this.progress("Сохраняю название, описание, теги и превью эфира");
     await this.assertTarget(); await this.click(labels.edit);
     const d = await this.dialog();
     await this.details(d, options.title, options, true);
@@ -349,7 +412,7 @@ class NativeStudio {
     if (end && await end.isEnabled()) return "live";
     if (labels.finished.test(text)) return "complete";
     const go = await this.button(labels.go, this.page, false);
-    if (go) return "ready";
+    if (go || await this.roomReady()) return "ready";
     return null; // Native controls can briefly disappear while Studio renders the new state.
   }
   async state() { return waitUntil(()=>this.readState(),15000); }
@@ -398,16 +461,19 @@ class NativeStudio {
 async function main() {
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   let input = ""; for await (const line of lines) { input = line; break; } lines.close();
+  emitProgress("Studio worker "+WORKER_BUILD);
   const job = validateJob(JSON.parse(input)); job.liveOperationId = job.operationId;
   const token = process.env.VIDEOBATCH_DOLPHIN_TOKEN || "";
   if (!token) throw new Error("Не передан API-токен Dolphin.");
   const request = (p, options = {}, timeout) => dolphin.requestLocal(job, p, options, timeout);
+  emitProgress("Подключаюсь к локальному Dolphin");
   const auth = await request("/v1.0/auth/login-with-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
   if (!auth.ok || auth.data.success === false) throw new Error("Dolphin отклонил авторизацию локального API.");
+  emitProgress("Открываю или подключаю профиль Dolphin "+job.profileId);
   const endpoint = await dolphin.startOrAttach(job, path.join(path.dirname(job.stateDirectory), "dolphin-sessions"), request);
   const { chromium } = require("playwright-core");
   const browser = await chromium.connectOverCDP(endpoint, { timeout: 60000 });
-  let page;
+  let page,ui,succeeded=false;
   const events = [];
   try {
     const context = browser.contexts()[0]; if (!context) throw new Error("Dolphin не вернул браузерную сессию.");
@@ -420,15 +486,18 @@ async function main() {
       events.push({ method: response.request().method(), path: u.pathname, status: response.status() });
       if (events.length > 25) events.shift();
     });
-    const ui = new NativeStudio(page);
+    ui = new NativeStudio(page,"",emitProgress);
     const data = await new SessionEngine(job, ui).execute();
+    succeeded=true;
     process.stdout.write(JSON.stringify({ type: "result", ok: true, data }) + "\n");
   } catch (error) {
     fs.mkdirSync(job.stateDirectory, { recursive: true });
-    fs.writeFileSync(path.join(job.stateDirectory, job.operationId + ".diagnostic.json"), JSON.stringify({ command: job.command, error: sanitize(error), requests: events }), { mode: 0o600 });
+    const diagnostic=path.join(job.stateDirectory,job.operationId+".diagnostic.json");
+    fs.writeFileSync(diagnostic, JSON.stringify({ command: job.command, error: sanitize(error), step:ui?.lastStep || "Подключение Dolphin", action:ui?.lastAction || "", taskTabLeftOpen:!!page, requests: events }), { mode: 0o600 });
+    emitProgress("Ошибка Studio: "+sanitize(error)+" · диагностика: "+diagnostic+" · проблемная вкладка оставлена открытой");
     throw error;
   } finally {
-    if (page) await dolphin.releaseTaskPage(page).catch(() => {});
+    if (page && succeeded) await dolphin.releaseTaskPage(page).catch(() => {});
     // connectOverCDP: close disconnects this client; never close the existing context or call Dolphin /stop.
     await browser.close().catch(() => {});
   }
@@ -436,4 +505,4 @@ async function main() {
 if (require.main === module) main().catch(error => {
   process.stdout.write(JSON.stringify({ type: "result", ok: false, error: sanitize(error) }) + "\n"); process.exitCode = 1;
 });
-module.exports = { validateJob, sanitize, rtmpsAddress, OperationStore, operationTitle, SessionEngine, NativeStudio, uniqueVisible, labels };
+module.exports = { WORKER_BUILD,validateJob, sanitize, rtmpsAddress, OperationStore, operationTitle, SessionEngine, NativeStudio, uniqueVisible, labels };

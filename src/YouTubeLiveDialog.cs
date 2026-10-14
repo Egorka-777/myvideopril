@@ -18,6 +18,7 @@ namespace VideoBatch {
         readonly ListBox accounts = new ListBox();
         readonly Button connect = new Button(), launch = new Button();
         readonly Label oauth = new Label();
+        readonly Label progressLabel=new Label{Dock=DockStyle.Fill,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Theme.TextPrimary};
         bool connecting;
         public LiveOptions Options { get; private set; }
         public YouTubeLiveDialog(YouTubeLiveManager manager, IReadOnlyList<YouTubeChannel> channels) {
@@ -55,14 +56,22 @@ namespace VideoBatch {
             accounts.Dock = DockStyle.Fill; accounts.HorizontalScrollbar = true;
             connect.Text = "Проверить сессию Dolphin"; connect.Dock = DockStyle.Top; connect.Height = 52; connect.Click += async (s, e) => await Connect();
             auth.Controls.Add(oauth, 0, 0);  auth.Controls.Add(accounts, 0, 1); auth.Controls.Add(connect, 1, 1);
-            var help = new Label { Text = "Используется вход в YouTube внутри Dolphin. Google OAuth для новых эфиров не нужен.", AutoSize = true, ForeColor = Theme.TextMuted };
-            auth.Controls.Add(help, 0, 2); auth.SetColumnSpan(help, 2); root.Controls.Add(auth, 0, 1);
+            progressLabel.Text="Проверка сессии и запуск будут видны здесь и в логе.";
+            var logButton=Button("Открыть лог",()=>{try{Ui.Open(LiveDiagnostics.LogPath);}catch(Exception e){manager.Trace("Не удалось открыть лог: "+e.Message);}},210);logButton.Dock=DockStyle.Fill;logButton.Margin=Padding.Empty;
+            auth.Controls.Add(progressLabel,0,2);auth.Controls.Add(logButton,1,2);
+            manager.LogLine+=ShowProgress;
+            root.Controls.Add(auth, 0, 1);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
             var cancel = Button("Отмена", () => Close()); cancel.DialogResult = DialogResult.Cancel;
             launch.Text = "Запустить эфир"; launch.Width = 180; launch.Height = 32; launch.Click += async (s, e) => await ValidateLaunch();
             buttons.Controls.Add(cancel); buttons.Controls.Add(launch); root.Controls.Add(buttons, 0, 2); CancelButton = cancel;
             FormClosing += (s, e) => lifetime.Cancel();
-            UpdateAccounts();
+            UpdateAccounts();manager.Trace("Открыто окно эфира · "+Text);
+        }
+        void ShowProgress(string line) {
+            if(IsDisposed)return;
+            if(InvokeRequired){if(IsHandleCreated)BeginInvoke(new Action<string>(ShowProgress),line);return;}
+            progressLabel.Text=line;
         }
         static Button Button(string text, Action click, int width = 144) { var b = new Button { Text = text, Width = width, Height = 30 }; b.Click += (s, e) => click(); return b; }
         static void AddRow(TableLayoutPanel panel, string label, Control input, Control action, int height) {
@@ -91,6 +100,7 @@ namespace VideoBatch {
         async Task Connect(bool automatic = false) {
             int index = accounts.SelectedIndex; if (index < 0 || connecting) return;
             var channel = channels[index];
+            manager.Trace(channel.Name+" · проверяю сессию Dolphin "+channel.ProfileId);
             connecting = true; connect.Enabled = launch.Enabled = false;
             try {
                 if (string.IsNullOrWhiteSpace(channel.ProfileId)) throw new InvalidOperationException("Укажите Profile ID этого канала в Dolphin.");
@@ -98,7 +108,7 @@ namespace VideoBatch {
                 if (pendingBefore.Any(e => e.Transport != "studio" || e.ProfileId != channel.ProfileId || e.LocalPort != (manager.Preferences?.DolphinPort ?? 3001)))
                     throw new InvalidOperationException("Сначала завершите прежний эфир его прежним способом подключения. OAuth-журнал нельзя переносить на сессию.");
                 var account = new LiveAccount { LocalId = channel.ChannelId, ProfileId = channel.ProfileId, Transport = "studio", LocalPort = manager.Preferences?.DolphinPort ?? 3001 };
-                using (var api = new YouTubeLiveSessionApi(account, manager.Preferences)) {
+                using (var api = new YouTubeLiveSessionApi(account, manager.Preferences, progress: text=>manager.Trace(channel.Name+" · "+text))) {
                     await api.VerifyChannel(manager.Store.Account(channel.ChannelId)?.RemoteId ?? "", Store.ResolveYouTubeChannelUrl(channel.ChannelUrl,channel.Name,null), lifetime.Token);
                     account.RemoteId = api.ChannelId; account.Name = string.IsNullOrWhiteSpace(api.ChannelName) ? channel.Name : api.ChannelName;
                 }
@@ -108,10 +118,11 @@ namespace VideoBatch {
                 if (!automatic && MessageBox.Show(this, "Строка: " + channel.Name + "\nКанал YouTube: " + account.Name + "\nID: " + account.RemoteId + "\n\nПривязать этот канал?", "Подключение канала", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                 manager.Store.SaveAccount(account); UpdateAccounts();
             } catch (OperationCanceledException) { if(automatic) throw; if (!IsDisposed) MessageBox.Show(this, "Подключение отменено или истекло время ожидания.", "Сессия YouTube"); }
-            catch (Exception e) { if(automatic) throw; if (!IsDisposed) MessageBox.Show(this, e.Message, "Сессия YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            catch (Exception e) {manager.Trace(channel.Name+" · ошибка проверки: "+e.Message);if(automatic) throw; if (!IsDisposed) MessageBox.Show(this, e.Message, "Сессия YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
             finally { connecting = false; if (!IsDisposed) { connect.Enabled = launch.Enabled = true; UpdateAccounts(); } }
         }
         async Task ValidateLaunch() {
+            manager.Trace("Нажат запуск: проверяю папку, превью и параметры");
             try {
                 Options = new LiveOptions { Folder = folder.Text, Title = title.Text, Description = description.Text, Thumbnail = thumbnail.Text,
                     Tags = tags.Text.Split(','), Privacy = new[] { "public", "unlisted", "private" }[privacy.SelectedIndex], MadeForKids = kids.Checked };
@@ -121,8 +132,8 @@ namespace VideoBatch {
                 if (channels.Any(c => manager.Store.Account(c.ChannelId)?.Transport != "studio" || manager.Store.Account(c.ChannelId)?.ProfileId != c.ProfileId))
                     throw new InvalidOperationException("Проверьте сессию Dolphin каждого выбранного канала.");
                 DialogResult = DialogResult.OK; Close();
-            } catch (Exception e) { if(!IsDisposed && !lifetime.IsCancellationRequested)MessageBox.Show(this, e.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            } catch (Exception e) {manager.Trace("Запуск остановлен: "+e.Message);if(!IsDisposed && !lifetime.IsCancellationRequested)MessageBox.Show(this, e.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
-        protected override void Dispose(bool disposing) { if (disposing) lifetime.Cancel(); base.Dispose(disposing); }
+        protected override void Dispose(bool disposing) { if (disposing) {manager.LogLine-=ShowProgress;lifetime.Cancel();} base.Dispose(disposing); }
     }
 }

@@ -4,13 +4,13 @@ const assert = require("assert"), fs = require("fs"), os = require("os"), path =
 const { chromium } = require("../../tools/uploader/node_modules/playwright-core");
 const { NativeStudio } = require("../../tools/uploader/worker-youtube-live-session");
 const video = "abcdefghijk", channel = "UCfixture";
-const state = { title: "", description: "", tags: [], privacy: "private", kids: false, exists: false, live: false, ended: false, keyName: "", thumbnail: "https://i.ytimg.com/default.jpg" };
+const state = { title: "", description: "", tags: [], privacy: "private", kids: false, exists: false, live: false, signal: false, ended: false, keyName: "", thumbnail: "https://i.ytimg.com/default.jpg" };
 function html(url) {
   const mode = url.includes("/manage") ? "manage" : url.endsWith("/edit") ? "edit" : "room";
   return `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="channel-name">Fixture channel</div><main></main><script>
   const state=${JSON.stringify(state)}, mode=${JSON.stringify(mode)};
   window.ytcfg={get:k=>k==='DELEGATED_SESSION_ID'?${JSON.stringify(channel)}:''};
-  const main=document.querySelector('main');
+  const main=document.querySelector('main');const unrelated=document.createElement('button');unrelated.textContent='Создать';unrelated.onclick=()=>{throw new Error('wrong global Create clicked');};document.body.append(unrelated);
   const button=(text,fn,parent=main)=>{const b=document.createElement('button');b.textContent=text;b.onclick=fn;parent.append(b);return b;};
   function dialog(){const d=document.createElement('div');d.setAttribute('role','dialog');document.body.append(d);return d;}
   const save=async()=>{await fetch('/fixture/save',{method:'POST',body:JSON.stringify(state)});};
@@ -20,7 +20,7 @@ function html(url) {
     function radio(label,group,value,checked){const r=document.createElement('input');r.type='radio';r.name=group;r.setAttribute('aria-label',label);r.checked=checked;r.onchange=()=>{if(group==='audience')state.kids=value;else state.privacy=value;};d.append(r);}
     radio("Yes, it's made for kids",'audience',true,state.kids);radio("No, it's not made for kids",'audience',false,!state.kids);
     const software=document.createElement('span');software.textContent='Streaming software';d.append(software);
-    if(creation){button('Next',()=>{state.title=t.value;state.description=desc.value;d.innerHTML='';radio('Private','privacy','private',true);button('Schedule stream',async()=>{state.exists=true;await save();d.remove();location.href='/channel/${channel}/livestreaming/manage';},d);},d);return;}
+    if(creation){button('Next',()=>{state.title=t.value;state.description=desc.value;d.innerHTML='';radio('Private','privacy','private',true);button('Done',async()=>{state.exists=true;await save();d.remove();location.href='/channel/${channel}/livestreaming/manage';},d);},d);return;}
     for(const [v,label] of [['private','Private'],['public','Public'],['unlisted','Unlisted']])radio(label,'privacy',v,state.privacy===v);
     const tags=document.createElement('div');tags.id='tags-container';const input=document.createElement('input');input.name='tags';tags.append(input);d.append(tags);
     function drawTags(){for(const chip of tags.querySelectorAll('[role=listitem]'))chip.remove();for(const value of state.tags){const chip=document.createElement('span');chip.setAttribute('role','listitem');chip.append(value);button('Remove',()=>{state.tags=state.tags.filter(x=>x!==value);drawTags();},chip).setAttribute('aria-label','Remove');tags.insertBefore(chip,input);}}
@@ -37,7 +37,7 @@ function html(url) {
     for(const [label,value] of [['Stream key (paste in encoder)','fixture-key-1234'],['Stream URL','rtmp://a.rtmp.youtube.com/live2']]){const row=document.createElement('div');const l=document.createElement('span');l.textContent=label;row.append(l);button('Copy',()=>navigator.clipboard.writeText(value),row);main.append(row);}
     if(state.ended){main.append('Stream finished');return;}
     if(state.live)button('End stream',()=>{const d=dialog();button('End stream',async()=>{state.live=false;state.ended=true;await save();d.remove();main.innerHTML='Updating stream status';setTimeout(render,250);},d);});
-    else button('Go live',()=>{main.innerHTML='Waiting for confirmation';setTimeout(()=>{const d=dialog();button('Go live',async()=>{state.live=true;await save();d.remove();main.innerHTML='Updating stream status';setTimeout(render,250);},d);},100);});
+    else if(state.signal)button('Go live',()=>{main.innerHTML='Waiting for confirmation';setTimeout(()=>{const d=dialog();button('Go live',async()=>{state.live=true;await save();d.remove();main.innerHTML='Updating stream status';setTimeout(render,250);},d);},100);});
   }render();
   </script></body></html>`;
 }
@@ -49,6 +49,7 @@ function html(url) {
     await page.route("**/*", async route => {
       const u = new URL(route.request().url());
       if (u.hostname !== "studio.youtube.com") return route.fulfill({ status: 200, body: "" });
+      if(u.pathname==="/fixture/signal"){state.signal=true;return route.fulfill({body:"{}"});}
       if (u.pathname === "/fixture/save") { Object.assign(state, JSON.parse(route.request().postData())); return route.fulfill({ status: 200, body: "{}" }); }
       return route.fulfill({ contentType: "text/html", body: html(u.pathname) });
     });
@@ -60,7 +61,8 @@ function html(url) {
     await ui.open(video); const ingest = await ui.ingest("VideoBatch live unique-key"); assert.equal(ingest.key, "fixture-key-1234");
     assert.equal(await page.evaluate(() => '__vbCopied' in window), false, "secret must be removed from task page");
     await ui.configure(options); assert.equal(state.title, options.title); assert.deepEqual(state.tags, options.tags); assert.equal(state.privacy, "unlisted");
-    assert.equal(await ui.state(), "ready"); assert(await ui.canStart());
+    assert.equal(await ui.state(), "ready");assert.equal(await ui.canStart(),false,"encoder-less room must remain usable without Go live");
+    await page.evaluate(()=>fetch("/fixture/signal"));await page.reload();assert(await ui.canStart());
     await ui.start(); assert.equal(await ui.state(), "live");
     await ui.complete(true); assert.equal(await ui.state(), "complete"); assert(state.exists, "completed archive retained");
     state.ended = false; await ui.open(video); await ui.complete(false); assert.equal(state.exists, false, "only unstarted own event removed");
