@@ -167,7 +167,7 @@ namespace VideoBatch {
                 apis["a"].FailCreate = true; apis["a"].FailComplete = true;
                 manager.Start(new[] { ca }, options);
                 await Until(() => manager.View("a")?.Phase == LivePhase.NeedsCleanup).ConfigureAwait(false);
-                Check(store.PendingSnapshot().Length == 1 && apis["a"].Creates == 2, "uncertain creation retried or journal lost");
+                Check(store.PendingSnapshot().Length == 1 && store.PendingSnapshot()[0].CreationPending && apis["a"].Creates == 2, "uncertain creation retried or journal lost");
                 try { await manager.Stop("a").ConfigureAwait(false); } catch (HttpRequestException) { /* Expected while cleanup is deliberately unavailable. */ }
                 await Until(() => apis["a"].Completes >= 2).ConfigureAwait(false);
                 var recovered = new YouTubeLiveManager(new LiveStore(root), account => apis[account.LocalId]);

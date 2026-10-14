@@ -148,11 +148,12 @@ namespace VideoBatch {
                 var playlist = await AwaitCancelable(prepared, s.Cancel.Token).ConfigureAwait(false);
                 State(s, LivePhase.Starting,"Проверяю готовность YouTube Studio к видеокодеру…");
                 if(api is YouTubeLiveSessionApi studio)await studio.PrepareChannel(s.Cancel.Token).ConfigureAwait(false);
-                s.Journal.BroadcastAttempted = true;
+                s.Journal.BroadcastAttempted = true; s.Journal.CreationPending=true;
                 Store.Journal(s.Journal); journaled = true;
                 try { s.Journal.BroadcastId = await api.CreateBroadcast(options, YouTubeLiveApi.Marker(s.Journal.OperationId), s.Cancel.Token).ConfigureAwait(false); }
-                catch (LiveApiException e) when (e.StatusCode < 500) { s.Journal.BroadcastAttempted = false; Store.Journal(s.Journal); throw; }
-                Store.Journal(s.Journal);
+                catch (LiveApiException e) when (e.StatusCode < 500) { s.Journal.BroadcastAttempted = false; s.Journal.CreationPending=false; Store.Journal(s.Journal); throw; }
+                if(string.IsNullOrWhiteSpace(s.Journal.BroadcastId))throw new InvalidOperationException("YouTube не подтвердил ID созданного эфира. Сначала проверьте завершение предыдущей попытки.");
+                s.Journal.CreationPending=false; Store.Journal(s.Journal);
                 s.Journal.StreamAttempted = true; Store.Journal(s.Journal);
                 Dictionary<string, object> stream;
                 try { stream = await api.CreateStream(options, YouTubeLiveApi.Marker(s.Journal.OperationId), s.Cancel.Token).ConfigureAwait(false); }

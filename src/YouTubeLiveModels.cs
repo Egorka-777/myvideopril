@@ -18,8 +18,10 @@ namespace VideoBatch {
         public string Transport = "", ProfileId = "";
         public int LocalPort = 3001;
         public bool BroadcastAttempted, StreamAttempted;
+        // Set durably immediately before creation; old abandoned attempts lack this flag.
+        public bool CreationPending;
         public bool RequiresConfirmedCleanup() {
-            return !string.IsNullOrWhiteSpace(BroadcastId) || !string.IsNullOrWhiteSpace(StreamId);
+            return CreationPending || !string.IsNullOrWhiteSpace(BroadcastId) || !string.IsNullOrWhiteSpace(StreamId);
         }
     }
     public sealed class LiveConfiguration {
