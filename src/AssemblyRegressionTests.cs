@@ -251,7 +251,7 @@ namespace VideoBatch {
                     Invoke(window,"SetFormat",1080,1350); Invoke(window,"Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Width != 1080) throw new Exception("Studio checkpoint 8 failed"); Invoke(window,"SetFormat",1080,1920);
                     if (screenshots != null) {
                         Directory.CreateDirectory(screenshots); l.Start = 0; l.Unique = false;
-                        Invoke(window,"Save"); WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Осталось 72 "),"Live capacity should show 18 video orders * 2 pictures * 2 songs = 72");
+                        Invoke(window,"Save"); WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Осталось 36 "),"Live capacity should show 18 video orders * 2 pictures = 36; music excluded");
                         var background = new Bitmap(360,640); using (var g = Graphics.FromImage(background)) { g.Clear(Color.FromArgb(16,26,25)); using (var pen = new Pen(Theme.Accent,3)) g.DrawLines(pen,new[] {new Point(0,420),new Point(70,380),new Point(120,430),new Point(190,250),new Point(240,270),new Point(320,130),new Point(360,155)}); } canvas.SetBackground(background);
                         Capture(window,Path.Combine(screenshots,"studio-scenes.png"));
                         using (var pool = (System.Windows.Forms.Form)Invoke(window,"CreatePoolWindow",2)) { pool.Show(window); System.Windows.Forms.Application.DoEvents(); Capture(pool,Path.Combine(screenshots,"studio-files.png")); pool.Close(); }
@@ -261,8 +261,8 @@ namespace VideoBatch {
                         if (All(window).First(c => c.Name=="InsertScene4").Bottom>stack.ClientSize.Height) throw new Exception("Final insertion button is clipped");
                         Capture(window,Path.Combine(screenshots,"studio-compact.png"));
                         var resultButton=All(window).First(c => c.Name=="Results"); var footer=(System.Windows.Forms.FlowLayoutPanel)Field(window,"footer"); if (resultButton.Right>footer.ClientSize.Width) throw new Exception("Single-line results button is clipped");
-                        var number=(System.Windows.Forms.NumericUpDown)Field(window,"count"); number.Value=72; Invoke(window,"ChangeCount",1); if (number.Value!=72 || number.Maximum!=72) throw new Exception("Requested count exceeded the available combinations"); number.Value=3;
-                        current.Count=1001; Invoke(window,"BindTemplateValues"); if (number.Value!=1001 || All(window).First(c => c.Name=="Assemble").Enabled) throw new Exception("Loading a studio retained the previous studio's count limit or allowed assembly before recalculation"); current.Count=3; Invoke(window,"BindTemplateValues"); number.Maximum=72;
+                        var number=(System.Windows.Forms.NumericUpDown)Field(window,"count"); number.Value=36; Invoke(window,"ChangeCount",1); if (number.Value!=36 || number.Maximum!=36) throw new Exception("Requested count exceeded the available combinations"); number.Value=3;
+                        current.Count=1001; Invoke(window,"BindTemplateValues"); if (number.Value!=1001 || All(window).First(c => c.Name=="Assemble").Enabled) throw new Exception("Loading a studio retained the previous studio's count limit or allowed assembly before recalculation"); current.Count=3; Invoke(window,"BindTemplateValues"); number.Maximum=36;
                         Invoke(window,"FormatMenu"); System.Windows.Forms.Application.DoEvents(); var choice=window.OwnedForms.First(f => f.Name=="StudioChoice"); Capture(choice,Path.Combine(screenshots,"studio-format-choice.png")); choice.Close();
                         // A real two-layer final card: the top image stays, the bottom pack changes.
                         Invoke(window,"SelectScene",3); Invoke(window,"ImportPool",2,new string[] {other},false); Invoke(window,"SetImageMode",1);
@@ -272,7 +272,7 @@ namespace VideoBatch {
                         Invoke(window,"AddPack",(object)new string[] {asset,alternative}); var changing=current.Scenes[3].Layers[1]; changing.Width=.86; changing.Height=.16; changing.X=.07; changing.Y=.74;
                         Invoke(window,"RefreshCanvas");
                         Invoke(window,"SelectScene",3); Invoke(window,"SetImageMode",1); var finalBackground=new Bitmap(360,640); using (var g=Graphics.FromImage(finalBackground)) g.Clear(Color.FromArgb(16,26,25)); canvas.SetBackground(finalBackground);
-                        WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Осталось 144 "),"Final card capacity did not refresh");
+                        WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Осталось 72 "),"Final card capacity did not refresh");
                         Capture(window,Path.Combine(screenshots,"studio-final-cta.png")); Invoke(window,"SelectScene",0);
                         var firstScene=current.Scenes[0];var secondScene=current.Scenes[1];
                         Invoke(window,"ImportPool",3,new string[] {current.Resolve("Видео/darkgreen.mp4")},false);string ownPath=firstScene.Videos;

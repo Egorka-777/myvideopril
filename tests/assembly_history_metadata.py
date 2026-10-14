@@ -97,17 +97,17 @@ with tempfile.TemporaryDirectory(prefix='history-metadata-') as temp:
         assert not list(Path(file).parent.glob('*.txt')) and not list(Path(file).parent.glob('*.xml'))
         return ET.parse(report(file, '.assembly.xml')).getroot().findtext('Signature')
 
-    capacity(4)
+    capacity(2)
     set_scope('RU')
     ru_first = render(1)[0]; ru_signature = check_tags(ru_first, 'Apple')
     set_scope('EN')
-    capacity(4)  # EN ledger is independent from RU on the same materials.
+    capacity(2)  # EN ledger is independent from RU on the same materials.
     set_scope('RU')
-    capacity(3)
+    capacity(1)
     set_scope('Shared')
     first = render(1)[0]; signature = check_tags(first, 'Apple')
     set_scope('Shared')
-    capacity(3)  # New process, same materials.
+    capacity(1)  # New process, same materials.
     second = render(1)[0]; second_signature = check_tags(second, 'Apple')
     assert signature != second_signature
     # Removing every output/report, copying material filenames and changing the studio ID
@@ -116,27 +116,32 @@ with tempfile.TemporaryDirectory(prefix='history-metadata-') as temp:
     shutil.copyfile(root / 'videos/v.mp4', root / 'videos/copied.mp4')
     (root / 'images/0.png').rename(root / 'images/renamed.png')
     doc.find('Id').text = 'studio-b'; brands.find('string').text = 'Samsung'
-    capacity(2)
-    rest = render(2)
-    remaining_signatures = [check_tags(file, 'Samsung') for file in rest]
-    assert len({signature, second_signature, *remaining_signatures}) == 4
+    # Two images are two visual combinations; a second song or device tag
+    # must not revive an already rendered combination.
     capacity(0)
     blocked = call(); assert not blocked['Outputs'] and blocked['Errors'], blocked
-    # A new alternative extends the remaining space; changing software/titles does not.
-    metadata.find('Software').text = ''
     png(root / 'images/new.png', (30, 30, 320, 120), (0, 0, 255, 255))
-    capacity(2)
-    extra = render(2)
+    capacity(1)
+    rest = render(1)
+    remaining_signatures = [check_tags(file, 'Samsung') for file in rest]
+    assert len({signature, second_signature, *remaining_signatures}) == 3
+    capacity(0)
+    # Changing software alone must not expand the remaining visual space.
+    metadata.find('Software').text = ''
+    capacity(0)
+    png(root / 'images/another.png', (30, 30, 320, 120), (255, 255, 0, 255))
+    capacity(1)
+    extra = render(1)
     for file in extra: check_tags(file, 'Samsung', software=False)
     capacity(0)
     ru_ledger = history / 'markets' / 'ru.xml'
     assert len(ET.parse(ru_ledger).getroot().findall('Records/AssemblyHistoryRecord')) == 1
     ledger = history / 'all-studios.xml'
     state = ET.parse(ledger).getroot()
-    assert len(state.findall('Records/AssemblyHistoryRecord')) == 6
-    assert len(set(n.text for n in state.findall('Combinations/string'))) == 6
+    assert len(state.findall('Records/AssemblyHistoryRecord')) == 4
+    assert len(set(n.text for n in state.findall('Combinations/string'))) == 4
     # Corruption must fail closed without overwriting or auto-loading a stale backup.
     ledger.write_text('corrupted history', encoding='utf-8')
     failure = call(); assert failure['Errors'] and not failure['Outputs'], failure
     assert ledger.read_text(encoding='utf-8') == 'corrupted history'
-    print('PASS: six real MP4s, restart/new-studio persistence, deleted outputs/reports, renamed/copied inputs, exhaustion/new materials, Apple/Android native tags, UTC and offset date, Unicode software, real codec/audio and clean output folder', flush=True)
+    print('PASS: five real MP4s, music/device-only changes excluded from visual combinations, restart/new-studio persistence, deleted outputs/reports, renamed/copied inputs, exhaustion/new materials, Apple/Android native tags, UTC and offset date, Unicode software, real codec/audio and clean output folder', flush=True)
