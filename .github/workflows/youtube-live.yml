@@ -55,7 +55,7 @@ jobs:
           }
       - name: Install FFmpeg for real media tests
         shell: pwsh
-        run: choco install ffmpeg --no-progress -y
+        run: ./scripts/Install-CiFfmpeg.ps1
       - name: WinForms UI smoke test
         shell: powershell
         run: |

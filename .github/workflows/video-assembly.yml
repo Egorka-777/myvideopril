@@ -45,8 +45,7 @@ jobs:
       - name: Install FFmpeg
         shell: pwsh
         run: |
-          choco install ffmpeg --no-progress -y --limit-output
-          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
+          ./scripts/Install-CiFfmpeg.ps1
       - name: Capture real Windows editor screenshots
         shell: powershell
         run: |

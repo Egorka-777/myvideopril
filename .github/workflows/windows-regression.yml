@@ -83,8 +83,7 @@ jobs:
       - name: Install FFmpeg for processing integration
         shell: pwsh
         run: |
-          choco install ffmpeg --no-progress -y --limit-output
-          if ($LASTEXITCODE -ne 0) { throw "FFmpeg installation failed" }
+          ./scripts/Install-CiFfmpeg.ps1
       - name: Real media processing integration
         shell: pwsh
         run: |
