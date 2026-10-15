@@ -7,11 +7,11 @@ using System.Windows.Forms;
 namespace VideoBatch {
     /// <summary>Clean upload titles: remove leading junk only; preserve words and meaningful digits.</summary>
     public static class TitleCleaner {
-        static readonly Regex LeadingIndex = new Regex(@"^\s*(?:\[\s*\d+\s*\]|\(\s*\d+\s*\)|\d+\s*[\._\-]\s*|\d+\.\s*|\d+\s+)", RegexOptions.Compiled);
+        static readonly Regex LeadingIndex = new Regex(@"^\s*(?:\[\s*\d+\s*\]|\(\s*\d+\s*\)|\d{1,3}\s*[\._\-]+\s+(?=\S)|0\d+[\._\-]+\s*(?=\S)|\d{1,3}\s*[\._\-]+\s*(?=\p{L})|0\d+\s+)", RegexOptions.Compiled);
         static readonly Regex TrailingDuplicateIndex = new Regex(@"\s*\(\d+\)\s*$", RegexOptions.Compiled);
         static readonly Regex ExtSuffix = new Regex(@"\.(mp4|mov|mkv|webm|m4v|avi|mts|m2ts|ts|wmv)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         static readonly Regex MultiSpace = new Regex(@"\s+", RegexOptions.Compiled);
-        static readonly Regex DotUnderscoreGap = new Regex(@"(?<=\S)[\._]+(?=\S)", RegexOptions.Compiled);
+        static readonly Regex DotUnderscoreGap = new Regex(@"(?<=\S)_+(?=\S)", RegexOptions.Compiled);
 
         public static string CleanForUpload(string title) {
             if (string.IsNullOrWhiteSpace(title)) return "";
@@ -53,6 +53,7 @@ namespace VideoBatch {
             if (got.StartsWith("001")) return false;
             if (CleanForUpload("12.34 стратегия 2024").IndexOf("2024") < 0) return false;
             if (CleanForUpload("[01] Тест").StartsWith("[01]")) return false;
+            if(CleanForUpload("3 правила в 2026")!="3 правила в 2026"||CleanForUpload("2026 стратегия")!="2026 стратегия")return false;
             if (!string.Equals(CleanForUpload("Хороший сигнал (2)"), "Хороший сигнал", StringComparison.Ordinal)) return false;
             if (!string.Equals(CleanForUpload("Good Signal. Bad Entry (3)"), "Good Signal. Bad Entry", StringComparison.Ordinal)) return false;
             return true;

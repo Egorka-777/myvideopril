@@ -74,6 +74,9 @@ namespace VideoBatch {
         public string HttpWorkerPreset="normal";
         public int HttpWorkerCustomCount=3;
         /// <summary>scheduled | immediate | private</summary>
+        public bool YouTubeStudioPaidPromotion=false, YouTubeStudioAlteredContent=false;
+        public List<string> YouTubeDescriptionBankEn=new List<string>();
+        public int YouTubeDescriptionCursorEn;
         public string YouTubeHttpPublishMode="scheduled";
         public string YouTubeHttpLongPublishMode="scheduled";
         public string UploadStagingFolder=@"C:\VideoBatch\Upload";

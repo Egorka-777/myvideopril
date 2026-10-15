@@ -1,0 +1,314 @@
+"use strict";
+// Native Studio UI only. No metadata/publish HTTP endpoints and no clipboard/DOM text writes.
+const fs=require('fs');
+const L={
+ next:/^(Next|Далее)$/i, more:/^(Show more|Показать больше|Показать ещё|Показать еще|Развернуть|Ещё|Еще)$/i,
+ schedule:/^(Schedule(?: publication)?|Запланировать(?: публикацию)?)$/i,
+ zone:/^(Time zone|Timezone|Часовой пояс)$/i,
+ paid:/paid promotion|paid product|branded content|прямая реклама|спонсорск|продакт.плейсмент/i,
+ ai:/altered content|synthetic content|synthetic media|AI.generated content|was AI used|use of AI|AI usage|использование ИИ|изменённый контент|измененный контент/i,
+ no:/^(No(?:,.*)?|Нет(?:,.*)?)$/i, yes:/^(Yes(?:,.*)?|Да(?:,.*)?)$/i,
+ private:/^(Private|Ограниченный доступ|Закрытый доступ|Скрыт)/i,
+ scheduled:/Scheduled|Запланирован|Публикация запланирована/i
+};
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+async function one(locator,{optional=false}={}){
+ const all=[];for(const x of await locator.all())if(await x.isVisible())all.push(x);
+ if(all.length===1)return all[0];if(optional&&!all.length)return null;
+ throw new Error(`Studio: ожидается один элемент, найдено ${all.length}: ${locator}`);
+}
+async function until(fn,timeout=30000,message='Studio не подтвердил состояние'){
+ const end=Date.now()+timeout;while(Date.now()<end){const value=await fn();if(value)return value;await pause(150);}throw new Error(message);
+}
+function norm(s){return String(s||'').replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n').trim();}
+async function read(box){return norm(await box.evaluate(e=>e.isContentEditable?e.innerText:('value'in e?e.value:e.textContent)));}
+async function field(scope,kind,optional=false){
+ const selector=kind==='title'?'#title-textarea #textbox, #title-textarea [contenteditable=true], input[name="title"],textarea[name="title"]'
+  :'#description-textarea #textbox, #description-textarea [contenteditable=true],textarea[name="description"]';
+ let target=await one(scope.locator(selector),{optional:true});
+ if(!target)target=await one(scope.getByRole('textbox',{name:kind==='title'?/^(Title|Название)(?:\b|\s|\()/i:/^(Description|Описание)(?:\b|\s|\()/i}),{optional:true});
+ if(!target&&!optional)throw new Error(`Studio: не найдено однозначное поле ${kind}`);return target;
+}
+async function typeText(box,text,{delay=45}={}){
+ text=norm(text);await box.scrollIntoViewIfNeeded();await box.click();
+ await box.press('Control+A');await box.press('Delete');
+ await until(async()=>await read(box)==='',3000,'Studio не очистил прежний текст');
+ if(text)await box.pressSequentially(text,{delay});
+ await box.press('Tab');
+ await until(async()=>await read(box)===text,5000,'Studio не подтвердил введённый текст');
+}
+function tags(raw){const list=(Array.isArray(raw)?raw:String(raw||'').split(/[,;\n\r]/)).map(s=>String(s).trim().replace(/^#+/,'')).filter(Boolean);return [...new Set(list)];}
+function validateTags(list){const length=list.reduce((n,t)=>n+t.length+(t.includes(' ')?2:0),Math.max(0,list.length-1));if(length>500)throw new Error('Теги превышают лимит YouTube 500 символов с разделителями/кавычками. Сократите список в приложении.');}
+async function chips(scope){return scope.locator('#tags-container ytcp-chip, #tags-container [role=listitem],ytcp-free-text-chip-bar#tags-container .chip').evaluateAll(a=>a.map(e=>String(e.getAttribute('label')||e.getAttribute('data-tag')||e.querySelector('#label')?.textContent||e.textContent||'').replace(/\s*[×✕]\s*$/,'').trim()).filter(Boolean));}
+async function setTags(scope,list,{verify=false}={}){
+ validateTags(list);const container=scope.locator('#tags-container');
+ if(!list.length&&!await container.count())return;
+ const input=await one(scope.locator('#tags-container input, input[name=tags]'),{optional:true});
+ if(!input)throw new Error('Studio: поле тегов не найдено после «Показать больше»');
+ if(!verify){
+  let old=await chips(scope);
+  for(let i=0;i<old.length;i++){
+   const remove=await one(container.locator('ytcp-chip').first().locator('#delete-icon,button[aria-label], [role=button][aria-label]'),{optional:true});
+   if(remove)await remove.click();else{await input.click();await input.press('Home');await input.press('Backspace');await input.press('Backspace');}
+  }
+  if((await chips(scope)).length)throw new Error('Studio не удалил прежние теги');
+  for(const tag of list){await input.pressSequentially(tag,{delay:20});await input.press('Enter');}
+ }
+ const actual=await chips(scope);if(JSON.stringify(actual.slice().sort())!==JSON.stringify(list.slice().sort()))throw new Error('Studio не подтвердил точный список тегов');
+}
+async function showMore(scope){const button=await one(scope.getByRole('button',{name:L.more}),{optional:true});if(button)await button.click();else{const toggle=await one(scope.locator('#toggle-button'),{optional:true});if(toggle&&L.more.test(norm(await toggle.innerText())))await toggle.click();}}
+async function question(scope,kind,answer,{verify=false}={}){
+ const marker=kind==='paid'?L.paid:L.ai;
+ // Stable component ids first, then smallest containing section. Never fall back to the whole page.
+ const selector=kind==='paid'?'#paid-promotion, #paid-promotion-container,ytcp-paid-promotion,ytcp-paid-product-placement':'#altered-content, #altered-content-container, #synthetic-media,ytcp-altered-content,ytcp-video-metadata-editor-altered-content';
+ let block=await one(scope.locator(selector),{optional:true});
+ if(!block){
+  const handles=await scope.locator('ytcp-form-section,ytcp-video-metadata-editor-section,section,fieldset').all();
+  const found=[];for(const x of handles){if(!await x.isVisible())continue;const text=await x.innerText();if(marker.test(text)&&await x.locator('[role=radio],tp-yt-paper-radio-button,input[type=radio],input[type=checkbox],[role=checkbox],tp-yt-paper-checkbox').count())found.push(x);}
+  // Refuse ambiguous sections rather than clicking an unrelated "No".
+  if(found.length){const lengths=await Promise.all(found.map(async x=>(await x.innerText()).length));const min=Math.min(...lengths);const smallest=found.filter((x,i)=>lengths[i]===min);if(smallest.length===1)block=smallest[0];}
+ }
+ if(!block){
+  const marked=await scope.evaluate((root,kind)=>{
+   const mine=kind==='paid'?/paid promotion|paid product|branded content|прямая реклама|спонсорск|продакт.плейсмент/i:/altered content|synthetic content|synthetic media|AI.generated content|was AI used|use of AI|AI usage|использование ИИ|измен[её]нный контент/i;
+   const other=kind!=='paid'?/paid promotion|paid product|branded content|прямая реклама/i:/altered content|was AI used|использование ИИ/i;
+   const found=[];
+   for(const heading of root.querySelectorAll('h1,h2,h3,h4,[role=heading],label,span,div,p')){
+    const text=(heading.innerText||heading.textContent||'').trim();if(text.length>500||!mine.test(text))continue;
+    for(let p=heading.parentElement;p&&p!==root;p=p.parentElement){
+     const options=p.querySelectorAll('[role=radio],tp-yt-paper-radio-button,input[type=radio],[role=checkbox],tp-yt-paper-checkbox,input[type=checkbox]');
+     if(!options.length)continue;if(other.test(p.innerText||'')||options.length>5)break;
+     if(!found.includes(p))found.push(p);break;
+    }
+   }
+   if(!found.length)return false;const min=Math.min(...found.map(e=>(e.innerText||'').length));const smallest=found.filter(e=>(e.innerText||'').length===min);if(smallest.length!==1)return false;
+   root.querySelectorAll('[data-vb-question="'+kind+'"]').forEach(e=>e.removeAttribute('data-vb-question'));smallest[0].setAttribute('data-vb-question',kind);return true;
+  },kind);
+  if(marked)block=scope.locator('[data-vb-question="'+kind+'"]');
+ }
+ if(!block)throw new Error(`Studio: не найден отдельный блок ${kind==='paid'?'прямой рекламы / Paid promotion':'использования ИИ / Altered content'}`);
+ const radios=block.locator('[role=radio],tp-yt-paper-radio-button,input[type=radio]');
+ if(await radios.count()){
+  const accessible=await one(block.getByRole('radio',{name:answer?L.yes:L.no}),{optional:true});
+  const matches=accessible?[accessible]:[];for(const radio of accessible?[]:await radios.all())if(await radio.isVisible()){
+   const label=norm((await radio.getAttribute('aria-label'))||await radio.innerText().catch(()=>''));
+   if((answer?L.yes:L.no).test(label))matches.push(radio);
+  }
+  if(matches.length!==1)throw new Error(`Studio: неоднозначный ответ ${answer?'Да':'Нет'} в блоке ${kind}`);
+  const selected=matches[0];if(!verify)await selected.click();
+  await until(async()=>await selected.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':e.hasAttribute('checked')),4000,'Studio не подтвердил ответ в блоке '+kind);return;
+ }
+ // Legacy Paid promotion is a checkbox, not a Yes/No radio group.
+ if(kind!=='paid')throw new Error('Studio: неизвестный элемент ответа ИИ');
+ const checkbox=await one(block.locator('input[type=checkbox],[role=checkbox],tp-yt-paper-checkbox'));
+ const checked=await checkbox.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':e.hasAttribute('checked'));
+ if(checked!==answer&&!verify)await checkbox.click();
+ if(await checkbox.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':e.hasAttribute('checked'))!==answer)throw new Error('Studio не подтвердил прямую рекламу');
+}
+async function details(page,scope,item,opts,{verify=false}={}){
+ if(!verify)await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55});
+ else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
+ if(item.description!==null&&item.description!==undefined){
+  const description=await field(scope,'description');
+  if(!verify)await typeText(description,item.description,{delay:opts.descriptionDelay??18});
+  else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
+ }
+ await showMore(scope);
+ const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
+ if(kids&&!verify)await kids.click();
+ await question(scope,'paid',opts.paidPromotion===true,{verify});
+ await question(scope,'ai',opts.alteredContent===true,{verify});
+ if(item.tags!==null&&item.tags!==undefined)await setTags(scope,tags(item.tags),{verify});
+}
+const MONTHS=[['january','январ','янв'],['february','феврал','фев'],['march','марта','март','мар'],['april','апрел','апр'],['may','мая','май'],['june','июня','июнь','июн'],['july','июля','июль','июл'],['august','август','авг'],['september','сентябр','сен'],['october','октябр','окт'],['november','ноябр','ноя'],['december','декабр','дек']];
+function parseDate(text){
+ text=norm(text).toLowerCase();let m=text.match(/(\d{4})-(\d{2})-(\d{2})/);if(m)return `${m[1]}-${m[2]}-${m[3]}`;
+ m=text.match(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/);if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+ let month=MONTHS.findIndex(names=>names.some(n=>text.includes(n)||text.includes(n.slice(0,3))));
+ const year=text.match(/\b(20\d{2})\b/);const nums=text.replace(/20\d{2}/g,'').match(/\b\d{1,2}\b/g);
+ if(month>=0&&year&&nums?.length===1)return `${year[1]}-${String(month+1).padStart(2,'0')}-${nums[0].padStart(2,'0')}`;return null;
+}
+function parseTime(text){let m=norm(text).match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i);if(!m)return null;let h=Number(m[1]);if(m[3])h=(h%12)+(m[3].toLowerCase()==='pm'?12:0);if(h>23||Number(m[2])>59)return null;return `${String(h).padStart(2,'0')}:${m[2]}`;}
+async function dateControl(scope){for(const selector of ['ytcp-datepicker-trigger','#datepicker-trigger','input[type=date]','input[aria-label*="date" i],input[aria-label*="дат" i]']){const x=await one(scope.locator(selector),{optional:true});if(x)return x;}throw new Error('Studio: не найден элемент даты');}
+async function timeControl(scope){return one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input,input[aria-label="Time" i],input[aria-label="Время" i]'));}
+async function controlValue(control){return control.evaluate(e=>e.value||e.querySelector('input')?.value||e.innerText||e.textContent||'');}
+async function fillDate(scope,date){
+ const trigger=await dateControl(scope);
+ if(parseDate(await controlValue(trigger))===date)return;
+ const input=await trigger.evaluate(e=>e.tagName==='INPUT')?trigger:await one(trigger.locator('input'),{optional:true});
+ if(input&&!await input.getAttribute('readonly')){
+  const type=await input.getAttribute('type');const current=await read(input);
+  const d=new Date(date+'T12:00:00Z');const value=type==='date'?date:/[а-я]/i.test(current)?d.toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}):d.toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
+  if(type==='date'){await input.fill(value);await input.press('Tab');}else await typeText(input,value,{delay:35});
+  if(parseDate(await controlValue(trigger))===date)return;
+ }
+ await trigger.click();
+ const calendar=await one(scope.page().locator('ytcp-date-picker:visible,ytcp-datepicker:visible,[role=dialog][aria-label*="calendar" i]:visible,[role=dialog][aria-label*="календар" i]:visible'));
+ for(let step=0;step<36;step++){
+  // Accessible full dates are independent of the site's language and month layout.
+  const all=calendar.locator('[data-date],button[aria-label],[role=gridcell],td[aria-label]');
+  const cells=[];for(const c of await all.all()){
+   const value=await c.getAttribute('data-date')||await c.getAttribute('aria-label')||'';
+   if(parseDate(value)===date&&await c.isVisible()&&!await c.isDisabled().catch(()=>false))cells.push(c);
+  }
+  if(cells.length===1){await cells[0].click();break;}
+  const header=await one(calendar.locator('#month-label,#month,.month-label,.month-title,[data-calendar-month]'),{optional:true});
+  if(!header)throw new Error('Studio: календарь не показал однозначные даты или месяц');
+  const text=norm(await header.innerText()).toLowerCase();const year=text.match(/20\d{2}/);const month=MONTHS.findIndex(a=>a.some(x=>text.includes(x)));
+  if(!year||month<0)throw new Error('Studio: не удалось прочитать месяц/год календаря');
+  const target=Number(date.slice(0,4))*12+Number(date.slice(5,7))-1,current=Number(year[0])*12+month;
+  if(target===current){
+   const day=calendar.locator('[role=gridcell],td,button.day,.day').filter({hasText:new RegExp('^'+Number(date.slice(8))+'$')});
+   const candidates=[];for(const c of await day.all())if(await c.isVisible()&&!(await c.getAttribute('class')||'').match(/outside|other.month|disabled/i)&&!await c.isDisabled().catch(()=>false))candidates.push(c);
+   if(candidates.length!==1)throw new Error('Studio: день календаря неоднозначен');await candidates[0].click();break;
+  }
+  const button=await one(calendar.locator(target>current?'#next-month,#next-month-button':'#prev-month,#previous-month-button').or(calendar.getByRole('button',{name:target>current?/next month|следующ.*месяц/i:/previous month|предыдущ.*месяц/i})));
+  await button.click();
+ }
+ await until(async()=>parseDate(await controlValue(trigger))===date,5000,'Studio не подтвердил выбранную дату');
+}
+function offsetLabel(text){const m=String(text).match(/(?:GMT|UTC)\s*([+−-])\s*(\d{1,2})(?::?(\d{2}))?/i);return m?(m[1]==='+'?1:-1)*(Number(m[2])*60+Number(m[3]||0)):/\b(?:GMT|UTC)\b/.test(text)?0:null;}
+async function zoneValue(element){return element.evaluate(e=>{const value=e.value||e.getAttribute('data-value')||e.getAttribute('data-timezone')||e.getAttribute('value')||'';return typeof value==='string'?value:'';});}
+async function zoneOffset(element,plan){
+ const value=await zoneValue(element);
+ if(value)try{const part=new Intl.DateTimeFormat('en',{timeZone:value,timeZoneName:'longOffset'}).formatToParts(new Date(plan.unix*1000)).find(x=>x.type==='timeZoneName');return offsetLabel(part.value);}catch{}
+ return offsetLabel(await element.innerText());
+}
+async function setZone(scope,plan,zone){
+ const button=await one(scope.getByRole('button',{name:L.zone}).or(scope.locator('#timezone-button, #time-zone-button')),{optional:true});
+ if(!button)throw new Error('Studio: не найден выбор часового пояса, расписание не будет подтверждено');
+ await button.click();
+ const page=scope.page();const options=page.locator('[role=option],tp-yt-paper-item,ytcp-text-menu [role=menuitem]');
+ await until(async()=>(await options.count())>0,5000,'Studio не показал список часовых поясов');
+ const choices=[];
+ for(const option of await options.all())if(await option.isVisible()){
+  const text=norm(await option.innerText());const value=await zoneValue(option);
+  if(value===zone)choices.unshift({option,text,exact:true});
+  else if(await zoneOffset(option,plan)===plan.offset)choices.push({option,text,exact:false});
+ }
+ if(!choices.length)throw new Error('Studio не показал пояс ПК UTC'+(plan.offset>=0?'+':'')+plan.offset/60);
+ const choice=choices.find(x=>x.exact)||choices[0];await choice.option.click();
+ // Read back selection from reopening the menu: a click alone is not confirmation.
+ await button.click();
+ const selected=await one(page.locator('[role=option][aria-selected=true],tp-yt-paper-item[aria-selected=true],[role=option][selected],tp-yt-paper-item[selected]'),{optional:true});
+ if(!selected)throw new Error('Studio не подтвердил выбранный часовой пояс');
+ const value=await zoneValue(selected);
+ const text=norm(await selected.innerText());
+ if(value!==zone&&await zoneOffset(selected,plan)!==plan.offset)throw new Error('Studio сохранил другой часовой пояс');
+ await page.keyboard.press('Escape');return {label:text,offset:plan.offset};
+}
+function planFor(item,now=Date.now()){
+ const date=String(item.scheduleDate||''),time=String(item.scheduleTime||'');
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/^\d{2}:\d{2}$/.test(time))throw new Error('Нужно расписание из приложения');
+ const local=new Date(date+'T'+time+':00');const unix=Number(item.scheduledUnixSeconds);
+ if(!Number.isFinite(unix)||unix*1000<now+60000)throw new Error('Время публикации уже прошло или осталось меньше минуты. Пересоздайте расписание.');
+ if(!Number.isFinite(local.getTime())||local.getFullYear()!==Number(date.slice(0,4))||local.getMonth()+1!==Number(date.slice(5,7))||local.getDate()!==Number(date.slice(8)))throw new Error('Некорректная дата');
+ if(Math.abs(local.getTime()/1000-unix)>.1)throw new Error('Время ПК изменилось после подготовки расписания. Пересоздайте расписание.');
+ const offset=-local.getTimezoneOffset();if(offset!==Number(item.scheduledUtcOffsetMinutes))throw new Error('Часовой пояс ПК изменился. Пересоздайте расписание.');
+ return {date,time,unix,offset};
+}
+const clockSessions=new WeakMap();
+async function syncClock(page,plan,progress){
+ const zone=Intl.DateTimeFormat().resolvedOptions().timeZone;
+ let session=clockSessions.get(page);
+ if(!session){session=await page.context().newCDPSession(page);clockSessions.set(page,session);}
+ try{await session.send('Emulation.setTimezoneOverride',{timezoneId:zone});}
+ catch(error){if(!/already in effect/.test(error.message))throw error;progress('timezone','Dolphin фиксирует пояс браузера. В Studio будет явно выбран и проверен пояс ПК.');}
+ const actual=await page.evaluate(unix=>({zone:Intl.DateTimeFormat().resolvedOptions().timeZone,offset:-new Date(unix*1000).getTimezoneOffset()}),plan.unix);
+ if(actual.offset!==plan.offset)progress('timezone',`Пояс браузера ${actual.zone} отличается от ПК; обязательна проверка выбранного пояса Studio.`);
+ progress('timezone',`Время ПК: ${plan.date} ${plan.time} · ${zone} · UTC${plan.offset>=0?'+':''}${plan.offset/60}`);return zone;
+}
+async function visibility(page,scope){
+ for(let i=0;i<10;i++){
+  if(await one(scope.locator('ytcp-visibility-scheduler'),{optional:true})||await one(scope.locator('#schedule-radio-button,[name=SCHEDULE]'),{optional:true}))return;
+  if(await one(scope.getByText(/^(Save or publish|Сохранить или опубликовать)$/i),{optional:true}))return;
+  const next=await until(()=>one(scope.locator('#next-button').or(scope.getByRole('button',{name:L.next})),{optional:true}),20000,'Не найдена кнопка Далее / Next');
+  await until(async()=>!await next.isDisabled()&&await next.getAttribute('aria-disabled')!=='true',120000,'Кнопка Далее не стала доступна');await next.click();await pause(250);
+ }
+ throw new Error('Studio не открыл экран Доступ / Visibility');
+}
+async function schedule(page,scope,plan,zone){
+ if(!await one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input'),{optional:true})){
+  const expand=await one(scope.locator('#schedule-radio-button,[name=SCHEDULE]').or(scope.getByText(L.schedule)));
+  await expand.click();
+ }
+ const privateLater=await one(scope.getByRole('radio',{name:/private.*(?:then|to).*public|сначала закрытый, потом открытый/i}),{optional:true});if(privateLater){await privateLater.click();await until(async()=>await privateLater.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked')),4000,'Studio не подтвердил доступ после публикации');}
+ await fillDate(scope,plan.date);await setZone(scope,plan,zone);await fillDate(scope,plan.date);
+ const time=await timeControl(scope);if(await time.getAttribute('type')==='time'){await time.fill(plan.time);await time.press('Tab');}else await typeText(time,plan.time,{delay:45});
+ if(parseTime(await read(time))!==plan.time)throw new Error('Studio не подтвердил время');
+ if(parseDate(await controlValue(await dateControl(scope)))!==plan.date)throw new Error('Studio не подтвердил дату');
+ const button=await until(async()=>{const x=await one(scope.locator('#done-button').or(scope.getByRole('button',{name:L.schedule})),{optional:true});if(!x||await x.isDisabled()||await x.getAttribute('aria-disabled')==='true')return null;return x;},120000,'Кнопка Запланировать недоступна');
+ const label=norm(await button.innerText());if(!L.schedule.test(label)&&!/^Save$|^Done$|^Сохранить$|^Готово$/i.test(label))throw new Error('Studio предлагает «'+label+'» вместо планирования. Публикация остановлена.');
+ return button;
+}
+function videoId(value){return String(value||'').match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([A-Za-z0-9_-]{11})(?:\b|\/|$)/)?.[1]||'';}
+async function readVideoId(scope){const ids=await scope.locator('a[href],input[value]').evaluateAll(nodes=>nodes.map(e=>e.getAttribute('href')||e.getAttribute('value')||''));const unique=[...new Set(ids.map(videoId).filter(Boolean))];if(unique.length!==1)throw new Error('Studio не показал однозначный ID загруженного ролика');return unique[0];}
+async function readback(page,item,id,plan,opts,zone){
+ await page.goto(`https://studio.youtube.com/video/${id}/edit`,{waitUntil:'domcontentloaded',timeout:90000});
+ const scope=page.locator('ytcp-video-metadata-editor,ytcp-video-details,main').first();
+ await until(()=>field(scope,'title',true),30000,'Не открылся редактор загруженного видео');
+ await details(page,scope,item,opts,{verify:true});
+ const visible=await one(page.locator('#visibility, #visibility-button, ytcp-video-visibility-select').or(page.getByRole('button',{name:/scheduled|запланирован/i})),{optional:true});
+ if(!visible||!L.scheduled.test(norm(await visible.innerText())+' '+(await visible.getAttribute('aria-label'))))throw new Error('Studio не подтвердил статус «Запланировано» после перезагрузки');
+ await visible.click();
+ const dialog=await one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,[role=dialog]'));
+ if(parseDate(await controlValue(await dateControl(dialog)))!==plan.date||parseTime(await read(await timeControl(dialog)))!==plan.time)throw new Error('После сохранения дата/время Studio не совпали с расписанием');
+ // Verify zone in the persisted visibility dialog without changing it.
+ const zoneButton=await one(dialog.getByRole('button',{name:L.zone}).or(dialog.locator('#timezone-button,#time-zone-button')));await zoneButton.click();
+ const selected=await one(page.locator('[role=option][aria-selected=true],tp-yt-paper-item[aria-selected=true],[role=option][selected],tp-yt-paper-item[selected]'));
+ const value=await zoneValue(selected);
+ if(value!==zone&&await zoneOffset(selected,plan)!==plan.offset)throw new Error('После сохранения изменился часовой пояс');
+ await page.keyboard.press('Escape');await page.keyboard.press('Escape');
+ if(item.thumbnail)await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
+}
+async function waitUpload(page,{stallMs=1200000}={}){
+ const scope=page.locator('ytcp-uploads-dialog,ytcp-upload-dialog').first();let last='',moved=Date.now();
+ while(true){
+  if(page.isClosed()||!await scope.isVisible())throw new Error('Studio закрыл окно до подтверждения загрузки');
+  const labels=await scope.locator('ytcp-video-upload-progress,#progress-label,[class*=progress-label]').allTextContents();
+  const text=labels.map(norm).join(' ');
+  if(/(?:upload(?:ed)?|загружено)[^%]{0,30}100\s*%|upload complete|загрузка завершена|checks? (?:complete|running)|checking|проверка|обработка завершена/i.test(text))return;
+  if(text!==last){last=text;moved=Date.now();}
+  if(Date.now()-moved>stallMs)throw new Error('Studio не подтвердил завершение передачи файла. Проверьте открытый профиль.');
+  await pause(500);
+ }
+}
+async function diagnostics(page,error,folder){
+ const path=require('path');fs.mkdirSync(folder,{recursive:true});
+ const data={time:new Date().toISOString(),error:String(error.message||error),url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
+ if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url()))data.controls=await page.locator('button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
+ const file=path.join(folder,'youtube-studio-'+Date.now()+'-'+process.pid+'.json');fs.writeFileSync(file,JSON.stringify(data,null,2));return file;
+}
+async function runSequential(page,pack,opts,host){
+ const results=[];
+ // Preflight all items before uploading even the first file.
+ const plans=pack.map(item=>{if(!fs.existsSync(item.video))throw new Error('Не найден файл '+item.video);if(!norm(item.title)||item.title.length>100||/[<>]/.test(item.title))throw new Error('Некорректный заголовок');validateTags(tags(item.tags));if(item.description&&/[<>]/.test(item.description))throw new Error('Описание не должно содержать < или >');if(item.description?.length>5000)throw new Error('Описание превышает 5000 символов');return planFor(item);});
+ const usedIds=new Set();
+ for(let i=0;i<pack.length;i++){
+  const item=pack[i],plan=planFor(item),packIndex=item._packIndex||i+1;
+  if(item.studioPending)throw new Error('Предыдущая Studio-загрузка требует проверки. Не загружайте повторно.');
+  const zone=await syncClock(page,plan,host.progress);
+  await host.checkpoint(item,packIndex); // Desktop durably records pending BEFORE file selection.
+  host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
+  await host.openFile(page,item.video);
+  const scope=page.locator('ytcp-uploads-dialog,ytcp-upload-dialog').first();await until(()=>scope.isVisible(),90000,'Не открылся диалог загрузки');
+  await until(()=>field(scope,'title',true),90000,'Не появилось поле названия');
+  const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},90000,'YouTube не показал ID ролика');
+  if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
+  host.progress('item_accepted','Studio создал видео, сохраняю ID',{packIndex,videoId:id,localJobId:item.localJobId});
+  await details(page,scope,item,opts);
+  if(item.thumbnail)await host.thumbnail(page,item.thumbnail);
+  await host.waitUpload(page);
+  await visibility(page,scope);
+  const submit=await schedule(page,scope,plan,zone);
+  // Scheduling may have become past during a slow upload. Never silently publish immediately.
+  planFor(item);await submit.click();
+  await until(async()=>!await scope.isVisible()||await one(page.locator('ytcp-video-share-dialog,ytcp-video-upload-success'),{optional:true}),120000,'YouTube не подтвердил сохранение. Проверьте Studio; повторная загрузка заблокирована.');
+  const verify=await page.context().newPage();try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await verify.close();}
+  const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,schedule:plan};results.push(result);
+  host.progress('item_confirmed',`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
+  await host.dismiss(page);
+ }
+ return results;
+}
+module.exports={L,one,until,norm,read,field,typeText,tags,validateTags,setTags,question,details,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};

@@ -38,7 +38,7 @@ assert.match(mesh,/keepProfileOpen=true/);
 assert.match(mesh,/профили Dolphin оставлены открытыми/);
 assert.match(worker,/if \(!job\.openTodayOnly && !job\.watchMesh\) try/,'Navigation must not wait for external IP services');
 assert.match(worker,/openChannelsWatch\(page, targets, navigationJob/);
-assert.match(worker,/2026-10-05-profile-stability-v1/);
+assert.match(worker,/2026-10-15-studio-sequential-ru-en-v1/);
 assert.match(worker,/Задание остановлено; профиль Dolphin остаётся открытым/);
 assert.doesNotMatch(worker,/pauseVideoPage|pauseCurrentVideo/,'Video pause hooks must be removed');
 const playback=read('tools/uploader/youtube-playback.js');

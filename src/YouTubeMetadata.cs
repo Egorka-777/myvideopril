@@ -95,14 +95,24 @@ namespace VideoBatch {
             return body + Environment.NewLine + Environment.NewLine + footer;
         }
 
+        public static (string tags,string description) Build(Preferences settings,YouTubeChannel channel,int itemIndex) {
+            string market=string.Equals(channel?.Market,"EN",StringComparison.OrdinalIgnoreCase)?"EN":"RU";
+            string raw=market=="EN"?settings.YouTubeDefaultTagsEn:settings.YouTubeDefaultTagsRu;
+            var shuffled=ShuffleTags(channel?.ProfileId??"",MasterTags(market,raw));
+            string description=PickDescriptionBase(settings,channel,itemIndex);
+            if(market=="RU")description=AppendTagsFooter(description,shuffled);
+            return (JoinTags(shuffled),description);
+        }
+
         public static string PickDescriptionBase(Preferences settings, YouTubeChannel channel, int itemIndex) {
             if (settings == null || channel == null) return "";
             string market = (channel.Market ?? "RU").Trim().ToUpperInvariant();
-            if (market != "RU") return "";
-            var bank = settings.YouTubeDescriptionBankRu ?? new List<string>();
-            if (bank.Count == 0) bank = settings.TikTokFullCaptionBankRu ?? new List<string>();
+            var bank = (market=="EN"?settings.YouTubeDescriptionBankEn:settings.YouTubeDescriptionBankRu) ?? new List<string>();
+            if (bank.Count == 0) bank = (market=="EN"?settings.TikTokDescriptionBankEn:settings.TikTokFullCaptionBankRu) ?? new List<string>();
             if (bank.Count == 0) return "";
-            int cursor = settings.YouTubeDescriptionCursorRu;
+            int cursor = market=="EN"?settings.YouTubeDescriptionCursorEn:settings.YouTubeDescriptionCursorRu;
+            // Stable per-account offset: different accounts use different available descriptions.
+            cursor += (StableSeed(channel.ProfileId)&int.MaxValue)%Math.Max(1,bank.Count);
             if (cursor < 0) cursor = 0;
             int idx = (cursor + Math.Max(0, itemIndex - 1)) % bank.Count;
             return (bank[idx] ?? "").Trim();

@@ -6,7 +6,12 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-05-profile-stability-v1";
+const WORKER_BUILD = "2026-10-15-studio-sequential-ru-en-v1";
+const studioAcks=new Map();
+async function studioCheckpoint(item,packIndex){
+ if(!item.localJobId)throw new Error("Studio: нет постоянного ID задания. Обновите приложение вместе с worker.");
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{studioAcks.delete(item.localJobId);reject(new Error("Приложение не подтвердило сохранение защиты от повторной загрузки"));},15000);studioAcks.set(item.localJobId,()=>{clearTimeout(timer);resolve();});send("item_submitting","Сохраняю состояние перед загрузкой",{localJobId:item.localJobId,packIndex});});
+}
 
 const jobPath = process.argv[2];
 let job = null;
@@ -2544,7 +2549,7 @@ async function applyShortsThumbFrames(page, titles) {
 }
 
 function cleanUploadTitle(raw) {
-  return String(raw || "").trim().replace(/\s*[·•]\s*\+\d+\s*$/, "").replace(/\s+\+\d+\s*$/, "").replace(/\s+/g, " ").trim().slice(0, 100);
+  return String(raw || "").trim().replace(/\s*[·•]\s*\+\d+\s*$/, "").replace(/\s+\+\d+\s*$/, "").replace(/\s+/g, " ").trim();
 }
 
 function resolveItemSchedule(item, title) {
@@ -2864,61 +2869,22 @@ async function uploadDraftsBulk(page, pack) {
   return results;
 }
 
-async function uploadPackBulk(page, pack) {
-  assertPageOpen(page);
-  await verifyYouTubeStudioReady(page);
-  const { toUpload, skipped } = await filterPackForUpload(page, pack);
-  for (const s of skipped) {
-    const t = cleanUploadTitle(s.item.title);
-    send("youtube", `Пропуск «${t.slice(0, 40)}» — ${s.reason}.`, {
-      percent: 26,
-      packIndex: (s.item._origIndex != null ? s.item._origIndex : 0) + 1
-    });
-  }
-  if (!toUpload.length) {
-    send("youtube", "Все ролики уже на канале — новая загрузка не нужна.", { percent: 95 });
-    return [];
-  }
-
-  send("youtube", `Открываю загрузку ${toUpload.length} ролик(ов), затем запланирую…`, { percent: 27 });
-  await openUploadAndSetFiles(page, toUpload.map(it => it.video));
-  const labels = toUpload.map(it => path.basename(String(it.video || "")));
-  send("youtube", `Файлы переданы (${toUpload.length}), жду 100% на YouTube…`, { percent: 29 });
-  await waitForUploadsReady(page, toUpload.length, labels);
-
-  const results = [];
-  for (let i = 0; i < toUpload.length; i++) {
-    if (!(await uploadDialog(page).isVisible().catch(() => false))) {
-      await openUploadItemFromProgressPanel(page, i);
-    } else if (i > 0) {
-      await selectUploadQueueItem(page, i);
-    }
-    if (!(await uploadDialog(page).isVisible().catch(() => false))) {
-      const ok = await ensureUploadDialogOpen(page);
-      if (!ok) throw new Error(`Ролик ${i + 1}/${toUpload.length}: не открылось окно редактирования — нажмите ролик в «Загрузка завершена» вручную.`);
-    }
-    const one = await processUploadItemInDialog(page, toUpload[i], i + 1, toUpload.length);
-    results.push(one);
-    send("youtube", `Запланировано ${i + 1}/${toUpload.length}.`, {
-      percent: Math.min(95, 30 + Math.round((i + 1) / toUpload.length * 65)),
-      url: one.url || "",
-      packIndex: one.packIndex
-    });
-    if (i < toUpload.length - 1) await ensureUploadDialogOpen(page);
-  }
-  await dismissAfterPublish(page);
-  // Fresh editor readback happens only after publishing, never inside the upload wizard.
-  const checkPage=await page.context().newPage();
-  try { for(let i=0;i<results.length;i++) {
-    const item=toUpload[i];if(!item.thumbnail)continue;
-    const id=extractVideoId(results[i].url||"");
-    try {
-      if(!id)throw new Error("YouTube не вернул ID ролика для проверки превью");
-      await checkPage.goto(`https://studio.youtube.com/video/${id}/edit`,{waitUntil:"domcontentloaded",timeout:90000});
-      await require("./youtube-thumbnail").uploadThumbnail(checkPage,item.thumbnail,{save:true,verifyReload:true,progress:text=>send("thumbnail",text,{packIndex:results[i].packIndex,url:results[i].url})});
-    } catch(e) { send("thumbnail_warning",`Видео уже загружено. Превью не подтверждено: ${e.message}. Не загружай видео повторно.`,{packIndex:results[i].packIndex,url:results[i].url}); }
-  }} finally {await checkPage.close();}
-  return results;
+async function uploadPackBulk(page,pack){
+ await verifyYouTubeStudioReady(page);
+ const expected=String(job.channelUrl||'').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
+ if(expected){await gotoStable(page,'https://studio.youtube.com/channel/'+expected,{waitUntil:'domcontentloaded',timeout:90000});const actual=await resolveStudioChannelId(page);if(actual!==expected)throw new Error('Studio открыл другой канал. Загрузка остановлена.');}
+ const selected=pack.map((item,index)=>({...item,title:cleanUploadTitle(item.title),_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
+ const studio=require('./youtube-studio-upload');
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true},{
+  progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,
+  openFile:async(page,file)=>{
+   const input=await openUploadForPack(page);
+   if(input){await setInputFilesViaCdp(page,input,[require('path').resolve(file)]);return;}
+   const [chooser]=await Promise.all([page.waitForEvent('filechooser',{timeout:20000}),clickBrowseForFileChooser(page)]);
+   await chooser.setFiles(file); // Once only: an uncertain response must not create a second upload.
+  },
+  thumbnail:setThumbnail,waitUpload:studio.waitUpload,dismiss:dismissAfterPublish
+ });
 }
 
 async function main() {
@@ -3136,8 +3102,12 @@ if (require.main === module) {
   process.on("SIGINT", cancelTask);
   process.on("SIGTERM", cancelTask);
   const input = require("readline").createInterface({ input: process.stdin });
-  input.on("line", line => { if (line.trim() === "cancel") cancelTask(); });
+  input.on("line", line => { if (line.trim() === "cancel") cancelTask();
+    else if(line.startsWith("ack:")){const id=line.trim().slice(4);const ack=studioAcks.get(id);if(ack){studioAcks.delete(id);ack();}} });
   main().then(() => { input.close(); }).catch(async e => {
+    if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.openTodayOnly&&taskPage){
+      try{const diagnosticFile=await require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics'));send('diagnostic','Диагностика Studio сохранена',{diagnosticFile});}catch{} }
+
     if (browser) await browser.close().catch(err => send("diagnostic", "Отключение CDP: " + err.message));
     browser = null;
     fail(e, { keptOpen: profileStarted });

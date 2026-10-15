@@ -23,16 +23,20 @@ namespace VideoBatch {
         public string ProfileId;
         public List<PreparedUploadItem> Items=new List<PreparedUploadItem>();
 
-        public UploadJob ToUploadJob(string token,int localPort){
+        public UploadJob ToUploadJob(string token,int localPort,Preferences settings=null){
+            foreach(var it in Items)if(string.IsNullOrWhiteSpace(it.Source.StudioUploadId))it.Source.StudioUploadId=Guid.NewGuid().ToString("N");
             var first=Items[0];
-            return new UploadJob{
+            var job=new UploadJob{
                 token=token,
                 localPort=localPort,
-                profileId=Channel.ProfileId,
+                profileId=Channel.ProfileId,channelUrl=Channel.ChannelUrl,
                 expectedIp=Channel.ExpectedIp,
                 items=Items.Select(it=>new UploadItemJob{
                     video=it.StagedVideo,
                     title=it.UploadTitle,
+                    localJobId=it.Source.StudioUploadId,studioPending=it.Source.StudioPending,
+                    scheduledUnixSeconds=new DateTimeOffset(ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime)).ToUnixTimeSeconds(),
+                    scheduledUtcOffsetMinutes=(int)TimeZoneInfo.Local.GetUtcOffset(ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime)).TotalMinutes,
                     thumbnail=YouTubeThumbnailSync.ForItem(Channel,it.Source,it.Index-1),
                     scheduleDate=it.ScheduleDate,
                     scheduleTime=it.ScheduleTime,
@@ -48,6 +52,14 @@ namespace VideoBatch {
                 scheduleDate=first.ScheduleDate,
                 scheduleTime=first.ScheduleTime
             };
+            if(settings!=null){
+                job.studioPaidPromotion=settings.YouTubeStudioPaidPromotion;job.studioAlteredContent=settings.YouTubeStudioAlteredContent;
+                for(int i=0;i<Items.Count;i++){
+                    var meta=YouTubeMetadata.Build(settings,Channel,i+1);job.items[i].tags=meta.tags;
+                    job.items[i].description=string.IsNullOrWhiteSpace(meta.description)?null:meta.description;
+                }
+            }
+            return job;
         }
     }
 
@@ -60,6 +72,7 @@ namespace VideoBatch {
             var seenPerProfile=new Dictionary<string,HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             foreach(var job in jobs){
                 string ctx=job.ch.Name+" ["+job.index+"/"+job.total+"]";
+                if(job.item.StudioPending)throw new Exception(ctx+": предыдущая Studio-загрузка требует ручной проверки, повторная отправка запрещена.");
                 if(string.IsNullOrWhiteSpace(job.ch.ProfileId))throw new Exception(job.ch.Name+": вставьте Profile ID из Dolphin.");
                 if(string.IsNullOrWhiteSpace(NormTitle(job.item.Title)))throw new Exception(ctx+": введите заголовок.");
                 if(string.IsNullOrWhiteSpace(job.item.Video)||!File.Exists(job.item.Video))throw new Exception(ctx+": файл видео не найден.");
@@ -157,8 +170,8 @@ namespace VideoBatch {
             var batches=new List<PreparedProfileBatch>();
             foreach(var g in byProfile){
                 var batch=new PreparedProfileBatch{Row=g.row,Channel=g.ch,ProfileId=g.pid};
-                var uploadTitles=ResolveDuplicateUploadTitles(
-                    g.list.Select(j=>cleanTitleForUpload(j.item.Title,j.index,j.total)).ToList());
+                var cleanedTitles=g.list.Select(j=>cleanTitleForUpload(j.item.Title,j.index,j.total)).ToList();
+                var uploadTitles=studioSchedule?cleanedTitles:ResolveDuplicateUploadTitles(cleanedTitles);
                 var seenStagedNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 for(int ti=0;ti<g.list.Count;ti++){
                     var j=g.list[ti];

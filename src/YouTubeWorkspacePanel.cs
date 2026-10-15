@@ -177,11 +177,11 @@ namespace VideoBatch {
 
             var stopBtn = Theme.MakeButton("Стоп", ghost: true, action: () => backend.Stop());
             stopBtn.ForeColor = Theme.Warning;
-            httpUploadBtn = Theme.MakeButton("Быстрая загрузка", accent: true, action: () => QueueUpload(true));
-            studioUploadBtn = Theme.MakeButton("Через Studio", ghost: true, action: () => QueueUpload(false));
+            httpUploadBtn = Theme.MakeButton("Быстрая загрузка", ghost: true, action: () => QueueUpload(true));
+            studioUploadBtn = Theme.MakeButton("Через Studio", accent: true, action: () => QueueUpload(false));
             var bottom = Theme.MakeBottomBar(
-                (httpUploadBtn, true),
-                (studioUploadBtn, false),
+                (studioUploadBtn, true),
+                (httpUploadBtn, false),
                 (Theme.MakeButton("Смотреть ссылки", ghost: true, action: async () => await RunLinkWatch()), false),
                 (crossWatchBtn = Theme.MakeButton(CrossWatchButtonLabel(), ghost: true, action: async () => await RunCrossLinkWatch()), false),
                 (stopBtn, false));
@@ -207,6 +207,17 @@ namespace VideoBatch {
             menu.Items.Add("Снять галочки с загруженных", null, (s, e) => UncheckUploaded());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("+ Канал", null, (s, e) => AddChannel());
+            var studio=new ToolStripMenuItem("Настройки Studio");
+            var paid=new ToolStripMenuItem("Прямая реклама: "+(settings.YouTubeStudioPaidPromotion?"Да":"Нет")){Checked=settings.YouTubeStudioPaidPromotion,CheckOnClick=true};
+            paid.CheckedChanged+=(s,e)=>{settings.YouTubeStudioPaidPromotion=paid.Checked;paid.Text="Прямая реклама: "+(paid.Checked?"Да":"Нет");Store.Save(settings);};
+            var ai=new ToolStripMenuItem("Использование ИИ: "+(settings.YouTubeStudioAlteredContent?"Да":"Нет")){Checked=settings.YouTubeStudioAlteredContent,CheckOnClick=true};
+            ai.CheckedChanged+=(s,e)=>{settings.YouTubeStudioAlteredContent=ai.Checked;ai.Text="Использование ИИ: "+(ai.Checked?"Да":"Нет");Store.Save(settings);};
+            studio.DropDownItems.Add(paid);studio.DropDownItems.Add(ai);menu.Items.Add(studio);
+            menu.Items.Add("Studio: сбросить защиту после ручной проверки",null,(s,e)=>{
+                var ch=grid.CurrentRow?.Tag as YouTubeChannel;if(ch==null)return;
+                if(MessageBox.Show(this,"Сначала проверьте Studio: ролик мог уже загрузиться. Сбросить защиту для выбранного аккаунта?","Studio",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+                foreach(var it in ch.Items??new List<YouTubeItem>()){it.StudioPending=false;it.StudioUploadId=Guid.NewGuid().ToString("N");}Store.Save(settings);RefreshGrid();
+            });
             menu.Items.Add("Предпросмотр расписания", null, (s, e) => PreviewSchedule());
             menu.Items.Add("Проверить IP (выделенный канал)", null, (s, e) => { _ = RunCheck(); });
             menu.Items.Add("Смотреть ссылки (отмеченные ✓)", null, async (s, e) => await RunLinkWatch());
