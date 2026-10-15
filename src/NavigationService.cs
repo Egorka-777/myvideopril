@@ -15,7 +15,8 @@ namespace VideoBatch {
         ViewsSearch,
         Logs,
         Settings,
-        AccountLibrary
+        AccountLibrary,
+        Highlights
     }
 
     public sealed class NavigationService {
@@ -38,6 +39,7 @@ namespace VideoBatch {
                 case NavSection.Proxy: return "Прокси";
                 case NavSection.VideoProcessing: return "Обработка видео";
                 case NavSection.VideoAssembly: return "Сборка роликов";
+                case NavSection.Highlights: return "Нарезчик";
                 case NavSection.YouTube: return "YouTube";
                 case NavSection.TikTok: return "TikTok";
                 case NavSection.Warmup: return "Прогрев";
