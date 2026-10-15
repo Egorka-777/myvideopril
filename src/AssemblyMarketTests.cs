@@ -25,7 +25,9 @@ namespace VideoBatch {
                 t.MarketEn.TitleBank = new System.Collections.Generic.List<string> { "EN title" };
                 AssemblyFiles.Save(templatePath, t);
 
+                t.Width = 1920; t.Height = 1080;
                 AssemblyMarketProfiles.Capture(t, AssemblyHistoryScope.Ru);
+                t.Width = 1080; t.Height = 1920;
                 t.Videos = "en-videos";
                 t.Music = "en-music";
                 t.Scenes[0].Name = "EN scene";
@@ -37,11 +39,19 @@ namespace VideoBatch {
 
                 AssemblyMarketProfiles.Apply(t, AssemblyHistoryScope.Ru);
                 Check(t.Videos == "ru-videos" && t.Music == "ru-music", "RU videos/music");
+                Check(t.Width == 1920 && t.Height == 1080, "RU saved frame size");
                 Check(t.Scenes[0].Name == "RU scene" && t.Scenes[0].Videos == "ru-scene-vid", "RU scenes");
                 Check(t.TitleBank.Count == 1 && t.TitleBank[0] == "Ru Title", "RU titles got: " + string.Join("|", t.TitleBank));
 
                 AssemblyMarketProfiles.Apply(t, AssemblyHistoryScope.En);
                 Check(t.Videos == "en-videos" && t.Music == "en-music", "EN videos/music");
+                Check(t.Width == 1080 && t.Height == 1920, "EN saved frame size");
+
+                t.Scenes[0].Name = "RU Inst scene";
+                AssemblyMarketProfiles.Capture(t, AssemblyProfile.RuInst);
+                t.Scenes[0].Name = "RU main again";
+                AssemblyMarketProfiles.Apply(t, AssemblyProfile.RuInst);
+                Check(t.Scenes[0].Name == "RU Inst scene" && t.Width == 1080 && t.Height == 1920, "RU Inst isolated workspace + same format as RU");
                 Check(t.Scenes[0].Name == "EN scene", "EN scenes");
                 Check(t.TitleBank.Single() == "En Title", "EN titles");
 

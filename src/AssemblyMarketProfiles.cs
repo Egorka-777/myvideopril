@@ -10,6 +10,8 @@ namespace VideoBatch {
         public List<string> TitleBank = new List<string>();
         public string Output = "";
         public int Count = 10;
+        public int FormatWidth;
+        public int FormatHeight;
         public string Videos = "";
         public string Music = "";
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
@@ -17,17 +19,23 @@ namespace VideoBatch {
     }
 
     public static class AssemblyMarketProfiles {
-        public static string NormMarket(string market) {
-            return (market ?? "").Trim().ToUpperInvariant() == "EN" ? AssemblyHistoryScope.En : AssemblyHistoryScope.Ru;
-        }
+        public static string NormMarket(string market) => AssemblyProfile.MainProfile(market);
 
-        static string DefaultOutput(string scope) {
+        public static string DefaultOutput(string profile) {
             string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "VideoBatch");
-            return scope == AssemblyHistoryScope.En ? Path.Combine(root, "Assembled-EN") : Path.Combine(root, "Assembled");
+            profile = AssemblyProfile.Normalize(profile);
+            if (profile == AssemblyProfile.En) return Path.Combine(root, "Assembled-EN");
+            if (profile == AssemblyProfile.RuInst) return Path.Combine(root, "Assembled-RU-Inst");
+            if (profile == AssemblyProfile.EnInst) return Path.Combine(root, "Assembled-EN-Inst");
+            return Path.Combine(root, "Assembled");
         }
 
-        static AssemblyMarketSettings Slice(AssemblyTemplate t, string scope) {
-            return scope == AssemblyHistoryScope.En ? t.MarketEn : t.MarketRu;
+        static AssemblyMarketSettings Slice(AssemblyTemplate t, string profile) {
+            profile = AssemblyProfile.Normalize(profile);
+            if (profile == AssemblyProfile.En) return t.MarketEn ?? (t.MarketEn = new AssemblyMarketSettings());
+            if (profile == AssemblyProfile.RuInst) return t.MarketRuInst ?? (t.MarketRuInst = new AssemblyMarketSettings());
+            if (profile == AssemblyProfile.EnInst) return t.MarketEnInst ?? (t.MarketEnInst = new AssemblyMarketSettings());
+            return t.MarketRu ?? (t.MarketRu = new AssemblyMarketSettings());
         }
 
         static AssemblyOutputMetadata CloneMetadata(AssemblyOutputMetadata source) {
@@ -99,6 +107,14 @@ namespace VideoBatch {
             t.Scenes = CloneScenes(slice.Scenes);
         }
 
+        static void ImportWorkspaceFromSettings(AssemblyMarketSettings target, AssemblyMarketSettings source) {
+            if (source == null || !source.WorkspaceConfigured) return;
+            target.Videos = source.Videos ?? "";
+            target.Music = source.Music ?? "";
+            target.Scenes = CloneScenes(source.Scenes);
+            target.WorkspaceConfigured = target.Scenes.Count > 0;
+        }
+
         static bool SnapshotMatchesMarket(AssemblyTemplate snap, string scope) {
             if (snap == null) return false;
             if (NormMarket(snap.HistoryScope) == scope) return snap.Scenes != null && snap.Scenes.Count > 0;
@@ -150,7 +166,7 @@ namespace VideoBatch {
             foreach (string scope in new[] { AssemblyHistoryScope.Ru, AssemblyHistoryScope.En }) {
                 TryRecoverInactiveWorkspace(t, scope, templatePath, force: true);
             }
-            Capture(t, NormMarket(t.HistoryScope));
+            Capture(t, AssemblyProfile.Normalize(t.HistoryScope));
             t.MarketWorkspaceVersion = 1;
         }
 
@@ -158,44 +174,66 @@ namespace VideoBatch {
             if (t == null) return;
             if (t.MarketRu == null) t.MarketRu = new AssemblyMarketSettings();
             if (t.MarketEn == null) t.MarketEn = new AssemblyMarketSettings();
+            if (t.MarketRuInst == null) t.MarketRuInst = new AssemblyMarketSettings();
+            if (t.MarketEnInst == null) t.MarketEnInst = new AssemblyMarketSettings();
             if (t.AssemblyMarketsSeeded) return;
-            Capture(t, AssemblyHistoryScope.Ru);
+            Capture(t, AssemblyProfile.Ru);
             t.MarketEn.TitleBank = t.MarketRu.TitleBank.ToList();
             t.MarketEn.Count = t.MarketRu.Count;
             t.MarketEn.OutputMetadata = CloneMetadata(t.MarketRu.OutputMetadata);
-            t.MarketEn.Output = DefaultOutput(AssemblyHistoryScope.En);
+            t.MarketEn.FormatWidth = t.MarketRu.FormatWidth;
+            t.MarketEn.FormatHeight = t.MarketRu.FormatHeight;
+            t.MarketEn.Output = DefaultOutput(AssemblyProfile.En);
             t.MarketEn.Configured = t.MarketRu.Configured;
             if (string.Equals(t.HistoryScope, AssemblyHistoryScope.En, StringComparison.OrdinalIgnoreCase)) {
-                Capture(t, AssemblyHistoryScope.En);
+                Capture(t, AssemblyProfile.En);
             }
             t.AssemblyMarketsSeeded = true;
         }
 
-        public static void Capture(AssemblyTemplate t, string scope) {
+        public static void Capture(AssemblyTemplate t, string profile) {
             if (t == null) return;
-            scope = NormMarket(scope);
-            var slice = Slice(t, scope);
+            profile = AssemblyProfile.Normalize(profile);
+            var slice = Slice(t, profile);
             slice.TitleBank = AssemblyOutputTags.NormalizeBank(t.TitleBank);
             slice.Output = t.Output ?? "";
             slice.Count = t.Count;
+            slice.FormatWidth = t.Width;
+            slice.FormatHeight = t.Height;
             slice.OutputMetadata = CloneMetadata(t.OutputMetadata);
             CaptureWorkspace(t, slice);
             slice.Configured = true;
         }
 
-        public static void Apply(AssemblyTemplate t, string scope) {
+        public static void Apply(AssemblyTemplate t, string profile) {
             if (t == null) return;
-            scope = NormMarket(scope);
-            var slice = Slice(t, scope);
+            profile = AssemblyProfile.Normalize(profile);
+            var slice = Slice(t, profile);
+            var main = Slice(t, AssemblyProfile.MainProfile(profile));
             if (!slice.Configured) {
-                slice.Output = DefaultOutput(scope);
-                slice.Count = t.Count > 0 ? t.Count : 10;
-                slice.OutputMetadata = AssemblyOutputMetadata.Default();
+                slice.Output = DefaultOutput(profile);
+                slice.Count = main.Configured && main.Count > 0 ? main.Count : (t.Count > 0 ? t.Count : 10);
+                slice.OutputMetadata = CloneMetadata(main.Configured ? main.OutputMetadata : AssemblyOutputMetadata.Default());
+                if (main.FormatWidth >= 180 && main.FormatHeight >= 180) {
+                    slice.FormatWidth = main.FormatWidth;
+                    slice.FormatHeight = main.FormatHeight;
+                } else if (t.Width >= 180 && t.Height >= 180) {
+                    slice.FormatWidth = t.Width;
+                    slice.FormatHeight = t.Height;
+                }
+                if (AssemblyProfile.IsInst(profile) && !slice.WorkspaceConfigured && main.WorkspaceConfigured)
+                    ImportWorkspaceFromSettings(slice, main);
+                slice.TitleBank = (main.TitleBank ?? new List<string>()).ToList();
+                slice.Configured = true;
             }
-            t.HistoryScope = scope;
+            t.HistoryScope = AssemblyProfile.LedgerScope(profile);
             t.TitleBank = (slice.TitleBank ?? new List<string>()).ToList();
-            t.Output = string.IsNullOrWhiteSpace(slice.Output) ? DefaultOutput(scope) : slice.Output;
+            t.Output = string.IsNullOrWhiteSpace(slice.Output) ? DefaultOutput(profile) : slice.Output;
             t.Count = slice.Count <= 0 ? 10 : slice.Count;
+            if (slice.FormatWidth >= 180 && slice.FormatHeight >= 180) {
+                t.Width = slice.FormatWidth;
+                t.Height = slice.FormatHeight;
+            }
             t.OutputMetadata = CloneMetadata(slice.OutputMetadata);
             ApplyWorkspace(t, slice);
         }

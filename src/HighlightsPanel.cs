@@ -32,6 +32,8 @@ namespace VideoBatch {
         public int Mode { get; set; }
         public int Count { get; set; } = 10;
         public string Output { get; set; } = "";
+        /// <summary>original | vertical_916 (Shorts, TikTok, Reels)</summary>
+        public string ExportFormat { get; set; } = "vertical_916";
     }
     public sealed class HighlightsPanel : UserControl {
         static readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64*1024*1024 };
@@ -39,7 +41,7 @@ namespace VideoBatch {
         readonly HighlightsPreferences prefs;
         readonly Label sourceLabel, status;
         readonly Button load, find, setup, stop, export, results;
-        readonly ComboBox mode;
+        readonly ComboBox mode, exportFormat;
         readonly NumericUpDown count;
         readonly ProgressBar progress;
         readonly FlowLayoutPanel cards;
@@ -64,16 +66,21 @@ namespace VideoBatch {
             Controls.Add(layout);
             var intro = new FlowLayoutPanel { Dock=DockStyle.Fill, FlowDirection=FlowDirection.TopDown, WrapContents=false, Margin=Padding.Empty };
             intro.Controls.Add(new Label {Text="Сильные моменты из длинного видео", AutoSize=true, Font=Theme.FontCardTitle, Margin=new Padding(0,4,0,8)});
-            intro.Controls.Add(new Label {Text="Законченные мысли, цитаты и события · 20–40 секунд · обработка на вашем ПК", AutoSize=true, ForeColor=Theme.TextSecondary});
+            intro.Controls.Add(new Label {Text="Законченные мысли и события · 20–40 сек · выберите соотношение сторон для просмотра и экспорта", AutoSize=true, ForeColor=Theme.TextSecondary, MaximumSize=new Size(900,0)});
             layout.Controls.Add(intro,0,0);
             toolbar = new FlowLayoutPanel { Dock=DockStyle.Fill, WrapContents=true, Margin=Padding.Empty };
             load=Theme.MakeButton("＋ Видео",action:ChooseSource);
             sourceLabel = new Label {AutoSize=false, Width=300, Height=36, AutoEllipsis=true, TextAlign=ContentAlignment.MiddleLeft, Text=string.IsNullOrEmpty(prefs.Source)?"Выберите длинное видео":Path.GetFileName(prefs.Source)};
             mode=Theme.MakeCombo(new[]{"Авто: речь и события","Сильные мысли и цитаты","События без речи"}); mode.Width=224; mode.SelectedIndex=Math.Max(0,Math.Min(2,prefs.Mode));
+            exportFormat=Theme.MakeCombo(new[]{"9:16 · Shorts / TikTok / Reels","Оригинальное соотношение сторон"}); exportFormat.Width=268;
+            exportFormat.SelectedIndex=IsOriginalExportFormat(prefs.ExportFormat)?1:0;
+            exportFormat.SelectedIndexChanged+=(s,e)=>{prefs.ExportFormat=ExportFormatFromIndex(exportFormat.SelectedIndex);Save();};
             count = Number(1,50,Math.Max(1,Math.Min(50,prefs.Count))); count.Width=58;
             find=Theme.MakeButton("Найти моменты",accent:true); find.Click+=async(s,e)=>await Search();
             setup=Theme.MakeButton("Подготовка",ghost:true,action:ShowSetup);
             toolbar.Controls.Add(load); toolbar.Controls.Add(sourceLabel); toolbar.Controls.Add(mode);
+            toolbar.Controls.Add(new Label {Text="Соотношение",AutoSize=true,Margin=new Padding(8,9,4,0),ForeColor=Theme.TextSecondary});
+            toolbar.Controls.Add(exportFormat);
             toolbar.Controls.Add(new Label {Text="До",AutoSize=true,Margin=new Padding(4,9,4,0)}); toolbar.Controls.Add(count); toolbar.Controls.Add(find); toolbar.Controls.Add(setup);
             layout.Controls.Add(toolbar,0,1);
             cards=new FlowLayoutPanel {Dock=DockStyle.Fill, FlowDirection=FlowDirection.TopDown, WrapContents=false, AutoScroll=true, Margin=Padding.Empty};
@@ -93,6 +100,15 @@ namespace VideoBatch {
             var last=Path.Combine(root,"last-result.json");
             try { analysis=json.Deserialize<HighlightsResult>(File.ReadAllText(last)); if(analysis?.clips?.Count>0 && File.Exists(analysis.source)){prefs.Source=analysis.source;sourceLabel.Text=Path.GetFileName(prefs.Source);DrawCards();status.Text="Сохранённый поиск: "+analysis.clips.Count+". Проверьте границы и сохраните выбранное.";} } catch { }
         }
+        static bool IsOriginalExportFormat(string fmt) {
+            if(string.IsNullOrWhiteSpace(fmt))return false;
+            fmt=fmt.Trim();
+            return fmt.Equals("original",StringComparison.OrdinalIgnoreCase)
+                || fmt.Equals("source",StringComparison.OrdinalIgnoreCase)
+                || fmt.Equals("native",StringComparison.OrdinalIgnoreCase)
+                || fmt.StartsWith("orig",StringComparison.OrdinalIgnoreCase);
+        }
+        static string ExportFormatFromIndex(int index) => index==1?"original":"vertical_916";
         static NumericUpDown Number(decimal min, decimal max, decimal value) {
             return new NumericUpDown {Minimum=min,Maximum=max,Value=value,BackColor=Theme.Elevated,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,Height=30,Margin=new Padding(0,6,8,0)};
         }
@@ -125,7 +141,8 @@ namespace VideoBatch {
             if(!File.Exists(python))throw new Exception("Сначала откройте «Подготовка» и нажмите «Подготовить». Это нужно один раз.");
             var id=Guid.NewGuid().ToString("N");var jobs=Path.Combine(root,"jobs");Directory.CreateDirectory(jobs);
             cancellation=Path.Combine(jobs,id+".cancel");var result=Path.Combine(jobs,id+".result.json");var job=Path.Combine(jobs,id+".json");var workdir=Path.Combine(jobs,id+".work");
-            var input=new Dictionary<string,object>{{"source",prefs.Source},{"expected_fingerprint",analysis?.fingerprint},{"root",root},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"minimum",20},{"maximum",40},{"count",(int)count.Value},{"mode",new[]{"auto","speech","visual"}[mode.SelectedIndex]},{"action",action},{"result",result},{"workdir",workdir},{"cancel",cancellation},{"clips",clips},{"output",output}};
+            var fmt=ExportFormatFromIndex(exportFormat.SelectedIndex); prefs.ExportFormat=fmt;
+            var input=new Dictionary<string,object>{{"source",prefs.Source},{"expected_fingerprint",analysis?.fingerprint},{"root",root},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"minimum",20},{"maximum",40},{"count",(int)count.Value},{"mode",new[]{"auto","speech","visual"}[mode.SelectedIndex]},{"export_format",fmt},{"action",action},{"result",result},{"workdir",workdir},{"cancel",cancellation},{"clips",clips},{"output",output}};
             File.WriteAllText(job,json.Serialize(input),new UTF8Encoding(false));
             try {
                 var exit=await RunProcess(python,new[]{Path.Combine(Scripts(),"worker.py"),"--job",job},true);

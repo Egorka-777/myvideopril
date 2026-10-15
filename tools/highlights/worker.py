@@ -389,6 +389,17 @@ def validate_clip(clip, job, duration):
     return start, end
 
 
+def export_video_filter(fmt):
+    base = "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1"
+    key = (fmt or "original").strip().lower()
+    if key in ("original", "orig", "source", "native", "исходник", "оригинал"):
+        return base
+    if key in ("vertical_916", "shorts", "tiktok", "reels", "instagram", "9:16", "916"):
+        # Cover crop to 1080x1920 — YouTube Shorts, TikTok, Instagram Reels.
+        return "scale=w=1080:h=1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
+    return base
+
+
 def export(job, info):
     clips = job.get("clips", [])
     if not clips:
@@ -409,7 +420,7 @@ def export(job, info):
         try:
             run([job["ffmpeg"], "-v", "error", "-nostdin", "-n", "-ss", f"{start:.6f}", "-i", job["source"],
                  "-t", f"{end-start:.6f}", "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
-                 "-vf", "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                 "-vf", export_video_filter(job.get("export_format")), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                  "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-map_metadata", "-1", "-movflags", "+faststart", partial])
             actual = json.loads(run([job["ffprobe"], "-v", "error", "-show_format", "-of", "json", partial]))
             if abs(float(actual["format"]["duration"]) - (end-start)) > .2:

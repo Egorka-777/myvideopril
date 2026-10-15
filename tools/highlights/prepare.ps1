@@ -13,9 +13,23 @@ foreach ($candidate in $candidates) {
     if ($LASTEXITCODE -eq 0) { $python = $candidate; break }
 }
 if (!$python) { throw 'Install Python 3.11 (64-bit) from python.org, then click Prepare again.' }
-$ollama = Get-Command ollama.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
-if (!$ollama) { $ollama = Join-Path $env:LOCALAPPDATA 'Programs/Ollama/ollama.exe' }
-if (!(Test-Path $ollama)) { throw 'Install Ollama from https://ollama.com/download/windows, open it, then click Prepare again.' }
+function Resolve-OllamaExe {
+    if ($env:VB_OLLAMA_EXE -and (Test-Path $env:VB_OLLAMA_EXE)) { return $env:VB_OLLAMA_EXE }
+    $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+    if ($cmd -and (Test-Path $cmd)) { return $cmd }
+    foreach ($p in @(
+        (Join-Path $env:LOCALAPPDATA 'Programs/Ollama/ollama.exe'),
+        (Join-Path ${env:ProgramFiles} 'Ollama/ollama.exe'),
+        'D:\ollama-windows-amd64\ollama.exe'
+    )) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+$ollama = Resolve-OllamaExe
+if (!$ollama) {
+    throw 'Ollama not found. Install from https://ollama.com/download/windows or put ollama.exe on PATH (also checked: LocalAppData\Programs\Ollama and D:\ollama-windows-amd64). Then click Prepare again.'
+}
 Write-Output 'Preparing isolated speech tools...'
 $venv = Join-Path $Root 'venv'
 if (!(Test-Path (Join-Path $venv 'Scripts/python.exe'))) {
@@ -27,7 +41,13 @@ $runtime = Join-Path $venv 'Scripts/python.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Speech dependency installation failed. Check internet connection.' }
 Write-Output 'Downloading speech model (small, multilingual)...'
 $env:VB_HIGHLIGHTS_MODELS = Join-Path $Root 'models'
-& $runtime -c 'import os; from faster_whisper.utils import download_model; download_model("small", output_dir=None, cache_dir=os.environ["VB_HIGHLIGHTS_MODELS"])'
+$env:HF_HUB_DISABLE_SYMLINKS = '1'
+$downloadSpeech = @'
+import os
+from faster_whisper.utils import download_model
+download_model('small', output_dir=None, cache_dir=os.environ['VB_HIGHLIGHTS_MODELS'])
+'@
+& $runtime -c $downloadSpeech
 if ($LASTEXITCODE -ne 0) { throw 'Speech model download failed' }
 Write-Output 'Starting local model service...'
 $running = $false

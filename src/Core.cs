@@ -82,6 +82,8 @@ namespace VideoBatch {
         public string YouTubeMarketView="RU";
         /// <summary>Активная вкладка RU/EN в «Моя студия».</summary>
         public string AssemblyMarketView="RU";
+        /// <summary>RU | EN | RU-Inst | EN-Inst в «Моя студия».</summary>
+        public string AssemblyStudioProfile="RU";
         /// <summary>Активная вкладка Shorts/Long в workspace (не скрывает каналы).</summary>
         public string YouTubeKindView="shorts";
         public bool YouTubeLongScheduled20260923Migrated;
@@ -276,6 +278,9 @@ namespace VideoBatch {
             if(p.YouTubeSearchUrl==null)p.YouTubeSearchUrl="";
             if(string.IsNullOrWhiteSpace(p.YouTubeMarketView)||(p.YouTubeMarketView!="RU"&&p.YouTubeMarketView!="EN"))p.YouTubeMarketView="RU";
             if(string.IsNullOrWhiteSpace(p.AssemblyMarketView)||(p.AssemblyMarketView!="RU"&&p.AssemblyMarketView!="EN"))p.AssemblyMarketView="RU";
+            if(string.IsNullOrWhiteSpace(p.AssemblyStudioProfile))p.AssemblyStudioProfile=p.AssemblyMarketView;
+            p.AssemblyStudioProfile=AssemblyProfile.Normalize(p.AssemblyStudioProfile);
+            p.AssemblyMarketView=AssemblyProfile.MainProfile(p.AssemblyStudioProfile);
             if(string.IsNullOrWhiteSpace(p.YouTubeDefaultTagsRu))p.YouTubeDefaultTagsRu=YouTubeTagDefaults.Ru;
             if(string.IsNullOrWhiteSpace(p.YouTubeDefaultTagsEn))p.YouTubeDefaultTagsEn=YouTubeTagDefaults.En;
             if(p.YouTubeDefaultTagsRu==null)p.YouTubeDefaultTagsRu=YouTubeTagDefaults.Ru;
