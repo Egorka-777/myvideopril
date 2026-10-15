@@ -32,6 +32,14 @@ jobs:
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           $folder = Join-Path (Get-Location) 'artifacts/highlights-preview'
           if (!$asm.GetType('VideoBatch.HighlightsTests').GetMethod('RunUiTests').Invoke($null,[object[]]@([string]$folder))) { throw 'UI regression' }
+      - name: Desktop to Python real export integration
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          $python = [string](Get-Command python.exe).Source
+          $ffmpeg = [string](Get-Command ffmpeg.exe).Source
+          $ffprobe = [string](Get-Command ffprobe.exe).Source
+          if (!$asm.GetType('VideoBatch.HighlightsTests').GetMethod('RunWorkerExportTest').Invoke($null,[object[]]@($python,$ffmpeg,$ffprobe))) { throw 'Desktop worker integration' }
       - name: Package desktop update
         shell: pwsh
         run: |
