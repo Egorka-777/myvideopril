@@ -103,7 +103,7 @@ namespace VideoBatch {
             }
         }
         string Scripts() {
-            foreach(var candidate in AppPaths.CandidateInstallRoots()) {var dir=Path.Combine(candidate,"tools","highlights");if(File.Exists(Path.Combine(dir,"worker.py")))return dir;}
+            foreach(var candidate in new[]{Path.GetDirectoryName(typeof(HighlightsPanel).Assembly.Location)}.Concat(AppPaths.CandidateInstallRoots())) {var dir=Path.Combine(candidate,"tools","highlights");if(File.Exists(Path.Combine(dir,"worker.py")))return dir;}
             throw new Exception("Не найдена папка tools/highlights рядом с приложением. Агент должен скопировать её из новой ветки.");
         }
         void SetBusy(bool value) {
