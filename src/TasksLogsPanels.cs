@@ -85,7 +85,7 @@ namespace VideoBatch {
             accountFilter.Width = 120;
             taskFilter = Theme.MakeSearchBox();
             taskFilter.Width = 120;
-            platformFilter = Theme.MakeCombo(new[] { "Все", "YouTube", "TikTok" });
+            platformFilter = Theme.MakeCombo(new[] { "Все", "YouTube", "TikTok", "Telegram" });
             levelFilter = Theme.MakeCombo(new[] { "Все", "info", "warning", "error" });
             filters.Controls.Add(new Label { Text = "Аккаунт", AutoSize = true, ForeColor = Theme.TextSecondary });
             filters.Controls.Add(accountFilter);

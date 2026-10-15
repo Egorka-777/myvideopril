@@ -16,7 +16,8 @@ namespace VideoBatch {
         Logs,
         Settings,
         AccountLibrary,
-        Highlights
+        Highlights,
+        Telegram
     }
 
     public sealed class NavigationService {
@@ -42,6 +43,7 @@ namespace VideoBatch {
                 case NavSection.Highlights: return "Нарезчик";
                 case NavSection.YouTube: return "YouTube";
                 case NavSection.TikTok: return "TikTok";
+                case NavSection.Telegram: return "Telegram";
                 case NavSection.Warmup: return "Прогрев";
                 case NavSection.ViewsSearch: return "Просмотры и поиск";
                 case NavSection.Logs: return "Логи";

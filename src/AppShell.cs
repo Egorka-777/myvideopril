@@ -38,6 +38,7 @@ namespace VideoBatch {
         SettingsPanel settingsPanel;
         AssemblyWindow assemblyStudio;
         HighlightsPanel highlightsPanel;
+        TelegramPanel telegramPanel;
         MainWindow processingWindow;
         Control currentContent;
 
@@ -91,6 +92,10 @@ namespace VideoBatch {
                     try{await highlightsPanel.StopBeforeClose(); closingAfterHighlights=true; BeginInvoke(new Action(Close));}
                     finally{waitingForHighlights=false;} return;
                 }
+                if (telegramPanel?.HasWork == true) {
+                    e.Cancel=true; if (waitingForHighlights) return; waitingForHighlights=true;
+                    try { await telegramPanel.StopBeforeClose(); BeginInvoke(new Action(Close)); } finally { waitingForHighlights=false; } return;
+                }
                 SaveSettings(); youtubeBackend?.Dispose(); tiktokBackend?.Dispose();
             };
         }
@@ -100,7 +105,7 @@ namespace VideoBatch {
             int y = 0;
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
             y = AddNavGroup(panel, "Аккаунты", y, NavItem("Аккаунты", NavSection.AccountLibrary), NavItem("Профили браузера", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
-            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok));
+            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram));
             y = AddNavGroup(panel, "Автоматизация", y, NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
             return panel;
@@ -221,6 +226,8 @@ namespace VideoBatch {
             AddPanel(settingsPanel);
             highlightsPanel = new HighlightsPanel();
             AddPanel(highlightsPanel);
+            telegramPanel = new TelegramPanel();
+            AddPanel(telegramPanel);
             assemblyStudio = new AssemblyWindow(embedded: true);
             assemblyStudio.Visible = false;
             contentHost.Controls.Add(assemblyStudio);
@@ -270,6 +277,7 @@ namespace VideoBatch {
                 case NavSection.Proxy: next = proxyPanel; proxyPanel.RefreshData(); break;
                 case NavSection.VideoAssembly: next = assemblyStudio; break;
                 case NavSection.Highlights: next = highlightsPanel; break;
+                case NavSection.Telegram: next = telegramPanel; telegramPanel.RefreshData(); break;
                 case NavSection.YouTube: next = youtubeWorkspace; youtubeWorkspace.OnNavigated(); break;
                 case NavSection.TikTok: next = tiktokWorkspace; tiktokWorkspace.OnNavigated(); break;
                 case NavSection.ViewsSearch: next = viewsSearchPanel; viewsSearchPanel.RefreshData(); break;

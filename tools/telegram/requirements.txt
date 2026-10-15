@@ -1,0 +1,11 @@
+Telethon==1.45.0
+opentele==1.15.1
+PySocks==1.7.1
+python-socks[asyncio]==2.7.2
+PyQt5==5.15.11
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.20.0
+tgcrypto==1.2.5
+pyaes==1.6.1
+rsa==4.9.1
+pyasn1==0.6.4
