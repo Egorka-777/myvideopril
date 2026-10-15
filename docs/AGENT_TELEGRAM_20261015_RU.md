@@ -77,8 +77,8 @@ Workflow **Telegram workspace** собирает Windows .NET 4.8, готови�
 Технические первоисточники:
 - https://docs.telethon.dev/en/stable/concepts/sessions.html
 - https://docs.telethon.dev/en/stable/modules/client.html
-- https://tl.telethon.dev/methods/channels/invite_to_channel.html
-- https://tl.telethon.dev/methods/channels/get_participant.html
+- https://core.telegram.org/method/channels.inviteToChannel
+- https://core.telegram.org/method/channels.getParticipant
 - https://opentele.readthedocs.io/en/latest/documentation/telegram-desktop/tdesktop/
 - https://github.com/thedemons/opentele
 

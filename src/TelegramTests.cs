@@ -28,6 +28,27 @@ namespace VideoBatch {
                 return true;
             } finally {if(Directory.Exists(temp))Directory.Delete(temp,true);}
         }
+        public static bool RunWorkerProtocolTest(string root) {
+            return System.Threading.Tasks.Task.Run(async()=>{
+                var store=new TelegramStore(root);store.Prepare();
+                string fixture=Path.Combine(root,"Тест импорта","account.session");Directory.CreateDirectory(Path.GetDirectoryName(fixture));
+                string script="import sqlite3,sys,json;from pathlib import Path;p=Path(sys.argv[1]);d=sqlite3.connect(str(p));d.execute('CREATE TABLE sessions(dc_id INTEGER,server_address TEXT,port INTEGER,auth_key BLOB)');d.execute('INSERT INTO sessions VALUES(2,?,?,?)',('149.154.167.51',443,bytes(range(256))));d.commit();d.close();p.with_suffix('.json').write_text(json.dumps(dict(api_id=1234,api_hash='a'*32,first_name='Тест импорта')),encoding='utf-8')";
+                var info=new System.Diagnostics.ProcessStartInfo(Path.Combine(root,"venv","Scripts","python.exe"),"-c "+Core.Quote(script)+" "+Core.Quote(fixture)){UseShellExecute=false,CreateNoWindow=true};
+                using(var process=System.Diagnostics.Process.Start(info)){process.WaitForExit();if(process.ExitCode!=0)throw new Exception("Synthetic session fixture");}
+                var before=File.ReadAllBytes(fixture);var runner=new TelegramRunner(store);bool version=false,complete=false;string last="";int imported=0;
+                int code=await runner.Run(new System.Collections.Generic.Dictionary<string,object>{{"action","import"},{"paths",new[]{fixture}},{"api_id",0},{"api_hash",""}},ev=>{
+                    string kind=Convert.ToString(ev["event"]);if(kind=="version")version=true;if(kind=="complete"){complete=true;last=Convert.ToString(ev["text"]);}
+                    if(kind=="imported"){
+                        var account=new JavaScriptSerializer().ConvertToType<TelegramAccount>(ev["account"]);
+                        if(account.name!="Тест импорта"||account.api_id!=1234||account.session.Length<300)throw new Exception("Import JSON contract");
+                        store.Change(d=>d.accounts.Add(account));imported++;
+                    }
+                });
+                if(code!=0||!version||!complete||last!="Задача завершена"||runner.IsRunning||imported!=1)throw new Exception("Real desktop/Python UTF8 protocol");
+                if(!before.SequenceEqual(File.ReadAllBytes(fixture))||store.Load().accounts.Count!=1)throw new Exception("Import changed source or failed persistence");
+                return true;
+            }).GetAwaiter().GetResult();
+        }
         public static void RunUiTest(string output) {
             Exception failure=null;
             var thread=new System.Threading.Thread(()=>{

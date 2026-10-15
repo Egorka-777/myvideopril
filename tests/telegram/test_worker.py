@@ -52,7 +52,7 @@ class FakeClient:
         if isinstance(request,functions.channels.InviteToChannelRequest):
             if self.failure:raise self.failure
             return SimpleNamespace(missing_invitees=[object()] if self.missing else [])
-        return SimpleNamespace(participant=True)
+        return SimpleNamespace(participant=types.ChannelParticipant(user_id=101,date=None))
 
 
 class Imports(unittest.IsolatedAsyncioTestCase):
@@ -140,6 +140,15 @@ class Queue(unittest.IsolatedAsyncioTestCase):
         self.job['users']='userone';client=FakeClient();await self.execute(client);self.assertEqual(client.calls,[])
     async def test_missing_invitee_not_false_success(self):
         self.job['users']='userone';await self.execute(FakeClient(missing=True))
+        self.assertFalse(any(e[0]=='invite' and e[1]['state']=='confirmed' for e in self.events))
+    async def test_left_participant_not_false_success(self):
+        class Left(FakeClient):
+            async def __call__(self, request):
+                if isinstance(request,functions.channels.GetParticipantRequest):
+                    return SimpleNamespace(participant=types.ChannelParticipantLeft(peer=types.PeerUser(101)))
+                return await super().__call__(request)
+        self.job['users']='userone'
+        with self.assertRaises(w.StopJob):await self.execute(Left())
         self.assertFalse(any(e[0]=='invite' and e[1]['state']=='confirmed' for e in self.events))
     async def test_permissions_and_multiple_accounts(self):
         self.job['accounts'].append(dict(id='b'*64))

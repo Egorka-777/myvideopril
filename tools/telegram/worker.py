@@ -250,7 +250,7 @@ async def import_paths(job):
         except Exception as exc:
             failures += 1
             # Do not echo filenames or exception strings: may contain phone/session keys.
-            emit('import_error', text=str(exc) if isinstance(exc, ValueError) else 'Не удалось импортировать один источник', code=type(exc).__name__)
+            emit('import_error', text=str(exc) if isinstance(exc, ValueError) else 'Не удалось импортировать один источник', code=type(exc).__name__, source=path.name[:80])
     for p in job.get('paths', []):
         await load(Path(p))
     emit('summary', text=f'Импортировано: {added}; ошибок источников: {failures}', imported=added, failures=failures)
@@ -419,7 +419,10 @@ async def invite(job):
                     emit('invite', username=name, state='privacy', text='Telegram не добавил пользователя; приватность/ограничение')
                 else:
                     # A successful RPC response alone is insufficient on newer Telegram layers.
-                    await asyncio.wait_for(client(functions.channels.GetParticipantRequest(target, user)), 35)
+                    membership = await asyncio.wait_for(client(functions.channels.GetParticipantRequest(target, user)), 35)
+                    valid = (types.ChannelParticipant, types.ChannelParticipantSelf, types.ChannelParticipantCreator, types.ChannelParticipantAdmin)
+                    if not isinstance(getattr(membership, 'participant', None), valid):
+                        raise ValueError('Telegram не подтвердил активное участие; нужна ручная проверка')
                     ledger.finish(target.id, user.id, 'confirmed')
                     done += 1
                     emit('invite', username=name, state='confirmed', text='Участие подтверждено')

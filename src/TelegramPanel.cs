@@ -135,7 +135,7 @@ namespace VideoBatch {
         async Task Run(Dictionary<string,object> job) {
             if(busy)return;busy=true;foreach(var b in workButtons)b.Enabled=false;stop.Enabled=true;grid.Enabled=false;search.Enabled=false;
             bool complete=false;string task=Guid.NewGuid().ToString("N");status.Text="Выполняется…";
-            TaskQueueStore.Upsert(task,t=>{t.Platform="Telegram";t.UploadMethod="MTProto";t.Account="Выбранные аккаунты";t.Stage=Convert.ToString(job["action"]);t.Status=TaskQueueStatus.Preparing;},true);
+            TaskQueueStore.Upsert(task,t=>{t.Platform="Telegram";t.UploadMethod="MTProto";t.Account=job.ContainsKey("accounts")?string.Join(", ",((List<TelegramAccount>)job["accounts"]).Select(a=>a.name)):"Импорт аккаунтов";t.Stage=Convert.ToString(job["action"]);t.Status=TaskQueueStatus.Preparing;},true);
             try {
                 int code=await runner.Run(job,ev=>{
                     string type=Get(ev,"event");
@@ -156,7 +156,7 @@ namespace VideoBatch {
                     if(type=="complete")complete=true;
                     string text=Get(ev,"text");if(ev.ContainsKey("username")&&type=="invite")text="@"+Get(ev,"username")+": "+text;
                     if(ev.ContainsKey("seconds")&&Convert.ToInt32(ev["seconds"])>0)text+=" · "+ev["seconds"]+" сек";
-                    if(ev.ContainsKey("code"))text+=" · "+Get(ev,"code");
+                    if(ev.ContainsKey("code"))text+=" · "+Get(ev,"code");if(ev.ContainsKey("source"))text+=" · "+Get(ev,"source");
                     if(text!=""){status.Text=text;Log(task,Get(ev,"id"),type,text);TaskQueueStore.Upsert(task,t=>{t.Stage=type;t.Result=text;});}
                 });
                 if(code==0&&!complete)throw new IOException("Worker завершился без подтверждения результата");
@@ -165,7 +165,7 @@ namespace VideoBatch {
             }catch{TaskQueueStore.Upsert(task,t=>{t.Status=TaskQueueStatus.Error;t.Result="Проверьте журнал Telegram";},true);throw;}finally{busy=false;foreach(var b in workButtons)b.Enabled=true;stop.Enabled=false;grid.Enabled=true;search.Enabled=true;RefreshData();}
         }
         static string Get(Dictionary<string,object> ev,string key)=>ev.TryGetValue(key,out var value)?Convert.ToString(value):"";
-        void Log(string task,string account,string stage,string text){string line=DateTime.Now.ToString("HH:mm:ss")+" · "+text;log.AppendText(line+Environment.NewLine);log.ScrollToCaret();AppDiagnostics.Write("Telegram",account,task,stage,text,stage=="error"||stage=="import_error"?"error":"info");}
+        void Log(string task,string account,string stage,string text){if(!string.IsNullOrEmpty(account)){var a=store.Load().accounts.FirstOrDefault(x=>x.id==account);if(a!=null)text=a.name+": "+text;}string line=DateTime.Now.ToString("HH:mm:ss")+" · "+text;log.AppendText(line+Environment.NewLine);log.ScrollToCaret();AppDiagnostics.Write("Telegram",account,task,stage,text,stage=="error"||stage=="import_error"?"error":"info");}
         void Failure(Exception e){status.Text=e.Message;AppDiagnostics.Write("Telegram","","","error",e.Message,"error");MessageBox.Show(this,e.Message,"Telegram",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
         void EditAccount(TelegramAccount account) {
             if(account==null||busy)return;
@@ -205,7 +205,7 @@ namespace VideoBatch {
                 status.Text="Telegram подготовлен";
             }catch(Exception e){Failure(e);}finally{preparation=null;busy=false;}
         }
-        public async Task StopBeforeClose(){try{if(preparation!=null&&!preparation.HasExited)preparation.Kill();}catch{}await runner.Stop();while(busy)await Task.Delay(50);}
+        public async Task StopBeforeClose(){try{if(preparation!=null&&!preparation.HasExited){using(var kill=Process.Start(new ProcessStartInfo("taskkill.exe","/PID "+preparation.Id+" /T /F"){UseShellExecute=false,CreateNoWindow=true}))await Task.Run(()=>kill.WaitForExit());}}catch{}await runner.Stop();while(busy)await Task.Delay(50);}
     }
     internal sealed class TelegramFields : Form {
         readonly FlowLayoutPanel body;

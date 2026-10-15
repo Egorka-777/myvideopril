@@ -36,11 +36,13 @@ jobs:
       - name: Windows vault, serialization and UI tests
         shell: powershell
         run: |
+          $env:VIDEOBATCH_HOME = $PWD.Path
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           foreach ($name in @('TelegramTests','StudioUploadTests','TitleCleaner','ScheduleGenerator')) {
             if (!$asm.GetType('VideoBatch.'+$name).GetMethod('RunSelfTests').Invoke($null,@())) { throw $name }
           }
           if (!$asm.GetType('VideoBatch.AccountLibraryTests').GetMethod('RunSyncTests').Invoke($null,@())) { throw 'Account library sync' }
+          if (!$asm.GetType('VideoBatch.TelegramTests').GetMethod('RunWorkerProtocolTest').Invoke($null,@("$env:RUNNER_TEMP/telegram-runtime"))) { throw 'Desktop worker protocol' }
           $dest = Join-Path $PWD 'artifacts/telegram-ui'
           New-Item -ItemType Directory -Force $dest | Out-Null
           $asm.GetType('VideoBatch.TelegramTests').GetMethod('RunUiTest').Invoke($null,@($dest))
