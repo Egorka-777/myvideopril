@@ -47,6 +47,17 @@ class HighlightsTests(unittest.TestCase):
         self.assertIn('first_unit',prompt)
         self.assertNotIn('CANDIDATES=[]',prompt)
 
+    def test_antecedent_is_not_left_out(self):
+        units=[dict(id=0,start=0,end=8,text='Успех не означает отсутствие ошибок.'),dict(id=1,start=8.2,end=19,text='Он означает способность учиться.'),dict(id=2,start=19.2,end=29,text='Поэтому оценивай скорость обучения.')]
+        pool=w.candidates(units,20,40,30)
+        with patch.object(w,'ask',return_value={'clips':[dict(id=1,score=90,complete=True,title='Успех',reason='Мысль')]}):
+            selected=w.select_speech(pool,units,30)
+        self.assertEqual(0,selected[0]['start'])
+        self.assertIn('Успех',selected[0]['text'])
+        # If preceding context cannot fit, reject the dangling excerpt.
+        orphan=dict(start=8,end=30,text='Он означает обучение.',score=90,title='Мысль',reason='Причина',kind='speech')
+        self.assertIsNone(w.repair_context(orphan,[orphan]))
+
     def test_no_fake_highlights(self):
         with patch.object(w,"ask",return_value={"clips":[]}):
             self.assertEqual([],w.select_speech([dict(id=0,start=0,end=23,text="Обычная фраза")],[dict(id=0,start=0,end=23,text="Обычная фраза")],25))

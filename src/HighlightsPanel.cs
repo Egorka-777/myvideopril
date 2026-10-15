@@ -83,15 +83,15 @@ namespace VideoBatch {
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.RowStyles.Add(new RowStyle(SizeType.Absolute,28));footer.RowStyles.Add(new RowStyle(SizeType.Percent,100));
             status=new Label {Dock=DockStyle.Fill,Text="Первый запуск? Подготовка → Подготовить. Затем выберите видео.", AutoEllipsis=true,ForeColor=Theme.TextSecondary,TextAlign=ContentAlignment.MiddleLeft};
-            progress=new ProgressBar {Dock=DockStyle.Fill,Height=4,Margin=new Padding(0,8,12,8)};
-            stop=Theme.MakeButton("Остановить",ghost:true,action:CancelWork);stop.Enabled=false;
+            progress=new ProgressBar {Dock=DockStyle.Top,Height=4,Visible=false,Margin=new Padding(0,18,12,0)};
+            stop=Theme.MakeButton("Остановить",ghost:true,action:CancelWork);stop.Enabled=false;stop.Visible=false;
             export=Theme.MakeButton("Сохранить выбранное",accent:true);export.Enabled=false;export.Click+=async(s,e)=>await Export();
-            results=Theme.MakeButton("Результаты",ghost:true,action:()=>OpenFolder(prefs.Output));
+            results=Theme.MakeButton("Результаты",ghost:true,action:()=>OpenFolder(prefs.Output));results.Enabled=Directory.Exists(prefs.Output);
             var actions=new FlowLayoutPanel {AutoSize=true,WrapContents=false,Dock=DockStyle.Fill};actions.Controls.Add(stop);actions.Controls.Add(export);actions.Controls.Add(results);
             footer.Controls.Add(status,0,0);footer.SetColumnSpan(status,2);footer.Controls.Add(progress,0,1);footer.Controls.Add(actions,1,1);
             layout.Controls.Add(footer,0,3);
             var last=Path.Combine(root,"last-result.json");
-            try { analysis=json.Deserialize<HighlightsResult>(File.ReadAllText(last)); if(analysis?.clips?.Count>0 && File.Exists(analysis.source)){prefs.Source=analysis.source;sourceLabel.Text=Path.GetFileName(prefs.Source);DrawCards();} } catch { }
+            try { analysis=json.Deserialize<HighlightsResult>(File.ReadAllText(last)); if(analysis?.clips?.Count>0 && File.Exists(analysis.source)){prefs.Source=analysis.source;sourceLabel.Text=Path.GetFileName(prefs.Source);DrawCards();status.Text="Сохранённый поиск: "+analysis.clips.Count+". Проверьте границы и сохраните выбранное.";} } catch { }
         }
         static NumericUpDown Number(decimal min, decimal max, decimal value) {
             return new NumericUpDown {Minimum=min,Maximum=max,Value=value,BackColor=Theme.Elevated,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,Height=30,Margin=new Padding(0,6,8,0)};
@@ -107,7 +107,7 @@ namespace VideoBatch {
             throw new Exception("Не найдена папка tools/highlights рядом с приложением. Агент должен скопировать её из новой ветки.");
         }
         void SetBusy(bool value) {
-            busy=value;stopping=false;toolbar.Enabled=!value;cards.Enabled=!value;export.Enabled=!value&&analysis?.clips?.Count>0;stop.Enabled=value;results.Enabled=!value;
+            busy=value;stopping=false;toolbar.Enabled=!value;cards.Enabled=!value;export.Enabled=!value&&analysis?.clips?.Count>0;stop.Enabled=value;stop.Visible=value;results.Enabled=!value&&Directory.Exists(prefs.Output);progress.Visible=value;
             progress.Style=value?ProgressBarStyle.Marquee:ProgressBarStyle.Continuous;if(!value)progress.Value=0;
         }
         void OnUi(Action action) {if(!IsDisposed && IsHandleCreated)try{BeginInvoke(action);}catch(InvalidOperationException){}}

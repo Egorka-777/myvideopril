@@ -51,7 +51,10 @@ with tempfile.TemporaryDirectory() as temp:
             w.atomic_json(artifacts/'speech-and-vision.json',dict(result=result,image_answer=image_answer))
             selected=w.select_speech(w.candidates(units,20,40,30),units,30)
             assert selected,'Actual model rejected a deliberately complete useful claim'
-            result.update(real_semantic_test=selected,real_vision_test=image_answer,elapsed_seconds=round(time.monotonic()-start,1))
+            assert all('Успех' in clip['text'] and not w.dependent_opening(clip['text']) for clip in selected),'Missing antecedent / opening context'
+            visual_clips=w.select_visual(job,[(0,30)],temp)
+            assert visual_clips==[],'Static background should not be invented into an interesting event'
+            result.update(real_semantic_test=selected,real_vision_test=image_answer,real_visual_event_test=visual_clips,elapsed_seconds=round(time.monotonic()-start,1))
             w.atomic_json(artifacts/'report.json',result)
             print('REAL small ASR + gemma3:4b semantic + image inference PASS',flush=True)
         finally:
