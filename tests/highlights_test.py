@@ -33,6 +33,7 @@ class HighlightsTests(unittest.TestCase):
         self.assertTrue(all(20<=c['end']-c['start']<=40 for c in pool))
         # No arbitrary 40s slice out of a 43s single sentence.
         self.assertEqual([],w.candidates(w.sentences([dict(start=0,end=43,text="Длинная мысль.")]),20,40,43))
+        self.assertEqual([],w.candidates(w.sentences([dict(start=0,end=31,text="Окончание аудио за пределами видео.")]),20,40,30))
         adjacent = w.sentences([dict(start=0,end=1,text=" Первое."),dict(start=1.02,end=23,text=" Второе."),dict(start=23.01,end=24,text=" Да.")])
         for c in w.candidates(adjacent,20,40,25):
             if c["text"]=="Второе.":

@@ -200,6 +200,8 @@ def candidates(units, minimum, maximum, duration):
     pool = []
     for i, first in enumerate(units):
         for last in units[i:]:
+            if last["end"] > duration + .001:
+                break  # Never silently trim a spoken ending beyond the video track.
             previous_end = units[i-1]["end"] if i else 0
             next_start = units[last["id"]+1]["start"] if last["id"]+1 < len(units) else duration
             start = max(0, first["start"] - .12, previous_end)
