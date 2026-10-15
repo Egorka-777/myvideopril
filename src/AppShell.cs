@@ -75,7 +75,7 @@ namespace VideoBatch {
             BuildPanels();
             ShowSection(NavSection.Home);
             Shown += async (s, e) => await CheckDolphinAsync(false);
-            bool closingAfterLive = false, waitingForLive = false, closingAfterHighlights = false;
+            bool closingAfterLive = false, waitingForLive = false, closingAfterHighlights = false, waitingForHighlights = false;
             FormClosing += async (s, e) => {
                 if (!closingAfterLive && youtubeWorkspace?.HasLiveWork == true) {
                     e.Cancel = true;
@@ -87,7 +87,9 @@ namespace VideoBatch {
                     return;
                 }
                 if (!closingAfterHighlights && highlightsPanel?.HasWork == true) {
-                    e.Cancel = true; await highlightsPanel.StopBeforeClose(); closingAfterHighlights=true; BeginInvoke(new Action(Close)); return;
+                    e.Cancel = true; if(waitingForHighlights)return; waitingForHighlights=true;
+                    try{await highlightsPanel.StopBeforeClose(); closingAfterHighlights=true; BeginInvoke(new Action(Close));}
+                    finally{waitingForHighlights=false;} return;
                 }
                 SaveSettings(); youtubeBackend?.Dispose(); tiktokBackend?.Dispose();
             };

@@ -33,7 +33,7 @@ def check():
 
 
 def emit(stage, message, percent=None):
-    print(json.dumps(dict(stage=stage, message=message, percent=percent), ensure_ascii=False), flush=True)
+    print(json.dumps(dict(stage=stage, message=message, percent=percent), ensure_ascii=True), flush=True)
 
 
 def atomic_json(path, data):
@@ -409,9 +409,13 @@ def execute(job):
     ready()  # Do not spend time transcribing if semantic model is not configured.
     emit("source", "Проверяю видео и сохранённую расшифровку", 3)
     key = fingerprint(source)
+    initial_stat = source.stat()
     cache = Path(job["root"]) / "cache" / key
     cache.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="videobatch-highlights-") as temp:
+    workdir = job.get("workdir")
+    if workdir:
+        Path(workdir).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="videobatch-highlights-", dir=workdir) as temp:
         words = transcribe(job, info, cache, temp)
         units = sentences(words)
         pool = candidates(units, minimum, maximum, info["duration"])
@@ -422,6 +426,9 @@ def execute(job):
         clips = deduplicate(clips, max(1,min(50,int(job.get("count",10)))))
         for clip in clips:
             validate_clip(clip, job, info["duration"])
+        final_stat = source.stat()
+        if (initial_stat.st_size, initial_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
+            raise ValueError("Исходное видео изменилось во время поиска. Повторите анализ.")
         result = dict(version=VERSION, source=str(source.resolve()), fingerprint=key, duration=info["duration"],
                       minimum=minimum, maximum=maximum, clips=clips, words=words,
                       note="Моменты выбраны локальной моделью. Проверьте смысл и границы; визуальные тайминги приблизительные (кадры раз в 2 секунды).")

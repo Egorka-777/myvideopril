@@ -88,6 +88,9 @@ class HighlightsTests(unittest.TestCase):
                 analysis=w.execute(auto)
             self.assertEqual(1,len(analysis['clips']))
             self.assertEqual(original,analysis['fingerprint'])
+            job['expected_fingerprint']='changed-source'
+            with self.assertRaises(ValueError):w.execute(job)
+            job.pop('expected_fingerprint')
             job['clips']=[dict(start=1,end=10)]
             with self.assertRaises(ValueError):w.execute(job)
 

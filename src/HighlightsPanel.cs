@@ -124,8 +124,8 @@ namespace VideoBatch {
             var python=Path.Combine(root,"venv","Scripts","python.exe");
             if(!File.Exists(python))throw new Exception("Сначала откройте «Подготовка» и нажмите «Подготовить». Это нужно один раз.");
             var id=Guid.NewGuid().ToString("N");var jobs=Path.Combine(root,"jobs");Directory.CreateDirectory(jobs);
-            cancellation=Path.Combine(jobs,id+".cancel");var result=Path.Combine(jobs,id+".result.json");var job=Path.Combine(jobs,id+".json");
-            var input=new Dictionary<string,object>{{"source",prefs.Source},{"expected_fingerprint",analysis?.fingerprint},{"root",root},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"minimum",20},{"maximum",40},{"count",(int)count.Value},{"mode",new[]{"auto","speech","visual"}[mode.SelectedIndex]},{"action",action},{"result",result},{"cancel",cancellation},{"clips",clips},{"output",output}};
+            cancellation=Path.Combine(jobs,id+".cancel");var result=Path.Combine(jobs,id+".result.json");var job=Path.Combine(jobs,id+".json");var workdir=Path.Combine(jobs,id+".work");
+            var input=new Dictionary<string,object>{{"source",prefs.Source},{"expected_fingerprint",analysis?.fingerprint},{"root",root},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"minimum",20},{"maximum",40},{"count",(int)count.Value},{"mode",new[]{"auto","speech","visual"}[mode.SelectedIndex]},{"action",action},{"result",result},{"workdir",workdir},{"cancel",cancellation},{"clips",clips},{"output",output}};
             File.WriteAllText(job,json.Serialize(input),new UTF8Encoding(false));
             try {
                 var exit=await RunProcess(python,new[]{Path.Combine(Scripts(),"worker.py"),"--job",job},true);
@@ -137,6 +137,7 @@ namespace VideoBatch {
                 return parsed;
             } finally {
                 foreach(var file in new[]{job,result,cancellation})try{if(File.Exists(file))File.Delete(file);}catch{}
+                try{if(Directory.Exists(workdir))Directory.Delete(workdir,true);}catch{}
                 cancellation=null;
             }
         }
