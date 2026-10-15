@@ -31,7 +31,7 @@ jobs:
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           $folder = Join-Path (Get-Location) 'artifacts/highlights-preview'
-          if (!$asm.GetType('VideoBatch.HighlightsTests').GetMethod('RunUiTests').Invoke($null,@($folder))) { throw 'UI regression' }
+          if (!$asm.GetType('VideoBatch.HighlightsTests').GetMethod('RunUiTests').Invoke($null,[object[]]@([string]$folder))) { throw 'UI regression' }
       - name: Package desktop update
         shell: pwsh
         run: |

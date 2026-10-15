@@ -8,6 +8,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import types
+import wave
+import array
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +33,11 @@ class HighlightsTests(unittest.TestCase):
         self.assertTrue(all(20<=c['end']-c['start']<=40 for c in pool))
         # No arbitrary 40s slice out of a 43s single sentence.
         self.assertEqual([],w.candidates(w.sentences([dict(start=0,end=43,text="Длинная мысль.")]),20,40,43))
+        adjacent = w.sentences([dict(start=0,end=1,text=" Первое."),dict(start=1.02,end=23,text=" Второе."),dict(start=23.01,end=24,text=" Да.")])
+        for c in w.candidates(adjacent,20,40,25):
+            if c["text"]=="Второе.":
+                self.assertGreaterEqual(c["start"],1)
+                self.assertLessEqual(c["end"],23.01)
         with patch.object(w,"ask",return_value={"clips":[dict(id=0,score=90,complete=True,title="Тезис",reason="Есть объяснение"),dict(id=9999,score=99,complete=True),dict(id=1,score=98,complete=False)]}) as model:
             selected=w.select_speech(pool,units,70)
         self.assertEqual(1,len(selected))
@@ -58,6 +68,33 @@ class HighlightsTests(unittest.TestCase):
             Path(w.CANCEL).touch()
             with self.assertRaises(w.Cancelled):w.run([sys.executable,'-c','print(1)'])
         w.CANCEL=None
+        with tempfile.TemporaryDirectory() as temp:
+            w.CANCEL=str(Path(temp)/'during-stop')
+            timer=threading.Timer(.3,lambda:Path(w.CANCEL).touch());timer.start()
+            start=time.monotonic()
+            try:
+                with self.assertRaises(w.Cancelled):w.run([sys.executable,'-c','import time; time.sleep(30)'])
+                self.assertLess(time.monotonic()-start,3)
+            finally:timer.join();w.CANCEL=None
+
+    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'),'FFmpeg required')
+    def test_audio_offset_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp);source=folder/'delayed.mp4'
+            subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=navy:s=128x72:r=10:d=12','-itsoffset','5','-f','lavfi','-i','sine=frequency=440:duration=6','-c:v','libx264','-c:a','aac',str(source)],check=True)
+            class Model:
+                def __init__(self,*args,**kwargs):pass
+                def transcribe(self,path,**kwargs):
+                    with wave.open(path) as audio:
+                        rate=audio.getframerate()
+                        initial=array.array('h',audio.readframes(rate*3))
+                        audio.setpos(rate*6);later=array.array('h',audio.readframes(rate))
+                    assert max(abs(v) for v in initial)<10,'Offset lost: sound starts early'
+                    assert max(abs(v) for v in later)>100,'Sound missing'
+                    return iter([]),types.SimpleNamespace(language='en')
+            job=dict(source=str(source),root=str(folder),mode='speech',ffmpeg=shutil.which('ffmpeg'))
+            with patch.dict(sys.modules,{'faster_whisper':types.SimpleNamespace(WhisperModel=Model)}):
+                self.assertEqual([],w.transcribe(job,dict(audio=True,duration=12),folder,temp))
 
     @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'),'FFmpeg required')
     def test_real_export_visual_and_integrity(self):

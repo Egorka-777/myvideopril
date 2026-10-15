@@ -12,6 +12,14 @@ root=Path(__file__).parents[1]
 spec=importlib.util.spec_from_file_location('highlights',root/'tools/highlights/worker.py')
 w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
 artifacts=root/'artifacts/highlights-models';artifacts.mkdir(parents=True,exist_ok=True)
+original_ask=w.ask
+def audited_ask(*args,**kwargs):
+    answer=original_ask(*args,**kwargs)
+    with (artifacts/'model-responses.jsonl').open('a',encoding='utf-8') as f:
+        import json
+        f.write(json.dumps({'prompt':args[0],'answer':answer},ensure_ascii=False)+'\n')
+    return answer
+w.ask=audited_ask
 with tempfile.TemporaryDirectory() as temp:
     temp=Path(temp)
     env=dict(os.environ,OLLAMA_HOST='127.0.0.1:11434',OLLAMA_MODELS=str(temp/'ollama-models'),OLLAMA_NO_CLOUD='1')
@@ -40,6 +48,7 @@ with tempfile.TemporaryDirectory() as temp:
                                {'type':'object','properties':{'description':{'type':'string'}},'required':['description']},[sheet])
             assert isinstance(image_answer.get('description'),str) and image_answer['description'].strip()
             units=[dict(id=0,start=0,end=8,text='Успех не означает, что ты никогда не ошибаешься.'),dict(id=1,start=8.2,end=19,text='Он означает, что ты замечаешь ошибку раньше и меняешь свой подход.'),dict(id=2,start=19.2,end=29,text='Поэтому оценивай не число побед, а скорость, с которой ты учишься на своих решениях.')]
+            w.atomic_json(artifacts/'speech-and-vision.json',dict(result=result,image_answer=image_answer))
             selected=w.select_speech(w.candidates(units,20,40,30),units,30)
             assert selected,'Actual model rejected a deliberately complete useful claim'
             result.update(real_semantic_test=selected,real_vision_test=image_answer,elapsed_seconds=round(time.monotonic()-start,1))
