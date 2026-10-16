@@ -585,6 +585,7 @@ async def invite_preview(job):
         raise ValueError('Выберите одного отправителя')
     account = accounts[0]
     client = None
+    me = None
     try:
         await account_route(account)
         client = client_for(account)
@@ -593,6 +594,11 @@ async def invite_preview(job):
         target = await resolve_target(client, job.get('target',''))
         emit('target', title=target.title, target_id=target.id, text='Права подтверждены: '+target.title)
         emit('summary', text='Права подтверждены; приглашения не отправлялись')
+    except Exception as exc:
+        if me is None:
+            state, text, seconds = error_info(exc)
+            emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, ValueError) else text, seconds=seconds, code=type(exc).__name__)
+        raise
     finally:
         if client:
             await client.disconnect()

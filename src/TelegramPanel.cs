@@ -54,6 +54,8 @@ namespace VideoBatch {
             grid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;grid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
             grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="selected",HeaderText="",AutoSizeMode=DataGridViewAutoSizeColumnMode.None,Width=40,MinimumWidth=40,DefaultCellStyle=new DataGridViewCellStyle{Padding=Padding.Empty}});
             foreach(var spec in new[]{new[]{"name","Аккаунт"},new[]{"username","Username"},new[]{"status","Состояние"},new[]{"proxy","Прокси"},new[]{"country","Страна"},new[]{"checked","Попытка"},new[]{"detail","Результат / причина"}}){var i=grid.Columns.Add(spec[0],spec[1]);grid.Columns[i].ReadOnly=true;}
+            foreach(var spec in new[]{new[]{"name","95","120"},new[]{"username","80","90"},new[]{"status","90","110"},new[]{"proxy","155","170"},new[]{"country","45","60"},new[]{"checked","65","80"},new[]{"detail","170","180"}}){grid.Columns[spec[0]].FillWeight=int.Parse(spec[1]);grid.Columns[spec[0]].MinimumWidth=int.Parse(spec[2]);}
+            grid.Columns["detail"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;
             grid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0)EditAccount(grid.Rows[e.RowIndex].Tag as TelegramAccount);};
             grid.CurrentCellDirtyStateChanged+=(s,e)=>{if(grid.IsCurrentCellDirty)grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
             var context=new ContextMenuStrip{BackColor=Theme.Elevated,ForeColor=Theme.TextPrimary};context.Items.Add("Карточка аккаунта",null,(s,e)=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount));
@@ -73,7 +75,7 @@ namespace VideoBatch {
             form.RowStyles.Add(new RowStyle(SizeType.Percent,100));foreach(var h in new[]{30,52,48})form.RowStyles.Add(new RowStyle(SizeType.Absolute,h));
             form.Controls.Add(new Label{Text="Тест приглашений",AutoSize=true,Font=Theme.FontCardTitle},0,0);
             var senderRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};senderRow.Controls.Add(new Label{Text="Отправитель",Width=110,Margin=new Padding(0,8,0,0)});
-            senderChoice=TelegramImportDialog.ProxyChoices(new TelegramData());senderChoice.Items.Clear();senderChoice.Width=390;senderChoice.Name="InviteSender";senderChoice.DisplayMember="name";senderChoice.DrawMode=DrawMode.Normal;senderRow.Controls.Add(senderChoice);form.Controls.Add(senderRow,0,1);
+            senderChoice=TelegramImportDialog.ProxyChoices(new TelegramData());senderChoice.Items.Clear();senderChoice.Width=390;senderChoice.Name="InviteSender";senderChoice.DisplayMember="name";senderRow.Controls.Add(senderChoice);form.Controls.Add(senderRow,0,1);
             var targetRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3};targetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,110));targetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));targetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,170));
             targetRow.Controls.Add(new Label{Text="Группа / канал",AutoSize=true,Margin=new Padding(0,8,0,0)},0,0);
             target=Theme.MakeSearchBox();target.Name="InviteTarget";target.Dock=DockStyle.Fill;targetRow.Controls.Add(target,1,0);
@@ -120,13 +122,21 @@ namespace VideoBatch {
             TelegramData data;try{data=store.Load();}catch(Exception e){unavailable=true;actions.Enabled=false;status.Text=e.Message;return;}
             var all=data.accounts;string q=search.Text.Trim();grid.Rows.Clear();
             foreach(var a in all.Where(a=>string.Join(" ",a.name,a.username,a.phone,a.country,a.note).IndexOf(q,StringComparison.OrdinalIgnoreCase)>=0)){
-                int i=grid.Rows.Add(selected.Contains(a.id),a.name,string.IsNullOrEmpty(a.username)?"—":"@"+a.username,TelegramHealth.AccountLabel(a),TelegramHealth.ProxyLabel(a)+" · "+TelegramStore.ProxyLabel(a.proxy),a.country,string.IsNullOrEmpty(a.checked_at)?"—":a.checked_at,string.IsNullOrEmpty(a.last_error)?(a.status=="ready"?"Telegram подтвердил аккаунт":"—"):a.last_error);grid.Rows[i].Tag=a;grid.Rows[i].Cells["detail"].ToolTipText=a.last_error+(string.IsNullOrEmpty(a.last_code)?"":" · "+a.last_code);grid.Rows[i].Cells["proxy"].ToolTipText=a.proxy_detail;grid.Rows[i].Cells["proxy"].Style.ForeColor=a.proxy_status=="ready"?Theme.Success:a.proxy_status=="failed"?Theme.Error:Theme.TextMuted;
-                grid.Rows[i].Cells["status"].Style.ForeColor=TelegramHealth.AccountLabel(a).StartsWith("○")?Theme.TextMuted:a.status=="ready"?Theme.Success:a.status=="unchecked"?Theme.TextMuted:Theme.Warning;
+                int i=grid.Rows.Add(selected.Contains(a.id),a.name,string.IsNullOrEmpty(a.username)?"—":"@"+a.username,"","",a.country,"","");grid.Rows[i].Tag=a;PaintHealth(grid.Rows[i],a);
                 if(a.id==current)grid.CurrentCell=grid.Rows[i].Cells[1];
             }
             RefreshSenders();
             summary.Text=$"Последние проверки: всего {all.Count}   ·   Работают {all.Count(a=>a.status=="ready")}   ·   Требуют внимания {all.Count(a=>a.status!="ready"&&a.status!="unchecked")}   ·   Не проверены {all.Count(a=>a.status=="unchecked")}";
         }
+        void PaintHealth(DataGridViewRow row,TelegramAccount a){
+            string label=TelegramHealth.AccountLabel(a);row.Cells["status"].Value=label;
+            row.Cells["status"].Style.ForeColor=label.StartsWith("○")?Theme.TextMuted:a.status=="ready"&&!label.Contains("Пауза")?Theme.Success:new[]{"network","blocked","deactivated","unauthorized","configuration","error"}.Contains(a.status)?Theme.Error:Theme.Warning;
+            row.Cells["proxy"].Value=string.IsNullOrWhiteSpace(a.proxy)?"○ Без прокси":TelegramHealth.ProxyLabel(a)+" · "+TelegramStore.ProxyLabel(a.proxy);row.Cells["proxy"].Style.ForeColor=string.IsNullOrWhiteSpace(a.proxy)?Theme.TextMuted:a.proxy_status=="ready"?Theme.Success:a.proxy_status=="failed"?Theme.Error:Theme.TextMuted;row.Cells["proxy"].ToolTipText=a.proxy_detail;
+            row.Cells["checked"].Value=string.IsNullOrEmpty(a.checked_at)?"—":a.checked_at;
+            row.Cells["detail"].Value=string.IsNullOrEmpty(a.last_error)?(a.status=="ready"?"Telegram подтвердил аккаунт":"—"):a.last_error;
+            row.Cells["detail"].ToolTipText=a.last_error+(string.IsNullOrEmpty(a.last_code)?"":" · "+a.last_code);
+        }
+        void RefreshHealthRows(){var accounts=store.Load().accounts.ToDictionary(a=>a.id);foreach(DataGridViewRow row in grid.Rows){if(row.Tag is TelegramAccount old&&accounts.TryGetValue(old.id,out var a)){row.Tag=a;PaintHealth(row,a);}}}
         List<TelegramAccount> Selected() {
             grid.EndEdit();var list=grid.Rows.Cast<DataGridViewRow>().Where(r=>Convert.ToBoolean(r.Cells[0].Value)).Select(r=>(TelegramAccount)r.Tag).ToList();
             if(list.Count==0)list=grid.SelectedRows.Cast<DataGridViewRow>().Select(r=>(TelegramAccount)r.Tag).ToList();
@@ -173,7 +183,7 @@ namespace VideoBatch {
         }
         void OpenWeb(){try{if(busy)return;var a=Selected();if(a.Count!=1)throw new InvalidOperationException("Выберите один аккаунт");if(webWindows.TryGetValue(a[0].id,out var existing)&&!existing.IsDisposed){existing.Activate();return;}var window=new TelegramWebWindow(store,a[0],async token=>{if(busy)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");await Run(new Dictionary<string,object>{{"action","web_login"},{"accounts",new List<TelegramAccount>{a[0]}},{"login_token",token}});});webWindows[a[0].id]=window;window.Show(this);}catch(Exception e){Failure(e);}}
         async Task Run(Dictionary<string,object> job,string importProxyId=null,List<string> importedIds=null) {
-            if(busy)return;busy=true;foreach(var b in workButtons)b.Enabled=false;stop.Enabled=true;grid.Enabled=false;search.Enabled=false;proxyGrid.Enabled=false;
+            if(busy)return;busy=true;foreach(var b in workButtons)b.Enabled=false;stop.Enabled=true;grid.Enabled=false;search.Enabled=false;proxyGrid.Enabled=false;pages[2].Enabled=false;
             bool complete=false,failed=false;string finalSummary="";string task=Guid.NewGuid().ToString("N");status.Text="Выполняется…";
             TaskQueueStore.Upsert(task,t=>{t.Platform="Telegram";t.UploadMethod="MTProto";t.Account=job.ContainsKey("accounts")?string.Join(", ",((List<TelegramAccount>)job["accounts"]).Select(a=>a.name)):"Импорт аккаунтов";t.Stage=Convert.ToString(job["action"]);t.Status=TaskQueueStatus.Preparing;},true);
             try {
@@ -185,8 +195,8 @@ namespace VideoBatch {
                         importedIds?.Add(account.id);
                         Log(task,account.id,"import","Аккаунт импортирован");return;
                     }
-                    if(type=="account"){store.Change(d=>TelegramHealth.ApplyAccount(d,ev));if(Get(ev,"status")!="ready")failed=true;}
-                    if(type=="proxy"){store.Change(d=>TelegramHealth.ApplyProxy(d,ev));if(Get(ev,"status")=="failed")failed=true;}
+                    if(type=="account"){store.Change(d=>TelegramHealth.ApplyAccount(d,ev));RefreshHealthRows();if(Get(ev,"status")!="ready")failed=true;}
+                    if(type=="proxy"){store.Change(d=>TelegramHealth.ApplyProxy(d,ev));RefreshHealthRows();RefreshProxies();if(Get(ev,"status")=="failed")failed=true;}
                     if(type=="target")targetHint.Text=Get(ev,"text");
                     if(type=="stage"){foreach(DataGridViewRow row in grid.Rows)if((row.Tag as TelegramAccount)?.id==Get(ev,"id")){row.Cells["status"].Value=Get(ev,"text");row.Cells["status"].Style.ForeColor=Theme.Warning;}}
                     if(type=="summary"){finalSummary=Get(ev,"text");if(ev.TryGetValue("failures",out var failures)&&Convert.ToInt32(failures)>0)failed=true;}
@@ -204,7 +214,7 @@ namespace VideoBatch {
                 if(code!=0&&code!=2)throw new IOException("Telegram: "+status.Text);
                 if(code==0&&!string.IsNullOrEmpty(finalSummary))status.Text=finalSummary;if(code==2)status.Text="Остановлено";
                 TaskQueueStore.Upsert(task,t=>{t.Status=code==2?TaskQueueStatus.Stopped:failed?TaskQueueStatus.Error:TaskQueueStatus.Done;t.Progress=code==0?100:0;t.Result=status.Text;},true);
-            }catch{TaskQueueStore.Upsert(task,t=>{t.Status=TaskQueueStatus.Error;t.Result="Проверьте журнал Telegram";},true);throw;}finally{busy=false;foreach(var b in workButtons)b.Enabled=true;stop.Enabled=false;grid.Enabled=true;search.Enabled=true;proxyGrid.Enabled=true;RefreshData();RefreshProxies();}
+            }catch{TaskQueueStore.Upsert(task,t=>{t.Status=TaskQueueStatus.Error;t.Result="Проверьте журнал Telegram";},true);throw;}finally{busy=false;foreach(var b in workButtons)b.Enabled=true;stop.Enabled=false;grid.Enabled=true;search.Enabled=true;proxyGrid.Enabled=true;pages[2].Enabled=true;RefreshData();RefreshProxies();}
         }
         static string Get(Dictionary<string,object> ev,string key)=>ev.TryGetValue(key,out var value)?Convert.ToString(value):"";
         void Log(string task,string account,string stage,string text){if(!string.IsNullOrEmpty(account)){var a=store.Load().accounts.FirstOrDefault(x=>x.id==account);if(a!=null)text=a.name+": "+text;}string line=DateTime.Now.ToString("HH:mm:ss")+" · "+text;log.AppendText(line+Environment.NewLine);log.ScrollToCaret();AppDiagnostics.Write("Telegram",account,task,stage,text,stage=="error"||stage=="import_error"?"error":"info");}

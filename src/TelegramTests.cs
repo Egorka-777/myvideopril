@@ -68,8 +68,8 @@ namespace VideoBatch {
                     System.Windows.Forms.Application.EnableVisualStyles();
                     var store=new TelegramStore(root);
                     store.Change(d=>{
-                        d.accounts.Add(new TelegramAccount{id=new string('a',64),name="Канал RU",username="sample_ru",status="ready",last_success_utc=DateTime.UtcNow.ToString("o"),proxy_status="ready",proxy_detail="Туннель до Telegram доступен",proxy="socks5://user:password@127.0.0.1:1080",country="Германия"});
-                        d.accounts.Add(new TelegramAccount{id=new string('b',64),name="English channel",username="sample_en",status="network",last_error="Прокси не ответил вовремя",proxy_status="failed",country="Польша"});
+                        d.accounts.Add(new TelegramAccount{id=new string('a',64),name="Канал RU",username="sample_ru",status="ready",checked_at=DateTime.Now.ToString("dd.MM HH:mm"),last_success_utc=DateTime.UtcNow.ToString("o"),proxy_status="ready",proxy_detail="Туннель до Telegram доступен",proxy="socks5://user:password@127.0.0.1:1080",country="Германия"});
+                        d.accounts.Add(new TelegramAccount{id=new string('b',64),name="English channel",username="sample_en",status="network",checked_at=DateTime.Now.ToString("dd.MM HH:mm"),proxy="socks5://127.0.0.2:1080",last_error="Прокси не ответил вовремя",proxy_status="failed",country="Польша"});
                         d.accounts.Add(new TelegramAccount{id=new string('c',64),name="Новый аккаунт",status="unchecked"});
                     });
                     using(var form=new System.Windows.Forms.Form{ClientSize=new System.Drawing.Size(1080,720),BackColor=Theme.Background})
