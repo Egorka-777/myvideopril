@@ -122,23 +122,10 @@ namespace VideoBatch {
             onCol.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             grid.Columns.Add(onCol);
             var thumbCol = new DataGridViewImageColumn {
-                Name = "thumb", HeaderText = "", Width = 44, MinimumWidth = 44,
+                Name = "thumb", HeaderText = "", Width = 52, MinimumWidth = 48,
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.None, ImageLayout = DataGridViewImageCellLayout.Zoom
             };
             grid.Columns.Add(thumbCol);
-            var thumbPickCol = new DataGridViewButtonColumn {
-                Name = "thumbPick", HeaderText = "Превью", Text = "Задать", UseColumnTextForButtonValue = true,
-                Width = 58, MinimumWidth = 52, AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-            };
-            thumbPickCol.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            grid.Columns.Add(thumbPickCol);
-            var thumbClearCol = new DataGridViewButtonColumn {
-                Name = "thumbClear", HeaderText = "", Text = "×", UseColumnTextForButtonValue = true,
-                Width = 32, MinimumWidth = 28, AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-            };
-            thumbClearCol.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            thumbClearCol.DefaultCellStyle.ForeColor = Theme.Warning;
-            grid.Columns.Add(thumbClearCol);
             grid.Columns.Add("account", "Аккаунт");
             grid.Columns["account"].FillWeight = 260;
             grid.Columns["account"].MinimumWidth = 200;
@@ -162,9 +149,7 @@ namespace VideoBatch {
             grid.Columns["url"].DefaultCellStyle.ForeColor = Theme.Info;
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "live", HeaderText = "Эфир", ReadOnly = true, Visible = false, Width = 180, MinimumWidth = 130, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
             grid.CellClick += OnGridClick;
-            grid.CellContentClick += OnGridContentClick;
             grid.CellEndEdit += SaveChannelLink;
-            grid.CellFormatting += OnGridCellFormatting;
             grid.CellPainting += OnAccountCellPaint;
             grid.RowPostPaint += OnRowPostPaint;
             grid.SelectionChanged += (s, e) => { RememberSelectedChannel(); UpdateLiveRows(); };
@@ -495,14 +480,12 @@ namespace VideoBatch {
                 string url = ch.ChannelUrl ?? "";
                 string thumb = ch.Items?.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.Thumbnail))?.Thumbnail ?? ch.Thumbnail ?? "";
                 string filesLabel = files > 1 ? files + " видео" : (files == 1 ? "1 видео" : "—");
-                int ri = grid.Rows.Add(ch.Enabled, LoadThumbImage(thumb, ch.Name), "Задать", "×", ch.Name, "—",
+                int ri = grid.Rows.Add(ch.Enabled, LoadThumbImage(thumb, ch.Name), ch.Name, "—",
                     filesLabel, title, ch.Status ?? "Готов", url);
                 grid.Rows[ri].Tag = ch;
                 grid.Rows[ri].Height = 54;
                 grid.Rows[ri].Cells["account"].ToolTipText = (ch.Name ?? "") + "\nProfile " + (ch.ProfileId ?? "");
-                grid.Rows[ri].Cells["thumb"].ToolTipText = string.IsNullOrWhiteSpace(thumb) ? "Клик по иконке — выбрать превью" : thumb;
-                grid.Rows[ri].Cells["thumbPick"].ToolTipText = "Задать превью для этого канала";
-                grid.Rows[ri].Cells["thumbClear"].ToolTipText = string.IsNullOrWhiteSpace(thumb) ? "Превью не задано" : "Удалить превью";
+                grid.Rows[ri].Cells["thumb"].ToolTipText = string.IsNullOrWhiteSpace(thumb) ? "Нажмите — выбрать превью" : thumb;
                 if (!string.IsNullOrWhiteSpace(ch.ExpectedIp))
                     _ = ResolveCountryAsync(ch.ExpectedIp, ch);
                 n++;
@@ -642,20 +625,6 @@ namespace VideoBatch {
             PickThumbnail(e.RowIndex);
         }
 
-        void OnGridContentClick(object sender, DataGridViewCellEventArgs e) {
-            if (e.RowIndex < 0) return;
-            string col = grid.Columns[e.ColumnIndex].Name;
-            if (col == "thumbPick") PickThumbnail(e.RowIndex);
-            else if (col == "thumbClear") ClearThumbnail(e.RowIndex);
-        }
-
-        void OnGridCellFormatting(object sender, DataGridViewCellFormattingEventArgs e) {
-            if (e.RowIndex < 0 || grid.Columns[e.ColumnIndex].Name != "thumbClear") return;
-            var ch = grid.Rows[e.RowIndex].Tag as YouTubeChannel;
-            bool has = ch != null && HasThumbnail(ch);
-            e.CellStyle.ForeColor = has ? Theme.Warning : Theme.TextMuted;
-        }
-
         static bool HasThumbnail(YouTubeChannel ch) {
             if (!string.IsNullOrWhiteSpace(ch.Thumbnail)) return true;
             return ch.Items?.Any(i => !string.IsNullOrWhiteSpace(i?.Thumbnail)) == true;
@@ -684,8 +653,7 @@ namespace VideoBatch {
             var old = grid.Rows[rowIndex].Cells["thumb"].Value as Image;
             grid.Rows[rowIndex].Cells["thumb"].Value = LoadThumbImage("", ch.Name);
             if (old != null && old != grid.Rows[rowIndex].Cells["thumb"].Value) old.Dispose();
-            grid.Rows[rowIndex].Cells["thumb"].ToolTipText = "Превью не задано";
-            grid.Rows[rowIndex].Cells["thumbClear"].ToolTipText = "Превью не задано";
+            grid.Rows[rowIndex].Cells["thumb"].ToolTipText = "Нажмите — выбрать превью";
             AppendLog("Превью удалено → " + ch.Name);
         }
 
@@ -698,7 +666,6 @@ namespace VideoBatch {
             grid.Rows[rowIndex].Cells["thumb"].Value = LoadThumbImage(path, ch.Name);
             if (old != null && old != grid.Rows[rowIndex].Cells["thumb"].Value) old.Dispose();
             grid.Rows[rowIndex].Cells["thumb"].ToolTipText = path;
-            grid.Rows[rowIndex].Cells["thumbClear"].ToolTipText = "Удалить превью";
             AppendLog("Превью: " + Path.GetFileName(path) + " → " + ch.Name);
         }
 

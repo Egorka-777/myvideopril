@@ -1201,7 +1201,7 @@ namespace VideoBatch {
             try{ValidateForPreview(true);}catch(Exception e){MessageBox.Show(this,e.Message,"YouTube",MessageBoxButtons.OK,MessageBoxIcon.Warning);return false;}
             var rows=UploadTargets();
             var flat=ExpandUploadJobs(rows);
-            foreach(var job in flat){if(job.item.StudioPending)throw new Exception(job.ch.Name+": Studio-загрузка требует проверки. Проверьте видео "+job.item.StudioVideoId+" в Studio; повторная загрузка заблокирована.");job.item.Title=CleanTitle(job.item.Title);}
+            foreach(var job in flat)job.item.Title=CleanTitle(job.item.Title);
             if(flat.Count==0){MessageBox.Show(this,"Нет готовых роликов для предпросмотра.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return false;}
             var batches=QueueManager.Prepare(flat,(src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),(ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),(title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),settings,false,workspaceKindView);
             using(var dlg=new SchedulePreviewDialog(batches,settings,true,true))return dlg.ShowDialog(this)==DialogResult.OK;
@@ -2029,7 +2029,7 @@ namespace VideoBatch {
                 var rows=ResolveUploadRows(channelsFilter);
                 if(rows.Count==0){MessageBox.Show(this,"Отметьте галочкой ✓ каналы для загрузки.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 var flat=ExpandUploadJobs(rows);
-                foreach(var job in flat){if(job.item.StudioPending)throw new Exception(job.ch.Name+": Studio-загрузка требует проверки. Проверьте видео "+job.item.StudioVideoId+" в Studio; повторная загрузка заблокирована.");job.item.Title=CleanTitle(job.item.Title);}
+                foreach(var job in flat){job.item.StudioPending=false;job.item.Title=CleanTitle(job.item.Title);}
 
                 List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> free;
                 lock(uploadLock){free=flat.Where(j=>!busyProfiles.Contains((j.ch.ProfileId??"").Trim())).ToList();}
@@ -2149,7 +2149,7 @@ namespace VideoBatch {
                 if(rows.Count==0){MessageBox.Show(this,"Отметьте галочкой ✓ каналы для загрузки.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 Write("К загрузке отмечено каналов: "+rows.Count);
                 var flat=ExpandUploadJobs(rows);
-                foreach(var job in flat){if(job.item.StudioPending)throw new Exception(job.ch.Name+": Studio-загрузка требует проверки. Проверьте видео "+job.item.StudioVideoId+" в Studio; повторная загрузка заблокирована.");job.item.Title=CleanTitle(job.item.Title);}
+                foreach(var job in flat){job.item.StudioPending=false;job.item.Title=CleanTitle(job.item.Title);}
                 List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> free;
                 lock(uploadLock){free=flat.Where(j=>!busyProfiles.Contains((j.ch.ProfileId??"").Trim())).ToList();}
                 if(free.Count==0){MessageBox.Show(this,"Выбранные каналы уже загружаются.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}

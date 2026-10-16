@@ -303,7 +303,6 @@ async function runSequential(page,pack,opts,host){
  const usedIds=new Set();
  for(let i=0;i<pack.length;i++){
   const item=pack[i],plan=planFor(item),packIndex=item._packIndex||i+1;
-  if(item.studioPending)throw new Error('Предыдущая Studio-загрузка требует проверки. Не загружайте повторно.');
   const zone=await syncClock(page,plan,host.progress);
   host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
   await host.openFile(page,item.video,()=>host.checkpoint(item,packIndex));

@@ -72,7 +72,6 @@ namespace VideoBatch {
             var seenPerProfile=new Dictionary<string,HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             foreach(var job in jobs){
                 string ctx=job.ch.Name+" ["+job.index+"/"+job.total+"]";
-                if(job.item.StudioPending)throw new Exception(ctx+": предыдущая Studio-загрузка требует ручной проверки, повторная отправка запрещена.");
                 if(string.IsNullOrWhiteSpace(job.ch.ProfileId))throw new Exception(job.ch.Name+": вставьте Profile ID из Dolphin.");
                 if(string.IsNullOrWhiteSpace(NormTitle(job.item.Title)))throw new Exception(ctx+": введите заголовок.");
                 if(string.IsNullOrWhiteSpace(job.item.Video)||!File.Exists(job.item.Video))throw new Exception(ctx+": файл видео не найден.");

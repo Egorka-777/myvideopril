@@ -94,7 +94,7 @@ namespace VideoBatch {
         List<UnifiedProfile> rows = new List<UnifiedProfile>();
         readonly Dictionary<string,TelegramProxy> dolphinProxies=new Dictionary<string,TelegramProxy>(StringComparer.OrdinalIgnoreCase);
         readonly System.Threading.CancellationTokenSource lifetime=new System.Threading.CancellationTokenSource();
-        bool pullingProxies,loadedProxies;
+        bool pullingProxies,loadedProxies,importingDolphin;
         Label proxyState;
 
         public ProfilesPanel(Preferences prefs, NavigationService nav, YouTubeBackend yt, TikTokBackend tk,Action<UnifiedProfile> details=null) {
@@ -123,10 +123,14 @@ namespace VideoBatch {
             filters.Controls.Add(platformFilter);
             filters.Controls.Add(marketFilter);
 
+            filters.Controls.Add(Theme.MakeButton("Загрузить из Dolphin", accent: true, action: () => { if (!importingDolphin) _ = ImportFromDolphinAsync(); }));
             filters.Controls.Add(Theme.MakeButton("Обновить", ghost: true, action: async()=>{RefreshData();await PullProxies();}));
             proxyState=new Label{AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(4,10,0,0)};filters.Controls.Add(proxyState);
             layout.Controls.Add(filters,0,0);
 
+            var gridCard = Theme.MakeCard();
+            gridCard.Dock = DockStyle.Fill;
+            gridCard.Padding = new Padding(10, 10, 10, 10);
             grid = new DataGridView { Dock = DockStyle.Fill, AllowUserToAddRows = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
             Theme.StyleGrid(grid);
             grid.AlternatingRowsDefaultCellStyle.BackColor = Theme.ColorFromHex("#282828");
@@ -139,6 +143,7 @@ namespace VideoBatch {
             grid.Columns.Add("country", "Страна");
             grid.Columns.Add("profile", "Profile ID");
             grid.Columns.Add("ip", "Прокси");
+            grid.Columns.Add("proxyload", "Нагрузка прокси");
             grid.Columns.Add("videos", "Видео");
             grid.Columns.Add("status", "Состояние");
             grid.Columns.Add("last", "Последняя операция");
@@ -152,7 +157,8 @@ namespace VideoBatch {
                 var hit=grid.HitTest(e.X,e.Y);
                 if (hit.RowIndex>=0) OnAction(grid,new DataGridViewCellEventArgs(grid.Columns["actions"].Index,hit.RowIndex));
             };
-            layout.Controls.Add(grid,0,1);
+            gridCard.Controls.Add(grid);
+            layout.Controls.Add(gridCard,0,1);
 
             var bottom = Theme.MakeToolbar();
             bottom.Controls.Add(Theme.MakeButton("YouTube", accent: true, action: () => OpenPlatform(NavSection.YouTube)));
@@ -186,17 +192,74 @@ namespace VideoBatch {
             rows = ProfileCatalog.Build(settings);
             foreach (var p in rows) ProfileCatalog.FinalizeLabels(p);
             string q = (search.Text ?? "").Trim().ToLowerInvariant();
+            var routeLoads = BuildRouteLoads();
             foreach (var p in rows) {
                 if (!FilterMatch(p, q)) continue;
+                string routeKey = ProfileProxyLoad.RouteKey(p, ProxyFor);
+                routeLoads.TryGetValue(routeKey, out var load);
+                string loadLabel = ProfileProxyLoad.FormatLoad(load.yt, load.tt);
                 int ri = grid.Rows.Add(false, p.DisplayName, p.PlatformsLabel, p.ChannelNames, p.Market, p.ContentKind,
-                    p.CountryCode, p.ProfileId, ProxyFor(p.ProfileId)!=""?TelegramStore.ProxyLabel(ProxyFor(p.ProfileId)):"Не получен", p.VideoCount, p.Status, p.LastOperation, "⋯");
+                    p.CountryCode, p.ProfileId, ProxyFor(p.ProfileId)!=""?TelegramStore.ProxyLabel(ProxyFor(p.ProfileId)):"Не получен", loadLabel, p.VideoCount, p.Status, p.LastOperation, "⋯");
                 grid.Rows[ri].Tag = p;
                 if(!string.IsNullOrEmpty(current)&&p.ProfileId==current)grid.CurrentCell=grid.Rows[ri].Cells["name"];
                 grid.Rows[ri].Cells["ip"].ToolTipText="Настроенный прокси Dolphin. Ожидаемый IP: "+p.ExpectedIp;
+                grid.Rows[ri].Cells["proxyload"].ToolTipText="Сколько YouTube и TikTok аккаунтов на одном прокси (лимит "+ProfileProxyLoad.MaxYouTubePerRoute+" YT и "+ProfileProxyLoad.MaxTikTokPerRoute+" TT).";
+                var loadStyle = grid.Rows[ri].Cells["proxyload"].Style;
+                if (ProfileProxyLoad.IsFull(load.yt, load.tt)) loadStyle.ForeColor = Theme.Error;
+                else if (load.yt >= ProfileProxyLoad.MaxYouTubePerRoute - 1 || load.tt >= ProfileProxyLoad.MaxTikTokPerRoute - 1) loadStyle.ForeColor = Theme.Warning;
+                else loadStyle.ForeColor = Theme.TextPrimary;
                 if(dolphinProxies.TryGetValue(p.ProfileId??"",out var route)&&!string.IsNullOrEmpty(route.country))grid.Rows[ri].Cells["country"].Value=route.country;
                 if (p.ExpectedIp != "—" && p.CountryCode == "—")
                     _ = ResolveCountryAsync(p, ri);
             }
+        }
+
+        Dictionary<string, (int yt, int tt)> BuildRouteLoads() {
+            var dict = new Dictionary<string, (int yt, int tt)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in rows) {
+                string key = ProfileProxyLoad.RouteKey(p, ProxyFor);
+                if (key == "") continue;
+                if (!dict.TryGetValue(key, out var totals)) totals = (0, 0);
+                totals.yt += p.YouTubeAccounts?.Count ?? 0;
+                totals.tt += p.TikTokAccounts?.Count ?? 0;
+                dict[key] = totals;
+            }
+            return dict;
+        }
+
+        async Task ImportFromDolphinAsync() {
+            if (importingDolphin || IsDisposed) return;
+            string token = WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
+            if (string.IsNullOrWhiteSpace(token)) {
+                MessageBox.Show(this, "Сначала сохраните API-токен Dolphin в настройках (раздел «Dolphin Anty»).", "Профили", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                navigation.Navigate(NavSection.Settings);
+                return;
+            }
+            importingDolphin = true;
+            proxyState.Text = "Загружаем профили Dolphin…";
+            try {
+                var profiles = await DolphinProfileCatalog.FetchAll(token, null, lifetime.Token).ConfigureAwait(true);
+                if (IsDisposed) return;
+                var result = DolphinProfileCatalog.Import(settings, profiles);
+                Store.Save(settings);
+                youtubeBackend.Reload();
+                tiktokBackend.Reload();
+                RefreshData();
+                loadedProxies = false;
+                await PullProxies().ConfigureAwait(true);
+                string msg = "Профилей в Dolphin: " + profiles.Count + "\nДобавлено каналов: " + result.AddedYouTube
+                    + "\nУже были: " + result.SkippedExisting
+                    + "\n\nРынок RU/EN берётся из папок и названий в Dolphin. Если не угадали — ПКМ по строке → «Рынок RU / EN».";
+                MessageBox.Show(this, msg, "Импорт Dolphin", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                proxyState.Text = "Импорт · " + profiles.Count + " профилей Dolphin";
+            } catch (OperationCanceledException) {
+                if (!IsDisposed) proxyState.Text = "Импорт отменён";
+            } catch (Exception ex) {
+                if (!IsDisposed) {
+                    proxyState.Text = "Импорт не удался";
+                    MessageBox.Show(this, ex.Message, "Импорт Dolphin", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            } finally { importingDolphin = false; }
         }
 
         async Task ResolveCountryAsync(UnifiedProfile p, int rowIndex) {
@@ -266,6 +329,9 @@ namespace VideoBatch {
             grid.CurrentCell = grid.Rows[e.RowIndex].Cells[0];
             var p = (UnifiedProfile)grid.Rows[e.RowIndex].Tag;
             var menu = Theme.MakeContextMenu();
+            menu.Items.Add("Рынок: RU", null, (s, ev) => SetProfileMarket(p, "RU"));
+            menu.Items.Add("Рынок: EN", null, (s, ev) => SetProfileMarket(p, "EN"));
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("YouTube", null, (s, ev) => { SelectContext(p, "YouTube"); navigation.Navigate(NavSection.YouTube); });
             menu.Items.Add("TikTok", null, (s, ev) => { SelectContext(p, "TikTok"); navigation.Navigate(NavSection.TikTok); });
             menu.Items.Add("Добавить видео", null, (s, ev) => { SelectContext(p, "YouTube"); navigation.Navigate(NavSection.YouTube); });
@@ -277,6 +343,21 @@ namespace VideoBatch {
             menu.Items.Add("Прокси", null, (s, ev) => navigation.Navigate(NavSection.Proxy));
             menu.Items.Add("Журнал", null, (s, ev) => navigation.Navigate(NavSection.Logs));
             menu.Show(Cursor.Position);
+        }
+
+        void SetProfileMarket(UnifiedProfile p, string market) {
+            if (p == null) return;
+            market = (market ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU";
+            foreach (var ch in p.YouTubeAccounts) if (ch != null) ch.Market = market;
+            foreach (var acc in p.TikTokAccounts) if (acc != null) acc.Market = market;
+            try {
+                TikTokProfileSync.SyncFromYouTube(settings, "RU");
+                TikTokProfileSync.SyncFromYouTube(settings, "EN");
+                Store.Save(settings);
+                youtubeBackend.Reload();
+                tiktokBackend.Reload();
+                RefreshData();
+            } catch (Exception ex) { MessageBox.Show(this, ex.Message, "Рынок профиля", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
         void CopyProfileId(UnifiedProfile p) {
@@ -310,11 +391,9 @@ namespace VideoBatch {
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
                 MinimizeBox = false,
-                ClientSize = new Size(420, 120),
-                BackColor = Theme.Background,
-                ForeColor = Theme.TextPrimary,
-                Font = Theme.FontBody
+                ClientSize = new Size(420, 120)
             }) {
+                Theme.StyleModal(dlg);
                 var box = Theme.MakeSearchBox();
                 box.Text = current;
                 box.Width = 380;

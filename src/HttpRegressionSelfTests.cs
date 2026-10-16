@@ -16,6 +16,7 @@ namespace VideoBatch {
             if (!TikTokScheduleGenerator.RunSelfTests()) return false;
             if (!TikTokCaptionTemplates.RunSelfTests()) return false;
             if (!UploadStaging.RunSelfTests()) return false;
+            if (!DolphinProfileCatalogTests.RunSelfTests()) return false;
             if (!RunLog160617Scenario()) return false;
             if (!RunYouTubeChannelUrlSelfTest()) return false;
             if (!RunDiagnosticsSelfTest()) return false;

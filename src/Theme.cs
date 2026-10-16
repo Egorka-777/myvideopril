@@ -75,6 +75,49 @@ namespace VideoBatch {
             form.MinimumSize = new Size(1100, 700);
         }
 
+        public static System.Drawing.Drawing2D.GraphicsPath RoundedRectPath(Rectangle bounds, int radius) {
+            var path = new System.Drawing.Drawing2D.GraphicsPath();
+            int d = Math.Max(2, radius * 2);
+            d = Math.Min(d, Math.Min(bounds.Width, bounds.Height));
+            if (bounds.Width <= 0 || bounds.Height <= 0) return path;
+            path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+            path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
+            path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
+            path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        public static void ApplyRoundedRegion(Control control, int radius = 12) {
+            if (control == null) return;
+            void apply() {
+                if (!control.IsHandleCreated || control.Width < 8 || control.Height < 8) return;
+                using (var path = RoundedRectPath(new Rectangle(0, 0, control.Width, control.Height), radius)) {
+                    var old = control.Region;
+                    control.Region = new Region(path);
+                    old?.Dispose();
+                }
+            }
+            control.HandleCreated += (s, e) => apply();
+            control.SizeChanged += (s, e) => apply();
+        }
+
+        /// <summary>Modal dialogs: dark theme + soft rounded window outline.</summary>
+        public static void StyleModal(Form form, int radius = 12) {
+            if (form == null) return;
+            form.BackColor = Background;
+            form.ForeColor = TextPrimary;
+            form.Font = FontBody;
+            ApplyRoundedRegion(form, radius);
+            form.Paint += (s, e) => {
+                if (form.Width < 4 || form.Height < 4) return;
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var path = RoundedRectPath(new Rectangle(0, 0, form.Width - 1, form.Height - 1), radius))
+                using (var pen = new Pen(Border))
+                    e.Graphics.DrawPath(pen, path);
+            };
+        }
+
         public static Button MakeButton(string text, bool accent = false, bool ghost = false, Action action = null) {
             var b = new WorkspaceButton {
                 Text = text,
@@ -105,13 +148,32 @@ namespace VideoBatch {
             return b;
         }
 
-        public static Panel MakeCard() {
-            return new Panel {
-                BackColor = Card,
-                Padding = new Padding(16),
-                Margin = new Padding(0, 0, 12, 12)
-            };
+        internal sealed class ThemeCardPanel : Panel {
+            public ThemeCardPanel() {
+                BackColor = Card;
+                Padding = new Padding(16);
+                Margin = new Padding(0, 0, 12, 12);
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            }
+            protected override void OnPaint(PaintEventArgs e) {
+                e.Graphics.Clear(Parent?.BackColor ?? Background);
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                float radius = 10f * DeviceDpi / 96f, d = radius * 2;
+                var box = new RectangleF(.5f, .5f, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
+                d = Math.Min(d, Math.Min(box.Width, box.Height));
+                using (var path = new System.Drawing.Drawing2D.GraphicsPath()) {
+                    path.AddArc(box.X, box.Y, d, d, 180, 90);
+                    path.AddArc(box.Right - d, box.Y, d, d, 270, 90);
+                    path.AddArc(box.Right - d, box.Bottom - d, d, d, 0, 90);
+                    path.AddArc(box.X, box.Bottom - d, d, d, 90, 90);
+                    path.CloseFigure();
+                    using (var brush = new SolidBrush(Card)) e.Graphics.FillPath(brush, path);
+                    using (var pen = new Pen(Border)) e.Graphics.DrawPath(pen, path);
+                }
+            }
         }
+
+        public static Panel MakeCard() => new ThemeCardPanel();
 
         public static void StyleGrid(DataGridView grid) {
             grid.BackgroundColor = Card;

@@ -47,7 +47,8 @@ namespace VideoBatch {
     public class Dialog:Form {
         protected TableLayoutPanel Root;protected Panel Body;protected new FlowLayoutPanel Bottom;
         public Dialog(string title,int height=570){Text=title;ClientSize=new Size(610,height);MinimumSize=new Size(580,420);StartPosition=FormStartPosition.CenterParent;Font=new Font("Segoe UI",10);BackColor=Ui.Bg;ForeColor=Ui.Ink;AutoScaleMode=AutoScaleMode.Dpi;MinimizeBox=false;MaximizeBox=false;ShowInTaskbar=false;
-            Root=Ui.Table();Root.Padding=new Padding(22);Root.RowCount=2;Root.RowStyles.Add(new RowStyle(SizeType.Percent,100));Root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Body=new Panel{Dock=DockStyle.Fill,AutoScroll=true};Bottom=Ui.Flow();Bottom.FlowDirection=FlowDirection.RightToLeft;Bottom.Padding=new Padding(0,16,0,0);Root.Controls.Add(Body,0,0);Root.Controls.Add(Bottom,0,1);Controls.Add(Root);
+            Theme.StyleModal(this);
+            Root=Ui.Table();Root.Padding=new Padding(22);Root.RowCount=2;Root.RowStyles.Add(new RowStyle(SizeType.Percent,100));Root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Body=new Panel{Dock=DockStyle.Fill,AutoScroll=true,BackColor=Color.Transparent};Bottom=Ui.Flow();Bottom.FlowDirection=FlowDirection.RightToLeft;Bottom.Padding=new Padding(0,16,0,0);Root.Controls.Add(Body,0,0);Root.Controls.Add(Bottom,0,1);Controls.Add(Root);
         }
         protected override void OnShown(EventArgs e){StyleInputs(this);base.OnShown(e);}
         static void StyleInputs(Control parent){
