@@ -501,6 +501,7 @@ def main():
     # No third-party DEBUG logger or traceback containing credentials on stdout/stderr.
     import logging
     logging.disable(logging.CRITICAL)
+    sys.stdin.reconfigure(encoding='utf-8-sig')
     line = sys.stdin.readline(MAX_INPUT + 1)
     if len(line) > MAX_INPUT:
         emit('error', text='Слишком большое задание'); return 1

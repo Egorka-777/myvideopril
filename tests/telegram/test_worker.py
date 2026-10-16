@@ -198,6 +198,18 @@ class Queue(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls,[])
 
 
+class StdinProtocol(unittest.TestCase):
+    def test_real_worker_accepts_plain_and_bom_prefixed_utf8(self):
+        import subprocess, sys
+        for prefix in (b'', b'\xef\xbb\xbf'):
+            with tempfile.TemporaryDirectory() as root:
+                raw=json.dumps(dict(root=root,action='check',accounts=[],text='Русский 🇷🇺'),ensure_ascii=False).encode('utf-8')
+                process=subprocess.run([sys.executable,str(ROOT/'tools/telegram/worker.py')],input=prefix+raw+b'\n',capture_output=True,timeout=15)
+                events=[json.loads(line) for line in process.stdout.decode('utf-8').splitlines()]
+                self.assertEqual(process.returncode,0,[(e.get('event'),e.get('code'),e.get('text')) for e in events])
+                self.assertEqual(events[-1],dict(event='complete',text='Задача завершена'))
+
+
 class Parsing(unittest.TestCase):
     def test_proxy_ipv6_credentials_and_rejection(self):
         p=w.parse_proxy('socks5://hello:p%40ss@[::1]:1080')
