@@ -121,8 +121,11 @@ def from_sqlite(path, defaults):
         if not isinstance(meta, dict):
             raise ValueError('JSON аккаунта должен быть объектом')
     # Read-only URI, snapshot into memory. No .session-journal, WAL or source mutation.
-    with contextlib.closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
-        rows = db.execute('SELECT dc_id, server_address, port, auth_key FROM sessions').fetchmany(2)
+    try:
+        with contextlib.closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+            rows = db.execute('SELECT dc_id, server_address, port, auth_key FROM sessions').fetchmany(2)
+    except sqlite3.DatabaseError:
+        raise ValueError('Файл не является поддерживаемой Telethon SQLite-сессией; для другого формата используйте TData') from None
     if len(rows) != 1:
         raise ValueError('Ожидалась одна Telethon SQLite-сессия')
     dc, host, port, key = rows[0]

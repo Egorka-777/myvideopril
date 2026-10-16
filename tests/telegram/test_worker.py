@@ -99,6 +99,10 @@ class Imports(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows),1);self.assertEqual(rows[0]['user_id'],123456)
         self.assertEqual(StringSession(rows[0]['session']).auth_key.key,session_bytes(5))
         with self.assertRaises(Exception):await w.from_tdata(path,'wrong-pin')
+    async def test_unsupported_session_format_has_clear_error(self):
+        path=self.root/'invalid.session';path.write_bytes(b'not a sqlite session')
+        with self.assertRaisesRegex(ValueError,'Telethon SQLite'):
+            w.from_sqlite(path,{'api_id':1234,'api_hash':'a'*32})
     async def test_session_requires_api_pair_and_rejects_fake_dc(self):
         path=self.root/'account.session';make_session(path);path.with_suffix('.json').unlink()
         with self.assertRaises(ValueError):w.from_sqlite(path,{})
