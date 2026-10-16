@@ -127,9 +127,24 @@ namespace VideoBatch {
                 case "dolphin": return TaskQueueStatus.ProfileStart;
                 case "ip": return TaskQueueStatus.IpCheck;
                 case "youtube": return TaskQueueStatus.YoutubeConfirm;
+                case "studio_open":
+                case "studio_ready": return TaskQueueStatus.YoutubeConfirm;
+                case "file_select":
+                case "file_selected":
+                case "studio_editor":
+                case "upload_transfer":
                 case "upload": return TaskQueueStatus.Uploading;
                 case "video_created": return TaskQueueStatus.Creating;
                 case "schedule":
+                case "metadata_title":
+                case "metadata_description":
+                case "metadata_options":
+                case "metadata_tags":
+                case "metadata_ready":
+                case "studio_steps":
+                case "studio_schedule":
+                case "studio_verify":
+                case "studio_dialog":
                 case "metadata": return TaskQueueStatus.Scheduling;
                 case "thumbnail":
                 case "thumbnail_warning": return TaskQueueStatus.Scheduling;

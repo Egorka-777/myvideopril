@@ -46,6 +46,9 @@ namespace VideoBatch {
                 Check(Path.GetDirectoryName(renamed)==root,"rename does not create a staging copy");
                 Check(File.ReadAllText(occupied)=="existing bytes"&&File.ReadAllText(renamed)=="source bytes","collision keeps both files intact");
                 Check(UploadWindow.RenameVideoFile(renamed,"Новый заголовок",1,1)==renamed,"reselecting same title is idempotent");
+                foreach(var stage in new[]{"metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_verify"})
+                    Check(TaskQueueStore.MapStage(stage)==TaskQueueStatus.Scheduling,"Studio phase remains active: "+stage);
+                Check(TaskQueueStore.MapStage("upload_transfer")==TaskQueueStatus.Uploading,"upload transfer keeps active queue status");
                 Console.WriteLine("Studio: five-item metadata + PC-time contract, durable pending state, XML and wire roundtrip PASS");return true;
             }finally{Store.Root=oldRoot;try{Directory.Delete(root,true);}catch{}}
         }

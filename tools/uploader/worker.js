@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-16-studio-startup-v2";
+const WORKER_BUILD = "2026-10-16-studio-details-v3";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function studioCheckpoint(item,packIndex){
@@ -78,6 +78,10 @@ function assertPageOpen(page) {
 
 function attachPageGuards(page) {
   page.on("dialog", async (dialog) => {
+    if(studioBrowser.isStudioUpload(job)){
+      await studioBrowser.handleUploadDialog(dialog,send).catch(e=>send('diagnostic','Диалог Studio: '+e.message));
+      return;
+    }
     const msg = (dialog.message() || "").slice(0, 120);
     send("youtube", "Диалог браузера: " + msg, { percent: 50 });
     await dialog.accept().catch(() => dialog.dismiss().catch(() => {}));

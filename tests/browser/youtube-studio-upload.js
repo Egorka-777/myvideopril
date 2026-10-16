@@ -21,7 +21,7 @@ function html(lang,state,editor=false,legacy=false){
  else{q('#video-file').onchange=()=>{q('ytcp-uploads-dialog').hidden=false;const link=q('#details a');link.dataset.original=link.href;link.removeAttribute('href');q('#title-textarea').addEventListener('input',()=>{link.href=link.dataset.original;});};let step=0;q('#next-button').onclick=()=>{if(++step>=3){q('#details').hidden=true;q('ytcp-visibility-scheduler').hidden=false;q('#next-button').hidden=true;}};q('#schedule-radio-button').onclick=()=>{q('#schedule-controls').hidden=false;q('#done-button').textContent=ru?'Запланировать публикацию':'Schedule';};q('#done-button').onclick=async()=>{const record={id:state.id,title:state.title,description:state.description,tags:Array.from(document.querySelectorAll('ytcp-chip')).map(x=>x.dataset.tag),paid:q('#paid')?q('#paid').checked:q('#paid-yes').checked,ai:q('#ai-yes').checked,date:q('#date-trigger').textContent,time:q('ytcp-time-of-day-picker input').value,zone,scheduled:!q('#schedule-controls').hidden,events};await fetch('/fixture/submit',{method:'POST',body:JSON.stringify(record)});q('ytcp-uploads-dialog:not([hidden])').remove();};}
  </script></body></html>`;
 }
-(async()=>{
+async function run(){
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'yt-studio-native-')),browser=await chromium.launch({headless:true});
  try{
   for(const variant of ['ru','en','en-legacy']){
@@ -49,4 +49,6 @@ function html(lang,state,editor=false,legacy=false){
   await check.locator('ytcp-video-upload-progress').evaluate(e=>e.textContent='Uploaded: 100%');await S.waitUpload(check,{stallMs:30});await check.close();
   console.log('PASS: wrong persisted metadata/schedule stops queue; previous upload progress ignored');
  }finally{await browser.close();fs.rmSync(temp,{recursive:true,force:true});}
-})().catch(e=>{console.error(e);process.exitCode=1;});
+}
+module.exports={html};
+if(require.main===module)run().catch(e=>{console.error(e);process.exitCode=1;});

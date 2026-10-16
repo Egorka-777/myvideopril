@@ -4,11 +4,21 @@ const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
 async function uploadScope(page){
- // Ignore old hidden dialogs retained by Polymer. Prefer the actual editor dialog.
+ // The editor may be nested in the upload wizard. Its footer/Next button belongs
+ // to the outer dialog. Never take a visible inner host as the complete wizard.
+ const roots=[];
  for(const selector of UPLOAD_DIALOG.split(',')){
-  const result=await one(page.locator(selector),{optional:true});if(result)return result;
+  for(const candidate of await page.locator(selector).all())if(await candidate.isVisible()){
+   const nested=await candidate.evaluate((e,selectors)=>{
+    for(let p=e.parentElement||e.getRootNode().host;p;p=p.parentElement||p.getRootNode().host)
+     if(p.matches(selectors)&&p.getClientRects().length&&getComputedStyle(p).visibility!=='hidden')return true;
+    return false;
+   },UPLOAD_DIALOG);
+   if(!nested)roots.push(candidate);
+  }
  }
- return null;
+ if(roots.length>1)throw new Error('Studio: открыто несколько активных окон загрузки; выбор ролика неоднозначен');
+ return roots[0]||null;
 }
 const L={
  next:/^(Next|Далее)$/i, more:/^(Show more|Показать больше|Показать ещё|Показать еще|Развернуть|Ещё|Еще)$/i,
@@ -34,15 +44,28 @@ async function read(box){return norm(await box.evaluate(e=>e.isContentEditable?e
 async function field(scope,kind,optional=false){
  const selector=kind==='title'?'#title-textarea #textbox, #title-textarea [contenteditable=true], input[name="title"],textarea[name="title"]'
   :'#description-textarea #textbox, #description-textarea [contenteditable=true],textarea[name="description"]';
- let target=await one(scope.locator(selector),{optional:true});
- if(!target)target=await one(scope.getByRole('textbox',{name:kind==='title'?/^(Title|Название)(?:\b|\s|\()/i:/^(Description|Описание)(?:\b|\s|\()/i}),{optional:true});
+ const editable=[];for(const candidate of await scope.locator(selector).all())
+  if(await candidate.isVisible()&&await candidate.isEditable().catch(()=>false))editable.push(candidate);
+ if(editable.length>1)throw new Error(`Studio: несколько редактируемых полей ${kind}`);
+ let target=editable[0]||null;
+ if(!target)target=await one(scope.getByRole('textbox',{name:kind==='title'?/^(Title|Название)(?:\b|\s|\()|add a title|добавьте название|введите название/i:/^(Description|Описание)(?:\b|\s|\()|tell viewers about your video|расскажите зрителям о/i}),{optional:true});
  if(!target&&!optional)throw new Error(`Studio: не найдено однозначное поле ${kind}`);return target;
 }
-async function typeText(box,text,{delay=45}={}){
+function typingBudget(text,delay){return 10000+Array.from(norm(text)).length*(Math.max(0,delay)+30);}
+function metadataBudget(item,opts){return 60000+typingBudget(item.title,opts.titleDelay??55)+typingBudget(item.description,opts.descriptionDelay??18)+typingBudget(tags(item.tags).join(','),20);}
+async function typeText(box,text,{delay=45,onProgress=()=>{}}={}){
  text=norm(text);await box.scrollIntoViewIfNeeded();await box.click();
+ await box.focus();
  await box.press('Control+A');await box.press('Delete');
  await until(async()=>await read(box)==='',3000,'Studio не очистил прежний текст');
- if(text)await box.pressSequentially(text,{delay});
+ const chars=Array.from(text);
+ // Each keyboard action has its own native, cancellable timeout. A 10-second
+ // context default must not truncate a 5000-character description midway.
+ for(let start=0;start<chars.length;start+=80){
+  const chunk=chars.slice(start,start+80).join('');
+  await box.pressSequentially(chunk,{delay,timeout:typingBudget(chunk,delay)});
+  onProgress(Math.min(start+80,chars.length),chars.length);
+ }
  await box.press('Tab');
  await until(async()=>await read(box)===text,5000,'Studio не подтвердил введённый текст');
 }
@@ -122,23 +145,25 @@ async function question(scope,kind,answer,{verify=false}={}){
  if(await checkbox.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':e.hasAttribute('checked'))!==answer)throw new Error('Studio не подтвердил прямую рекламу');
 }
 async function details(page,scope,item,opts,{verify=false}={}){
- if(!verify)await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55});
+ const report=opts.progress||(()=>{});
+ if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55});report('metadata_title','Заголовок введён и проверен.');}
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
  if(item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
-  if(!verify)await typeText(description,item.description,{delay:opts.descriptionDelay??18});
+  if(!verify){report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
  if(kids&&!verify)await kids.click();
- await showMore(scope);
+ report('metadata_options','Открываю настройки рекламы, ИИ и тегов.');await showMore(scope);
  // Expansion mounts these controls asynchronously, so a one-shot lookup is too early.
  await until(async()=>{
   const text=await scope.innerText();return L.paid.test(text)&&L.ai.test(text);
  },10000,'Studio не показал настройки рекламы и ИИ после «Развернуть»');
  await question(scope,'paid',opts.paidPromotion===true,{verify});
  await question(scope,'ai',opts.alteredContent===true,{verify});
- if(item.tags!==null&&item.tags!==undefined)await setTags(scope,tags(item.tags),{verify});
+ if(item.tags!==null&&item.tags!==undefined){report('metadata_tags','Проверяю теги.');await setTags(scope,tags(item.tags),{verify});}
+ report('metadata_ready','Название, описание и настройки проверены.');
 }
 const MONTHS=[['january','январ','янв'],['february','феврал','фев'],['march','марта','март','мар'],['april','апрел','апр'],['may','мая','май'],['june','июня','июнь','июн'],['july','июля','июль','июл'],['august','август','авг'],['september','сентябр','сен'],['october','октябр','окт'],['november','ноябр','ноя'],['december','декабр','дек']];
 function parseDate(text){
@@ -278,13 +303,20 @@ async function readback(page,item,id,plan,opts,zone){
  await page.keyboard.press('Escape');await page.keyboard.press('Escape');
  if(item.thumbnail)await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
 }
-async function waitUpload(page,{stallMs=1200000}={}){
+async function waitUpload(page,{stallMs=1200000,unknownMs=30000,progress=()=>{}}={}){
  const scope=await uploadScope(page);if(!scope)throw new Error('Studio не показал активный диалог загрузки');let last='',moved=Date.now();
+ let reported=0,unknownSince=Date.now();
  while(true){
   if(page.isClosed()||!await scope.isVisible())throw new Error('Studio закрыл окно до подтверждения загрузки');
-  const labels=await bounded(()=>scope.locator('ytcp-video-upload-progress,#progress-label,[class*=progress-label]').allTextContents(),5000,'Вкладка Studio перестала отвечать во время загрузки');
+  const labels=await bounded(async()=>{
+   const values=[];for(const status of await scope.locator('ytcp-video-upload-progress,#progress-label,[class*=progress-label]').all())
+    if(await status.isVisible())values.push(await status.innerText());return values;
+  },5000,'Вкладка Studio перестала отвечать во время загрузки');
   const text=labels.map(norm).join(' ');
-  if(/(?:upload(?:ed)?|загружено)[^%]{0,30}100\s*%|upload complete|загрузка завершена|checks? (?:complete|running)|checking|проверка|обработка завершена/i.test(text))return;
+  if(text)unknownSince=Date.now();
+  if(text!==last||Date.now()-reported>5000){progress('upload_transfer',text?'Studio: '+text.slice(0,240):'Ожидаю индикатор передачи файла Studio.');reported=Date.now();}
+  if(/(?:upload(?:ed)?|загружено)[^%]{0,30}100\s*%|upload complete|загрузка завершена|checks? (?:complete|running)|checking|проверка|обработка завершена/i.test(text)){progress('upload_transfer','Studio подтвердил передачу файла.');return;}
+  if(!text&&Date.now()-unknownSince>unknownMs)throw new Error(`Studio не показал распознаваемый индикатор передачи за ${Math.ceil(unknownMs/1000)} секунд. Сохраните диагностику; отсутствие индикатора не считается успехом.`);
   if(text!==last){last=text;moved=Date.now();}
   if(Date.now()-moved>stallMs)throw new Error('Studio не подтвердил завершение передачи файла. Проверьте открытый профиль.');
   await pause(500);
@@ -293,7 +325,11 @@ async function waitUpload(page,{stallMs=1200000}={}){
 async function diagnostics(page,error,folder){
  const path=require('path');fs.mkdirSync(folder,{recursive:true});
  const data={time:new Date().toISOString(),error:String(error.message||error),url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
- if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url()))data.controls=await page.locator('button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
+ if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url())){
+  data.controls=await page.locator('button,ytcp-button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
+  data.fields=await page.locator('#title-textarea,#description-textarea,[contenteditable=true]').evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,id:e.id,visible:!!e.getClientRects().length,editable:e.isContentEditable,role:e.getAttribute('role'),length:(e.innerText||'').length,focused:e===document.activeElement||e.contains(document.activeElement)})));
+  data.dialogs=await page.locator(UPLOAD_DIALOG).evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,visible:!!e.getClientRects().length,next:e.querySelectorAll('#next-button').length,fields:e.querySelectorAll('[contenteditable=true]').length})));
+ }
  const file=path.join(folder,'youtube-studio-'+Date.now()+'-'+process.pid+'.json');fs.writeFileSync(file,JSON.stringify(data,null,2));return file;
 }
 async function runSequential(page,pack,opts,host){
@@ -306,21 +342,24 @@ async function runSequential(page,pack,opts,host){
   const zone=await syncClock(page,plan,host.progress);
   host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
   await host.openFile(page,item.video,()=>host.checkpoint(item,packIndex));
+  host.progress('studio_editor','Файл передан; ищу активное окно и редактируемое поле названия.',{packIndex});
   const scope=await until(()=>uploadScope(page),25000,'Studio принял файл, но не показал окно редактирования за 25 секунд. Проверьте черновик перед повтором.');
   await until(()=>field(scope,'title',true),25000,'Не появилось поле названия');
   host.progress('metadata','Удаляю название файла и печатаю заголовок из приложения.',{packIndex});
-  await bounded(()=>details(page,scope,item,opts),180000,'Studio не завершил ввод метаданных за 3 минуты');
+  const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex,...extra});
+  await bounded(()=>details(page,scope,item,{...opts,progress}),metadataBudget(item,opts),'Studio не завершил ввод метаданных в рассчитанное время');
   if(item.thumbnail)await host.thumbnail(page,item.thumbnail);
-  await host.waitUpload(page);
+  progress('upload_transfer','Проверяю завершение передачи файла.');await host.waitUpload(page,{progress});
   // The video link may appear only after processing starts. Do not block typing on it.
   const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},30000,'YouTube не показал ID ролика');
   if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
   host.progress('item_accepted','Studio создал видео, сохраняю ID',{packIndex,videoId:id,localJobId:item.localJobId});
-  await visibility(page,scope);
-  const submit=await schedule(page,scope,plan,zone);
+  progress('studio_steps','Перехожу через «Далее / Next» к доступу.');await visibility(page,scope);
+  progress('studio_schedule','Устанавливаю дату, время и часовой пояс.');const submit=await schedule(page,scope,plan,zone);
   // Scheduling may have become past during a slow upload. Never silently publish immediately.
   planFor(item);await submit.click();
   await until(async()=>!await scope.isVisible()||await one(page.locator('ytcp-video-share-dialog,ytcp-video-upload-success'),{optional:true}),120000,'YouTube не подтвердил сохранение. Проверьте Studio; повторная загрузка заблокирована.');
+  progress('studio_verify','Проверяю сохранённые метаданные и расписание в Studio.');
   const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
   const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,schedule:plan};results.push(result);
   host.progress('item_confirmed',`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
@@ -328,4 +367,4 @@ async function runSequential(page,pack,opts,host){
  }
  return results;
 }
-module.exports={L,one,until,norm,read,field,typeText,tags,validateTags,setTags,question,details,showMore,uploadScope,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};
+module.exports={L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};

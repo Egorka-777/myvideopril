@@ -13,6 +13,16 @@ async function bounded(work, timeout, message) {
 function isStudioUpload(job) {
   return !['checkOnly','recheckOnly','searchOnly','watchMesh','watchDirectLinks','shortsWarmup','openTodayOnly'].some(k => job[k]);
 }
+async function handleUploadDialog(dialog,report){
+  if(dialog.type()==='beforeunload'){
+    await dialog.dismiss();
+    report('studio_dialog','Перезагрузка/выход отменены: открыта незавершённая загрузка. Сначала остановите задачу.');
+  }else if(dialog.type()==='alert')await dialog.accept();
+  else{
+    await dialog.dismiss();
+    report('studio_dialog','Неожиданный диалог отменён; подтверждение публикации не выполнялось.');
+  }
+}
 async function connect(chromium, endpoint, report, { timeout = 20000 } = {}) {
   report('dolphin', `Подключаюсь к браузеру · не более ${timeout/1000} секунд.`);
   try { return await chromium.connectOverCDP(endpoint, { timeout }); }
@@ -115,6 +125,7 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false 
     report('file_select', 'Передаю видео в Studio: ' + path.basename(file));
     if (cdp) await bounded(() => cdp.send(file), 20000, 'Studio не подтвердил приём файла. Повторная передача заблокирована.');
     else await input.setInputFiles(file, { timeout: 20000 });
+    report('file_selected','Файл передан. Ожидаю поле названия в редакторе Studio.');
   } finally { if (cdp) await cdp.dispose(); }
 }
-module.exports = { bounded, isStudioUpload, connect, openStudio, openFile, videoInput, findMarkedNode };
+module.exports = { bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode };
