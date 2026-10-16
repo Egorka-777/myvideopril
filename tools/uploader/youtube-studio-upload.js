@@ -3,15 +3,23 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
+async function scopeAlive(scope){
+ if(await scope.isVisible())return true;
+ // A component host can have no box while its positioned dialog and fields
+ // are visible. Hidden stale hosts still have no visible descendants.
+ for(const child of await scope.locator('[contenteditable=true],#next-button,#done-button,ytcp-video-upload-progress,tp-yt-paper-dialog,ytcp-dialog,[role=dialog]').all())
+  if(await child.isVisible())return true;
+ return false;
+}
 async function uploadScope(page){
  // The editor may be nested in the upload wizard. Its footer/Next button belongs
  // to the outer dialog. Never take a visible inner host as the complete wizard.
  const roots=[];
  for(const selector of UPLOAD_DIALOG.split(',')){
-  for(const candidate of await page.locator(selector).all())if(await candidate.isVisible()){
+  for(const candidate of await page.locator(selector).all())if(await scopeAlive(candidate)){
    const nested=await candidate.evaluate((e,selectors)=>{
     for(let p=e.parentElement||e.getRootNode().host;p;p=p.parentElement||p.getRootNode().host)
-     if(p.matches(selectors)&&p.getClientRects().length&&getComputedStyle(p).visibility!=='hidden')return true;
+     if(p.matches(selectors)&&!p.hidden&&getComputedStyle(p).display!=='none'&&getComputedStyle(p).visibility!=='hidden')return true;
     return false;
    },UPLOAD_DIALOG);
    if(!nested)roots.push(candidate);
@@ -307,7 +315,7 @@ async function waitUpload(page,{stallMs=1200000,unknownMs=30000,progress=()=>{}}
  const scope=await uploadScope(page);if(!scope)throw new Error('Studio не показал активный диалог загрузки');let last='',moved=Date.now();
  let reported=0,unknownSince=Date.now();
  while(true){
-  if(page.isClosed()||!await scope.isVisible())throw new Error('Studio закрыл окно до подтверждения загрузки');
+  if(page.isClosed()||!await scopeAlive(scope))throw new Error('Studio закрыл окно до подтверждения загрузки');
   const labels=await bounded(async()=>{
    const values=[];for(const status of await scope.locator('ytcp-video-upload-progress,#progress-label,[class*=progress-label]').all())
     if(await status.isVisible())values.push(await status.innerText());return values;
@@ -358,7 +366,7 @@ async function runSequential(page,pack,opts,host){
   progress('studio_schedule','Устанавливаю дату, время и часовой пояс.');const submit=await schedule(page,scope,plan,zone);
   // Scheduling may have become past during a slow upload. Never silently publish immediately.
   planFor(item);await submit.click();
-  await until(async()=>!await scope.isVisible()||await one(page.locator('ytcp-video-share-dialog,ytcp-video-upload-success'),{optional:true}),120000,'YouTube не подтвердил сохранение. Проверьте Studio; повторная загрузка заблокирована.');
+  await until(async()=>!await scopeAlive(scope)||await one(page.locator('ytcp-video-share-dialog,ytcp-video-upload-success'),{optional:true}),120000,'YouTube не подтвердил сохранение. Проверьте Studio; повторная загрузка заблокирована.');
   progress('studio_verify','Проверяю сохранённые метаданные и расписание в Studio.');
   const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
   const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,schedule:plan};results.push(result);
@@ -367,4 +375,4 @@ async function runSequential(page,pack,opts,host){
  }
  return results;
 }
-module.exports={L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};
+module.exports={L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};

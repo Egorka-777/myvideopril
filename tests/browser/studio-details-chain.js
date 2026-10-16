@@ -11,6 +11,8 @@ function fixture(lang,state,editor=false){
  body=body.replace(/<div id="title-textarea"><div id="textbox" contenteditable="true" role="textbox">([^<]*)<\/div><\/div>/,
   '<div id="title-textarea"><div id="textbox"><div contenteditable="true" role="textbox">$1</div><aside>Recommended hashtags</aside></div></div>');
  if(editor)return body;
+ body=body.replace('<style>','<style>ytcp-uploads-dialog:not([hidden]){display:block;width:0;height:0}');
+ body=body.replace('<ytcp-uploads-dialog hidden>','<ytcp-uploads-dialog hidden><div role="dialog" style="position:fixed;left:10px;top:10px;width:700px;max-height:90vh;overflow:auto">').replace('</ytcp-uploads-dialog>','</div></ytcp-uploads-dialog>');
  body=body.replace('<ytcp-uploads-dialog hidden><div id="details">','<ytcp-uploads-dialog hidden><ytcp-video-upload-dialog><div id="details">')
   .replace('<ytcp-visibility-scheduler hidden>','</ytcp-video-upload-dialog><ytcp-visibility-scheduler hidden>')
   .replace('<button id="next-button">','<ytcp-video-upload-progress><span class="progress-label">'+(lang==='ru'?'Загружено: 38 %':'Uploading: 38 %')+'</span></ytcp-video-upload-progress><div hidden class="progress-label">Upload complete</div><button id="next-button">');
@@ -62,7 +64,7 @@ function fixture(lang,state,editor=false){
    assert.equal(checkpoints,1);assert.equal(output.length,1);assert(saved.scheduled);assert.equal(saved.title,item.title);assert.equal(saved.description,item.description);assert(!saved.paid&&!saved.ai);
    assert(saved.events.some(e=>e.key==='Delete'&&e.target==='title'));assert.equal(await p.evaluate(()=>window.nextClicks),3);
    for(const stage of ['file_selected','studio_editor','metadata_title','metadata_description','metadata_options','metadata_tags','upload_transfer','studio_steps','studio_schedule','item_confirmed'])assert(events.some(e=>e.stage===stage),stage);
-   console.log('PASS',lang,'native picker → nested editor → rewritten title → footer progress → Next → persisted schedule');
+   console.log('PASS',lang,'native picker → zero-box nested editor → rewritten title → footer progress → Next → persisted schedule');
    await ctx.close();
   }
   const p=await browser.newPage(),dialogs=[];
