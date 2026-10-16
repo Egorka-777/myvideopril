@@ -100,7 +100,9 @@ namespace VideoBatch {
                                     Check(bounds.Top>=0&&bounds.Bottom<=bar.ClientSize.Height&&bounds.Left>=0&&bounds.Right<=bar.ClientSize.Width,"Unclipped shell control: "+field+" @"+width);
                                 }
                                 Console.WriteLine("Shell layout: capture "+platform+" "+width);
-                                using(var bitmap=new Bitmap(shell.Width,shell.Height)){shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(output,"shell-"+platform+"-"+width+".png"));}
+                                var render=(Control)type.GetField("shellRoot",flags).GetValue(shell);
+                                Check(render.Width==width&&render.Height==820,"Workspace layout matches requested viewport");
+                                using(var bitmap=new Bitmap(render.Width,render.Height)){render.DrawToBitmap(bitmap,render.ClientRectangle);bitmap.Save(Path.Combine(output,"shell-"+platform+"-"+width+".png"));}
                             }
                         }
                         type.GetMethod("ApplyPlatform",flags).Invoke(shell,new object[]{AppPlatform.YouTube,true});
@@ -109,7 +111,8 @@ namespace VideoBatch {
                         var grid=(DataGridView)typeof(ProfilesPanel).GetField("grid",flags).GetValue(profiles);
                         Check(grid.Rows.Count==2,"Profiles come from existing YouTube and TikTok accounts without re-import");
                         Check(grid.Height>200,"Profiles list remains visible between filters and actions");
-                        using(var bitmap=new Bitmap(shell.Width,shell.Height)){shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(output,"shell-profiles.png"));}
+                        var profileRender=(Control)type.GetField("shellRoot",flags).GetValue(shell);
+                        using(var bitmap=new Bitmap(profileRender.Width,profileRender.Height)){profileRender.DrawToBitmap(bitmap,profileRender.ClientRectangle);bitmap.Save(Path.Combine(output,"shell-profiles.png"));}
                         shell.Close();host.Close();
                         }
                     }
