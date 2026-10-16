@@ -28,6 +28,7 @@ namespace VideoBatch {
             layout.Controls.Add(buttons,0,0);
             proxyHint=new Label{Dock=DockStyle.Fill,Text="Прокси выбирается при добавлении аккаунтов. «Из Dolphin» получает настройки, не открывая профили браузера.",ForeColor=Theme.TextSecondary};layout.Controls.Add(proxyHint,0,1);
             proxyGrid=new DataGridView{Dock=DockStyle.Fill,ReadOnly=true,AllowUserToAddRows=false,AllowUserToDeleteRows=false,MultiSelect=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(proxyGrid);
+            proxyGrid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;proxyGrid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
             foreach(var name in new[]{"Название","Адрес","Источник","Аккаунтов","Новые аккаунты"})proxyGrid.Columns.Add(name,name);
             proxyGrid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0){var p=CurrentProxy();store.Change(d=>d.default_proxy_id=p.id);RefreshProxies();}};
             layout.Controls.Add(proxyGrid,0,2);page.Controls.Add(layout);
@@ -94,7 +95,8 @@ namespace VideoBatch {
         public string Passcode=>passcode.Text;
         public bool CheckAfter=>check.Checked;
         public static ComboBox ProxyChoices(TelegramData data){
-            var combo=Theme.MakeCombo(new string[0]);combo.Width=450;combo.DisplayMember="";
+            var combo=Theme.MakeCombo(new string[0]);combo.Width=450;combo.DisplayMember="";combo.DrawMode=DrawMode.OwnerDrawFixed;combo.ItemHeight=28;
+            combo.DrawItem+=(sender,e)=>{if(e.Index<0)return;var c=(ComboBox)sender;using(var brush=new SolidBrush((e.State&DrawItemState.Selected)!=0?Theme.Selected:Theme.Elevated))e.Graphics.FillRectangle(brush,e.Bounds);TextRenderer.DrawText(e.Graphics,c.Items[e.Index].ToString(),Theme.FontBody,new Rectangle(e.Bounds.X+8,e.Bounds.Y,e.Bounds.Width-12,e.Bounds.Height),Theme.TextPrimary,TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);};
             combo.Items.Add(new TelegramProxy{id="",name="Без прокси",url=""});foreach(var p in data.proxies)combo.Items.Add(p);
             combo.SelectedIndex=0;for(int i=1;i<combo.Items.Count;i++)if(((TelegramProxy)combo.Items[i]).id==data.default_proxy_id)combo.SelectedIndex=i;
             return combo;

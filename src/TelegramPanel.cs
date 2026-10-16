@@ -35,7 +35,7 @@ namespace VideoBatch {
             var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));Controls.Add(layout);
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,54));Controls.Add(layout);
             actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};layout.Controls.Add(actions,0,0);
             WorkButton("＋ Аккаунты",ChooseImport,true);
             WorkButton("Проверить",async()=>await RunSelected("check"));
@@ -57,7 +57,7 @@ namespace VideoBatch {
             var context=new ContextMenuStrip{BackColor=Theme.Elevated,ForeColor=Theme.TextPrimary};context.Items.Add("Карточка аккаунта",null,(s,e)=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Удалить из Telegram-раздела",null,(s,e)=>RemoveSelected());grid.ContextMenuStrip=context;
             grid.CellMouseDown+=(s,e)=>{if(e.Button==MouseButtons.Right&&e.RowIndex>=0){grid.ClearSelection();grid.Rows[e.RowIndex].Selected=true;grid.CurrentCell=grid.Rows[e.RowIndex].Cells[1];}};
-            var table=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2};table.RowStyles.Add(new RowStyle(SizeType.Percent,100));table.RowStyles.Add(new RowStyle(SizeType.Absolute,42));table.Controls.Add(grid,0,0);
+            var table=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2};table.RowStyles.Add(new RowStyle(SizeType.Percent,100));table.RowStyles.Add(new RowStyle(SizeType.Absolute,52));table.Controls.Add(grid,0,0);
             var foot=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
             foot.Controls.Add(Theme.MakeButton("Выбрать все",ghost:true,action:()=>{foreach(DataGridViewRow row in grid.Rows)row.Cells[0].Value=true;}));
             foot.Controls.Add(Theme.MakeButton("Карточка",ghost:true,action:()=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount)));
