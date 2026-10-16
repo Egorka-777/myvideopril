@@ -1,6 +1,6 @@
 # Исправление запуска Dolphin и загрузки YouTube Studio
 
-Ветка: `fix/youtube-studio-startup-20261016`. База: main `1a65b34a81b1f1ae82345fb0b8a8df1dec27fc85`.
+Ветка: `fix/youtube-studio-startup-20261016` (**влита в main @ `bb9e7cb`, 16.10.2026**). База: main `1a65b34a81b1f1ae82345fb0b8a8df1dec27fc85`. Сводка для агента: `docs/AGENT_MAIN_20261016_RU.md`.
 
 ## Задача агенту на ПК
 
