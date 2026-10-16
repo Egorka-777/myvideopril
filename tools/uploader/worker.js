@@ -6,7 +6,8 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-16-shorts-warmup-v1";
+const WORKER_BUILD = "2026-10-16-studio-startup-v2";
+const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function studioCheckpoint(item,packIndex){
  if(!item.localJobId)throw new Error("Studio: нет постоянного ID задания. Обновите приложение вместе с worker.");
@@ -181,18 +182,24 @@ async function stopProfile() {
 
 async function startOrConnectProfile() {
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
-  await api("/v1.0/auth/login-with-token", {
+  const loginOptions={
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
-  });
+  };
+  const studioUpload=studioBrowser.isStudioUpload(job);
+  if(studioUpload){
+    const auth=await apiRaw('/v1.0/auth/login-with-token',loginOptions,8000);
+    if(!auth.ok||auth.data.success===false)throw new Error('Dolphin: не подтверждена авторизация локального API (HTTP '+auth.status+').');
+  }else await api('/v1.0/auth/login-with-token',loginOptions);
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
-    { onAttached: () => { profileOwned = false; } }
+    { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:20000,maxAttempts:1}:{}) }
   );
   profileStarted = true;
   return endpoint;
 }
 
 async function connectBrowser(endpoint) {
+  if (studioBrowser.isStudioUpload(job)) return studioBrowser.connect(chromium, endpoint, send);
   send("dolphin", "Подключение к браузеру…", { percent: 12 });
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -2870,19 +2877,12 @@ async function uploadDraftsBulk(page, pack) {
 }
 
 async function uploadPackBulk(page,pack){
- await verifyYouTubeStudioReady(page);
- const expected=String(job.channelUrl||'').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
- if(expected){await gotoStable(page,'https://studio.youtube.com/channel/'+expected,{waitUntil:'domcontentloaded',timeout:90000});const actual=await resolveStudioChannelId(page);if(actual!==expected)throw new Error('Studio открыл другой канал. Загрузка остановлена.');}
+ await studioBrowser.openStudio(page,job.channelUrl,send);
  const selected=pack.map((item,index)=>({...item,title:cleanUploadTitle(item.title),_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  const studio=require('./youtube-studio-upload');
  return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,
-  openFile:async(page,file)=>{
-   const input=await openUploadForPack(page);
-   if(input){await setInputFilesViaCdp(page,input,[require('path').resolve(file)]);return;}
-   const [chooser]=await Promise.all([page.waitForEvent('filechooser',{timeout:20000}),clickBrowseForFileChooser(page)]);
-   await chooser.setFiles(file); // Once only: an uncertain response must not create a second upload.
-  },
+  openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send),
   thumbnail:setThumbnail,waitUpload:studio.waitUpload,dismiss:dismissAfterPublish
  });
 }
@@ -2893,21 +2893,28 @@ async function main() {
   job.token = process.env.VIDEOBATCH_DOLPHIN_TOKEN || job.token;
   if (!job.token || !job.profileId) throw new Error("Укажите токен Dolphin и ID профиля.");
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
+  send("start", "Worker " + WORKER_BUILD, { profileId: job.profileId });
 
   if (!job.searchOnly && !job.watchMesh && !job.watchDirectLinks && !job.shortsWarmup && !job.skipQueueDelay) await waitBetweenProfiles();
   let endpoint = await startOrConnectProfile();
   browser = await connectBrowser(endpoint);
   let context = browser.contexts()[0];
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
-  let page = await context.newPage();
+  if(studioBrowser.isStudioUpload(job)){
+    context.setDefaultTimeout(10000);
+    context.setDefaultNavigationTimeout(35000);
+  }
+  let page = studioBrowser.isStudioUpload(job)
+    ? await studioBrowser.bounded(()=>context.newPage(),15000,'Dolphin не открыл вкладку задания за 15 секунд.')
+    : await context.newPage();
   taskPage = page;
   send("start", "Worker " + WORKER_BUILD, { profileId: job.profileId });
   attachPageGuards(page);
-  await page.bringToFront().catch(() => {});
+  await studioBrowser.bounded(()=>page.bringToFront(),3000,'Dolphin не активировал вкладку.').catch(() => {});
   const playback = require("./youtube-playback.js");
   // IP не блокируем: прокси уже в Dolphin. Только пишем в лог, если удалось узнать.
   let verifiedIp = "";
-  if (!job.openTodayOnly && !job.watchMesh) try {
+  if (!studioBrowser.isStudioUpload(job) && !job.openTodayOnly && !job.watchMesh) try {
     const ip = await publicIp(page);
     verifiedIp = ip || "";
     if (ip) send("ip", `IP профиля: ${ip}`, { ip, percent: 20 });
@@ -3116,9 +3123,9 @@ if (require.main === module) {
     stopping = true;
     send("cancel", "Задание остановлено; профиль Dolphin остаётся открытым.");
     try {
-      if (taskPage && !taskPage.isClosed()) await releaseTaskPage(taskPage);
-      if (browser) await browser.close();
+      if (taskPage && !taskPage.isClosed()) await studioBrowser.bounded(()=>releaseTaskPage(taskPage),1000,'Вкладка не ответила на закрытие.');
     } catch (e) { send("diagnostic", "Не удалось освободить вкладку задания: " + e.message); }
+    if(browser)await studioBrowser.bounded(()=>browser.close(),1000,'CDP отключается при завершении worker.').catch(()=>{});
     process.exit(130);
   }
   process.on("SIGINT", cancelTask);
@@ -3128,9 +3135,9 @@ if (require.main === module) {
     else if(line.startsWith("ack:")){const id=line.trim().slice(4);const ack=studioAcks.get(id);if(ack){studioAcks.delete(id);ack();}} });
   main().then(() => { input.close(); }).catch(async e => {
     if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.shortsWarmup&&!job.openTodayOnly&&taskPage){
-      try{const diagnosticFile=await require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics'));send('diagnostic','Диагностика Studio сохранена',{diagnosticFile});}catch{} }
+      try{const diagnosticFile=await studioBrowser.bounded(()=>require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics')),2000,'Вкладка не ответила на диагностику');send('diagnostic','Диагностика Studio сохранена',{diagnosticFile});}catch{} }
 
-    if (browser) await browser.close().catch(err => send("diagnostic", "Отключение CDP: " + err.message));
+    if (browser) await studioBrowser.bounded(()=>browser.close(),2000,'Таймаут отключения CDP').catch(err => send("diagnostic", "Отключение CDP: " + err.message));
     browser = null;
     fail(e, { keptOpen: profileStarted });
     input.close();

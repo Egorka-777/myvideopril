@@ -36,7 +36,7 @@ assert.match(mesh,/await Task.WhenAll\(tasks\)/);
 assert.doesNotMatch(mesh,/StopProfileRequired|StopProfile|closeErrors/,'Preserve profiles on success, failure and cancellation');
 assert.match(mesh,/keepProfileOpen=true/);
 assert.match(mesh,/профили Dolphin оставлены открытыми/);
-assert.match(worker,/if \(!job\.openTodayOnly && !job\.watchMesh\) try/,'Navigation must not wait for external IP services');
+assert.match(worker,/if \(!studioBrowser\.isStudioUpload\(job\) && !job\.openTodayOnly && !job\.watchMesh\) try/,'Navigation and Studio must not wait for external IP services');
 assert.match(worker,/openChannelsWatch\(page, targets, navigationJob/);
 assert.match(worker,/const WORKER_BUILD = "[^"]+"/,'Worker must expose its deployed build identifier');
 assert.match(worker,/Задание остановлено; профиль Dolphin остаётся открытым/);

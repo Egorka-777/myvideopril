@@ -39,6 +39,13 @@ namespace VideoBatch {
                 Check(TitleCleaner.RunSelfTests(),"clean title regressions");
                 Check(TitleCleaner.CleanForUpload("001. 3 правила 2026 (2).mp4")=="3 правила 2026","strip service indices, keep meaningful numbers");
                 Check(TitleCleaner.CleanForUpload("12.34 стратегия 2026")=="12.34 стратегия 2026","preserve decimal punctuation");
+                string source=Path.Combine(root,"original-001.mp4");File.WriteAllText(source,"source bytes");
+                string occupied=Path.Combine(root,"Новый заголовок.mp4");File.WriteAllText(occupied,"existing bytes");
+                string renamed=UploadWindow.RenameVideoFile(source,"Новый заголовок",1,1);
+                Check(!File.Exists(source)&&File.Exists(renamed),"source renamed immediately in its original directory");
+                Check(Path.GetDirectoryName(renamed)==root,"rename does not create a staging copy");
+                Check(File.ReadAllText(occupied)=="existing bytes"&&File.ReadAllText(renamed)=="source bytes","collision keeps both files intact");
+                Check(UploadWindow.RenameVideoFile(renamed,"Новый заголовок",1,1)==renamed,"reselecting same title is idempotent");
                 Console.WriteLine("Studio: five-item metadata + PC-time contract, durable pending state, XML and wire roundtrip PASS");return true;
             }finally{Store.Root=oldRoot;try{Directory.Delete(root,true);}catch{}}
         }

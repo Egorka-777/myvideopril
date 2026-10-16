@@ -1,6 +1,15 @@
 "use strict";
 // Native Studio UI only. No metadata/publish HTTP endpoints and no clipboard/DOM text writes.
 const fs=require('fs');
+const {bounded}=require('./studio-browser');
+const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
+async function uploadScope(page){
+ // Ignore old hidden dialogs retained by Polymer. Prefer the actual editor dialog.
+ for(const selector of UPLOAD_DIALOG.split(',')){
+  const result=await one(page.locator(selector),{optional:true});if(result)return result;
+ }
+ return null;
+}
 const L={
  next:/^(Next|Далее)$/i, more:/^(Show more|Показать больше|Показать ещё|Показать еще|Развернуть|Ещё|Еще)$/i,
  schedule:/^(Schedule(?: publication)?|Запланировать(?: публикацию)?)$/i,
@@ -18,7 +27,7 @@ async function one(locator,{optional=false}={}){
  throw new Error(`Studio: ожидается один элемент, найдено ${all.length}: ${locator}`);
 }
 async function until(fn,timeout=30000,message='Studio не подтвердил состояние'){
- const end=Date.now()+timeout;while(Date.now()<end){const value=await fn();if(value)return value;await pause(150);}throw new Error(message);
+ const end=Date.now()+timeout;while(Date.now()<end){const value=await bounded(fn,Math.min(5000,Math.max(1,end-Date.now())),message+' · страница не отвечает');if(value)return value;await pause(150);}throw new Error(message);
 }
 function norm(s){return String(s||'').replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n').trim();}
 async function read(box){return norm(await box.evaluate(e=>e.isContentEditable?e.innerText:('value'in e?e.value:e.textContent)));}
@@ -56,12 +65,19 @@ async function setTags(scope,list,{verify=false}={}){
  }
  const actual=await chips(scope);if(JSON.stringify(actual.slice().sort())!==JSON.stringify(list.slice().sort()))throw new Error('Studio не подтвердил точный список тегов');
 }
-async function showMore(scope){const button=await one(scope.getByRole('button',{name:L.more}),{optional:true});if(button)await button.click();else{const toggle=await one(scope.locator('#toggle-button'),{optional:true});if(toggle&&L.more.test(norm(await toggle.innerText())))await toggle.click();}}
+async function showMore(scope){
+ // The screenshot's «Развернуть» is the metadata toggle below age restrictions.
+ // Prefer its stable id; unrelated expanders elsewhere must not make it ambiguous.
+ const toggles=scope.locator('#toggle-button');
+ for(const toggle of await toggles.all())if(await toggle.isVisible()&&L.more.test(norm(await toggle.innerText()))){await toggle.scrollIntoViewIfNeeded();await toggle.click();return;}
+ const button=await one(scope.getByRole('button',{name:L.more}),{optional:true});
+ if(button){await button.scrollIntoViewIfNeeded();await button.click();}
+}
 async function question(scope,kind,answer,{verify=false}={}){
  const marker=kind==='paid'?L.paid:L.ai;
  // Stable component ids first, then smallest containing section. Never fall back to the whole page.
- const selector=kind==='paid'?'#paid-promotion, #paid-promotion-container,ytcp-paid-promotion,ytcp-paid-product-placement':'#altered-content, #altered-content-container, #synthetic-media,ytcp-altered-content,ytcp-video-metadata-editor-altered-content';
- let block=await one(scope.locator(selector),{optional:true});
+ const selector=kind==='paid'?'#paid-promotion, #paid-promotion-container,ytcp-paid-promotion,ytcp-paid-product-placement':'#altered-content, #altered-content-container, #synthetic-media,ytkp-altered-content-select,ytcp-altered-content,ytcp-video-metadata-editor-altered-content';
+ let block=null;for(const part of selector.split(',')){block=await one(scope.locator(part),{optional:true});if(block)break;}
  if(!block){
   const handles=await scope.locator('ytcp-form-section,ytcp-video-metadata-editor-section,section,fieldset').all();
   const found=[];for(const x of handles){if(!await x.isVisible())continue;const text=await x.innerText();if(marker.test(text)&&await x.locator('[role=radio],tp-yt-paper-radio-button,input[type=radio],input[type=checkbox],[role=checkbox],tp-yt-paper-checkbox').count())found.push(x);}
@@ -113,9 +129,13 @@ async function details(page,scope,item,opts,{verify=false}={}){
   if(!verify)await typeText(description,item.description,{delay:opts.descriptionDelay??18});
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
- await showMore(scope);
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
  if(kids&&!verify)await kids.click();
+ await showMore(scope);
+ // Expansion mounts these controls asynchronously, so a one-shot lookup is too early.
+ await until(async()=>{
+  const text=await scope.innerText();return L.paid.test(text)&&L.ai.test(text);
+ },10000,'Studio не показал настройки рекламы и ИИ после «Развернуть»');
  await question(scope,'paid',opts.paidPromotion===true,{verify});
  await question(scope,'ai',opts.alteredContent===true,{verify});
  if(item.tags!==null&&item.tags!==undefined)await setTags(scope,tags(item.tags),{verify});
@@ -207,14 +227,11 @@ function planFor(item,now=Date.now()){
  const offset=-local.getTimezoneOffset();if(offset!==Number(item.scheduledUtcOffsetMinutes))throw new Error('Часовой пояс ПК изменился. Пересоздайте расписание.');
  return {date,time,unix,offset};
 }
-const clockSessions=new WeakMap();
 async function syncClock(page,plan,progress){
  const zone=Intl.DateTimeFormat().resolvedOptions().timeZone;
- let session=clockSessions.get(page);
- if(!session){session=await page.context().newCDPSession(page);clockSessions.set(page,session);}
- try{await session.send('Emulation.setTimezoneOverride',{timezoneId:zone});}
- catch(error){if(!/already in effect/.test(error.message))throw error;progress('timezone','Dolphin фиксирует пояс браузера. В Studio будет явно выбран и проверен пояс ПК.');}
- const actual=await page.evaluate(unix=>({zone:Intl.DateTimeFormat().resolvedOptions().timeZone,offset:-new Date(unix*1000).getTimezoneOffset()}),plan.unix);
+ // Scheduling selects the PC zone in Studio itself. Do not override the browser's
+ // emulation settings or hold an extra CDP session in the Dolphin profile.
+ const actual=await bounded(()=>page.evaluate(unix=>({zone:Intl.DateTimeFormat().resolvedOptions().timeZone,offset:-new Date(unix*1000).getTimezoneOffset()}),plan.unix),5000,'Вкладка Dolphin не отвечает при подготовке расписания');
  if(actual.offset!==plan.offset)progress('timezone',`Пояс браузера ${actual.zone} отличается от ПК; обязательна проверка выбранного пояса Studio.`);
  progress('timezone',`Время ПК: ${plan.date} ${plan.time} · ${zone} · UTC${plan.offset>=0?'+':''}${plan.offset/60}`);return zone;
 }
@@ -262,10 +279,10 @@ async function readback(page,item,id,plan,opts,zone){
  if(item.thumbnail)await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
 }
 async function waitUpload(page,{stallMs=1200000}={}){
- const scope=page.locator('ytcp-uploads-dialog,ytcp-upload-dialog').first();let last='',moved=Date.now();
+ const scope=await uploadScope(page);if(!scope)throw new Error('Studio не показал активный диалог загрузки');let last='',moved=Date.now();
  while(true){
   if(page.isClosed()||!await scope.isVisible())throw new Error('Studio закрыл окно до подтверждения загрузки');
-  const labels=await scope.locator('ytcp-video-upload-progress,#progress-label,[class*=progress-label]').allTextContents();
+  const labels=await bounded(()=>scope.locator('ytcp-video-upload-progress,#progress-label,[class*=progress-label]').allTextContents(),5000,'Вкладка Studio перестала отвечать во время загрузки');
   const text=labels.map(norm).join(' ');
   if(/(?:upload(?:ed)?|загружено)[^%]{0,30}100\s*%|upload complete|загрузка завершена|checks? (?:complete|running)|checking|проверка|обработка завершена/i.test(text))return;
   if(text!==last){last=text;moved=Date.now();}
@@ -288,27 +305,28 @@ async function runSequential(page,pack,opts,host){
   const item=pack[i],plan=planFor(item),packIndex=item._packIndex||i+1;
   if(item.studioPending)throw new Error('Предыдущая Studio-загрузка требует проверки. Не загружайте повторно.');
   const zone=await syncClock(page,plan,host.progress);
-  await host.checkpoint(item,packIndex); // Desktop durably records pending BEFORE file selection.
   host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
-  await host.openFile(page,item.video);
-  const scope=page.locator('ytcp-uploads-dialog,ytcp-upload-dialog').first();await until(()=>scope.isVisible(),90000,'Не открылся диалог загрузки');
-  await until(()=>field(scope,'title',true),90000,'Не появилось поле названия');
-  const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},90000,'YouTube не показал ID ролика');
-  if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
-  host.progress('item_accepted','Studio создал видео, сохраняю ID',{packIndex,videoId:id,localJobId:item.localJobId});
-  await details(page,scope,item,opts);
+  await host.openFile(page,item.video,()=>host.checkpoint(item,packIndex));
+  const scope=await until(()=>uploadScope(page),25000,'Studio принял файл, но не показал окно редактирования за 25 секунд. Проверьте черновик перед повтором.');
+  await until(()=>field(scope,'title',true),25000,'Не появилось поле названия');
+  host.progress('metadata','Удаляю название файла и печатаю заголовок из приложения.',{packIndex});
+  await bounded(()=>details(page,scope,item,opts),180000,'Studio не завершил ввод метаданных за 3 минуты');
   if(item.thumbnail)await host.thumbnail(page,item.thumbnail);
   await host.waitUpload(page);
+  // The video link may appear only after processing starts. Do not block typing on it.
+  const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},30000,'YouTube не показал ID ролика');
+  if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
+  host.progress('item_accepted','Studio создал видео, сохраняю ID',{packIndex,videoId:id,localJobId:item.localJobId});
   await visibility(page,scope);
   const submit=await schedule(page,scope,plan,zone);
   // Scheduling may have become past during a slow upload. Never silently publish immediately.
   planFor(item);await submit.click();
   await until(async()=>!await scope.isVisible()||await one(page.locator('ytcp-video-share-dialog,ytcp-video-upload-success'),{optional:true}),120000,'YouTube не подтвердил сохранение. Проверьте Studio; повторная загрузка заблокирована.');
-  const verify=await page.context().newPage();try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await verify.close();}
+  const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
   const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,schedule:plan};results.push(result);
   host.progress('item_confirmed',`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
   await host.dismiss(page);
  }
  return results;
 }
-module.exports={L,one,until,norm,read,field,typeText,tags,validateTags,setTags,question,details,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};
+module.exports={L,one,until,norm,read,field,typeText,tags,validateTags,setTags,question,details,showMore,uploadScope,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};

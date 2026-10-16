@@ -997,9 +997,29 @@ namespace VideoBatch {
             }
             throw new IOException("Не удалось подобрать свободное имя файла для «"+stem+ext+"».");
         }
-        static string RenameVideoFile(string path,string title,int index1Based,int total){
-            // Titles are upload metadata. Never move the selected source file.
-            return string.IsNullOrWhiteSpace(path)||!File.Exists(path)?path:PathUtil.Normalize(Path.GetFullPath(path));
+        internal static string RenameVideoFile(string path,string title,int index1Based,int total){
+            if(string.IsNullOrWhiteSpace(path)||!File.Exists(path))return path;
+            title=StripLeadingTitleIndex(title);
+            if(string.IsNullOrWhiteSpace(title))return path;
+            string finalTitle=PackTitleWithIndex(title,index1Based,total);
+            ValidateTitleLength(finalTitle,"Переименование");
+            string ext=Path.GetExtension(path);
+            if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
+            string dest=FindUniqueFilePath(Path.GetDirectoryName(path)??"",FileNameFromTitle(finalTitle),ext,path);
+            if(PathsEqual(path,dest))return PathUtil.Normalize(Path.GetFullPath(path));
+            try{File.Move(path,dest);return PathUtil.Normalize(Path.GetFullPath(dest));}
+            catch(Exception ex){throw new IOException("Не удалось переименовать «"+Path.GetFileName(path)+"» в «"+Path.GetFileName(dest)+"»: "+ex.Message,ex);}
+        }
+        string AssignVideoFile(string path,string title,int index,int total){
+            string renamed=RenameVideoFile(path,title,index,total);
+            if(!PathsEqual(path,renamed)){
+                // A source may already be selected in another channel. Keep every reference valid.
+                foreach(var channel in settings.YouTubeChannels??new List<YouTubeChannel>()){
+                    if(PathsEqual(channel.Video,path))channel.Video=renamed;
+                    foreach(var item in channel.Items??new List<YouTubeItem>())if(item!=null&&PathsEqual(item.Video,path))item.Video=renamed;
+                }
+            }
+            return renamed;
         }
         void ClearThumbnail(YouTubeChannel c){
             if(c==null)return;
@@ -1023,7 +1043,7 @@ namespace VideoBatch {
                 string m=NormMarket(c.Market);
                 string packKind=EffectiveKind(c);
                 try{title=PeekTitlesFromBank(packKind,1,m)[0];}catch(Exception ex){Ui.Error(this,ex);return;}
-                string path=RenameVideoFile(p,title,1,1);
+                string path=AssignVideoFile(p,title,1,1);
                 c.Items=new List<YouTubeItem>{new YouTubeItem{Video=path,Title=PackTitleWithIndex(title,1,1),Thumbnail=c.Thumbnail??""}};c.Kind=packKind;SyncChannelPrimary(c);c.Enabled=true;row.Cells[COn].Value=true;row.Cells[CKind].Value=KindLabel(packKind);AdvanceTitleCursor(packKind,1,m);Write(TitleCursorLabel(packKind,m));RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbPick){var p=Ui.File(this,"Изображение|*.jpg;*.jpeg;*.png;*.webp|Все файлы|*.*");if(p!=null){c.Thumbnail=p;if(c.Items!=null&&c.Items.Count>0)c.Items[0].Thumbnail=p;RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbClear){ClearThumbnail(c);SyncChannelPrimary(c);RefreshRowDisplay(row);}else if(e.ColumnIndex==CRemove){grid.Rows.RemoveAt(e.RowIndex);}SaveGrid();RefreshMarketUi();}
         List<string> TitleBankRef(string kind,string market=null){
             kind=NormKind(kind);bool en=NormMarket(market??marketView)=="EN";
@@ -1245,6 +1265,8 @@ namespace VideoBatch {
         }
         void AssignVideoPackToChannel(YouTubeChannel ch,DataGridViewRow row,string[] filePaths){
             var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
+            if(ch.Items!=null&&ch.Items.Any(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Video))&&
+                MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+paths.Length+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
             string packKind=EffectiveKind(ch);
             List<string> titles;
@@ -1260,13 +1282,10 @@ namespace VideoBatch {
                 ValidateTitleLength(finalTitle,"«"+ch.Name+"» ["+(i+1)+"/"+paths.Length+"]");
                 Write("  "+(i+1)+". «"+MakeWindowsSafeTitle(finalTitle)+"» ← "+Path.GetFileName(paths[i]));
                 string path=paths[i];string before=path;
-                path=RenameVideoFile(path,baseTitle,i+1,paths.Length);
+                path=AssignVideoFile(path,baseTitle,i+1,paths.Length);
                 if(!string.Equals(before,path,StringComparison.OrdinalIgnoreCase))renamed++;
                 else if(!string.Equals(Path.GetFileName(before),Path.GetFileName(path),StringComparison.OrdinalIgnoreCase))renamed++;
                 items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=i==0?(ch.Thumbnail??""):""});
-            }
-            if(ch.Items!=null&&ch.Items.Count>0&&ch.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
-                if(MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+items.Count+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             }
             ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;ch.Status=ChannelStatus.Ready;
             SyncChannelPrimary(ch);
@@ -1315,6 +1334,8 @@ namespace VideoBatch {
                     foreach(var g in groups){
                         var ch=g.Key;
                         var paths=g.Select(x=>x.Path).ToList();
+                        if(ch.Items!=null&&ch.Items.Any(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Video))&&
+                            MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+paths.Count+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)continue;
                         string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
                         List<string> titles;
                         string packKind=EffectiveKind(ch);
@@ -1329,13 +1350,9 @@ namespace VideoBatch {
                             ValidateTitleLength(finalTitle,"«"+ch.Name+"» ["+(i+1)+"/"+paths.Count+"]");
                             Write("  "+(i+1)+". «"+MakeWindowsSafeTitle(finalTitle)+"» ← "+Path.GetFileName(paths[i]));
                             string path=paths[i];string before=path;
-                            path=RenameVideoFile(path,baseTitle,i+1,paths.Count);
+                            path=AssignVideoFile(path,baseTitle,i+1,paths.Count);
                             if(!string.Equals(before,path,StringComparison.OrdinalIgnoreCase))renamed++;
                             items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=i==0?(ch.Thumbnail??""):""});
-                        }
-                        // Если у канала уже была пачка — спрашиваем только когда добавляем поверх
-                        if(ch.Items!=null&&ch.Items.Count>0&&ch.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
-                            if(MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+items.Count+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)continue;
                         }
                         ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;SyncChannelPrimary(ch);done+=items.Count;
                         AdvanceTitleCursor(packKind,paths.Count,m);
@@ -1388,7 +1405,7 @@ namespace VideoBatch {
                     string finalTitle=PackTitleWithIndex(baseTitle,i+1,videoFiles.Length);
                     ValidateTitleLength(finalTitle,"«"+baseCh.Name+"» шортс ["+(i+1)+"/"+videoFiles.Length+"]");
                     Write("  "+(i+1)+". «"+MakeWindowsSafeTitle(finalTitle)+"»");
-                    string path=RenameVideoFile(videoFiles[i],baseTitle,i+1,videoFiles.Length);
+                    string path=AssignVideoFile(videoFiles[i],baseTitle,i+1,videoFiles.Length);
                     items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=""});
                 }
                 baseCh.Enabled=true;baseCh.Market=m;baseCh.Kind="shorts";baseCh.Items=items;baseCh.Status="Готов (шортс "+items.Count+")";

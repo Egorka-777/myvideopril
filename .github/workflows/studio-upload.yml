@@ -1,9 +1,9 @@
 name: YouTube Studio RU EN upload
 on:
   push:
-    branches: [feat/studio-upload-ru-en-20261015]
+    branches: [feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016]
   pull_request:
-    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','tools/uploader/youtube-studio-upload.js','tools/uploader/worker.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
+    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','tools/uploader/studio-browser.js','tools/uploader/youtube-studio-upload.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
   workflow_dispatch:
 jobs:
   verify:
@@ -37,7 +37,7 @@ jobs:
         run: |
           npx --prefix tools/uploader playwright-core install chromium
           if ($LASTEXITCODE -ne 0) { throw 'Chromium install' }
-          foreach ($name in @('youtube-studio-upload','publishing-ui','native_calendar','dolphin_lifecycle')) {
+          foreach ($name in @('studio-startup','studio-cdp-stall','youtube-studio-upload','publishing-ui','native_calendar','dolphin_lifecycle')) {
             node "tests/browser/$name.js"
             if ($LASTEXITCODE -ne 0) { throw $name }
           }
@@ -50,6 +50,7 @@ jobs:
           Copy-Item tools/uploader/*.js "$dest/tools/uploader"
           Copy-Item tools/uploader/package*.json "$dest/tools/uploader"
           Copy-Item docs/AGENT_STUDIO_UPLOAD_20261015_RU.md $dest
+          Copy-Item docs/AGENT_STUDIO_STARTUP_20261016_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
       - uses: actions/upload-artifact@v4
         with:

@@ -106,16 +106,17 @@ async function startOrAttach(job, directory, request, report = () => {}, options
     return cached;
   }
   const startPath = `/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/start?automation=1`;
+  const attempts = options.maxAttempts || 2;
   let last = "", alreadyRunning = false;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     const startedAt = Date.now();
-    report("dolphin", `Запрос подключения Dolphin · попытка ${attempt}/2.`);
+    report("dolphin", `Запрос подключения Dolphin · попытка ${attempt}/${attempts}.`);
     let response;
-    try { response = await request(startPath, {}, 120000); }
+    try { response = await request(startPath, {}, options.startTimeoutMs || 120000); }
     catch (e) { response = { ok: false, status: 0, data: {}, text: e.message }; }
     const data = response.data || {};
     const code = /^[A-Z_]+$/.test(String(data.code || "")) ? data.code : "";
-    report("dolphin", `Ответ Dolphin · попытка ${attempt}/2 · ${Date.now()-startedAt} мс · HTTP ${response.status || "сеть"}${code ? " · " + code : ""}.`);
+    report("dolphin", `Ответ Dolphin · попытка ${attempt}/${attempts} · ${Date.now()-startedAt} мс · HTTP ${response.status || "сеть"}${code ? " · " + code : ""}.`);
     // Endpoints in an ALREADY_RUNNING response may still be usable.
     const endpoint = automationEndpoint(data);
     if (endpoint) {
@@ -132,7 +133,7 @@ async function startOrAttach(job, directory, request, report = () => {}, options
     // Lost start response: another worker may have obtained and cached its endpoint.
     const recovered = await readCached(job, directory, fetchImpl);
     if (recovered) return recovered;
-    if (attempt < 2 && (alreadyRunning || !response.status || response.status >= 500 || response.status === 429)) {
+    if (attempt < attempts && (alreadyRunning || !response.status || response.status >= 500 || response.status === 429)) {
       report("dolphin", "Адрес CDP пока недоступен; повтор подключения без закрытия профиля.");
       await (options.delay || (ms => new Promise(resolve => setTimeout(resolve, ms))))(1500);
       continue;
