@@ -12,11 +12,13 @@ namespace VideoBatch {
         readonly TelegramStore store;
         Process active;
         StreamWriter commands;
+        bool stopRequested;
         public bool IsRunning => active!=null;
         public TelegramRunner(TelegramStore store){this.store=store;}
         public static string Scripts() => AppPaths.CandidateInstallRoots().Select(p=>Path.Combine(p,"tools","telegram")).FirstOrDefault(p=>File.Exists(Path.Combine(p,"worker.py"))) ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tools","telegram");
         public async Task<int> Run(Dictionary<string,object> job,Action<Dictionary<string,object>> receive) {
             if(active!=null)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");
+            stopRequested=false;
             store.Prepare();string python=Path.Combine(store.Root,"venv","Scripts","python.exe");
             if(!File.Exists(python))throw new IOException("Нажмите «Настройки → Подготовить Telegram». Нужен Python 3.11 x64.");
             job["root"]=store.Root;
@@ -37,7 +39,7 @@ namespace VideoBatch {
                     receive(ev); // A vault-save failure aborts before any following operation.
                 }
                 await Task.Run(()=>process.WaitForExit());await errors;
-                return process.ExitCode;
+                return stopRequested?2:process.ExitCode;
             } finally {
                 try{if(!process.HasExited)process.Kill();}catch{}
                 commands=null;active=null;process.Dispose();
@@ -45,6 +47,7 @@ namespace VideoBatch {
         }
         public async Task Stop() {
             var process=active;if(process==null)return;
+            stopRequested=true;
             try{if(commands!=null)await commands.WriteLineAsync("cancel");}catch{}
             var ended=await Task.Run(()=>{try{return process.WaitForExit(5000);}catch{return true;}});
             if(!ended)try{process.Kill();}catch{}

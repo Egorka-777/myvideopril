@@ -46,6 +46,16 @@ namespace VideoBatch {
                 });
                 if(code!=0||!version||!complete||last!="Задача завершена"||runner.IsRunning||imported!=1)throw new Exception("Real desktop/Python UTF8 protocol: exit="+code+", version="+version+", complete="+complete+", imported="+imported+", running="+runner.IsRunning+"; "+string.Join(" | ",stages));
                 if(!before.SequenceEqual(File.ReadAllBytes(fixture))||store.Load().accounts.Count!=1)throw new Exception("Import changed source or failed persistence");
+                // Keep a real local SOCKS socket open without replying. Stop must kill the
+                // blocked worker after its grace period and report cancellation, not failure.
+                var listener=new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback,0);listener.Start();
+                try {
+                    var account=store.Load().accounts.Single();account.proxy="socks5://127.0.0.1:"+((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+                    var accept=listener.AcceptTcpClientAsync();
+                    var running=runner.Run(new System.Collections.Generic.Dictionary<string,object>{{"action","check"},{"accounts",new[]{account}}},ev=>{});
+                    if(await System.Threading.Tasks.Task.WhenAny(accept,System.Threading.Tasks.Task.Delay(15000))!=accept){await runner.Stop();await running;throw new Exception("Worker never connected to configured SOCKS proxy");}
+                    using(var socket=await accept){await runner.Stop();if(await running!=2||runner.IsRunning)throw new Exception("Stopped worker reported an error instead of cancellation");}
+                }finally{listener.Stop();}
                 return true;
             }).GetAwaiter().GetResult();
         }
