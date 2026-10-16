@@ -61,6 +61,11 @@ namespace VideoBatch {
                                 browser.CoreWebView2.NavigateToString("<html><body><div id='auth-qr-form'><div class='qr-container' style='width:250px;height:250px'>Login fixture</div></div></body></html>");
                                 if(await Task.WhenAny(loaded.Task,Task.Delay(10000))!=loaded.Task)throw new Exception("WebView2 fixture rendering timeout");await Task.Delay(200);
                                 string rect=await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginRectScript);Check(rect!="null"&&rect.Contains("viewportWidth"),"Login-screen-only DOM selector");
+                                Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"waiting\"","QR page is not a signed-in account");
+                                await browser.CoreWebView2.ExecuteScriptAsync("document.body.innerHTML='<div id=Main>Account fixture</div>'");
+                                Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"ready\"","Authorized Web A detection");
+                                await browser.CoreWebView2.ExecuteScriptAsync("document.body.innerHTML='<div id=auth-password-form>2FA fixture</div>'");
+                                Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"password\"","2FA is distinguished from ready");
                                 using(var png=new MemoryStream()){await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,png);Check(png.Length>1000,"Real WebView2 screenshot");}
                             }catch(Exception e){failure=e;}finally{done=true;form.Close();}
                         }
@@ -70,5 +75,31 @@ namespace VideoBatch {
                 finally{stop.Cancel();listener.Stop();try{if(Directory.Exists(root))Directory.Delete(root,true);}catch{}}
             });thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure!=null)throw new Exception("Telegram browser integration",failure);return true;
         }
+        public static bool RunShellLayoutTest(string output){
+            Exception failure=null;var thread=new Thread(()=>{
+                try{
+                    using(var shell=new AppShell(new Preferences())){
+                        shell.Show();Application.DoEvents();
+                        var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                        var type=typeof(AppShell);Directory.CreateDirectory(output);
+                        foreach(var platform in new[]{AppPlatform.Telegram,AppPlatform.YouTube}){
+                            type.GetMethod("ApplyPlatform",flags).Invoke(shell,new object[]{platform,true});Application.DoEvents();
+                            foreach(int width in new[]{1100,1280}){
+                                shell.ClientSize=new Size(width,820);shell.PerformLayout();Application.DoEvents();
+                                var bar=(Control)type.GetField("topBar",flags).GetValue(shell);
+                                foreach(string field in new[]{"settingsBtn","platformBackBtn","menuToggleBtn","pageTitleLabel","tasksLabel"}){
+                                    var c=(Control)type.GetField(field,flags).GetValue(shell);if(!c.Visible)continue;
+                                    var bounds=bar.RectangleToClient(c.RectangleToScreen(c.ClientRectangle));
+                                    Check(bounds.Top>=0&&bounds.Bottom<=bar.ClientSize.Height&&bounds.Left>=0&&bounds.Right<=bar.ClientSize.Width,"Unclipped shell control: "+field+" @"+width);
+                                }
+                                using(var bitmap=new Bitmap(shell.Width,shell.Height)){shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(output,"shell-"+platform+"-"+width+".png"));}
+                            }
+                        }
+                        shell.Close();
+                    }
+                }catch(Exception e){failure=e;}
+            });thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure!=null)throw new Exception("Shared workspace layout",failure);return true;
+        }
+
     }
 }

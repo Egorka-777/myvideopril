@@ -49,31 +49,12 @@ function pickLikeAtSec(duration) {
 }
 
 async function dismissYouTubeOverlays(page) {
-  const labels = [
-    /Accept all/i, /Accept/i, /I agree/i, /Agree/i,
-    /Принять все/i, /Принять/i, /Согласен/i, /Хорошо/i, /OK/i,
-    /Reject all/i, /Отклонить все/i
-  ];
-  for (const re of labels) {
-    try {
-      const btn = page.getByRole("button", { name: re }).first();
-      if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
-        await btn.click({ timeout: 1500 }).catch(() => {});
-        await page.waitForTimeout(300);
-      }
-    } catch (_) {}
-  }
+  await require("./youtube-interaction-safety.js").assertNoAds(page);
 }
 
 async function skipAdIfPossible(page) {
-  const skip = page.locator([
-    ".ytp-ad-skip-button",
-    ".ytp-ad-skip-button-modern",
-    ".ytp-skip-ad-button",
-    "button.ytp-ad-skip-button-modern",
-    "button[id*='skip' i]"
-  ].join(", "));
-  if (await visible(skip, 400)) await skip.first().click({ timeout: 1000 }).catch(() => {});
+  // Do not click the player or generic "skip" buttons over an advertisement.
+  await require("./youtube-interaction-safety.js").assertNoAds(page);
 }
 
 async function readPlaybackState(page) {
@@ -98,16 +79,6 @@ async function resumeIfPaused(page) {
   const state = await readPlaybackState(page);
   if (state.missing || state.ended || !state.paused) return;
 
-  const play = page.locator([
-    "button.ytp-large-play-button",
-    "button.ytp-play-button[aria-label*='Play' i]",
-    "button.ytp-play-button[aria-label*='Смотр' i]",
-    "button.ytp-play-button[aria-label*='Воспроиз' i]"
-  ].join(", "));
-  if (await visible(play, 1200)) {
-    await play.first().click({ timeout: 2000 }).catch(() => {});
-    return;
-  }
   await page.evaluate(() => {
     const v = document.querySelector("video.html5-main-video") || document.querySelector("#movie_player video") || document.querySelector("video");
     if (v && v.paused && !v.ended) {
@@ -145,6 +116,7 @@ async function isVideoLiked(page) {
 
 async function likeCurrentVideo(page, report) {
   report = report || (() => {});
+  await require("./youtube-interaction-safety.js").assertNoAds(page);
   report("youtube", "Ставлю лайк…");
   await page.evaluate(() => {
     const actions = document.querySelector("#actions, #actions-inner, ytd-menu-renderer, like-button-view-model");
@@ -175,27 +147,12 @@ async function likeCurrentVideo(page, report) {
     const label = ((await btn.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
     if (/dislike|не нрав/.test(label) && !/^нрав|^like/.test(label)) continue;
     await btn.scrollIntoViewIfNeeded().catch(() => {});
-    await btn.click({ timeout: 5000 }).catch(async () => {
-      await btn.click({ force: true }).catch(() => {});
-    });
+    await require("./youtube-interaction-safety.js").assertNoAds(page);
+    await btn.click({ timeout: 5000 });
     clicked = true;
     break;
   }
 
-  if (!clicked) {
-    clicked = await page.evaluate(() => {
-      const nodes = Array.from(document.querySelectorAll("button, [role='button']"));
-      const like = nodes.find(btn => {
-        const label = `${btn.getAttribute("aria-label") || ""} ${btn.getAttribute("title") || ""}`.toLowerCase();
-        if (!label) return false;
-        if (/dislike|не нрав/.test(label)) return false;
-        return /(^|\s)like\b|like this|нрав/.test(label);
-      });
-      if (!like) return false;
-      like.click();
-      return true;
-    }).catch(() => false);
-  }
 
   if (!clicked) throw new Error("Не найдена кнопка «Нравится». Профиль оставлен открытым — поставьте лайк вручную.");
 

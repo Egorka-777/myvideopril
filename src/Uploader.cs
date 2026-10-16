@@ -1872,7 +1872,7 @@ namespace VideoBatch {
                 int batchTotal=(viewers.Count+batchSize-1)/batchSize;
                 Write("["+MarketLabel(marketView)+"] прогрев Shorts · "+viewers.Count+" акк. · "+settings.YouTubeWarmupMinMinutes+"–"+settings.YouTubeWarmupMaxMinutes+" мин · пачки по "+batchSize+".");
                 var errors=new ConcurrentBag<string>();
-                int ok=0;
+                int ok=0,interrupted=0,started=0;
                 bool cancelled=false;
                 for(int batchStart=0;batchStart<viewers.Count&&!cancelled;batchStart+=batchSize){
                     var batch=viewers.Skip(batchStart).Take(batchSize).ToList();
@@ -1881,19 +1881,25 @@ namespace VideoBatch {
                     var launchGate=ProfileLaunchGate.FromSettings(settings,batch.Count);
                     var tasks=batch.Select(pair=>Task.Run(async()=>{
                         var ch=pair.ch;var row=pair.row;
+                        bool launched=false;
                         try{
                             await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
                             cancellation.Token.ThrowIfCancellationRequested();
+                            System.Threading.Interlocked.Increment(ref started);launched=true;
                             Status(row,"Прогрев Shorts…");
                             await RunWarmupForChannel(token,ch,row,cancellation.Token).ConfigureAwait(false);
                             System.Threading.Interlocked.Increment(ref ok);
-                        }catch(OperationCanceledException){throw;}
-                        catch(Exception e){errors.Add(ch.Name+": "+e.Message);Status(row,"Ошибка прогрева");}
+                        }catch(Exception) when(cancellation.IsCancellationRequested){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено пользователем");throw new OperationCanceledException(cancellation.Token);}
+                        catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено");throw;}
+                        catch(Exception e){errors.Add(ch.Name+": "+e.Message);Status(row,"Ошибка · "+e.Message);}
                     })).ToArray();
                     try{await Task.WhenAll(tasks).ConfigureAwait(true);}
                     catch(OperationCanceledException){Write("Прогрев остановлен.");cancelled=true;}
                 }
-                if(errors.Count>0){
+                if(cancelled||cancellation.IsCancellationRequested){
+                    string result="Остановлено пользователем. Завершено: "+ok+"; прервано: "+interrupted+"; не запущено: "+Math.Max(0,viewers.Count-started)+"; ошибок: "+errors.Count+".";
+                    Write(result);MessageBox.Show(this,result,"YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                }else if(errors.Count>0){
                     Write("Прогрев: "+ok+"/"+viewers.Count+" успешно, ошибок "+errors.Count+".");
                     MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Прогрев Shorts",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 }else{

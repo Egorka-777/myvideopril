@@ -3,6 +3,33 @@ using System.Drawing;
 using System.Windows.Forms;
 
 namespace VideoBatch {
+    internal sealed class WorkspaceButton : Button {
+        bool over, down;
+        public WorkspaceButton() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
+        protected override void OnMouseEnter(EventArgs e) { over=true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { over=down=false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { down=e.Button==MouseButtons.Left; Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { down=false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnPaint(PaintEventArgs e) {
+            var g=e.Graphics; g.Clear(Parent?.BackColor ?? Theme.Background);
+            g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            float radius=6f*DeviceDpi/96f, d=radius*2;
+            var box=new RectangleF(.5f,.5f,Math.Max(1,Width-1),Math.Max(1,Height-1));
+            d=Math.Min(d,Math.Min(box.Width,box.Height));
+            using(var path=new System.Drawing.Drawing2D.GraphicsPath()) {
+                path.AddArc(box.X,box.Y,d,d,180,90);path.AddArc(box.Right-d,box.Y,d,d,270,90);
+                path.AddArc(box.Right-d,box.Bottom-d,d,d,0,90);path.AddArc(box.X,box.Bottom-d,d,d,90,90);path.CloseFigure();
+                Color fill=!Enabled?Theme.Card:down?Theme.Selected:over?FlatAppearance.MouseOverBackColor:BackColor;
+                if(fill.IsEmpty)fill=Theme.Hover;
+                using(var brush=new SolidBrush(fill))g.FillPath(brush,path);
+                if(FlatAppearance.BorderSize>0)using(var pen=new Pen(FlatAppearance.BorderColor))g.DrawPath(pen,path);
+            }
+            TextRenderer.DrawText(g,Text,Font,ClientRectangle,Enabled?ForeColor:Theme.TextMuted,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.SingleLine);
+            if(Focused&&ShowFocusCues)ControlPaint.DrawFocusRectangle(g,Rectangle.Inflate(ClientRectangle,-5,-5),ForeColor,BackColor);
+        }
+    }
+
     /// <summary>Centralized asphalt dark theme (ChatGPT-like contrast, no blue base).</summary>
     public static class Theme {
         public static readonly Color Background = ColorFromHex("#171717");
@@ -49,11 +76,11 @@ namespace VideoBatch {
         }
 
         public static Button MakeButton(string text, bool accent = false, bool ghost = false, Action action = null) {
-            var b = new Button {
+            var b = new WorkspaceButton {
                 Text = text,
                 FlatStyle = FlatStyle.Flat,
                 AutoSize = true,
-                MinimumSize = new Size(72, 34),
+                MinimumSize = new Size(72, 36),
                 Padding = new Padding(12, 6, 12, 6),
                 Cursor = Cursors.Hand,
                 Margin = new Padding(0, 0, 8, 0),
@@ -164,7 +191,7 @@ namespace VideoBatch {
         public const int HeroToggleHeight = 36;
 
         public static Button MakeHeroToggle(string text, bool active, Action action) {
-            var b = new Button {
+            var b = new WorkspaceButton {
                 Text = text,
                 FlatStyle = FlatStyle.Flat,
                 AutoSize = false,
@@ -270,7 +297,7 @@ namespace VideoBatch {
         }
 
         public static Button MakeIconButton(string text, Action action = null) {
-            var b = new Button {
+            var b = new WorkspaceButton {
                 Text = text,
                 FlatStyle = FlatStyle.Flat,
                 AutoSize = false,

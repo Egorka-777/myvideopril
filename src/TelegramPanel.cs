@@ -35,16 +35,16 @@ namespace VideoBatch {
             getPreferences=preferences;
             store=storage??new TelegramStore();runner=new TelegramRunner(store);
             Dock=DockStyle.Fill;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
-            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty,Padding=new Padding(6,2,6,0)};
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,54));Controls.Add(layout);
             actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};layout.Controls.Add(actions,0,0);
-            WorkButton("＋ Аккаунты",ChooseImport,true);
-            WorkButton("Проверить",async()=>await RunSelected("check"));
+            WorkButton("＋ Добавить аккаунты",ChooseImport,true);
+            WorkButton("Проверить выбранные",async()=>await RunSelected("check"));
             WorkButton("Настройки",Settings);
             actions.Controls.Add(new Label{Text="Поиск",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,4,0)});
-            search=Theme.MakeSearchBox();search.Width=170;search.Margin=new Padding(4,7,0,0);search.TextChanged+=(s,e)=>RefreshData();actions.Controls.Add(search);
+            search=Theme.MakeSearchBox();search.Width=160;search.Margin=new Padding(4,7,0,0);search.TextChanged+=(s,e)=>RefreshData();actions.Controls.Add(search);
             summary=new Label{Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary,TextAlign=ContentAlignment.MiddleLeft};layout.Controls.Add(summary,0,1);
             tabStrip=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(tabStrip,0,2);
             pageHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(pageHost,0,3);
@@ -52,22 +52,25 @@ namespace VideoBatch {
             BuildProxyPage(proxiesPage);
             grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,ReadOnly=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=true,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(grid);
             grid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;grid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
-            grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="selected",HeaderText="",AutoSizeMode=DataGridViewAutoSizeColumnMode.None,Width=40,MinimumWidth=40,DefaultCellStyle=new DataGridViewCellStyle{Padding=Padding.Empty}});
+            grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="selected",HeaderText="✓",AutoSizeMode=DataGridViewAutoSizeColumnMode.None,Width=40,MinimumWidth=40,DefaultCellStyle=new DataGridViewCellStyle{Padding=Padding.Empty}});
             foreach(var spec in new[]{new[]{"name","Аккаунт"},new[]{"username","Username"},new[]{"status","Состояние"},new[]{"proxy","Прокси"},new[]{"country","Страна"},new[]{"checked","Попытка"},new[]{"detail","Результат / причина"}}){var i=grid.Columns.Add(spec[0],spec[1]);grid.Columns[i].ReadOnly=true;}
             foreach(var spec in new[]{new[]{"name","95","120"},new[]{"username","80","90"},new[]{"status","90","110"},new[]{"proxy","155","170"},new[]{"country","45","60"},new[]{"checked","65","80"},new[]{"detail","170","180"}}){grid.Columns[spec[0]].FillWeight=int.Parse(spec[1]);grid.Columns[spec[0]].MinimumWidth=int.Parse(spec[2]);}
             grid.Columns["detail"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;
+            grid.Columns["username"].Visible=false;grid.Columns["country"].Visible=false;
+            grid.Columns["name"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.RowTemplate.Height=60;
+            grid.ColumnHeaderMouseClick+=(s,e)=>{if(e.ColumnIndex==0){bool select=grid.Rows.Cast<DataGridViewRow>().Any(row=>!Convert.ToBoolean(row.Cells[0].Value));foreach(DataGridViewRow row in grid.Rows)row.Cells[0].Value=select;}};
             grid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0)EditAccount(grid.Rows[e.RowIndex].Tag as TelegramAccount);};
             grid.CurrentCellDirtyStateChanged+=(s,e)=>{if(grid.IsCurrentCellDirty)grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
-            var context=new ContextMenuStrip{BackColor=Theme.Elevated,ForeColor=Theme.TextPrimary};context.Items.Add("Карточка аккаунта",null,(s,e)=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount));
+            var context=Theme.MakeContextMenu();context.Items.Add("Карточка аккаунта",null,(s,e)=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Открыть Telegram",null,(s,e)=>OpenWeb(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Удалить из Telegram-раздела",null,(s,e)=>RemoveSelected());grid.ContextMenuStrip=context;
             grid.CellMouseDown+=(s,e)=>{if(e.Button==MouseButtons.Right&&e.RowIndex>=0){grid.ClearSelection();grid.Rows[e.RowIndex].Selected=true;grid.CurrentCell=grid.Rows[e.RowIndex].Cells[1];}};
             var table=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2};table.RowStyles.Add(new RowStyle(SizeType.Percent,100));table.RowStyles.Add(new RowStyle(SizeType.Absolute,52));table.Controls.Add(grid,0,0);
             var foot=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
-            foot.Controls.Add(Theme.MakeButton("Выбрать все",ghost:true,action:()=>{foreach(DataGridViewRow row in grid.Rows)row.Cells[0].Value=true;}));
             foot.Controls.Add(Theme.MakeButton("Карточка",ghost:true,action:()=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount)));
             foot.Controls.Add(Theme.MakeButton("Назначить прокси",ghost:true,action:AssignProxy));
-            foot.Controls.Add(Theme.MakeButton("Открыть Telegram",ghost:true,action:OpenWeb));
+            foot.Controls.Add(Theme.MakeButton("Открыть Telegram",accent:true,action:OpenWeb));
+            foreach(var button in foot.Controls.OfType<Button>())workButtons.Add(button);
             foot.Controls.Add(new Label{Text="",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,0,0)});table.Controls.Add(foot,0,1);accountsPage.Controls.Add(table);
             var form=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=9,Padding=new Padding(16)};
             form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
@@ -95,8 +98,7 @@ namespace VideoBatch {
             log=Theme.MakeLogBox();logsPage.Controls.Add(log);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
             stop=Theme.MakeButton("Остановить",ghost:true,action:async()=>await runner.Stop());stop.Enabled=false;bottom.Controls.Add(stop);
-            bottom.Controls.Add(Theme.MakeButton("Открыть логи",ghost:true,action:()=>{Directory.CreateDirectory(AppDiagnostics.Folder);Process.Start(new ProcessStartInfo(AppDiagnostics.Folder){UseShellExecute=true});}));
-            status=new Label{Text="Добавьте аккаунты, затем проверьте соединение",Width=560,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,4);
+            status=new Label{Text="Выберите аккаунт → проверьте соединение → откройте Telegram",Width=720,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,4);
             SelectTab(0);
             AllowDrop=true;DragEnter+=(s,e)=>e.Effect=!busy&&e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;
             DragDrop+=async(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))await Import((string[])e.Data.GetData(DataFormats.FileDrop));};
@@ -112,6 +114,7 @@ namespace VideoBatch {
         internal void SelectTab(int index){
             if(index<0||index>=pages.Count)throw new ArgumentOutOfRangeException(nameof(index));
             for(int i=0;i<pages.Count;i++){pages[i].Visible=i==index;pageButtons[i].BackColor=i==index?Theme.Selected:Theme.Background;pageButtons[i].ForeColor=i==index?Theme.TextPrimary:Theme.TextSecondary;}
+            foreach(Control c in actions.Controls)c.Visible=index==0||(c is Button b&&(b.Text.Contains("Добавить аккаунты")||b.Text=="Настройки"));
             pages[index].BringToFront();if(index==2&&senderChoice!=null)RefreshSenders();
         }
         void WorkButton(string text,Action action,bool accent=false){var b=Theme.MakeButton(text,accent:accent,action:()=>{try{action();}catch(Exception e){Failure(e);}});actions.Controls.Add(b);workButtons.Add(b);}
@@ -122,17 +125,20 @@ namespace VideoBatch {
             TelegramData data;try{data=store.Load();}catch(Exception e){unavailable=true;actions.Enabled=false;status.Text=e.Message;return;}
             var all=data.accounts;string q=search.Text.Trim();grid.Rows.Clear();
             foreach(var a in all.Where(a=>string.Join(" ",a.name,a.username,a.phone,a.country,a.note).IndexOf(q,StringComparison.OrdinalIgnoreCase)>=0)){
-                int i=grid.Rows.Add(selected.Contains(a.id),a.name,string.IsNullOrEmpty(a.username)?"—":"@"+a.username,"","",a.country,"","");grid.Rows[i].Tag=a;PaintHealth(grid.Rows[i],a);
+                int i=grid.Rows.Add(selected.Contains(a.id),a.name+(string.IsNullOrEmpty(a.username)?"":"\n@"+a.username),string.IsNullOrEmpty(a.username)?"—":"@"+a.username,"","",a.country,"","");grid.Rows[i].Tag=a;PaintHealth(grid.Rows[i],a);
                 if(a.id==current)grid.CurrentCell=grid.Rows[i].Cells[1];
             }
             RefreshSenders();
             int ready=all.Count(a=>TelegramHealth.AccountLabel(a).Contains("Работает")),uncheckedCount=all.Count(a=>TelegramHealth.AccountLabel(a).StartsWith("○"));
+            if(!busy&&status.Text.StartsWith("Выберите аккаунт"))status.Text=all.Count==0?"Добавьте папку аккаунта или перетащите JSON / TData сюда":"Выберите аккаунт и откройте Telegram. Причина ошибки — в строке аккаунта и журнале.";
             summary.Text=$"Всего {all.Count}   ·   Доступны {ready}   ·   Требуют внимания {all.Count-ready-uncheckedCount}   ·   Проверить {uncheckedCount}";
         }
         void PaintHealth(DataGridViewRow row,TelegramAccount a){
             string label=TelegramHealth.AccountLabel(a);row.Cells["status"].Value=label;
             row.Cells["status"].Style.ForeColor=label.StartsWith("○")?Theme.TextMuted:a.status=="ready"&&!label.Contains("Пауза")?Theme.Success:new[]{"network","blocked","deactivated","unauthorized","configuration","error"}.Contains(a.status)?Theme.Error:Theme.Warning;
             row.Cells["proxy"].Value=string.IsNullOrWhiteSpace(a.proxy)?"○ Без прокси":TelegramHealth.ProxyLabel(a)+" · "+TelegramStore.ProxyLabel(a.proxy);row.Cells["proxy"].Style.ForeColor=string.IsNullOrWhiteSpace(a.proxy)?Theme.TextMuted:a.proxy_status=="ready"?Theme.Success:a.proxy_status=="failed"?Theme.Error:Theme.TextMuted;row.Cells["proxy"].ToolTipText=a.proxy_detail;
+            row.Cells["name"].Value=a.name+(string.IsNullOrEmpty(a.username)?"":"\n@"+a.username);
+            row.Cells["name"].ToolTipText=string.Join(" · ",a.country,a.note).Trim(' ','·');
             row.Cells["checked"].Value=string.IsNullOrEmpty(a.checked_at)?"—":a.checked_at;
             row.Cells["detail"].Value=string.IsNullOrEmpty(a.last_error)?(a.status=="ready"?"Telegram подтвердил аккаунт":"—"):a.last_error;
             row.Cells["detail"].ToolTipText=a.last_error+(string.IsNullOrEmpty(a.last_code)?"":" · "+a.last_code);

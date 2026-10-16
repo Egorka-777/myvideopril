@@ -18,20 +18,22 @@ namespace VideoBatch {
             var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(12)};
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,56));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-            var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-            void button(string title,Action action){var b=Theme.MakeButton(title,action:action);buttons.Controls.Add(b);workButtons.Add(b);}
+            var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+            var extra=new List<(string label,Action action)>();
+            void button(string title,Action action){if(title!="＋ Прокси"&&title!="Проверить"){extra.Add((title,action));return;}var b=Theme.MakeButton(title,accent:title=="＋ Прокси",action:action);buttons.Controls.Add(b);workButtons.Add(b);}
             button("＋ Прокси",()=>{try{using(var f=new TelegramProxyDialog())if(f.ShowDialog(this)==DialogResult.OK){store.Change(d=>{foreach(string raw in f.Values)TelegramProxyCatalog.Add(d,raw,f.ProxyName);});RefreshProxies();}}catch(Exception e){Failure(e);}});
             button("Из Dolphin",async()=>await SyncDolphin());
             button("Проверить",async()=>{try{await Run(new Dictionary<string,object>{{"action","check_proxy"},{"proxies",new List<TelegramProxy>{CurrentProxy()}}});}catch(Exception e){Failure(e);}});
             button("По умолчанию",()=>{try{var p=CurrentProxy();store.Change(d=>d.default_proxy_id=p.id);RefreshProxies();}catch(Exception e){Failure(e);}});
             button("Изменить",()=>{try{var p=CurrentProxy();using(var f=new TelegramProxyDialog(p))if(f.ShowDialog(this)==DialogResult.OK){store.Change(d=>{var saved=d.proxies.First(x=>x.id==p.id);string url=f.Values.Single();saved.name=f.ProxyName;saved.url=url;saved.status="unchecked";saved.detail="";saved.checked_at="";foreach(var a in d.accounts.Where(a=>a.proxy_id==p.id)){if(a.proxy!=url){a.proxy=url;TelegramHealth.RouteChanged(a);}}});RefreshProxies();RefreshData();}}catch(Exception e){Failure(e);}});
             button("Удалить",()=>{try{var p=CurrentProxy();store.Change(d=>TelegramProxyCatalog.Remove(d,p.id));RefreshProxies();RefreshData();}catch(Exception e){Failure(e);}});
+            var more=Theme.MakeMenuButton("Ещё",extra.ToArray());buttons.Controls.Add(more);workButtons.Add(more);
             layout.Controls.Add(buttons,0,0);
             proxyHint=new Label{Dock=DockStyle.Fill,Text="Прокси выбирается при добавлении аккаунтов. «Из Dolphin» получает настройки, не открывая профили браузера.",ForeColor=Theme.TextSecondary};layout.Controls.Add(proxyHint,0,1);
             proxyGrid=new DataGridView{Dock=DockStyle.Fill,ReadOnly=true,AllowUserToAddRows=false,AllowUserToDeleteRows=false,MultiSelect=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(proxyGrid);
             proxyGrid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;proxyGrid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
             foreach(var name in new[]{"Название","Адрес","Источник","Состояние","Аккаунтов / блок.","Новые аккаунты"})proxyGrid.Columns.Add(name,name);
-            proxyGrid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0){var p=CurrentProxy();store.Change(d=>d.default_proxy_id=p.id);RefreshProxies();}};
+            proxyGrid.SelectionChanged+=(s,e)=>{if(proxyGrid.CurrentRow?.Tag is TelegramProxy p)proxyHint.Text=(string.IsNullOrEmpty(p.detail)?"Выберите «Проверить», чтобы открыть туннель до Telegram через этот прокси.":p.detail)+(string.IsNullOrEmpty(p.checked_at)?"":" · "+p.checked_at);};
             layout.Controls.Add(proxyGrid,0,2);page.Controls.Add(layout);
         }
         TelegramProxy CurrentProxy()=>proxyGrid.CurrentRow?.Tag as TelegramProxy??throw new InvalidOperationException("Выберите прокси в списке");

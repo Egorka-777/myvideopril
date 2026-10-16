@@ -13,19 +13,7 @@ function randFloat(min, max) {
 }
 
 async function dismissOverlays(page) {
-  const labels = [
-    /Accept all/i, /Accept/i, /I agree/i,
-    /Принять все/i, /Принять/i, /Согласен/i, /Хорошо/i, /OK/i
-  ];
-  for (const re of labels) {
-    try {
-      const btn = page.getByRole("button", { name: re }).first();
-      if (await btn.isVisible({ timeout: 400 }).catch(() => false)) {
-        await btn.click({ timeout: 1500 }).catch(() => {});
-        await page.waitForTimeout(300);
-      }
-    } catch (_) {}
-  }
+  await require("./youtube-interaction-safety.js").assertNoAds(page);
 }
 
 async function ensureShortsFeed(page) {
@@ -85,11 +73,14 @@ async function runShortsWarmup(page, job, report) {
   const totalMs = randFloat(minMin, maxMin) * 60 * 1000;
   const deadline = Date.now() + totalMs;
 
+  const boundary = await require("./youtube-interaction-safety.js").installPlaybackBoundary(page, report);
+  try {
   report("youtube", "Shorts прогрев: ~" + Math.round(totalMs / 60000) + " мин.");
   await ensureShortsFeed(page);
 
   let count = 0;
   while (Date.now() < deadline) {
+    await boundary.check();
     count++;
     const watchSec = randInt(minSec, maxSec);
     const remaining = deadline - Date.now();
@@ -103,6 +94,7 @@ async function runShortsWarmup(page, job, report) {
   }
   report("youtube", "Shorts прогрев завершён: " + count + " ролик(ов).");
   return { count, minutes: Math.round(totalMs / 60000) };
+  } finally { await boundary.dispose(); }
 }
 
 module.exports = { runShortsWarmup };

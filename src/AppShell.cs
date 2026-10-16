@@ -147,82 +147,31 @@ namespace VideoBatch {
         }
 
         Panel BuildTopBar() {
-            var bar = new TableLayoutPanel {
-                Dock = DockStyle.Fill,
-                BackColor = Theme.TopBar,
-                ColumnCount = 3,
-                RowCount = 1,
-                Padding = new Padding(16, 0, 16, 0)
-            };
-            bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            var bar=new TableLayoutPanel { Dock=DockStyle.Fill, BackColor=Theme.TopBar, ColumnCount=4, RowCount=1, Padding=new Padding(18,0,18,0), Margin=Padding.Empty };
+            bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            bar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            pageTitleLabel = new Label {
-                Text = "Главная",
-                Font = Theme.FontPageTitle,
-                ForeColor = Theme.TextPrimary,
-                AutoSize = true,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft
-            };
-            platformBadge = new Label {
-                Text = "",
-                Font = Theme.FontSmall,
-                ForeColor = Theme.Accent,
-                AutoSize = true,
-                Margin = new Padding(12, 0, 0, 0)
-            };
-            platformBackBtn = Theme.MakeButton("← К разделам", ghost: true, action: ShowPlatformHub);
-            platformBackBtn.Margin = new Padding(0, 8, 8, 8);
-            platformBackBtn.Visible = false;
-
-            globalSearch = Theme.MakeSearchBox();
-            globalSearch.Width = 220;
-            globalSearch.Margin = new Padding(0, 10, 12, 10);
-            globalSearch.TextChanged += (s, e) => ApplyGlobalSearch();
-
-            dolphinDot = new Panel { Width = 10, Height = 10, BackColor = Theme.TextMuted, Margin = new Padding(6, 0, 0, 0) };
-            dolphinLabel = new Label { Text = "Dolphin", ForeColor = Theme.TextSecondary, AutoSize = true, Margin = new Padding(0, 0, 0, 0) };
-            tasksLabel = new Label { Text = "Задач: 0", ForeColor = Theme.TextSecondary, AutoSize = true, Margin = new Padding(14, 0, 0, 0) };
-
-            var statusWrap = new FlowLayoutPanel {
-                AutoSize = true,
-                WrapContents = false,
-                BackColor = Theme.TopBar,
-                Dock = DockStyle.Fill,
-                FlowDirection = FlowDirection.LeftToRight,
-                Margin = new Padding(0, 10, 0, 10)
-            };
-            statusWrap.Controls.Add(globalSearch);
-            statusWrap.Controls.Add(dolphinLabel);
-            statusWrap.Controls.Add(dolphinDot);
-            statusWrap.Controls.Add(tasksLabel);
-
-            dolphinRefreshBtn = Theme.MakeIconButton("↻", async () => await CheckDolphinAsync(true));
-            settingsBtn = Theme.MakeIconButton("⚙", () => navigation.Navigate(NavSection.Settings));
-            menuToggleBtn = Theme.MakeIconButton("☰", ToggleSidebar);
-            var actionsWrap = new FlowLayoutPanel {
-                AutoSize = true,
-                WrapContents = false,
-                FlowDirection = FlowDirection.LeftToRight,
-                BackColor = Theme.TopBar,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 10, 0, 10)
-            };
-            actionsWrap.Controls.Add(dolphinRefreshBtn);
-            actionsWrap.Controls.Add(settingsBtn);
-            actionsWrap.Controls.Add(platformBackBtn);
-            actionsWrap.Controls.Add(menuToggleBtn);
-
-            var titleWrap = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, BackColor = Theme.TopBar, FlowDirection = FlowDirection.LeftToRight };
-            titleWrap.Controls.Add(pageTitleLabel);
-            titleWrap.Controls.Add(platformBadge);
-            bar.Controls.Add(titleWrap, 0, 0);
-            bar.Controls.Add(statusWrap, 1, 0);
-            bar.Controls.Add(actionsWrap, 2, 0);
-            return bar;
+            bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bar.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            var titleWrap=new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=2, RowCount=1, Margin=Padding.Empty };
+            titleWrap.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));titleWrap.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            pageTitleLabel=new Label { Text="Главная", Font=Theme.FontPageTitle, ForeColor=Theme.TextPrimary, Dock=DockStyle.Fill, TextAlign=ContentAlignment.MiddleLeft, AutoEllipsis=true, Margin=Padding.Empty };
+            platformBadge=new Label { Text="", AutoSize=true, ForeColor=Theme.TextMuted, Font=Theme.FontSmall, Anchor=AnchorStyles.Right, Margin=new Padding(8,0,16,0) };
+            titleWrap.Controls.Add(pageTitleLabel,0,0);titleWrap.Controls.Add(platformBadge,1,0);bar.Controls.Add(titleWrap,0,0);
+            globalSearch=Theme.MakeSearchBox();globalSearch.Width=180;globalSearch.Anchor=AnchorStyles.Right;globalSearch.Margin=new Padding(8,0,12,0);globalSearch.AccessibleName="Поиск в разделе";
+            globalSearch.TextChanged+=(s,e)=>ApplyGlobalSearch();bar.Controls.Add(globalSearch,1,0);
+            dolphinDot=new Panel { Width=7,Height=7,BackColor=Theme.TextMuted,Margin=new Padding(0,13,6,0) };
+            dolphinLabel=new Label { Text="Dolphin",ForeColor=Theme.TextSecondary,Width=145,Height=34,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,Margin=Padding.Empty };
+            tasksLabel=new Label { Text="Задач: 0",ForeColor=Theme.TextSecondary,Width=72,Height=34,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,0,8,0) };
+            var statusWrap=new FlowLayoutPanel { AutoSize=true,WrapContents=false,Anchor=AnchorStyles.Right,Margin=Padding.Empty,Padding=Padding.Empty };
+            statusWrap.Controls.Add(dolphinDot);statusWrap.Controls.Add(dolphinLabel);statusWrap.Controls.Add(tasksLabel);bar.Controls.Add(statusWrap,2,0);
+            dolphinRefreshBtn=Theme.MakeIconButton("↻",async()=>await CheckDolphinAsync(true));
+            settingsBtn=Theme.MakeIconButton("⚙",()=>navigation.Navigate(NavSection.Settings));
+            menuToggleBtn=Theme.MakeIconButton("☰",ToggleSidebar);
+            platformBackBtn=Theme.MakeButton("← К разделам",ghost:true,action:ShowPlatformHub);platformBackBtn.Visible=false;
+            var actionsWrap=new FlowLayoutPanel { AutoSize=true,WrapContents=false,Anchor=AnchorStyles.Right,Margin=Padding.Empty,Padding=Padding.Empty };
+            foreach(var control in new[]{dolphinRefreshBtn,settingsBtn,platformBackBtn,menuToggleBtn}){control.Margin=new Padding(4,0,0,0);control.Height=36;actionsWrap.Controls.Add(control);}
+            bar.Controls.Add(actionsWrap,3,0);return bar;
         }
 
         void BuildPanels() {
@@ -291,6 +240,8 @@ namespace VideoBatch {
         void ShowSection(NavSection section) {
             dolphinLabel.Visible=dolphinDot.Visible=dolphinRefreshBtn.Visible=section!=NavSection.Telegram;
             pageTitleLabel.Text = NavigationService.Title(section);
+            platformBadge.Visible=platformBadge.Text!=pageTitleLabel.Text;
+            globalSearch.Visible=section==NavSection.Profiles||section==NavSection.AccountLibrary||section==NavSection.Tasks;
             HighlightNav(section);
             if (section == NavSection.VideoProcessing) {
                 if (processingWindow == null) {
@@ -393,9 +344,15 @@ namespace VideoBatch {
         }
 
         void RefreshSidebarGroupVisibility() {
-            foreach (Control c in sidebar.Controls) {
-                if (c is Label group && group.Font == Theme.FontSmall)
-                    group.Visible = sidebarExpanded && IsGroupVisibleForPlatform(group.Text);
+            int y=12;
+            foreach(Control c in sidebar.Controls) {
+                if(c is Label group && group.Font==Theme.FontSmall) {
+                    group.Visible=sidebarExpanded&&IsGroupVisibleForPlatform(group.Text);
+                    if(group.Visible){group.Top=y;group.Height=28;y+=28;}
+                } else if(c is Button b && b.Tag is NavSection section) {
+                    b.Visible=AppPlatformNav.IsNavVisible(appPlatform,section);
+                    if(b.Visible){b.Top=y;b.Height=36;y+=40;}
+                }
             }
         }
 
@@ -417,6 +374,7 @@ namespace VideoBatch {
                     b.Width = sidebarExpanded ? Theme.SidebarExpanded - 24 : Theme.SidebarCollapsed - 16;
                 }
             }
+            RefreshSidebarGroupVisibility();
         }
 
         void ApplyGlobalSearch() {

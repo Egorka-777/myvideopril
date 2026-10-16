@@ -48,29 +48,23 @@ namespace VideoBatch {
                 Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false,
                 AutoScroll = true, BackColor = Theme.Card
             };
-            settingsCard.Controls.Add(new Label {
-                Text = "Поведение в ленте Shorts",
-                Font = Theme.FontCardTitle,
-                ForeColor = Theme.TextPrimary,
-                Dock = DockStyle.Top,
-                Height = 32
-            });
-            settingsCard.Controls.Add(sliders);
-            sliders.Top = 36;
-            sliders.Height = settingsCard.Height - 40;
-            settingsCard.SizeChanged += (s, e) => { sliders.Top = 40; sliders.Height = Math.Max(120, settingsCard.Height - 48); };
+            var settingsLayout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
+            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            settingsLayout.Controls.Add(new Label{Text="Настройки сессии",Font=Theme.FontCardTitle,ForeColor=Theme.TextPrimary,Dock=DockStyle.Fill},0,0);
+            settingsLayout.Controls.Add(sliders,0,1);settingsCard.Controls.Add(settingsLayout);
+            sliders.SizeChanged+=(s,e)=>{foreach(Control child in sliders.Controls)child.Width=Math.Max(220,sliders.ClientSize.Width-SystemInformation.VerticalScrollBarWidth-8);};
 
             sliders.Controls.Add(new AssemblySlider("Мин. время сессии", minMinutes, "мин") { Width = 360 });
             sliders.Controls.Add(new AssemblySlider("Макс. время сессии", maxMinutes, "мин") { Width = 360 });
             sliders.Controls.Add(new AssemblySlider("Мин. просмотр ролика", minWatchSec, "сек") { Width = 360 });
             sliders.Controls.Add(new AssemblySlider("Макс. просмотр ролика", maxWatchSec, "сек") { Width = 360 });
 
-            var likeWrap = new Panel { Width = 360, Height = 100, BackColor = Theme.Card, Margin = new Padding(0, 4, 0, 8) };
+            var likeWrap = new Panel { Width = 360, Height = 150, BackColor = Theme.Card, Margin = new Padding(0, 4, 0, 8) };
             likeWrap.Controls.Add(new Label { Text = "Лайки", ForeColor = Theme.TextPrimary, Location = new Point(12, 8), AutoSize = true });
             likesToggle = Theme.MakeHeroToggle(likesOn ? "Вкл" : "Выкл", likesOn, ToggleLikes);
             likesToggle.Location = new Point(12, 34);
             likeWrap.Controls.Add(likesToggle);
-            likeWrap.Controls.Add(new AssemblySlider("Вероятность лайка", likePercent, "%") { Location = new Point(0, 52), Width = 360, Height = 66 });
+            likeWrap.Controls.Add(new AssemblySlider("Вероятность лайка", likePercent, "%") { Location = new Point(0, 78), Width = 360, Height = 66 });
             sliders.Controls.Add(likeWrap);
             UpdateLikeSlider();
 

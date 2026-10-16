@@ -17,7 +17,9 @@ import time
 import zipfile
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-16-telegram-status-v3'
+VERSION = '2026-10-16-telegram-polish-v1'
+PROXY_TIMEOUT = 7
+ACCOUNT_TIMEOUT = 22
 CANCEL = threading.Event()
 MAX_ARCHIVE = 256 * 1024 * 1024
 MAX_FILES = 10000
@@ -102,26 +104,29 @@ async def probe_proxy(value, host='149.154.167.51', port=443):
     """Actual authenticated tunnel to a Telegram DC, not just ping/TCP proxy port."""
     if not value:
         return dict(status='direct', text='Без прокси', latency_ms=0)
-    connector = proxy_connector(value)
     start = time.monotonic()
     sock = None
     try:
-        sock = await connector.connect(dest_host=host, dest_port=port, timeout=12)
+        connector = proxy_connector(value)
+        # Outer deadline also bounds resolver/handshake delays, not only TCP connect.
+        sock = await asyncio.wait_for(connector.connect(dest_host=host, dest_port=port, timeout=PROXY_TIMEOUT), PROXY_TIMEOUT)
         return dict(status='ready', text='Туннель до Telegram доступен',
                     latency_ms=int((time.monotonic()-start)*1000))
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         from python_socks import ProxyError, ProxyConnectionError, ProxyTimeoutError
-        if isinstance(exc, (TimeoutError, ProxyTimeoutError)):
-            code, text = 'timeout', 'Прокси не ответил вовремя'
+        if isinstance(exc, ValueError):
+            code, text = 'configuration', 'Неверный формат прокси: проверьте протокол, адрес и порт'
+        elif isinstance(exc, (TimeoutError, ProxyTimeoutError)):
+            code, text = 'timeout', f'Прокси не открыл туннель до Telegram за {PROXY_TIMEOUT} сек. Проверьте протокол и доступ к Telegram'
         elif isinstance(exc, ProxyConnectionError):
             code, text = 'connection', 'Не удалось подключиться к адресу прокси'
         elif isinstance(exc, ProxyError):
             code, text = 'handshake', 'Прокси отказал: проверьте протокол, логин/пароль и доступ до Telegram'
         else:
             code, text = 'network', 'Не удалось открыть туннель через прокси'
-        return dict(status='failed', text=text, code=code, latency_ms=0)
+        return dict(status='failed', text=text, code=code, diagnostic=type(exc).__name__, latency_ms=int((time.monotonic()-start)*1000))
     finally:
         if sock is not None:
             sock.close()
@@ -469,16 +474,18 @@ def error_info(exc):
 
 async def connect(client, account=None):
     cancelled()
-    await asyncio.wait_for(client.connect(), 35)
-    if not await asyncio.wait_for(client.is_user_authorized(), 35):
-        raise ValueError('Сессия не авторизована; войдите через официальный клиент и импортируйте её заново')
-    me = await asyncio.wait_for(client.get_me(), 35)
-    if me is None or me.bot:
-        raise ValueError('Нужна авторизованная пользовательская сессия')
-    expected = (account or {}).get('expected_user_id')
-    if expected and int(expected) != me.id:
-        raise ValueError('user_id аккаунта не совпадает с импортированными данными')
-    return me
+    async def handshake():
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise ValueError('Сессия не авторизована; войдите через официальный клиент и импортируйте её заново')
+        me = await client.get_me()
+        if me is None or me.bot:
+            raise ValueError('Нужна авторизованная пользовательская сессия')
+        expected = (account or {}).get('expected_user_id')
+        if expected and int(expected) != me.id:
+            raise ValueError('user_id аккаунта не совпадает с импортированными данными')
+        return me
+    return await asyncio.wait_for(handshake(), ACCOUNT_TIMEOUT)
 
 
 async def check_accounts(job):
@@ -614,7 +621,14 @@ async def web_login(job):
     account = accounts[0]
     client = client_for(account)
     try:
-        await connect(client, account)
+        try:
+            await account_route(account)
+            me = await connect(client, account)
+        except Exception as exc:
+            state, text, seconds = error_info(exc)
+            emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, ValueError) else text, seconds=seconds, code=type(exc).__name__)
+            raise
+        emit('account', id=account['id'], status='ready', text='Telegram подтвердил аккаунт', username=me.username or '', name=me.first_name or '', phone=me.phone or '', user_id=me.id)
         await asyncio.wait_for(client(functions.auth.AcceptLoginTokenRequest(base64.urlsafe_b64decode(token+'='*((-len(token))%4)))), 35)
         emit('summary', text='Вход в Telegram Web подтверждён. Дождитесь загрузки; при запросе 2FA введите пароль в веб-окне')
     finally:

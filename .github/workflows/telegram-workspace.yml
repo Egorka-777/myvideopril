@@ -1,7 +1,7 @@
 name: Telegram workspace
 on:
   push:
-    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016]
+    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016, feat/telegram-polish-20261016]
   pull_request:
     paths: ['src/Telegram*.cs','tools/telegram/**','tests/telegram/**','src/AppShell.cs','src/NavigationService.cs','.github/workflows/telegram-workspace.yml']
   workflow_dispatch:
@@ -47,6 +47,7 @@ jobs:
           $dest = Join-Path $PWD 'artifacts/telegram-ui'
           New-Item -ItemType Directory -Force $dest | Out-Null
           $asm.GetType('VideoBatch.TelegramTests').GetMethod('RunUiTest').Invoke($null,@([string]$dest))
+          if (!$asm.GetType('VideoBatch.TelegramStatusTests').GetMethod('RunShellLayoutTest').Invoke($null,@([string]$dest))) { throw 'Shared shell layout' }
       - name: Existing JS regressions
         shell: pwsh
         run: |
@@ -62,7 +63,7 @@ jobs:
           if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes "$dest/runtimes" -Recurse }
           Copy-Item tools/telegram/*.py,tools/telegram/*.ps1,tools/telegram/*.txt "$dest/tools/telegram"
           Copy-Item tools/uploader/*.js,tools/uploader/package*.json "$dest/tools/uploader"
-          Copy-Item docs/AGENT_TELEGRAM_STATUS_20261016_RU.md $dest
+          Copy-Item docs/AGENT_TELEGRAM_POLISH_20261016_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
           foreach ($entry in @(@('x86',0x014c),@('x64',0x8664))) {
             $native = Join-Path $dest ('runtimes/win-'+$entry[0]+'/native/WebView2Loader.dll')
