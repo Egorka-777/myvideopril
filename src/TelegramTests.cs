@@ -59,6 +59,7 @@ namespace VideoBatch {
                 return true;
             }).GetAwaiter().GetResult();
         }
+        static System.Collections.Generic.IEnumerable<System.Windows.Forms.Control> Descendants(System.Windows.Forms.Control root){foreach(System.Windows.Forms.Control c in root.Controls){yield return c;foreach(var child in Descendants(c))yield return child;}}
         public static void RunUiTest(string output) {
             Exception failure=null;
             var thread=new System.Threading.Thread(()=>{
@@ -67,8 +68,8 @@ namespace VideoBatch {
                     System.Windows.Forms.Application.EnableVisualStyles();
                     var store=new TelegramStore(root);
                     store.Change(d=>{
-                        d.accounts.Add(new TelegramAccount{id=new string('a',64),name="Канал RU",username="sample_ru",status="ready",proxy="socks5://user:password@127.0.0.1:1080",country="Германия"});
-                        d.accounts.Add(new TelegramAccount{id=new string('b',64),name="English channel",username="sample_en",status="network",country="Польша"});
+                        d.accounts.Add(new TelegramAccount{id=new string('a',64),name="Канал RU",username="sample_ru",status="ready",last_success_utc=DateTime.UtcNow.ToString("o"),proxy_status="ready",proxy_detail="Туннель до Telegram доступен",proxy="socks5://user:password@127.0.0.1:1080",country="Германия"});
+                        d.accounts.Add(new TelegramAccount{id=new string('b',64),name="English channel",username="sample_en",status="network",last_error="Прокси не ответил вовремя",proxy_status="failed",country="Польша"});
                         d.accounts.Add(new TelegramAccount{id=new string('c',64),name="Новый аккаунт",status="unchecked"});
                     });
                     using(var form=new System.Windows.Forms.Form{ClientSize=new System.Drawing.Size(1080,720),BackColor=Theme.Background})
@@ -77,6 +78,7 @@ namespace VideoBatch {
                         Directory.CreateDirectory(output);
                         foreach(var tab in new[]{0,1,2}) {
                             panel.SelectTab(tab);System.Windows.Forms.Application.DoEvents();
+                            if(tab==2){foreach(System.Windows.Forms.Control c in Descendants(panel))if(c.Name=="InviteUsers")c.Text="@test_user_one";}
                             using(var bitmap=new System.Drawing.Bitmap(panel.ClientSize.Width,panel.ClientSize.Height)){panel.DrawToBitmap(bitmap,panel.ClientRectangle);bitmap.Save(Path.Combine(output,tab==0?"telegram-accounts.png":tab==1?"telegram-proxies.png":"telegram-invites.png"));}
                         }
                         using(var wizard=new TelegramImportDialog(store,new[]{@"C:\Downloads\700001.json"})){

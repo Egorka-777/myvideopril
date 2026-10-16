@@ -17,6 +17,10 @@ namespace VideoBatch {
         public string source {get;set;}="Вручную";
         public string source_id {get;set;}="";
         public string country {get;set;}="";
+        public string status {get;set;}="unchecked";
+        public string detail {get;set;}="";
+        public string checked_at {get;set;}="";
+        public int latency_ms {get;set;}
         public List<string> source_ids {get;set;}=new List<string>();
         public override string ToString()=>string.IsNullOrWhiteSpace(url)?(string.IsNullOrWhiteSpace(name)?"Без прокси":name):string.IsNullOrWhiteSpace(name)?TelegramStore.ProxyLabel(url):name+" · "+TelegramStore.ProxyLabel(url);
     }
@@ -44,18 +48,18 @@ namespace VideoBatch {
             var item=sourceId!=""?data.proxies.FirstOrDefault(p=>p.source_id==sourceId||(p.source_ids!=null&&p.source_ids.Contains(sourceId))):null;
             item=item??data.proxies.FirstOrDefault(p=>p.url==url);
             if(item==null){item=new TelegramProxy();data.proxies.Add(item);}
-            bool changed=item.url!=url;
+            bool changed=item.url!=url;if(changed){item.status="unchecked";item.detail="";item.checked_at="";}
             item.url=url;item.name=string.IsNullOrWhiteSpace(name)?TelegramStore.ProxyLabel(url):name;item.source=source;item.country=country;
             if(item.source_ids==null)item.source_ids=new List<string>();
             if(sourceId!=""){if(item.source_id=="")item.source_id=sourceId;if(!item.source_ids.Contains(sourceId))item.source_ids.Add(sourceId);}
             // Update only accounts explicitly bound to this entry; never reassign at random.
-            foreach(var account in data.accounts.Where(a=>a.proxy_id==item.id)){account.proxy=url;if(changed)account.status="unchecked";}
+            foreach(var account in data.accounts.Where(a=>a.proxy_id==item.id)){account.proxy=url;if(changed){account.status="unchecked";account.proxy_status="unchecked";account.proxy_detail="";}}
             return item;
         }
         public static void Assign(TelegramData data,IEnumerable<string> accountIds,string proxyId) {
             var ids=new HashSet<string>(accountIds);var proxy=data.proxies.FirstOrDefault(p=>p.id==proxyId);
             if(proxyId!=""&&proxy==null)throw new ArgumentException("Выбранный прокси уже удалён");
-            foreach(var account in data.accounts.Where(a=>ids.Contains(a.id))){account.proxy_id=proxyId;account.proxy=proxy?.url??"";account.status="unchecked";}
+            foreach(var account in data.accounts.Where(a=>ids.Contains(a.id))){account.proxy_id=proxyId;account.proxy=proxy?.url??"";account.status="unchecked";account.proxy_status="unchecked";account.proxy_detail="";}
         }
         public static void Remove(TelegramData data,string id) {
             // Keep assigned connection snapshots; removing a catalog row must not switch to direct.

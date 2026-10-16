@@ -32,6 +32,13 @@ namespace VideoBatch {
         public string note { get; set; } = "";
         public string status { get; set; } = "unchecked";
         public string checked_at { get; set; } = "";
+        public string last_attempt_utc {get;set;}="";
+        public string last_success_utc {get;set;}="";
+        public string last_error {get;set;}="";
+        public string last_code {get;set;}="";
+        public string proxy_status {get;set;}="unchecked";
+        public string proxy_detail {get;set;}="";
+        public string proxy_checked_at {get;set;}="";
         public string wait_until { get; set; } = "";
         public override string ToString() => string.IsNullOrWhiteSpace(name) ? id.Substring(0,Math.Min(10,id.Length)) : name;
     }
@@ -41,6 +48,7 @@ namespace VideoBatch {
         public string api_hash { get; set; } = "";
         public string target { get; set; } = "";
         public int delay { get; set; } = 60;
+        public int invite_limit {get;set;}=1;
         public string default_proxy_id {get;set;}="";
         public List<TelegramProxy> proxies {get;set;}=new List<TelegramProxy>();
         public List<TelegramAccount> accounts { get; set; } = new List<TelegramAccount>();
@@ -96,7 +104,7 @@ namespace VideoBatch {
         }
         public static string Status(string value) {
             switch(value){case "ready":return "Работает";case "blocked":return "Заблокирован";case "unauthorized":return "Нужен вход";
-                case "network":return "Нет связи";case "flood_wait":return "Ожидание Telegram";case "restricted":return "Ограничен";
+                case "deactivated":return "Удалён";case "network":return "Нет связи";case "flood_wait":return "Ожидание Telegram";case "restricted":return "Ограничен";
                 case "configuration":return "Нужна настройка";case "permissions":return "Нет прав";case "error":return "Ошибка проверки";default:return "Не проверен";}
         }
         public static string ProxyLabel(string raw) {

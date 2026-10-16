@@ -233,7 +233,8 @@ class Queue(unittest.IsolatedAsyncioTestCase):
         memory=MemorySession();memory.set_dc(2,'149.154.167.51',443);memory.auth_key=AuthKey(session_bytes())
         client=w.client_for(dict(session=StringSession.save(memory),api_id=1234,api_hash='a'*32,proxy='socks5://127.0.0.1:'+str(server.sockets[0].getsockname()[1])))
         try:
-            with self.assertRaises(ConnectionError):await asyncio.wait_for(client.connect(),5)
+            from python_socks import ProxyError
+            with self.assertRaises((ConnectionError,ProxyError)):await asyncio.wait_for(client.connect(),5)
             self.assertEqual(handshakes[0][0],5);self.assertEqual(handshakes[1][1],443)
             self.assertEqual(len(handshakes),2)  # One proxy connection, no direct retry.
         finally:

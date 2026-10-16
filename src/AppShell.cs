@@ -255,6 +255,7 @@ namespace VideoBatch {
         }
 
         void ShowSection(NavSection section) {
+            dolphinLabel.Visible=dolphinDot.Visible=dolphinRefreshBtn.Visible=section!=NavSection.Telegram;
             pageTitleLabel.Text = NavigationService.Title(section);
             HighlightNav(section);
             if (section == NavSection.VideoProcessing) {

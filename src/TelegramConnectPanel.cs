@@ -22,14 +22,15 @@ namespace VideoBatch {
             void button(string title,Action action){var b=Theme.MakeButton(title,action:action);buttons.Controls.Add(b);workButtons.Add(b);}
             button("＋ Прокси",()=>{try{using(var f=new TelegramProxyDialog())if(f.ShowDialog(this)==DialogResult.OK){store.Change(d=>{foreach(string raw in f.Values)TelegramProxyCatalog.Add(d,raw,f.ProxyName);});RefreshProxies();}}catch(Exception e){Failure(e);}});
             button("Из Dolphin",async()=>await SyncDolphin());
+            button("Проверить",async()=>{try{await Run(new Dictionary<string,object>{{"action","check_proxy"},{"proxies",new List<TelegramProxy>{CurrentProxy()}}});}catch(Exception e){Failure(e);}});
             button("По умолчанию",()=>{try{var p=CurrentProxy();store.Change(d=>d.default_proxy_id=p.id);RefreshProxies();}catch(Exception e){Failure(e);}});
-            button("Изменить",()=>{try{var p=CurrentProxy();using(var f=new TelegramProxyDialog(p))if(f.ShowDialog(this)==DialogResult.OK){store.Change(d=>{var saved=d.proxies.First(x=>x.id==p.id);string url=f.Values.Single();saved.name=f.ProxyName;saved.url=url;foreach(var a in d.accounts.Where(a=>a.proxy_id==p.id)){a.proxy=url;a.status="unchecked";}});RefreshProxies();RefreshData();}}catch(Exception e){Failure(e);}});
+            button("Изменить",()=>{try{var p=CurrentProxy();using(var f=new TelegramProxyDialog(p))if(f.ShowDialog(this)==DialogResult.OK){store.Change(d=>{var saved=d.proxies.First(x=>x.id==p.id);string url=f.Values.Single();saved.name=f.ProxyName;saved.url=url;saved.status="unchecked";saved.detail="";saved.checked_at="";foreach(var a in d.accounts.Where(a=>a.proxy_id==p.id)){a.proxy=url;a.status="unchecked";a.proxy_status="unchecked";a.proxy_detail="";}});RefreshProxies();RefreshData();}}catch(Exception e){Failure(e);}});
             button("Удалить",()=>{try{var p=CurrentProxy();store.Change(d=>TelegramProxyCatalog.Remove(d,p.id));RefreshProxies();RefreshData();}catch(Exception e){Failure(e);}});
             layout.Controls.Add(buttons,0,0);
             proxyHint=new Label{Dock=DockStyle.Fill,Text="Прокси выбирается при добавлении аккаунтов. «Из Dolphin» получает настройки, не открывая профили браузера.",ForeColor=Theme.TextSecondary};layout.Controls.Add(proxyHint,0,1);
             proxyGrid=new DataGridView{Dock=DockStyle.Fill,ReadOnly=true,AllowUserToAddRows=false,AllowUserToDeleteRows=false,MultiSelect=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(proxyGrid);
             proxyGrid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;proxyGrid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
-            foreach(var name in new[]{"Название","Адрес","Источник","Аккаунтов","Новые аккаунты"})proxyGrid.Columns.Add(name,name);
+            foreach(var name in new[]{"Название","Адрес","Источник","Состояние","Аккаунтов / блок.","Новые аккаунты"})proxyGrid.Columns.Add(name,name);
             proxyGrid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0){var p=CurrentProxy();store.Change(d=>d.default_proxy_id=p.id);RefreshProxies();}};
             layout.Controls.Add(proxyGrid,0,2);page.Controls.Add(layout);
         }
@@ -46,7 +47,7 @@ namespace VideoBatch {
         void RefreshProxies() {
             if(proxyGrid==null)return;
             var data=store.Load();string current=(proxyGrid.CurrentRow?.Tag as TelegramProxy)?.id;proxyGrid.Rows.Clear();
-            foreach(var p in data.proxies){int row=proxyGrid.Rows.Add(p.name,TelegramStore.ProxyLabel(p.url),p.source,data.accounts.Count(a=>a.proxy_id==p.id),p.id==data.default_proxy_id?"По умолчанию":"—");proxyGrid.Rows[row].Tag=p;if(current==p.id)proxyGrid.CurrentCell=proxyGrid.Rows[row].Cells[0];}
+            foreach(var p in data.proxies){int row=proxyGrid.Rows.Add(p.name,TelegramStore.ProxyLabel(p.url),p.source,TelegramHealth.Dot(p.status)+" "+(p.status=="ready"?"Доступен":p.status=="failed"?"Ошибка":"Не проверен"),data.accounts.Count(a=>TelegramHealth.Key(a.proxy)==TelegramHealth.Key(p.url))+" / "+data.accounts.Count(a=>TelegramHealth.Key(a.proxy)==TelegramHealth.Key(p.url)&&a.status=="blocked"),p.id==data.default_proxy_id?"По умолчанию":"—");proxyGrid.Rows[row].Tag=p;proxyGrid.Rows[row].Cells[3].Style.ForeColor=p.status=="ready"?Theme.Success:p.status=="failed"?Theme.Error:Theme.TextMuted;proxyGrid.Rows[row].Cells[3].ToolTipText=p.detail;if(current==p.id)proxyGrid.CurrentCell=proxyGrid.Rows[row].Cells[0];}
         }
         async Task SyncDolphin() {
             if(busy)return;busy=true;foreach(var b in workButtons)b.Enabled=false;grid.Enabled=false;proxyGrid.Enabled=false;
@@ -79,8 +80,7 @@ namespace VideoBatch {
             name=Add("Название · необязательно",proxy?.name??"");
             AddInfo("socks5://логин:пароль@host:port  или  host:port:логин:пароль");
             raw=Add("Адрес",proxy?.url??"");raw.Multiline=true;raw.Height=110;raw.ScrollBars=ScrollBars.Vertical;
-            var show=new CheckBox{Text="Показать строки",AutoSize=true,ForeColor=Theme.TextSecondary};raw.UseSystemPasswordChar=true;
-            show.CheckedChanged+=(s,e)=>raw.UseSystemPasswordChar=!show.Checked;AddControl(show);
+
             FormClosing+=(s,e)=>{if(DialogResult!=DialogResult.OK)return;try{Values=raw.Text.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries).Select(TelegramProxyCatalog.Normalize).Distinct().ToArray();if(Values.Length==0||proxy!=null&&Values.Length!=1)throw new ArgumentException(proxy==null?"Вставьте хотя бы один прокси":"Для изменения нужна одна строка");}catch(Exception ex){e.Cancel=true;DialogResult=DialogResult.None;MessageBox.Show(this,ex.Message,"Прокси");}};
         }
     }

@@ -17,7 +17,7 @@ import time
 import zipfile
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-16-telegram-connect-v2'
+VERSION = '2026-10-16-telegram-status-v3'
 CANCEL = threading.Event()
 MAX_ARCHIVE = 256 * 1024 * 1024
 MAX_FILES = 10000
@@ -83,6 +83,76 @@ def valid_port(port):
     if not 1 <= p <= 65535:
         raise ValueError('Неверный порт прокси')
     return p
+
+
+def proxy_connector(value):
+    from python_socks.async_.asyncio import Proxy
+    from python_socks import ProxyType
+    import socks
+    p = parse_proxy(value)
+    if p is None:
+        return None
+    return Proxy(proxy_type={socks.SOCKS5: ProxyType.SOCKS5, socks.SOCKS4: ProxyType.SOCKS4,
+                             socks.HTTP: ProxyType.HTTP}[p['proxy_type']],
+                 host=p['addr'], port=p['port'], username=p['username'],
+                 password=p['password'], rdns=True)
+
+
+async def probe_proxy(value, host='149.154.167.51', port=443):
+    """Actual authenticated tunnel to a Telegram DC, not just ping/TCP proxy port."""
+    if not value:
+        return dict(status='direct', text='Без прокси', latency_ms=0)
+    connector = proxy_connector(value)
+    start = time.monotonic()
+    sock = None
+    try:
+        sock = await connector.connect(dest_host=host, dest_port=port, timeout=12)
+        return dict(status='ready', text='Туннель до Telegram доступен',
+                    latency_ms=int((time.monotonic()-start)*1000))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        from python_socks import ProxyError, ProxyConnectionError, ProxyTimeoutError
+        if isinstance(exc, (TimeoutError, ProxyTimeoutError)):
+            code, text = 'timeout', 'Прокси не ответил вовремя'
+        elif isinstance(exc, ProxyConnectionError):
+            code, text = 'connection', 'Не удалось подключиться к адресу прокси'
+        elif isinstance(exc, ProxyError):
+            code, text = 'handshake', 'Прокси отказал: проверьте протокол, логин/пароль и доступ до Telegram'
+        else:
+            code, text = 'network', 'Не удалось открыть туннель через прокси'
+        return dict(status='failed', text=text, code=code, latency_ms=0)
+    finally:
+        if sock is not None:
+            sock.close()
+
+
+async def account_route(account):
+    value = account.get('proxy', '')
+    host = '149.154.167.51'
+    if value and account.get('session'):
+        from telethon.sessions import StringSession
+        host = StringSession(account['session']).server_address
+    emit('stage', id=account['id'], text='Проверка прокси…' if value else 'Подключение без прокси…')
+    result = await probe_proxy(value, host)
+    emit('proxy', id=account['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(), **result)
+    if result['status'] == 'failed':
+        raise RouteError(result['text'])
+
+
+class RouteError(ConnectionError):
+    pass
+
+
+async def check_proxies(job):
+    ready = failed = 0
+    for p in job.get('proxies', []):
+        cancelled()
+        result = await probe_proxy(p.get('url', ''))
+        emit('proxy', proxy_id=p['id'], proxy_key=hashlib.sha256(p.get('url','').strip().encode()).hexdigest(), **result)
+        ready += result['status'] == 'ready'
+        failed += result['status'] == 'failed'
+    emit('summary', text=f'Прокси: доступны {ready}; ошибок {failed}', failures=failed)
 
 
 def api_data(meta, default_id=0, default_hash=''):
@@ -377,14 +447,21 @@ def error_info(exc):
         return 'flood_wait', 'Telegram требует подождать', int(exc.seconds)
     if isinstance(exc, errors.PeerFloodError):
         return 'restricted', 'Telegram ограничил приглашения; задача остановлена', 0
-    if isinstance(exc, (errors.UserDeactivatedBanError, errors.UserDeactivatedError)):
+    if isinstance(exc, errors.UserDeactivatedBanError):
         return 'blocked', 'Telegram сообщил о блокировке аккаунта', 0
+    if isinstance(exc, errors.UserDeactivatedError):
+        return 'deactivated', 'Аккаунт удалён/деактивирован в Telegram', 0
     if isinstance(exc, (errors.AuthKeyUnregisteredError, errors.SessionRevokedError, errors.SessionExpiredError, errors.AuthKeyDuplicatedError)):
         return 'unauthorized', 'Сессия недействительна; импортируйте актуальную сессию', 0
     if isinstance(exc, (errors.UserPrivacyRestrictedError, errors.UserNotMutualContactError, errors.UserChannelsTooMuchError)):
         return 'privacy', 'Приглашение недоступно из-за ограничений пользователя', 0
     if isinstance(exc, errors.ChatAdminRequiredError):
         return 'permissions', 'У аккаунта нет права приглашать в выбранную группу/канал', 0
+    if isinstance(exc, RouteError):
+        return 'network', str(exc), 0
+    from python_socks import ProxyError
+    if isinstance(exc, ProxyError):
+        return 'network', 'Прокси отказал при соединении с Telegram; проверьте авторизацию и доступ', 0
     if isinstance(exc, (TimeoutError, OSError, ConnectionError, asyncio.TimeoutError)):
         return 'network', 'Нет соединения: проверьте прокси и сеть', 0
     return 'error', 'Операция не завершена; код ошибки указан в журнале', 0
@@ -405,16 +482,20 @@ async def connect(client, account=None):
 
 
 async def check_accounts(job):
+    ready = failed = 0
     for account in job.get('accounts', []):
         cancelled()
         client = None
         try:
+            await account_route(account)
+            emit('stage', id=account['id'], text='Проверка аккаунта в Telegram…')
             client = client_for(account)
             me = await connect(client, account)
+            ready += 1
             name = ' '.join(filter(None, [me.first_name, me.last_name])) or str(me.id)
             emit('account', id=account['id'], status='ready', name=name,
                  user_id=me.id, username=me.username or '', phone=me.phone or '',
-                 text='Сессия работает')
+                 text='Telegram подтвердил аккаунт')
             if job['action'] == 'warmup':
                 # Read-only session diagnostic, no view counters, fake reactions, marks-read or messages.
                 dialogs = await asyncio.wait_for(client.get_dialogs(limit=20), 35)
@@ -422,15 +503,20 @@ async def check_accounts(job):
         except StopJob:
             raise
         except Exception as exc:
+            failed += 1
             state, text, seconds = error_info(exc)
             if isinstance(exc, ValueError):
                 state, text = 'configuration', 'Проверьте формат сессии, API и прокси'
                 if 'не авторизована' in str(exc):
                     state, text = 'unauthorized', 'Сессия не авторизована'
+                elif 'user_id' in str(exc):
+                    state, text = 'configuration', 'user_id не совпал: проверьте парный JSON'
             emit('account', id=account['id'], status=state, text=text, seconds=seconds, code=type(exc).__name__)
         finally:
             if client:
                 await client.disconnect()
+
+    emit('summary', text=f'Проверка: доступны {ready}; ошибок {failed}', ready=ready, failures=failed)
 
 
 def usernames(text):
@@ -439,12 +525,14 @@ def usernames(text):
         if not item:
             continue
         item = re.sub(r'^https?://(?:www\.)?t\.me/', '', item, flags=re.I).strip('@').rstrip('/')
-        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{3,31}', item):
-            raise ValueError('Укажите @username пользователей, по одному в строке')
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{3,31}', item) and not (item.isascii() and item.isdigit() and 0 < int(item) < 2**63):
+            raise ValueError('Укажите @username, t.me/username или положительный ID пользователя')
         if item.lower() not in [v.lower() for v in result]:
             result.append(item)
     if not result:
         raise ValueError('Список пользователей пуст')
+    if len(result)>10000:
+        raise ValueError('В списке больше 10 000 пользователей')
     return result
 
 
@@ -470,12 +558,73 @@ class InviteLedger:
         self.db.close()
 
 
+async def resolve_target(client, text):
+    from telethon import functions, types
+    text = text.strip()
+    private = re.fullmatch(r'(?:https?://)?t\.me/(?:\+|joinchat/)([A-Za-z0-9_-]+)', text, re.I)
+    if private:
+        result = await asyncio.wait_for(client(functions.messages.CheckChatInviteRequest(private[1])), 35)
+        if not isinstance(result, types.ChatInviteAlready):
+            raise ValueError('Аккаунт не состоит в этой группе. Вступите вручную и выдайте права добавления участников')
+        target = result.chat
+    else:
+        if re.fullmatch(r'-?\d+', text):
+            await asyncio.wait_for(client.get_dialogs(limit=100), 35)
+            text = int(text)
+        target = await asyncio.wait_for(client.get_entity(text), 35)
+    if not isinstance(target, (types.Channel, types.Chat)):
+        raise ValueError('Нужна ссылка на группу/канал, а не на пользователя или сообщение')
+    if not target.creator and not (getattr(target, 'admin_rights', None) and target.admin_rights.invite_users):
+        raise ValueError('У выбранного аккаунта нет прав добавлять участников. Для теста выдайте ему права администратора в вашей группе')
+    return target
+
+
+async def invite_preview(job):
+    accounts = job.get('accounts', [])
+    if len(accounts) != 1:
+        raise ValueError('Выберите одного отправителя')
+    account = accounts[0]
+    client = None
+    try:
+        await account_route(account)
+        client = client_for(account)
+        me = await connect(client, account)
+        emit('account', id=account['id'], status='ready', user_id=me.id, text='Telegram подтвердил аккаунт')
+        target = await resolve_target(client, job.get('target',''))
+        emit('target', title=target.title, target_id=target.id, text='Права подтверждены: '+target.title)
+        emit('summary', text='Права подтверждены; приглашения не отправлялись')
+    finally:
+        if client:
+            await client.disconnect()
+
+
+async def web_login(job):
+    import base64
+    from telethon import functions
+    accounts = job.get('accounts', [])
+    token = job.get('login_token','')
+    if len(accounts)!=1 or not re.fullmatch(r'[A-Za-z0-9_-]{16,1024}', token):
+        raise ValueError('Не удалось прочитать действующий QR-код Telegram Web')
+    account = accounts[0]
+    client = client_for(account)
+    try:
+        await connect(client, account)
+        await asyncio.wait_for(client(functions.auth.AcceptLoginTokenRequest(base64.urlsafe_b64decode(token+'='*((-len(token))%4)))), 35)
+        emit('summary', text='Вход в Telegram Web подтверждён. Дождитесь загрузки; при запросе 2FA введите пароль в веб-окне')
+    finally:
+        await client.disconnect()
+
+
 async def invite(job):
     from telethon import errors, functions, types
     accounts = job.get('accounts', [])
     if len(accounts) != 1:
         raise ValueError('Для приглашений выберите один аккаунт; ошибки не обходятся сменой аккаунта')
     names = usernames(job.get('users', ''))
+    limit = int(job.get('limit', 10000))
+    if not 1 <= limit <= 10000:
+        raise ValueError('Лимит на запуск: от 1 до 10 000 пользователей')
+    names = names[:limit]
     delay = int(job.get('delay', 60))
     if not 10 <= delay <= 3600:
         raise ValueError('Задержка: от 10 до 3600 секунд')
@@ -489,37 +638,47 @@ async def invite(job):
     ledger = InviteLedger(Path(job['root']) / 'invites.sqlite')
     try:
         me = await connect(client, account)
-        target_text = job.get('target', '').strip()
-        if re.fullmatch(r'-?\d+', target_text):
-            # Resolve known private chats from current dialogs, no joining by invite links.
+        target = await resolve_target(client, job.get('target', ''))
+        emit('target', title=target.title, target_id=target.id, text='Права подтверждены: '+target.title)
+        done = attempted = unresolved = skipped = 0
+        if any(name.isdigit() for name in names):
             await asyncio.wait_for(client.get_dialogs(limit=100), 35)
-            target_text = int(target_text)
-        target = await asyncio.wait_for(client.get_entity(target_text), 35)
-        if not isinstance(target, types.Channel):
-            raise ValueError('Выберите существующую супергруппу/канал; обычные чаты пока не поддерживаются')
-        if target.creator is not True and (not target.admin_rights or not target.admin_rights.invite_users):
-            raise ValueError('Для приглашений нужны права администратора выбранной группы/канала')
-        done = 0
+            await asyncio.wait_for(client(functions.contacts.GetContactsRequest(hash=0)), 35)
         for i, name in enumerate(names):
             cancelled()
-            user = await asyncio.wait_for(client.get_entity(name), 35)
+            try:
+                reference = types.PeerUser(int(name)) if name.isdigit() else name
+                user = await asyncio.wait_for(client.get_entity(reference), 35)
+            except (ValueError, errors.UsernameInvalidError, errors.UsernameNotOccupiedError):
+                unresolved += 1
+                emit('invite', username=name, state='unresolved', text='Не найден. Для незнакомого ID нужен доступ к пользователю; используйте @username')
+                continue
             if not isinstance(user, types.User) or user.bot or user.deleted or user.id == me.id:
+                skipped += 1
                 emit('invite', username=name, state='skipped', text='Пропущен недоступный пользователь')
                 continue
             if not ledger.reserve(target.id, user.id, account['id']):
+                skipped += 1
                 emit('invite', username=name, state='skipped', text='Уже есть в истории; повтор автоматически не отправляется')
                 continue
             try:
-                result = await asyncio.wait_for(client(functions.channels.InviteToChannelRequest(target, [user])), 45)
+                attempted += 1
+                request = functions.channels.InviteToChannelRequest(target, [user]) if isinstance(target, types.Channel) else functions.messages.AddChatUserRequest(target.id,user,0)
+                result = await asyncio.wait_for(client(request), 45)
                 missing = getattr(result, 'missing_invitees', []) or []
                 if missing:
                     ledger.finish(target.id, user.id, 'privacy')
                     emit('invite', username=name, state='privacy', text='Telegram не добавил пользователя; приватность/ограничение')
                 else:
                     # A successful RPC response alone is insufficient on newer Telegram layers.
-                    membership = await asyncio.wait_for(client(functions.channels.GetParticipantRequest(target, user)), 35)
-                    valid = (types.ChannelParticipant, types.ChannelParticipantSelf, types.ChannelParticipantCreator, types.ChannelParticipantAdmin)
-                    if not isinstance(getattr(membership, 'participant', None), valid):
+                    if isinstance(target, types.Channel):
+                        membership = await asyncio.wait_for(client(functions.channels.GetParticipantRequest(target, user)), 35)
+                        valid = (types.ChannelParticipant, types.ChannelParticipantSelf, types.ChannelParticipantCreator, types.ChannelParticipantAdmin)
+                        confirmed = isinstance(getattr(membership, 'participant', None), valid)
+                    else:
+                        full = await asyncio.wait_for(client(functions.messages.GetFullChatRequest(target.id)),35)
+                        confirmed = any(getattr(p,'user_id',None)==user.id for p in getattr(getattr(full.full_chat,'participants',None),'participants',[]))
+                    if not confirmed:
                         raise ValueError('Telegram не подтвердил активное участие; нужна ручная проверка')
                     ledger.finish(target.id, user.id, 'confirmed')
                     done += 1
@@ -537,7 +696,7 @@ async def invite(job):
             if i + 1 < len(names):
                 emit('log', text=f'Ожидание {delay} сек перед следующим пользователем')
                 await pause(delay)
-        emit('summary', text=f'Подтверждено приглашений: {done}')
+        emit('summary', text=f'Приглашено: {done}; попыток: {attempted}; пропущено: {skipped}; не найдены: {unresolved}', confirmed=done, attempted=attempted, unresolved=unresolved)
     except StopJob:
         raise
     except Exception as exc:
@@ -588,6 +747,12 @@ async def run(job):
             await check_accounts(job)
         elif action == 'invite':
             await invite(job)
+        elif action == 'invite_preview':
+            await invite_preview(job)
+        elif action == 'check_proxy':
+            await check_proxies(job)
+        elif action == 'web_login':
+            await web_login(job)
         else:
             raise ValueError('Неизвестное действие Telegram')
         emit('complete', text='Задача завершена')
