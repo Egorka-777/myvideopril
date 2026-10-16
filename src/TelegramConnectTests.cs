@@ -29,7 +29,8 @@ namespace VideoBatch {
         public static bool RunSelfTests(){
             Check(TelegramProxyCatalog.Normalize("http://host.test:80")=="http://host.test:80","Explicit HTTP default port survives");
             Check(TelegramProxyCatalog.Normalize("localhost:1080:user:p@ss")=="socks5://user:p%40ss@localhost:1080","Legacy auth escaped");
-            Check(TelegramProxyCatalog.Normalize("socks5://u:p%3Aa@[::1]:1080").Contains("[::1]:1080"),"IPv6 proxy");
+            var ipv6=new Uri(TelegramProxyCatalog.Normalize("socks5://u:p%3Aa@[::1]:1080"));
+            Check(System.Net.IPAddress.Parse(ipv6.Host.Trim('[',']')).Equals(System.Net.IPAddress.IPv6Loopback)&&ipv6.Port==1080,"IPv6 endpoint preserved");
             foreach(string value in new[]{"https://host:443","socks5://host:0","socks5://host:1080/path","socks5://host:1080?token=secret"}){bool rejected=false;try{TelegramProxyCatalog.Normalize(value);}catch(ArgumentException ex){rejected=!ex.Message.Contains("token=secret");}Check(rejected,"Invalid proxy rejected safely");}
             var data=new TelegramData();data.accounts.Add(new TelegramAccount{id=new string('a',64),name="Keep name",note="Keep note"});
             var proxy=TelegramProxyCatalog.Add(data,"socks5://u:p@localhost:1080","Saved","Dolphin","dolphin:proxy:7");

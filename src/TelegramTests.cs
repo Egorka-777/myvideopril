@@ -36,7 +36,7 @@ namespace VideoBatch {
                 var info=new System.Diagnostics.ProcessStartInfo(Path.Combine(root,"venv","Scripts","python.exe"),"-c "+Core.Quote(script)+" "+Core.Quote(fixture)){UseShellExecute=false,CreateNoWindow=true};
                 using(var process=System.Diagnostics.Process.Start(info)){process.WaitForExit();if(process.ExitCode!=0)throw new Exception("Synthetic session fixture");}
                 var before=File.ReadAllBytes(fixture);var runner=new TelegramRunner(store);bool version=false,complete=false;string last="";int imported=0;var stages=new System.Collections.Generic.List<string>();
-                int code=await runner.Run(new System.Collections.Generic.Dictionary<string,object>{{"action","import"},{"paths",new[]{fixture}},{"api_id",0},{"api_hash",""}},ev=>{
+                int code=await runner.Run(new System.Collections.Generic.Dictionary<string,object>{{"action","import"},{"paths",new[]{Path.ChangeExtension(fixture,".json")}},{"api_id",0},{"api_hash",""}},ev=>{
                     string kind=Convert.ToString(ev["event"]);stages.Add(kind+(ev.ContainsKey("code")?":"+Convert.ToString(ev["code"]):"")+(ev.ContainsKey("text")?":"+Convert.ToString(ev["text"]):""));if(kind=="version")version=true;if(kind=="complete"){complete=true;last=Convert.ToString(ev["text"]);}
                     if(kind=="imported"){
                         var account=new JavaScriptSerializer().ConvertToType<TelegramAccount>(ev["account"]);
@@ -81,7 +81,7 @@ namespace VideoBatch {
                         }
                         using(var wizard=new TelegramImportDialog(store,new[]{@"C:\Downloads\700001.json"})){
                             wizard.Show();System.Windows.Forms.Application.DoEvents();
-                            using(var bitmap=new System.Drawing.Bitmap(wizard.ClientSize.Width,wizard.ClientSize.Height)){wizard.DrawToBitmap(bitmap,wizard.ClientRectangle);bitmap.Save(Path.Combine(output,"telegram-import.png"));}wizard.Close();
+                            using(var bitmap=new System.Drawing.Bitmap(wizard.Width,wizard.Height)){wizard.DrawToBitmap(bitmap,new System.Drawing.Rectangle(0,0,wizard.Width,wizard.Height));bitmap.Save(Path.Combine(output,"telegram-import.png"));}wizard.Close();
                         }
                         form.Close();
                     }

@@ -86,7 +86,9 @@ namespace VideoBatch {
             DragDrop+=async(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))await Import((string[])e.Data.GetData(DataFormats.FileDrop));};
             try{SeedProxies();var data=store.Load();target.Text=data.target;delay.Value=Math.Max(10,Math.Min(3600,data.delay));RefreshData();RefreshProxies();}catch(Exception e){status.Text=e.Message;actions.Enabled=false;unavailable=true;}
         }
-        protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);if(Visible&&!autoSyncTried&&getPreferences!=null){autoSyncTried=true;BeginInvoke(new Action(async()=>{if(!busy&&!string.IsNullOrEmpty(getPreferences()?.ProtectedDolphinToken))await SyncDolphin();}));}}
+        protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);TryAutoSync();}
+        protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);TryAutoSync();}
+        void TryAutoSync(){if(Visible&&IsHandleCreated&&proxyGrid!=null&&!unavailable&&!autoSyncTried&&getPreferences!=null){autoSyncTried=true;BeginInvoke(new Action(async()=>{if(!busy&&!string.IsNullOrEmpty(getPreferences()?.ProtectedDolphinToken))await SyncDolphin();}));}}
         Panel Page(string title){
             int index=pages.Count;var page=new Panel{Dock=DockStyle.Fill,BackColor=Theme.Background,ForeColor=Theme.TextPrimary,Visible=false};pages.Add(page);pageHost.Controls.Add(page);
             var button=Theme.MakeButton(title,action:()=>SelectTab(index));button.MinimumSize=new Size(100,34);pageButtons.Add(button);tabStrip.Controls.Add(button);return page;
@@ -197,7 +199,7 @@ namespace VideoBatch {
                 try{foreach(var a in new AccountLibraryStore().Load().Where(a=>!string.IsNullOrWhiteSpace(a.Proxy)))proxies.Add(Tuple.Create(a.Name,a.Proxy));}catch{}
                 if(proxies.Count>0){var choices=Theme.MakeCombo(new[]{"Взять сохранённый прокси…"}.Concat(proxies.Select(p=>p.Item1+" · "+TelegramStore.ProxyLabel(p.Item2))).ToArray());choices.Width=410;choices.SelectedIndexChanged+=(s,e)=>{if(choices.SelectedIndex>0)proxy.Text=proxies[choices.SelectedIndex-1].Item2;};f.AddControl(choices);}
                 if(f.ShowDialog(this)!=DialogResult.OK)return;
-                store.Change(d=>{var a=d.accounts.First(x=>x.id==account.id);a.name=name.Text.Trim();a.proxy=string.IsNullOrWhiteSpace(proxy.Text)?"":TelegramProxyCatalog.Normalize(proxy.Text);a.proxy_id="";a.country=country.Text.Trim();a.note=note.Text.Trim();a.status="unchecked";});RefreshData();
+                store.Change(d=>{var a=d.accounts.First(x=>x.id==account.id);a.name=name.Text.Trim();a.proxy=string.IsNullOrWhiteSpace(proxy.Text)?"":TelegramProxyCatalog.Normalize(proxy.Text);a.proxy_id="";a.country=country.Text.Trim();a.note=note.Text.Trim();a.status="unchecked";});RefreshData();RefreshProxies();
             }}catch(Exception e){Failure(e);}
         }
         void RemoveSelected() {

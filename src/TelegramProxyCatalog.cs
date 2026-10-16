@@ -18,7 +18,7 @@ namespace VideoBatch {
         public string source_id {get;set;}="";
         public string country {get;set;}="";
         public List<string> source_ids {get;set;}=new List<string>();
-        public override string ToString()=>string.IsNullOrWhiteSpace(name)?TelegramStore.ProxyLabel(url):name+" · "+TelegramStore.ProxyLabel(url);
+        public override string ToString()=>string.IsNullOrWhiteSpace(url)?(string.IsNullOrWhiteSpace(name)?"Без прокси":name):string.IsNullOrWhiteSpace(name)?TelegramStore.ProxyLabel(url):name+" · "+TelegramStore.ProxyLabel(url);
     }
     public sealed class TelegramProxySync {
         public List<TelegramProxy> Proxies=new List<TelegramProxy>();
