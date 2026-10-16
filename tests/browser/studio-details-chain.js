@@ -25,7 +25,7 @@ function fixture(lang,state,editor=false){
 (async()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'vb-details-')),browser=await chromium.launch({headless:true});
  try{
-  // Production context uses 10 seconds. This exact 900-character case failed at
+  // Production context uses 10 seconds. This exact 959-character case failed at
   // ~518 characters before the fix; do not accelerate typing in this regression.
   const context=await browser.newContext();context.setDefaultTimeout(10000);
   const page=await context.newPage();await page.setContent('<div contenteditable="true" id="description" style="white-space:pre-wrap">old</div>');
@@ -39,7 +39,7 @@ function fixture(lang,state,editor=false){
    await S.typeText(await S.field(page,'title'),'Accessible title',{delay:1});
    assert.equal(await S.read(await S.field(page,'title')),'Accessible title');
   }
-  console.log('PASS 900-character description at production speed survives 10s context default, with progress');
+  console.log('PASS 959-character description at production speed survives 10s context default, with progress');
   await context.close();
   for(const lang of ['ru','en']){
    const ctx=await browser.newContext({timezoneId:'America/New_York'});ctx.setDefaultTimeout(10000);
