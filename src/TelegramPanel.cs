@@ -18,7 +18,10 @@ namespace VideoBatch {
         readonly Label summary, status;
         readonly TextBox search, users, target;
         readonly NumericUpDown delay;
-        readonly TabControl tabs;
+        readonly Panel pageHost;
+        readonly FlowLayoutPanel tabStrip;
+        readonly List<Panel> pages=new List<Panel>();
+        readonly List<Button> pageButtons=new List<Button>();
         readonly FlowLayoutPanel actions;
         readonly Button stop;
         readonly List<Button> workButtons=new List<Button>();
@@ -28,23 +31,24 @@ namespace VideoBatch {
         public TelegramPanel(TelegramStore storage=null) {
             store=storage??new TelegramStore();runner=new TelegramRunner(store);
             Dock=DockStyle.Fill;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
-            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));Controls.Add(layout);
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));Controls.Add(layout);
             actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};layout.Controls.Add(actions,0,0);
             WorkButton("＋ Аккаунты",ChooseImport,true);
             WorkButton("Проверить",async()=>await RunSelected("check"));
             WorkButton("Прогрев",async()=>await RunSelected("warmup"));
-            WorkButton("Пригласить",()=>tabs.SelectedIndex=1);
             WorkButton("Настройки",Settings);
+            actions.Controls.Add(new Label{Text="Поиск",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,4,0)});
             search=Theme.MakeSearchBox();search.Width=170;search.Margin=new Padding(4,7,0,0);search.TextChanged+=(s,e)=>RefreshData();actions.Controls.Add(search);
             summary=new Label{Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary,TextAlign=ContentAlignment.MiddleLeft};layout.Controls.Add(summary,0,1);
-            tabs=new TabControl{Dock=DockStyle.Fill,Padding=new Point(18,8),DrawMode=TabDrawMode.OwnerDrawFixed};
-            tabs.DrawItem+=(s,e)=>{var color=e.Index==tabs.SelectedIndex?Theme.Selected:Theme.Elevated;using(var brush=new SolidBrush(color))e.Graphics.FillRectangle(brush,e.Bounds);TextRenderer.DrawText(e.Graphics,tabs.TabPages[e.Index].Text,Theme.FontBody,e.Bounds,Theme.TextPrimary,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);};layout.Controls.Add(tabs,0,2);
+            tabStrip=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(tabStrip,0,2);
+            pageHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(pageHost,0,3);
             var accountsPage=Page("Аккаунты");var invitePage=Page("Приглашения");var logsPage=Page("Журнал");
             grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,ReadOnly=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=true,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(grid);
-            grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="selected",HeaderText="",FillWeight=14});
+            grid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;grid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
+            grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="selected",HeaderText="",AutoSizeMode=DataGridViewAutoSizeColumnMode.None,Width=40,MinimumWidth=40,DefaultCellStyle=new DataGridViewCellStyle{Padding=Padding.Empty}});
             foreach(var spec in new[]{new[]{"name","Аккаунт"},new[]{"username","Username"},new[]{"status","Состояние"},new[]{"proxy","Прокси"},new[]{"country","Страна"},new[]{"checked","Проверен"}}){var i=grid.Columns.Add(spec[0],spec[1]);grid.Columns[i].ReadOnly=true;}
             grid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0)EditAccount(grid.Rows[e.RowIndex].Tag as TelegramAccount);};
             grid.CurrentCellDirtyStateChanged+=(s,e)=>{if(grid.IsCurrentCellDirty)grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
@@ -73,12 +77,21 @@ namespace VideoBatch {
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
             stop=Theme.MakeButton("Остановить",ghost:true,action:async()=>await runner.Stop());stop.Enabled=false;bottom.Controls.Add(stop);
             bottom.Controls.Add(Theme.MakeButton("Открыть логи",ghost:true,action:()=>{Directory.CreateDirectory(AppDiagnostics.Folder);Process.Start(new ProcessStartInfo(AppDiagnostics.Folder){UseShellExecute=true});}));
-            status=new Label{Text="Добавьте аккаунты, затем проверьте соединение",Width=560,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,3);
+            status=new Label{Text="Добавьте аккаунты, затем проверьте соединение",Width=560,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,4);
+            SelectTab(0);
             AllowDrop=true;DragEnter+=(s,e)=>e.Effect=!busy&&e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;
             DragDrop+=async(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))await Import((string[])e.Data.GetData(DataFormats.FileDrop));};
             try{var data=store.Load();target.Text=data.target;delay.Value=Math.Max(10,Math.Min(3600,data.delay));RefreshData();}catch(Exception e){status.Text=e.Message;actions.Enabled=false;unavailable=true;}
         }
-        TabPage Page(string title){var p=new TabPage(title){BackColor=Theme.Background,ForeColor=Theme.TextPrimary};tabs.TabPages.Add(p);return p;}
+        Panel Page(string title){
+            int index=pages.Count;var page=new Panel{Dock=DockStyle.Fill,BackColor=Theme.Background,ForeColor=Theme.TextPrimary,Visible=false};pages.Add(page);pageHost.Controls.Add(page);
+            var button=Theme.MakeButton(title,action:()=>SelectTab(index));button.MinimumSize=new Size(100,34);pageButtons.Add(button);tabStrip.Controls.Add(button);return page;
+        }
+        internal void SelectTab(int index){
+            if(index<0||index>=pages.Count)throw new ArgumentOutOfRangeException(nameof(index));
+            for(int i=0;i<pages.Count;i++){pages[i].Visible=i==index;pageButtons[i].BackColor=i==index?Theme.Selected:Theme.Background;pageButtons[i].ForeColor=i==index?Theme.TextPrimary:Theme.TextSecondary;}
+            pages[index].BringToFront();
+        }
         void WorkButton(string text,Action action,bool accent=false){var b=Theme.MakeButton(text,accent:accent,action:()=>{try{action();}catch(Exception e){Failure(e);}});actions.Controls.Add(b);workButtons.Add(b);}
         public void RefreshData() {
             if(grid==null||busy||unavailable)return;

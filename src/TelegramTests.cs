@@ -54,6 +54,7 @@ namespace VideoBatch {
             var thread=new System.Threading.Thread(()=>{
                 string root=Path.Combine(Path.GetTempPath(),"TelegramUi-"+Guid.NewGuid().ToString("N"));
                 try {
+                    System.Windows.Forms.Application.EnableVisualStyles();
                     var store=new TelegramStore(root);
                     store.Change(d=>{
                         d.accounts.Add(new TelegramAccount{id=new string('a',64),name="Канал RU",username="sample_ru",status="ready",proxy="socks5://user:password@127.0.0.1:1080",country="Германия"});
@@ -63,11 +64,10 @@ namespace VideoBatch {
                     using(var form=new System.Windows.Forms.Form{ClientSize=new System.Drawing.Size(1080,720),BackColor=Theme.Background})
                     using(var panel=new TelegramPanel(store)) {
                         form.Controls.Add(panel);form.Show();System.Windows.Forms.Application.DoEvents();
-                        var layout=(System.Windows.Forms.TableLayoutPanel)panel.Controls[0];var tabs=layout.Controls.OfType<System.Windows.Forms.TabControl>().Single();
                         Directory.CreateDirectory(output);
                         foreach(var tab in new[]{0,1}) {
-                            tabs.SelectedIndex=tab;System.Windows.Forms.Application.DoEvents();
-                            using(var bitmap=new System.Drawing.Bitmap(form.ClientSize.Width,form.ClientSize.Height)){form.DrawToBitmap(bitmap,form.ClientRectangle);bitmap.Save(Path.Combine(output,tab==0?"telegram-accounts.png":"telegram-invites.png"));}
+                            panel.SelectTab(tab);System.Windows.Forms.Application.DoEvents();
+                            using(var bitmap=new System.Drawing.Bitmap(panel.ClientSize.Width,panel.ClientSize.Height)){panel.DrawToBitmap(bitmap,panel.ClientRectangle);bitmap.Save(Path.Combine(output,tab==0?"telegram-accounts.png":"telegram-invites.png"));}
                         }
                         form.Close();
                     }
