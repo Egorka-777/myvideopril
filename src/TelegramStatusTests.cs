@@ -78,13 +78,17 @@ namespace VideoBatch {
         public static bool RunShellLayoutTest(string output){
             Exception failure=null;var thread=new Thread(()=>{
                 try{
+                    Console.WriteLine("Shell layout: constructing");
                     using(var shell=new AppShell(new Preferences())){
+                        Console.WriteLine("Shell layout: showing");
                         shell.Show();Application.DoEvents();
                         var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
                         var type=typeof(AppShell);Directory.CreateDirectory(output);
                         foreach(var platform in new[]{AppPlatform.Telegram,AppPlatform.YouTube}){
+                            Console.WriteLine("Shell layout: platform "+platform);
                             type.GetMethod("ApplyPlatform",flags).Invoke(shell,new object[]{platform,true});Application.DoEvents();
                             foreach(int width in new[]{1100,1280}){
+                                Console.WriteLine("Shell layout: width "+width);
                                 shell.ClientSize=new Size(width,820);shell.PerformLayout();Application.DoEvents();
                                 var bar=(Control)type.GetField("topBar",flags).GetValue(shell);
                                 foreach(string field in new[]{"settingsBtn","platformBackBtn","menuToggleBtn","pageTitleLabel","tasksLabel"}){
@@ -92,6 +96,7 @@ namespace VideoBatch {
                                     var bounds=bar.RectangleToClient(c.RectangleToScreen(c.ClientRectangle));
                                     Check(bounds.Top>=0&&bounds.Bottom<=bar.ClientSize.Height&&bounds.Left>=0&&bounds.Right<=bar.ClientSize.Width,"Unclipped shell control: "+field+" @"+width);
                                 }
+                                Console.WriteLine("Shell layout: capture "+platform+" "+width);
                                 using(var bitmap=new Bitmap(shell.Width,shell.Height)){shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(output,"shell-"+platform+"-"+width+".png"));}
                             }
                         }

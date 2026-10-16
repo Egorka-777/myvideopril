@@ -347,11 +347,11 @@ namespace VideoBatch {
             int y=12;
             foreach(Control c in sidebar.Controls) {
                 if(c is Label group && group.Font==Theme.FontSmall) {
-                    group.Visible=sidebarExpanded&&IsGroupVisibleForPlatform(group.Text);
-                    if(group.Visible){group.Top=y;group.Height=28;y+=28;}
+                    bool show=sidebarExpanded&&IsGroupVisibleForPlatform(group.Text);group.Visible=show;
+                    if(show){group.Top=y;group.Height=28;y+=28;}
                 } else if(c is Button b && b.Tag is NavSection section) {
-                    b.Visible=AppPlatformNav.IsNavVisible(appPlatform,section);
-                    if(b.Visible){b.Top=y;b.Height=36;y+=40;}
+                    bool show=AppPlatformNav.IsNavVisible(appPlatform,section);b.Visible=show;
+                    if(show){b.Top=y;b.Height=36;y+=40;}
                 }
             }
         }

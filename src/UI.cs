@@ -10,11 +10,12 @@ using System.Diagnostics;
 
 namespace VideoBatch {
     public static class Ui {
-        public static readonly Color Bg=Color.FromArgb(243,245,249),Ink=Color.FromArgb(27,39,58),Muted=Color.FromArgb(103,117,139),Blue=Color.FromArgb(52,92,234);
-        public static Button Button(string text,Action action=null,bool primary=false){var b=new Button{Text=text,AutoSize=true,MinimumSize=new Size(80,36),Padding=new Padding(10,4,10,4),FlatStyle=FlatStyle.Flat,BackColor=primary?Blue:Color.FromArgb(228,235,246),ForeColor=primary?Color.White:Ink,Cursor=Cursors.Hand,Margin=new Padding(0,0,8,0)};b.FlatAppearance.BorderSize=0;if(action!=null)b.Click+=(s,e)=>action();return b;}
+        public static readonly Color Bg=Theme.Background,Ink=Theme.TextPrimary,Muted=Theme.TextSecondary,Blue=Theme.Accent;
+        public static Button Button(string text,Action action=null,bool primary=false)=>Theme.MakeButton(text,accent:primary,ghost:!primary,action:action);
+
         public static Label Label(string text,bool muted=false){return new Label{Text=text,AutoSize=true,ForeColor=muted?Muted:Ink,Margin=new Padding(0,0,0,8),MaximumSize=new Size(540,0)};}
-        public static ComboBox Combo(string[] items,string selected){var c=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList,Width=190,Anchor=AnchorStyles.Left|AnchorStyles.Right};c.Items.AddRange(items);c.SelectedItem=selected;if(c.SelectedIndex<0&&c.Items.Count>0)c.SelectedIndex=0;return c;}
-        public static NumericUpDown Number(double value,double min,double max,int decimals=2){var n=new NumericUpDown{Minimum=(decimal)min,Maximum=(decimal)max,DecimalPlaces=decimals,Increment=decimals==0?1:(decimal).1,Width=130,ThousandsSeparator=false,Anchor=AnchorStyles.Left|AnchorStyles.Right};n.Value=Math.Min(n.Maximum,Math.Max(n.Minimum,(decimal)value));return n;}
+        public static ComboBox Combo(string[] items,string selected){var c=Theme.MakeCombo(items);c.Width=190;c.Anchor=AnchorStyles.Left|AnchorStyles.Right;c.SelectedItem=selected;if(c.SelectedIndex<0&&c.Items.Count>0)c.SelectedIndex=0;return c;}
+        public static NumericUpDown Number(double value,double min,double max,int decimals=2){var n=new NumericUpDown{BackColor=Theme.Elevated,ForeColor=Theme.TextPrimary,Minimum=(decimal)min,Maximum=(decimal)max,DecimalPlaces=decimals,Increment=decimals==0?1:(decimal).1,Width=130,ThousandsSeparator=false,Anchor=AnchorStyles.Left|AnchorStyles.Right};n.Value=Math.Min(n.Maximum,Math.Max(n.Minimum,(decimal)value));return n;}
         public static TableLayoutPanel Table(int cols=1){var t=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=cols,Padding=new Padding(0),AutoSize=false,BackColor=Color.Transparent};for(int i=0;i<cols;i++)t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/cols));return t;}
         public static void Row(TableLayoutPanel t,string label,Control c){int r=t.RowCount++;t.RowStyles.Add(new RowStyle(SizeType.AutoSize));var l=Label(label);l.Anchor=AnchorStyles.Left;l.Margin=new Padding(0,10,12,10);c.Margin=new Padding(0,7,0,7);t.Controls.Add(l,0,r);t.Controls.Add(c,1,r);}
         public static TableLayoutPanel Fields(){var t=Table(2);t.Dock=DockStyle.Top;t.AutoSize=true;t.ColumnStyles[0].Width=55;t.ColumnStyles[1].Width=45;return t;}
@@ -47,6 +48,14 @@ namespace VideoBatch {
         protected TableLayoutPanel Root;protected Panel Body;protected new FlowLayoutPanel Bottom;
         public Dialog(string title,int height=570){Text=title;ClientSize=new Size(610,height);MinimumSize=new Size(580,420);StartPosition=FormStartPosition.CenterParent;Font=new Font("Segoe UI",10);BackColor=Ui.Bg;ForeColor=Ui.Ink;AutoScaleMode=AutoScaleMode.Dpi;MinimizeBox=false;MaximizeBox=false;ShowInTaskbar=false;
             Root=Ui.Table();Root.Padding=new Padding(22);Root.RowCount=2;Root.RowStyles.Add(new RowStyle(SizeType.Percent,100));Root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Body=new Panel{Dock=DockStyle.Fill,AutoScroll=true};Bottom=Ui.Flow();Bottom.FlowDirection=FlowDirection.RightToLeft;Bottom.Padding=new Padding(0,16,0,0);Root.Controls.Add(Body,0,0);Root.Controls.Add(Bottom,0,1);Controls.Add(Root);
+        }
+        protected override void OnShown(EventArgs e){StyleInputs(this);base.OnShown(e);}
+        static void StyleInputs(Control parent){
+            foreach(Control c in parent.Controls){
+                if(c is TextBoxBase||c is NumericUpDown||c is ListBox||c is ComboBox){c.BackColor=Theme.Elevated;c.ForeColor=Theme.TextPrimary;}
+                if(c is CheckBox check)Theme.StyleCheckBox(check);
+                StyleInputs(c);
+            }
         }
         protected void StandardButtons(Action save){var ok=Ui.Button("Сохранить",()=>{try{save();DialogResult=DialogResult.OK;Close();}catch(Exception e){Ui.Error(this,e);}},true);var cancel=Ui.Button("Отмена",()=>{DialogResult=DialogResult.Cancel;Close();});Bottom.Controls.Add(ok);Bottom.Controls.Add(cancel);AcceptButton=ok;CancelButton=cancel;}
     }
