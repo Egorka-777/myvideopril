@@ -198,7 +198,7 @@ namespace VideoBatch {
         }
 
         async Task ResolveCountryAsync(UnifiedProfile p, int rowIndex) {
-            string code = await GeoIpCache.LookupAsync(p.ExpectedIp).ConfigureAwait(false);
+            string code = await GeoIpCache.LookupAsync(p.ExpectedIp).ConfigureAwait(true);
             if (IsDisposed || rowIndex >= grid.Rows.Count) return;
             p.CountryCode = code;
             if (grid.Rows[rowIndex].Tag == p) grid.Rows[rowIndex].Cells["country"].Value = code;
@@ -384,7 +384,7 @@ namespace VideoBatch {
         }
 
         async Task GeoCountry(UnifiedProfile p, int ri) {
-            string c = await GeoIpCache.LookupAsync(p.ExpectedIp).ConfigureAwait(false);
+            string c = await GeoIpCache.LookupAsync(p.ExpectedIp).ConfigureAwait(true);
             if (!IsDisposed && ri < grid.Rows.Count && grid.Rows[ri].Tag == p) grid.Rows[ri].Cells["country"].Value = c;
         }
 

@@ -79,7 +79,7 @@ namespace VideoBatch {
             Exception failure=null;var thread=new Thread(()=>{
                 try{
                     Console.WriteLine("Shell layout: constructing");
-                    using(var shell=new AppShell(new Preferences())){
+                    using(var shell=new AppShell(new Preferences{YouTubeChannels=new System.Collections.Generic.List<YouTubeChannel>{new YouTubeChannel{Name="Sample RU",ProfileId="100001",Market="RU",Kind="shorts"}},TikTokAccounts=new System.Collections.Generic.List<TikTokAccount>{new TikTokAccount{Name="Sample EN",ProfileId="200001",Market="EN"}}})){
                         Console.WriteLine("Shell layout: showing");
                         shell.Show();Application.DoEvents();
                         var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
@@ -100,6 +100,13 @@ namespace VideoBatch {
                                 using(var bitmap=new Bitmap(shell.Width,shell.Height)){shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(output,"shell-"+platform+"-"+width+".png"));}
                             }
                         }
+                        type.GetMethod("ApplyPlatform",flags).Invoke(shell,new object[]{AppPlatform.YouTube,true});
+                        type.GetMethod("ShowSection",flags).Invoke(shell,new object[]{NavSection.Profiles});Application.DoEvents();
+                        var profiles=(Control)type.GetField("profilesPanel",flags).GetValue(shell);
+                        var grid=(DataGridView)typeof(ProfilesPanel).GetField("grid",flags).GetValue(profiles);
+                        Check(grid.Rows.Count==2,"Profiles come from existing YouTube and TikTok accounts without re-import");
+                        Check(grid.Height>200,"Profiles list remains visible between filters and actions");
+                        using(var bitmap=new Bitmap(shell.Width,shell.Height)){shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(output,"shell-profiles.png"));}
                         shell.Close();
                     }
                 }catch(Exception e){failure=e;}

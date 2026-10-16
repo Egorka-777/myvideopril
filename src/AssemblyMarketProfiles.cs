@@ -62,9 +62,11 @@ namespace VideoBatch {
 
         public static void SyncMissingLayersFromPrimary(AssemblyTemplate t) {
             if (t == null) return;
-            EnsureSeeded(t);
+            // EnsureSeeded calls us after seeding (and on every subsequent use).
+            // Calling it again for a seeded template recurses until process termination.
+            if (!t.AssemblyMarketsSeeded) { EnsureSeeded(t); return; }
             var primary = t.MarketRu;
-            if (!primary.WorkspaceConfigured || primary.Scenes == null) return;
+            if (primary == null || !primary.WorkspaceConfigured || primary.Scenes == null) return;
             PropagateSceneLayers(t, AssemblyProfile.Ru);
         }
 

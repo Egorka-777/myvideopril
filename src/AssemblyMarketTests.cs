@@ -6,6 +6,19 @@ namespace VideoBatch {
     public static class AssemblyMarketTests {
         static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
 
+        public static bool RunInitializationTests() {
+            var t=AssemblyTemplate.Defaults();
+            AssemblyMarketProfiles.EnsureSeeded(t);
+            AssemblyMarketProfiles.EnsureSeeded(t);
+            AssemblyMarketProfiles.SyncMissingLayersFromPrimary(t);
+            Check(t.AssemblyMarketsSeeded&&t.MarketRu.Scenes.Count==4,"Repeated template initialization terminates and preserves scenes");
+            t.MarketRu.Scenes[0].Layers.Add(new AssemblyLayer{Name="Another object",Source="test-images"});
+            AssemblyMarketProfiles.SyncMissingLayersFromPrimary(t);
+            AssemblyMarketProfiles.SyncMissingLayersFromPrimary(t);
+            Check(t.MarketRuInst.Scenes[0].Layers.Count==2,"Objects propagate once to configured profiles");
+            return true;
+        }
+
         public static bool RunSelfTests() {
             string root = Path.Combine(Path.GetTempPath(), "assembly-market-" + Guid.NewGuid().ToString("N"));
             try {
