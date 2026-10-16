@@ -8,9 +8,14 @@ namespace VideoBatch {
     public static class TelegramHealth {
         static string S(Dictionary<string,object> e,string k)=>e.TryGetValue(k,out var v)?Convert.ToString(v):"";
         public static string Key(string url){using(var hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes((url??"").Trim()))).Replace("-","").ToLowerInvariant();}
+        public static void RouteChanged(TelegramAccount a){
+            a.proxy_status="unchecked";a.proxy_detail="";a.proxy_checked_at="";
+            // A different network route is not evidence of unblocking or restoring a revoked session.
+            if(!new[]{"blocked","deactivated","unauthorized"}.Contains(a.status)){a.status="unchecked";a.last_error="";a.last_code="";}
+        }
         public static string Dot(string state)=>state=="ready"?"●":state=="unchecked"||state=="direct"?"○":"●";
         public static string AccountLabel(TelegramAccount a){
-            if(DateTime.TryParse(a.wait_until,null,System.Globalization.DateTimeStyles.RoundtripKind,out var until)&&until.ToUniversalTime()>DateTime.UtcNow)return "● Пауза Telegram";
+            if(new[]{"ready","flood_wait","restricted"}.Contains(a.status)&&DateTime.TryParse(a.wait_until,null,System.Globalization.DateTimeStyles.RoundtripKind,out var until)&&until.ToUniversalTime()>DateTime.UtcNow)return "● Пауза Telegram";
             if(a.status=="ready"&&string.IsNullOrEmpty(a.last_success_utc))return "○ Проверить снова";
             if(a.status=="ready"&&DateTime.TryParse(a.last_success_utc,null,System.Globalization.DateTimeStyles.RoundtripKind,out var success)&&DateTime.UtcNow-success.ToUniversalTime()>TimeSpan.FromMinutes(15))return "○ Проверить снова";
             return Dot(a.status)+" "+TelegramStore.Status(a.status);

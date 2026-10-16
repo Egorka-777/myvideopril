@@ -126,7 +126,8 @@ namespace VideoBatch {
                 if(a.id==current)grid.CurrentCell=grid.Rows[i].Cells[1];
             }
             RefreshSenders();
-            summary.Text=$"Последние проверки: всего {all.Count}   ·   Работают {all.Count(a=>a.status=="ready")}   ·   Требуют внимания {all.Count(a=>a.status!="ready"&&a.status!="unchecked")}   ·   Не проверены {all.Count(a=>a.status=="unchecked")}";
+            int ready=all.Count(a=>TelegramHealth.AccountLabel(a).Contains("Работает")),uncheckedCount=all.Count(a=>TelegramHealth.AccountLabel(a).StartsWith("○"));
+            summary.Text=$"Всего {all.Count}   ·   Доступны {ready}   ·   Требуют внимания {all.Count-ready-uncheckedCount}   ·   Проверить {uncheckedCount}";
         }
         void PaintHealth(DataGridViewRow row,TelegramAccount a){
             string label=TelegramHealth.AccountLabel(a);row.Cells["status"].Value=label;
@@ -232,7 +233,7 @@ namespace VideoBatch {
                 try{foreach(var a in new AccountLibraryStore().Load().Where(a=>!string.IsNullOrWhiteSpace(a.Proxy)))proxies.Add(Tuple.Create(a.Name,a.Proxy));}catch{}
                 if(proxies.Count>0){var choices=Theme.MakeCombo(new[]{"Взять сохранённый прокси…"}.Concat(proxies.Select(p=>p.Item1+" · "+TelegramStore.ProxyLabel(p.Item2))).ToArray());choices.Width=410;choices.SelectedIndexChanged+=(s,e)=>{if(choices.SelectedIndex>0)proxy.Text=proxies[choices.SelectedIndex-1].Item2;};f.AddControl(choices);}
                 if(f.ShowDialog(this)!=DialogResult.OK)return;
-                store.Change(d=>{var a=d.accounts.First(x=>x.id==account.id);a.name=name.Text.Trim();a.proxy=string.IsNullOrWhiteSpace(proxy.Text)?"":TelegramProxyCatalog.Normalize(proxy.Text);a.proxy_id="";a.proxy_status="unchecked";a.proxy_detail="";a.country=country.Text.Trim();a.note=note.Text.Trim();a.status="unchecked";});RefreshData();RefreshProxies();
+                store.Change(d=>{var a=d.accounts.First(x=>x.id==account.id);a.name=name.Text.Trim();string url=string.IsNullOrWhiteSpace(proxy.Text)?"":TelegramProxyCatalog.Normalize(proxy.Text);if(a.proxy!=url){a.proxy=url;a.proxy_id="";TelegramHealth.RouteChanged(a);}a.country=country.Text.Trim();a.note=note.Text.Trim();});RefreshData();RefreshProxies();
             }}catch(Exception e){Failure(e);}
         }
         void RemoveSelected() {

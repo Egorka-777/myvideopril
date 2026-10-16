@@ -53,13 +53,13 @@ namespace VideoBatch {
             if(item.source_ids==null)item.source_ids=new List<string>();
             if(sourceId!=""){if(item.source_id=="")item.source_id=sourceId;if(!item.source_ids.Contains(sourceId))item.source_ids.Add(sourceId);}
             // Update only accounts explicitly bound to this entry; never reassign at random.
-            foreach(var account in data.accounts.Where(a=>a.proxy_id==item.id)){account.proxy=url;if(changed){account.status="unchecked";account.proxy_status="unchecked";account.proxy_detail="";}}
+            foreach(var account in data.accounts.Where(a=>a.proxy_id==item.id)){account.proxy=url;if(changed)TelegramHealth.RouteChanged(account);}
             return item;
         }
         public static void Assign(TelegramData data,IEnumerable<string> accountIds,string proxyId) {
             var ids=new HashSet<string>(accountIds);var proxy=data.proxies.FirstOrDefault(p=>p.id==proxyId);
             if(proxyId!=""&&proxy==null)throw new ArgumentException("Выбранный прокси уже удалён");
-            foreach(var account in data.accounts.Where(a=>ids.Contains(a.id))){account.proxy_id=proxyId;account.proxy=proxy?.url??"";account.status="unchecked";account.proxy_status="unchecked";account.proxy_detail="";}
+            foreach(var account in data.accounts.Where(a=>ids.Contains(a.id))){account.proxy_id=proxyId;account.proxy=proxy?.url??"";TelegramHealth.RouteChanged(account);}
         }
         public static void Remove(TelegramData data,string id) {
             // Keep assigned connection snapshots; removing a catalog row must not switch to direct.
