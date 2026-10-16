@@ -40,6 +40,7 @@ namespace VideoBatch {
         public Task RunCrossMeshWatchAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> viewerChannels, System.Collections.Generic.IReadOnlyList<YouTubeChannel> targetChannels, System.Collections.Generic.IReadOnlyDictionary<string, string> channelUrlsByProfileId, string viewerMarket) { return Window.RunCrossMeshWatchAsync(viewerChannels, targetChannels, channelUrlsByProfileId, viewerMarket); }
         public Task RunLinksWatchAsync(string linksText) { return Window.RunLinksWatchAsync(linksText); }
         public Task RunLinksWatchAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels, string linksText) { return Window.RunLinksWatchAsync(channels, linksText); }
+        public Task RunShortsWarmupAsync(System.Collections.Generic.IReadOnlyList<YouTubeChannel> channels) { return Window.RunShortsWarmupAsync(channels); }
         public Task RunSearchAsync() { return Window.RunYouTubeSearchAsync(); }
         public void Stop() { Window.RequestStopUpload(); }
         public void AssignVideos(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }

@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-15-studio-sequential-ru-en-v1";
+const WORKER_BUILD = "2026-10-16-shorts-warmup-v1";
 const studioAcks=new Map();
 async function studioCheckpoint(item,packIndex){
  if(!item.localJobId)throw new Error("Studio: нет постоянного ID задания. Обновите приложение вместе с worker.");
@@ -2894,7 +2894,7 @@ async function main() {
   if (!job.token || !job.profileId) throw new Error("Укажите токен Dolphin и ID профиля.");
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
 
-  if (!job.searchOnly && !job.watchMesh && !job.watchDirectLinks && !job.skipQueueDelay) await waitBetweenProfiles();
+  if (!job.searchOnly && !job.watchMesh && !job.watchDirectLinks && !job.shortsWarmup && !job.skipQueueDelay) await waitBetweenProfiles();
   let endpoint = await startOrConnectProfile();
   browser = await connectBrowser(endpoint);
   let context = browser.contexts()[0];
@@ -2912,6 +2912,28 @@ async function main() {
     verifiedIp = ip || "";
     if (ip) send("ip", `IP профиля: ${ip}`, { ip, percent: 20 });
   } catch (_) {}
+
+  if (job.shortsWarmup) {
+    const { runShortsWarmup } = require("./youtube-shorts-warmup.js");
+    youtubeOpened = true;
+    send("youtube", "Прогрев Shorts…", { percent: 30 });
+    await runShortsWarmup(page, job, (stage, text) => send(stage || "youtube", text, { percent: 50 }));
+    if (job.keepProfileOpen) {
+      if (page && !page.isClosed()) await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
+      await browser.close().catch(() => {});
+      browser = null;
+      finished = true;
+      send("done", "Прогрев Shorts завершён.", { success: true, keptOpen: true, ip: verifiedIp, percent: 100 });
+      return;
+    }
+    await browser.close().catch(() => {});
+    browser = null;
+    await stopProfile();
+    await pauseAfterWatch();
+    finished = true;
+    send("done", "Прогрев Shorts завершён.", { success: true, keptOpen: false, ip: verifiedIp, percent: 100 });
+    return;
+  }
 
   if (job.openTodayOnly) {
     const { navigateTodayVideo } = require("./youtube-open-today.js");
@@ -3105,7 +3127,7 @@ if (require.main === module) {
   input.on("line", line => { if (line.trim() === "cancel") cancelTask();
     else if(line.startsWith("ack:")){const id=line.trim().slice(4);const ack=studioAcks.get(id);if(ack){studioAcks.delete(id);ack();}} });
   main().then(() => { input.close(); }).catch(async e => {
-    if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.openTodayOnly&&taskPage){
+    if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.shortsWarmup&&!job.openTodayOnly&&taskPage){
       try{const diagnosticFile=await require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics'));send('diagnostic','Диагностика Studio сохранена',{diagnosticFile});}catch{} }
 
     if (browser) await browser.close().catch(err => send("diagnostic", "Отключение CDP: " + err.message));

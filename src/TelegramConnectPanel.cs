@@ -104,7 +104,7 @@ namespace VideoBatch {
         public TelegramImportDialog(TelegramStore store,string[] initial=null):base("Добавить аккаунты","Выберите папку, JSON, .session или ZIP. Вложенная TData и парные данные будут найдены автоматически. Исходники не изменяются."){
             this.store=store;Name="TelegramImport";
             var buttons=new FlowLayoutPanel{Width=450,Height=46,WrapContents=false};
-            buttons.Controls.Add(Theme.MakeButton("Выбрать папку",action:()=>{using(var p=new FolderBrowserDialog{Description="Выберите внешнюю папку аккаунта или папку с несколькими аккаунтами"})if(p.ShowDialog(this)==DialogResult.OK)SetPaths(new[]{p.SelectedPath});}));
+            buttons.Controls.Add(Theme.MakeButton("Выбрать папку",action:()=>{var dir=Ui.PickFolder(this,null,"Выберите папку аккаунта или папку с несколькими аккаунтами");if(dir!=null)SetPaths(new[]{dir});}));
             buttons.Controls.Add(Theme.MakeButton("Выбрать файлы",ghost:true,action:()=>{using(var p=new OpenFileDialog{Filter="Аккаунты Telegram|*.json;*.session;*.zip",Multiselect=true})if(p.ShowDialog(this)==DialogResult.OK)SetPaths(p.FileNames);}));AddControl(buttons);
             files=new Label{Width=450,Height=44,AutoEllipsis=true,ForeColor=Theme.TextSecondary};AddControl(files);SetPaths(initial??new string[0]);
             AddInfo("Прокси для новых аккаунтов");proxies=ProxyChoices(store.Load());proxies.Name="ImportProxy";AddControl(proxies);

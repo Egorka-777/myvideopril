@@ -88,7 +88,9 @@ namespace VideoBatch {
         [DataMember]public string token,profileId,expectedIp,video,title,thumbnail,searchUrl,searchFilter,searchKeys,searchFullTitle,scheduleDate,scheduleTime,channelUrl,todayDate;
         [DataMember]public int localPort,pcUtcOffsetMinutes;
         [DataMember]public bool studioPaidPromotion,studioAlteredContent;
-        [DataMember]public bool recheckOnly,checkOnly,searchOnly,watchMesh,watchDirectLinks,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
+        [DataMember]public bool recheckOnly,checkOnly,searchOnly,watchMesh,watchDirectLinks,shortsWarmup,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
+        [DataMember]public int warmupMinMinutes,warmupMaxMinutes,warmupWatchMinSec,warmupWatchMaxSec,warmupLikePercent;
+        [DataMember]public bool warmupLikesEnabled;
         [DataMember]public UploadItemJob[] items; // пачка в одном профиле без перезапуска
         [DataMember]public WatchTargetJob[] watchTargets;
     }
@@ -1150,6 +1152,7 @@ namespace VideoBatch {
         public Task RunCrossMeshWatchAsync(IReadOnlyList<YouTubeChannel> viewerChannels,IReadOnlyList<YouTubeChannel> targetChannels,IReadOnlyDictionary<string,string> channelUrlsByProfileId,string viewerMarket)=>TrackOperation(()=>CrossWatchMesh(viewerChannels,channelUrlsByProfileId,viewerMarket,targetChannels));
         public Task RunLinksWatchAsync(string linksText)=>TrackOperation(()=>CrossWatchLinks(null,linksText));
         public Task RunLinksWatchAsync(IReadOnlyList<YouTubeChannel> channels,string linksText)=>TrackOperation(()=>CrossWatchLinks(channels,linksText));
+        public Task RunShortsWarmupAsync(IReadOnlyList<YouTubeChannel> channels)=>TrackOperation(()=>ShortsWarmup(channels));
         public Task RunYouTubeSearchAsync()=>TrackOperation(()=>SearchOnYouTube());
         public void RequestStopUpload(){stop.Enabled=false;AbortHttpUpload(true);}
         public void AssignVideosToProfile(string profileId,string market,string[] files){
@@ -1827,6 +1830,75 @@ namespace VideoBatch {
                 }else{
                     Write("["+MarketLabel(marketView)+"] просмотр ссылок завершён: "+viewersOk+"/"+viewers.Count+" аккаунтов · "+watchTargets.Length+" ролик(ов) каждый.");
                     MessageBox.Show(this,viewersOk+" аккаунт(ов) досмотрели "+watchTargets.Length+" ссылок.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                }
+            }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}
+        }
+        UploadJob BuildWarmupJob(string token,YouTubeChannel ch){
+            return new UploadJob{
+                token=token,localPort=settings.DolphinPort,profileId=ch.ProfileId,expectedIp=ch.ExpectedIp,
+                shortsWarmup=true,skipQueueDelay=true,checkOnly=false,keepProfileOpen=settings.KeepDolphinProfileOpenAfterUpload,
+                warmupMinMinutes=settings.YouTubeWarmupMinMinutes,warmupMaxMinutes=settings.YouTubeWarmupMaxMinutes,
+                warmupWatchMinSec=settings.YouTubeWarmupWatchMinSec,warmupWatchMaxSec=settings.YouTubeWarmupWatchMaxSec,
+                warmupLikesEnabled=settings.YouTubeWarmupLikesEnabled,warmupLikePercent=settings.YouTubeWarmupLikePercent
+            };
+        }
+        async Task RunWarmupForChannel(string token,YouTubeChannel ch,DataGridViewRow row,CancellationToken ct){
+            await DolphinRunner.Run(BuildWarmupJob(token,ch),m=>{if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);},ct).ConfigureAwait(false);
+            Status(row,"Прогрев Shorts ✓");
+            SafeSave();
+        }
+        async Task ShortsWarmup(IReadOnlyList<YouTubeChannel> channelsFilter){
+            if(cancellation!=null)return;
+            if(uploadsInFlight>0){MessageBox.Show(this,"Дождитесь завершения загрузки или нажмите Стоп.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
+            string token="";
+            try{
+                SaveGrid();ValidateCommon(false,channelsFilter);
+                List<(YouTubeChannel ch,DataGridViewRow row)> viewers;
+                if(channelsFilter!=null&&channelsFilter.Count>0){
+                    viewers=BuildMeshViewers(channelsFilter);
+                }else{
+                    var rows=Selected();
+                    if(rows.Count==0)throw new Exception("Отметьте галочкой ✓ каналы YouTube для прогрева.");
+                    viewers=rows
+                        .Where(r=>!string.IsNullOrWhiteSpace(((YouTubeChannel)r.Tag).ProfileId))
+                        .GroupBy(r=>(((YouTubeChannel)r.Tag).ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase)
+                        .Select(g=>(((YouTubeChannel)g.First().Tag),g.First()))
+                        .ToList();
+                }
+                if(viewers.Count==0)throw new Exception("Нет профилей Dolphin для прогрева.");
+                cancellation=new CancellationTokenSource();Busy(true);
+                token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
+                int batchSize=Math.Max(1,Math.Min(5,settings.WatchMaxParallelProfiles));
+                int batchTotal=(viewers.Count+batchSize-1)/batchSize;
+                Write("["+MarketLabel(marketView)+"] прогрев Shorts · "+viewers.Count+" акк. · "+settings.YouTubeWarmupMinMinutes+"–"+settings.YouTubeWarmupMaxMinutes+" мин · пачки по "+batchSize+".");
+                var errors=new ConcurrentBag<string>();
+                int ok=0;
+                bool cancelled=false;
+                for(int batchStart=0;batchStart<viewers.Count&&!cancelled;batchStart+=batchSize){
+                    var batch=viewers.Skip(batchStart).Take(batchSize).ToList();
+                    int batchNum=batchStart/batchSize+1;
+                    Write("Прогрев: пачка "+batchNum+"/"+batchTotal+" — "+string.Join(", ",batch.Select(v=>v.ch.Name??"?"))+".");
+                    var launchGate=ProfileLaunchGate.FromSettings(settings,batch.Count);
+                    var tasks=batch.Select(pair=>Task.Run(async()=>{
+                        var ch=pair.ch;var row=pair.row;
+                        try{
+                            await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
+                            cancellation.Token.ThrowIfCancellationRequested();
+                            Status(row,"Прогрев Shorts…");
+                            await RunWarmupForChannel(token,ch,row,cancellation.Token).ConfigureAwait(false);
+                            System.Threading.Interlocked.Increment(ref ok);
+                        }catch(OperationCanceledException){throw;}
+                        catch(Exception e){errors.Add(ch.Name+": "+e.Message);Status(row,"Ошибка прогрева");}
+                    })).ToArray();
+                    try{await Task.WhenAll(tasks).ConfigureAwait(true);}
+                    catch(OperationCanceledException){Write("Прогрев остановлен.");cancelled=true;}
+                }
+                if(errors.Count>0){
+                    Write("Прогрев: "+ok+"/"+viewers.Count+" успешно, ошибок "+errors.Count+".");
+                    MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Прогрев Shorts",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                }else{
+                    Write("["+MarketLabel(marketView)+"] прогрев завершён: "+ok+"/"+viewers.Count+" аккаунтов.");
+                    MessageBox.Show(this,ok+" аккаунт(ов) прошли прогрев Shorts.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);
                 }
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}
         }

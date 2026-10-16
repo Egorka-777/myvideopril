@@ -9,6 +9,7 @@ namespace VideoBatch {
     public sealed class AppShell : Form {
         readonly Preferences settings;
         readonly NavigationService navigation = new NavigationService();
+        TableLayoutPanel shellRoot;
         Panel sidebar;
         Panel topBar;
         Panel contentHost;
@@ -39,8 +40,15 @@ namespace VideoBatch {
         AssemblyWindow assemblyStudio;
         HighlightsPanel highlightsPanel;
         TelegramPanel telegramPanel;
+        YouTubeWarmupPanel youtubeWarmupPanel;
+        WarmupVideoPanel warmupVideoPanel;
         MainWindow processingWindow;
         Control currentContent;
+        AppPlatform appPlatform = AppPlatform.Unchosen;
+        Label platformBadge;
+        Button platformBackBtn;
+        PlatformHubPanel platformHub;
+        bool hubMode;
 
         public AppShell(Preferences prefs) {
             settings = prefs ?? new Preferences();
@@ -50,21 +58,21 @@ namespace VideoBatch {
             Theme.StyleShellForm(this);
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            var root = new TableLayoutPanel {
+            shellRoot = new TableLayoutPanel {
                 Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
                 BackColor = Theme.Background, Padding = Padding.Empty, Margin = Padding.Empty
             };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Theme.SidebarExpanded));
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            Controls.Add(root);
+            shellRoot.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Theme.SidebarExpanded));
+            shellRoot.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            Controls.Add(shellRoot);
 
             sidebar = BuildSidebar();
-            root.Controls.Add(sidebar, 0, 0);
+            shellRoot.Controls.Add(sidebar, 0, 0);
 
             var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Background };
             right.RowStyles.Add(new RowStyle(SizeType.Absolute, Theme.TopBarHeight));
             right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.Controls.Add(right, 1, 0);
+            shellRoot.Controls.Add(right, 1, 0);
 
             topBar = BuildTopBar();
             right.Controls.Add(topBar, 0, 0);
@@ -74,8 +82,13 @@ namespace VideoBatch {
 
             navigation.Navigated += ShowSection;
             BuildPanels();
-            ShowSection(NavSection.Home);
-            Shown += async (s, e) => await CheckDolphinAsync(false);
+            appPlatform = AppPlatformNav.Parse(settings.AppPlatformView);
+            if (appPlatform == AppPlatform.Unchosen) appPlatform = AppPlatform.YouTube;
+            ApplyPlatform(appPlatform, navigate: false);
+            Shown += async (s, e) => {
+                ShowPlatformHub();
+                await CheckDolphinAsync(false);
+            };
             bool closingAfterLive = false, waitingForLive = false, closingAfterHighlights = false, waitingForHighlights = false;
             FormClosing += async (s, e) => {
                 if (!closingAfterLive && youtubeWorkspace?.HasLiveWork == true) {
@@ -106,7 +119,7 @@ namespace VideoBatch {
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
             y = AddNavGroup(panel, "Аккаунты", y, NavItem("Аккаунты", NavSection.AccountLibrary), NavItem("Профили браузера", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
             y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram));
-            y = AddNavGroup(panel, "Автоматизация", y, NavItem("Просмотры и поиск", NavSection.ViewsSearch));
+            y = AddNavGroup(panel, "YouTube", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогревочные ролики", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
             return panel;
         }
@@ -154,6 +167,16 @@ namespace VideoBatch {
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft
             };
+            platformBadge = new Label {
+                Text = "",
+                Font = Theme.FontSmall,
+                ForeColor = Theme.Accent,
+                AutoSize = true,
+                Margin = new Padding(12, 0, 0, 0)
+            };
+            platformBackBtn = Theme.MakeButton("← К разделам", ghost: true, action: ShowPlatformHub);
+            platformBackBtn.Margin = new Padding(0, 8, 8, 8);
+            platformBackBtn.Visible = false;
 
             globalSearch = Theme.MakeSearchBox();
             globalSearch.Width = 220;
@@ -190,9 +213,13 @@ namespace VideoBatch {
             };
             actionsWrap.Controls.Add(dolphinRefreshBtn);
             actionsWrap.Controls.Add(settingsBtn);
+            actionsWrap.Controls.Add(platformBackBtn);
             actionsWrap.Controls.Add(menuToggleBtn);
 
-            bar.Controls.Add(pageTitleLabel, 0, 0);
+            var titleWrap = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, BackColor = Theme.TopBar, FlowDirection = FlowDirection.LeftToRight };
+            titleWrap.Controls.Add(pageTitleLabel);
+            titleWrap.Controls.Add(platformBadge);
+            bar.Controls.Add(titleWrap, 0, 0);
             bar.Controls.Add(statusWrap, 1, 0);
             bar.Controls.Add(actionsWrap, 2, 0);
             return bar;
@@ -209,6 +236,11 @@ namespace VideoBatch {
             youtubeWorkspace = new YouTubeWorkspacePanel(settings, youtubeBackend, navigation);
             tiktokWorkspace = new TikTokWorkspacePanel(settings, tiktokBackend);
             viewsSearchPanel = new ViewsSearchPanel(settings, youtubeBackend);
+            youtubeWarmupPanel = new YouTubeWarmupPanel(settings, youtubeBackend);
+            warmupVideoPanel = new WarmupVideoPanel(settings);
+            platformHub = new PlatformHubPanel();
+            platformHub.PlatformChosen += p => { HidePlatformHub(); ApplyPlatform(p, navigate: true); };
+            AddPanel(platformHub);
             tasksPanel = new TasksPanel(settings);
             logsPanel = new LogsPanel(settings);
             statsPanel = new StatisticsPanel(settings);
@@ -220,6 +252,8 @@ namespace VideoBatch {
             AddPanel(youtubeWorkspace);
             AddPanel(tiktokWorkspace);
             AddPanel(viewsSearchPanel);
+            AddPanel(youtubeWarmupPanel);
+            AddPanel(warmupVideoPanel);
             AddPanel(tasksPanel);
             AddPanel(logsPanel);
             AddPanel(statsPanel);
@@ -281,6 +315,8 @@ namespace VideoBatch {
                 case NavSection.Telegram: next = telegramPanel; telegramPanel.RefreshData(); break;
                 case NavSection.YouTube: next = youtubeWorkspace; youtubeWorkspace.OnNavigated(); break;
                 case NavSection.TikTok: next = tiktokWorkspace; tiktokWorkspace.OnNavigated(); break;
+                case NavSection.Warmup: next = youtubeWarmupPanel; youtubeWarmupPanel.ReloadAccounts(); break;
+                case NavSection.WarmupClips: next = warmupVideoPanel; break;
                 case NavSection.ViewsSearch: next = viewsSearchPanel; viewsSearchPanel.RefreshData(); break;
                 case NavSection.Logs: next = logsPanel; logsPanel.RefreshData(); break;
                 case NavSection.Settings: next = settingsPanel; break;
@@ -304,11 +340,77 @@ namespace VideoBatch {
             }
         }
 
+        bool TryRestorePlatformFromSettings() {
+            var p = AppPlatformNav.Parse(settings.AppPlatformView);
+            if (p == AppPlatform.Unchosen) return false;
+            ApplyPlatform(p, navigate: true);
+            return true;
+        }
+
+        void ShowPlatformHub() {
+            hubMode = true;
+            platformBackBtn.Visible = false;
+            sidebar.Visible = false;
+            topBar.Visible = false;
+            shellRoot.ColumnStyles[0].Width = 0;
+            if (currentContent != null) currentContent.Visible = false;
+            platformHub.Visible = true;
+            platformHub.BringToFront();
+            currentContent = platformHub;
+            pageTitleLabel.Text = "VideoBatch";
+            platformBadge.Text = "";
+        }
+
+        void HidePlatformHub() {
+            hubMode = false;
+            sidebar.Visible = true;
+            topBar.Visible = true;
+            shellRoot.ColumnStyles[0].Width = sidebarExpanded ? Theme.SidebarExpanded : Theme.SidebarCollapsed;
+            platformBackBtn.Visible = true;
+            platformHub.Visible = false;
+        }
+
+        void ApplyPlatform(AppPlatform platform, bool navigate) {
+            if (platform == AppPlatform.Unchosen) platform = AppPlatform.YouTube;
+            appPlatform = platform;
+            settings.AppPlatformView = AppPlatformNav.ToStorage(platform);
+            SaveSettings();
+            platformBadge.Text = AppPlatformNav.Title(platform);
+            foreach (Control c in sidebar.Controls) {
+                if (c is Button b && b.Tag is NavSection section) {
+                    bool visible = AppPlatformNav.IsNavVisible(appPlatform, section);
+                    b.Visible = visible;
+                    if (!visible && navigation.Current == section && navigate)
+                        navigation.Navigate(AppPlatformNav.DefaultSection(appPlatform));
+                }
+            }
+            RefreshSidebarGroupVisibility();
+            dolphinLabel.Visible = dolphinDot.Visible = dolphinRefreshBtn.Visible = appPlatform != AppPlatform.Telegram;
+            if (navigate) {
+                HidePlatformHub();
+                navigation.Navigate(AppPlatformNav.DefaultSection(appPlatform));
+            } else RefreshSidebarGroupVisibility();
+        }
+
+        void RefreshSidebarGroupVisibility() {
+            foreach (Control c in sidebar.Controls) {
+                if (c is Label group && group.Font == Theme.FontSmall)
+                    group.Visible = sidebarExpanded && IsGroupVisibleForPlatform(group.Text);
+            }
+        }
+
+        bool IsGroupVisibleForPlatform(string caption) {
+            if (caption == "YouTube") return appPlatform == AppPlatform.YouTube;
+            if (caption == "Аккаунты") return appPlatform == AppPlatform.YouTube || appPlatform == AppPlatform.TikTok;
+            if (caption == "Контент") return appPlatform != AppPlatform.Unchosen;
+            return true;
+        }
+
         void ToggleSidebar() {
             sidebarExpanded = !sidebarExpanded;
-            ((TableLayoutPanel)Controls[0]).ColumnStyles[0].Width = sidebarExpanded ? Theme.SidebarExpanded : Theme.SidebarCollapsed;
+            if (!hubMode) shellRoot.ColumnStyles[0].Width = sidebarExpanded ? Theme.SidebarExpanded : Theme.SidebarCollapsed;
             foreach (Control c in sidebar.Controls) {
-                if (c is Label l && l.Font == Theme.FontSmall) l.Visible = sidebarExpanded;
+                if (c is Label l && l.Font == Theme.FontSmall) l.Visible = sidebarExpanded && IsGroupVisibleForPlatform(l.Text);
                 if (c is Button b && b.Tag is NavSection) {
                     string full = NavigationService.Title((NavSection)b.Tag);
                     b.Text = sidebarExpanded ? full : (full.Length > 0 ? full.Substring(0, 1) : "?");

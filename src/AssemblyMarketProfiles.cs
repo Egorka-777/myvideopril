@@ -27,6 +27,8 @@ namespace VideoBatch {
             if (profile == AssemblyProfile.En) return Path.Combine(root, "Assembled-EN");
             if (profile == AssemblyProfile.RuInst) return Path.Combine(root, "Assembled-RU-Inst");
             if (profile == AssemblyProfile.EnInst) return Path.Combine(root, "Assembled-EN-Inst");
+            if (profile == AssemblyProfile.RuTikTok) return Path.Combine(root, "Assembled-RU-TikTok");
+            if (profile == AssemblyProfile.EnTikTok) return Path.Combine(root, "Assembled-EN-TikTok");
             return Path.Combine(root, "Assembled");
         }
 
@@ -35,7 +37,35 @@ namespace VideoBatch {
             if (profile == AssemblyProfile.En) return t.MarketEn ?? (t.MarketEn = new AssemblyMarketSettings());
             if (profile == AssemblyProfile.RuInst) return t.MarketRuInst ?? (t.MarketRuInst = new AssemblyMarketSettings());
             if (profile == AssemblyProfile.EnInst) return t.MarketEnInst ?? (t.MarketEnInst = new AssemblyMarketSettings());
+            if (profile == AssemblyProfile.RuTikTok) return t.MarketRuTikTok ?? (t.MarketRuTikTok = new AssemblyMarketSettings());
+            if (profile == AssemblyProfile.EnTikTok) return t.MarketEnTikTok ?? (t.MarketEnTikTok = new AssemblyMarketSettings());
             return t.MarketRu ?? (t.MarketRu = new AssemblyMarketSettings());
+        }
+
+        /// <summary>When a scene gains objects in one profile, copy missing layers to sibling profiles (same scene folder).</summary>
+        static void PropagateSceneLayers(AssemblyTemplate t, string sourceProfile) {
+            var source = Slice(t, sourceProfile);
+            if (source.Scenes == null || source.Scenes.Count == 0) return;
+            foreach (string profile in AssemblyProfile.All) {
+                if (profile == sourceProfile) continue;
+                var slice = Slice(t, profile);
+                if (!slice.WorkspaceConfigured || slice.Scenes == null || slice.Scenes.Count == 0) continue;
+                foreach (var srcScene in source.Scenes) {
+                    if (string.IsNullOrWhiteSpace(srcScene.Folder)) continue;
+                    var dst = slice.Scenes.FirstOrDefault(s => string.Equals(s.Folder, srcScene.Folder, StringComparison.OrdinalIgnoreCase));
+                    if (dst == null) continue;
+                    for (int li = dst.Layers.Count; li < srcScene.Layers.Count; li++)
+                        dst.Layers.Add(CloneLayer(srcScene.Layers[li]));
+                }
+            }
+        }
+
+        public static void SyncMissingLayersFromPrimary(AssemblyTemplate t) {
+            if (t == null) return;
+            EnsureSeeded(t);
+            var primary = t.MarketRu;
+            if (!primary.WorkspaceConfigured || primary.Scenes == null) return;
+            PropagateSceneLayers(t, AssemblyProfile.Ru);
         }
 
         static AssemblyOutputMetadata CloneMetadata(AssemblyOutputMetadata source) {
@@ -176,7 +206,12 @@ namespace VideoBatch {
             if (t.MarketEn == null) t.MarketEn = new AssemblyMarketSettings();
             if (t.MarketRuInst == null) t.MarketRuInst = new AssemblyMarketSettings();
             if (t.MarketEnInst == null) t.MarketEnInst = new AssemblyMarketSettings();
-            if (t.AssemblyMarketsSeeded) return;
+            if (t.MarketRuTikTok == null) t.MarketRuTikTok = new AssemblyMarketSettings();
+            if (t.MarketEnTikTok == null) t.MarketEnTikTok = new AssemblyMarketSettings();
+            if (t.AssemblyMarketsSeeded) {
+                SyncMissingLayersFromPrimary(t);
+                return;
+            }
             Capture(t, AssemblyProfile.Ru);
             t.MarketEn.TitleBank = t.MarketRu.TitleBank.ToList();
             t.MarketEn.Count = t.MarketRu.Count;
@@ -188,7 +223,26 @@ namespace VideoBatch {
             if (string.Equals(t.HistoryScope, AssemblyHistoryScope.En, StringComparison.OrdinalIgnoreCase)) {
                 Capture(t, AssemblyProfile.En);
             }
+            SeedChannelProfile(t, AssemblyProfile.RuInst, AssemblyProfile.Ru);
+            SeedChannelProfile(t, AssemblyProfile.EnInst, AssemblyProfile.En);
+            SeedChannelProfile(t, AssemblyProfile.RuTikTok, AssemblyProfile.Ru);
+            SeedChannelProfile(t, AssemblyProfile.EnTikTok, AssemblyProfile.En);
             t.AssemblyMarketsSeeded = true;
+            SyncMissingLayersFromPrimary(t);
+        }
+
+        static void SeedChannelProfile(AssemblyTemplate t, string channel, string main) {
+            var slice = Slice(t, channel);
+            var parent = Slice(t, main);
+            if (slice.Configured) return;
+            slice.Output = DefaultOutput(channel);
+            slice.Count = parent.Count > 0 ? parent.Count : t.Count;
+            slice.OutputMetadata = CloneMetadata(parent.OutputMetadata);
+            slice.FormatWidth = parent.FormatWidth >= 180 ? parent.FormatWidth : t.Width;
+            slice.FormatHeight = parent.FormatHeight >= 180 ? parent.FormatHeight : t.Height;
+            slice.TitleBank = (parent.TitleBank ?? new List<string>()).ToList();
+            if (parent.WorkspaceConfigured) ImportWorkspaceFromSettings(slice, parent);
+            slice.Configured = true;
         }
 
         public static void Capture(AssemblyTemplate t, string profile) {
@@ -202,6 +256,7 @@ namespace VideoBatch {
             slice.FormatHeight = t.Height;
             slice.OutputMetadata = CloneMetadata(t.OutputMetadata);
             CaptureWorkspace(t, slice);
+            PropagateSceneLayers(t, profile);
             slice.Configured = true;
         }
 
@@ -221,7 +276,7 @@ namespace VideoBatch {
                     slice.FormatWidth = t.Width;
                     slice.FormatHeight = t.Height;
                 }
-                if (AssemblyProfile.IsInst(profile) && !slice.WorkspaceConfigured && main.WorkspaceConfigured)
+                if (AssemblyProfile.IsChannelProfile(profile) && !slice.WorkspaceConfigured && main.WorkspaceConfigured)
                     ImportWorkspaceFromSettings(slice, main);
                 slice.TitleBank = (main.TitleBank ?? new List<string>()).ToList();
                 slice.Configured = true;

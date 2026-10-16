@@ -487,6 +487,42 @@ namespace VideoBatch {
             tokenRow.Controls.Add(dolphinToken);
             tokenRow.Controls.Add(saveToken);
             Add(tokenRow);
+
+            Add(new Label {
+                Text = "Нейросеть и озвучка (прогревочные ролики)",
+                Font = new Font(Theme.FontPageTitle.FontFamily, 11f, FontStyle.Bold),
+                ForeColor = Theme.TextPrimary,
+                AutoSize = true,
+                Margin = new Padding(0, 16, 0, 4)
+            });
+            Add(new Label {
+                Text = "OpenRouter — тексты (GPT и др.). ElevenLabs — озвучка; на бесплатном тарифе хватает для коротких роликов. Ключи хранятся на этом ПК (DPAPI).",
+                ForeColor = Theme.TextSecondary,
+                AutoSize = true,
+                MaximumSize = new Size(780, 0),
+                Margin = new Padding(0, 0, 0, 6)
+            });
+            var openRouterKey = Theme.MakeSearchBox(); openRouterKey.Width = 560; openRouterKey.UseSystemPasswordChar = true;
+            var savedOr = WindowsSupport.Unprotect(settings.ProtectedOpenRouterKey);
+            if (!string.IsNullOrWhiteSpace(savedOr)) openRouterKey.Text = savedOr;
+            var openRouterModel = Theme.MakeSearchBox(); openRouterModel.Width = 360;
+            openRouterModel.Text = string.IsNullOrWhiteSpace(settings.OpenRouterModel) ? "openai/gpt-4o-mini" : settings.OpenRouterModel;
+            var elevenKey = Theme.MakeSearchBox(); elevenKey.Width = 560; elevenKey.UseSystemPasswordChar = true;
+            var savedEl = WindowsSupport.Unprotect(settings.ProtectedElevenLabsKey);
+            if (string.IsNullOrWhiteSpace(savedEl)) savedEl = WindowsSupport.Unprotect(settings.ProtectedKey);
+            if (!string.IsNullOrWhiteSpace(savedEl)) elevenKey.Text = savedEl;
+            Add(Labeled("OpenRouter API-ключ", openRouterKey));
+            Add(Labeled("Модель OpenRouter (например openai/gpt-4o-mini)", openRouterModel));
+            Add(Labeled("ElevenLabs API-ключ", elevenKey));
+            Add(Theme.MakeButton("Сохранить API", accent: true, action: () => {
+                settings.ProtectedOpenRouterKey = string.IsNullOrWhiteSpace(openRouterKey.Text) ? "" : WindowsSupport.Protect(openRouterKey.Text.Trim());
+                settings.OpenRouterModel = (openRouterModel.Text ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(settings.OpenRouterModel)) settings.OpenRouterModel = "openai/gpt-4o-mini";
+                settings.ProtectedElevenLabsKey = string.IsNullOrWhiteSpace(elevenKey.Text) ? "" : WindowsSupport.Protect(elevenKey.Text.Trim());
+                save();
+                MessageBox.Show(FindForm(), "Ключи OpenRouter и ElevenLabs сохранены.", "Настройки", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }));
+
             Add(new Label {
                 Text = "YouTube · HTTP и расписание",
                 Font = new Font(Theme.FontPageTitle.FontFamily, 11f, FontStyle.Bold),

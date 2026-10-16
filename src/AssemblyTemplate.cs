@@ -39,6 +39,7 @@ namespace VideoBatch {
         public int MarketWorkspaceVersion;
         public AssemblyMarketSettings MarketRu = new AssemblyMarketSettings(), MarketEn = new AssemblyMarketSettings();
         public AssemblyMarketSettings MarketRuInst = new AssemblyMarketSettings(), MarketEnInst = new AssemblyMarketSettings();
+        public AssemblyMarketSettings MarketRuTikTok = new AssemblyMarketSettings(), MarketEnTikTok = new AssemblyMarketSettings();
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
@@ -189,7 +190,13 @@ namespace VideoBatch {
                     if (string.IsNullOrWhiteSpace(l.Source)) l.Source = Path.Combine(scene.Folder, j == 0 ? "Изображения" : "Пачка-" + (j + 1));
                     MakeFolder(t.Resolve(l.Source));
                     var files=AssemblyFiles.Pool(t.Resolve(l.Source),t.PictureExtensions);
-                    if (files.Count>0) { l.PlacementConfigured=true; l.Fixed=files.Select(AssemblyFiles.Hash).Distinct().Count()==1; l.FixedAssetHash=l.Fixed?AssemblyFiles.Hash(files[0]):""; }
+                    if (files.Count>0) {
+                        l.PlacementConfigured=true;
+                        if (!l.ModeExplicit) {
+                            l.Fixed=files.Select(AssemblyFiles.Hash).Distinct().Count()==1;
+                            l.FixedAssetHash=l.Fixed?AssemblyFiles.Hash(files[0]):"";
+                        }
+                    }
                     if (objects) l.ModeExplicit=l.Fixed || l.Unique;
                 }
             }

@@ -26,7 +26,7 @@ namespace VideoBatch {
         public int FilterThreads => Math.Min(4, Math.Max(1, Environment.ProcessorCount / 2));
         internal static string RasterKey(AssemblyTemplate t, AssemblyLayerPlan p) {
             var l = p.Layer;
-            return AssemblyFiles.HashText(string.Join("|", t.Width, t.Height, p.Asset.Hash, Path.GetFullPath(p.Asset.Path),
+            return AssemblyFiles.HashText(string.Join("|", t.Width, t.Height, l.ObjectId, p.Asset.Hash, Path.GetFullPath(p.Asset.Path),
                 Core.N(l.X), Core.N(l.Y), Core.N(l.Width), Core.N(l.Height), Core.N(l.Opacity), l.Font,
                 Core.N(l.FontSize), Core.N(l.Radius), Core.N(l.Padding)));
         }

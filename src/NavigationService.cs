@@ -12,6 +12,7 @@ namespace VideoBatch {
         YouTube,
         TikTok,
         Warmup,
+        WarmupClips,
         ViewsSearch,
         Logs,
         Settings,
@@ -44,7 +45,8 @@ namespace VideoBatch {
                 case NavSection.YouTube: return "YouTube";
                 case NavSection.TikTok: return "TikTok";
                 case NavSection.Telegram: return "Telegram";
-                case NavSection.Warmup: return "Прогрев";
+                case NavSection.Warmup: return "Автопрогрев";
+                case NavSection.WarmupClips: return "Прогревочные ролики";
                 case NavSection.ViewsSearch: return "Просмотры и поиск";
                 case NavSection.Logs: return "Логи";
                 case NavSection.Settings: return "Настройки";
@@ -54,7 +56,6 @@ namespace VideoBatch {
 
         public static bool IsImplemented(NavSection section) {
             switch (section) {
-                case NavSection.Warmup:
                 case NavSection.ViewsSearch:
                 case NavSection.Statistics:
                     return false;

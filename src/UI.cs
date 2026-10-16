@@ -21,7 +21,20 @@ namespace VideoBatch {
         public static FlowLayoutPanel Flow(){return new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,WrapContents=false,FlowDirection=FlowDirection.LeftToRight,Margin=new Padding(0),Padding=new Padding(0)};}
         public static void Error(IWin32Window owner,Exception e){AppDiagnostics.Write("Приложение","","","error",e.ToString(),"error");MessageBox.Show(owner,e.Message,"VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
         public static string File(IWin32Window owner,string filter){using(var d=new OpenFileDialog{Filter=filter})return d.ShowDialog(owner)==DialogResult.OK?d.FileName:null;}
-        public static string Folder(IWin32Window owner,string current){using(var d=new FolderBrowserDialog{SelectedPath=current,Description="Выберите папку"})return d.ShowDialog(owner)==DialogResult.OK?d.SelectedPath:null;}
+        public static string Folder(IWin32Window owner,string current,string title="Выберите папку")=>PickFolder(owner,current,title);
+        /// <summary>Modern Windows folder picker (Explorer-style), not the legacy tree dialog.</summary>
+        public static string PickFolder(IWin32Window owner,string current,string title="Выберите папку"){
+            using(var d=new OpenFileDialog{Title=title,Filter="Папки|*.none",ValidateNames=false,CheckFileExists=false,CheckPathExists=true,FileName="Выберите эту папку",SupportMultiDottedExtensions=true,Multiselect=false}){
+                try{d.AutoUpgradeEnabled=true;}catch{}
+                if(!string.IsNullOrWhiteSpace(current)){
+                    string dir=Directory.Exists(current)?current:Path.GetDirectoryName(current);
+                    if(!string.IsNullOrWhiteSpace(dir)&&Directory.Exists(dir))d.InitialDirectory=dir;
+                }
+                if(d.ShowDialog(owner)!=DialogResult.OK)return null;
+                string chosen=Path.GetDirectoryName(d.FileName);
+                return string.IsNullOrWhiteSpace(chosen)?null:PathUtil.Normalize(chosen);
+            }
+        }
         public static void Open(string path){
             if(string.IsNullOrWhiteSpace(path))throw new Exception("Путь не указан.");
             if(path.StartsWith("http://",StringComparison.OrdinalIgnoreCase)||path.StartsWith("https://",StringComparison.OrdinalIgnoreCase)){Process.Start(new ProcessStartInfo(path){UseShellExecute=true});return;}

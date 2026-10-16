@@ -27,7 +27,7 @@ namespace VideoBatch {
         FlowLayoutPanel options;
         FlowLayoutPanel footer, packChips;
         Label status, selectedCaption, capacityLabel;
-        Button videoButton, musicButton, formatButton, titlesButton, profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, stop, imageFiles, transitionButton, objectFiles, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
+        Button videoButton, musicButton, formatButton, titlesButton, profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, profileRuTikTokBtn, profileEnTikTokBtn, stop, imageFiles, transitionButton, objectFiles, countButton, lessButton, moreButton, assembleButton, sceneVideoButton;
         string studioProfile = AssemblyProfile.Ru;
         Preferences assemblyPrefs;
         ProgressBar progress;
@@ -111,10 +111,13 @@ namespace VideoBatch {
             profileEnBtn = ProfileToggle("EN", AssemblyProfile.En);
             profileRuInstBtn = ProfileToggle("RU Inst", AssemblyProfile.RuInst);
             profileEnInstBtn = ProfileToggle("EN Inst", AssemblyProfile.EnInst);
+            profileRuTikTokBtn = ProfileToggle("RU TikTok", AssemblyProfile.RuTikTok);
+            profileEnTikTokBtn = ProfileToggle("EN TikTok", AssemblyProfile.EnTikTok);
             profileRuBtn.Name = "AssemblyProfileRu"; profileEnBtn.Name = "AssemblyProfileEn";
             profileRuInstBtn.Name = "AssemblyProfileRuInst"; profileEnInstBtn.Name = "AssemblyProfileEnInst";
-            var marketRow = new FlowLayoutPanel { AutoSize = true, AutoSizeMode=AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = new Padding(0, 8, 0, 0) };
-            marketRow.Controls.Add(Theme.MakeHeroSegmentGroup("", profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn));
+            profileRuTikTokBtn.Name = "AssemblyProfileRuTikTok"; profileEnTikTokBtn.Name = "AssemblyProfileEnTikTok";
+            var marketRow = new FlowLayoutPanel { AutoSize = true, AutoSizeMode=AutoSizeMode.GrowAndShrink, WrapContents = true, MaximumSize = new Size(720, 0), Margin = new Padding(0, 8, 0, 0) };
+            marketRow.Controls.Add(Theme.MakeHeroSegmentGroup("", profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, profileRuTikTokBtn, profileEnTikTokBtn));
             headerGrid.Controls.Add(marketRow, 0, 1); headerGrid.SetColumnSpan(marketRow, 2);
             header.Controls.Add(headerGrid);
             workspace = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(workspace,0,1);
@@ -265,9 +268,9 @@ namespace VideoBatch {
         void Changed(bool background) { RefreshInfo(); RefreshCanvas(); saveTimer.Stop(); saveTimer.Start(); if (background) RequestBackground(); }
         Button ProfileToggle(string label, string profile) {
             var b = Theme.MakeHeroToggle(label, studioProfile == profile, () => SwitchProfile(profile));
-            if (label.IndexOf("Inst", StringComparison.OrdinalIgnoreCase) >= 0) {
+            if (label.IndexOf("Inst", StringComparison.OrdinalIgnoreCase) >= 0 || label.IndexOf("TikTok", StringComparison.OrdinalIgnoreCase) >= 0) {
                 b.AutoSize = false;
-                b.Size = new Size(92, Theme.HeroToggleHeight);
+                b.Size = new Size(label.IndexOf("TikTok", StringComparison.OrdinalIgnoreCase) >= 0 ? 98 : 92, Theme.HeroToggleHeight);
                 b.MinimumSize = b.Size;
             }
             return b;
@@ -299,6 +302,8 @@ namespace VideoBatch {
             Theme.ApplyHeroToggleStyle(profileEnBtn, studioProfile == AssemblyProfile.En);
             Theme.ApplyHeroToggleStyle(profileRuInstBtn, studioProfile == AssemblyProfile.RuInst);
             Theme.ApplyHeroToggleStyle(profileEnInstBtn, studioProfile == AssemblyProfile.EnInst);
+            Theme.ApplyHeroToggleStyle(profileRuTikTokBtn, studioProfile == AssemblyProfile.RuTikTok);
+            Theme.ApplyHeroToggleStyle(profileEnTikTokBtn, studioProfile == AssemblyProfile.EnTikTok);
         }
         void InsertScene(int index) { Safe(() => { AssemblyWorkspace.Insert(template,index); BuildScenes(); SelectScene(index); Save(); status.Text = "Сцена добавлена. Папка создана — нажми «+ Изображения» для объекта."; }); }
         void MoveScene(int delta) { Safe(() => { int next = sceneIndex + delta; if (next < 0 || next >= template.Scenes.Count) return; var scene = SelectedScene; template.Scenes.RemoveAt(sceneIndex); template.Scenes.Insert(next,scene); BuildScenes(); SelectScene(next); Save(); }); }
@@ -647,7 +652,13 @@ namespace VideoBatch {
         }
         protected override void OnMouseMove(MouseEventArgs e) {
             base.OnMouseMove(e); if (!dragging || selected == null) return; var f = Frame; double dx = (e.X - origin.X) / f.Width, dy = (e.Y - origin.Y) / f.Height;
-            if (resizing) { selected.Width = Math.Max(.02, Math.Min(1 - selected.X, oldWidth + dx)); selected.Height = Math.Max(.02, Math.Min(1 - selected.Y, oldHeight + dy)); }
+            if (resizing) {
+                double aspect = oldWidth / Math.Max(.001, oldHeight);
+                double nw = Math.Max(.02, Math.Min(1 - selected.X, oldWidth + dx));
+                double nh = Math.Max(.02, Math.Min(1 - selected.Y, oldHeight + dy));
+                if (Math.Abs(dx) >= Math.Abs(dy)) { selected.Width = nw; selected.Height = Math.Min(1 - selected.Y, nw / aspect); }
+                else { selected.Height = nh; selected.Width = Math.Min(1 - selected.X, nh * aspect); }
+            }
             else { selected.X = Math.Max(0, Math.Min(1 - selected.Width, oldX + dx)); selected.Y = Math.Max(0, Math.Min(1 - selected.Height, oldY + dy)); }
             PlacementChanged?.Invoke(); Invalidate();
         }

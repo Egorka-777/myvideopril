@@ -39,7 +39,7 @@ namespace VideoBatch {
                         }
                     } else {
                         using (var image = Image.FromFile(plan.Asset.Path)) {
-                            float ratio = Math.Min(box.Width / image.Width, box.Height / image.Height);
+                            float ratio = Math.Max(box.Width / image.Width, box.Height / image.Height);
                             var target = new Rectangle((int)Math.Round(box.X + (box.Width - image.Width * ratio) / 2), (int)Math.Round(box.Y + (box.Height - image.Height * ratio) / 2), Math.Max(1, (int)Math.Round(image.Width * ratio)), Math.Max(1, (int)Math.Round(image.Height * ratio)));
                             using (var attrs = new ImageAttributes()) {
                                 var matrix = new ColorMatrix(); matrix.Matrix33 = (float)l.Opacity; attrs.SetColorMatrix(matrix);

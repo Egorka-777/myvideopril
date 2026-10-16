@@ -144,6 +144,23 @@ namespace VideoBatch {
         public int YouTubeSchedulePeriodMinGapMinutes=10;
         public string YouTubeScheduleFirstPublish="";
         public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
+        /// <summary>YouTube | TikTok | Telegram | Studio — стартовый раздел интерфейса.</summary>
+        public string AppPlatformView="";
+        public int YouTubeWarmupMinMinutes=5, YouTubeWarmupMaxMinutes=15;
+        public int YouTubeWarmupWatchMinSec=15, YouTubeWarmupWatchMaxSec=45;
+        public bool YouTubeWarmupLikesEnabled=true;
+        public int YouTubeWarmupLikePercent=38;
+        public bool YouTubeWarmupAutoBeforeUpload;
+        public string ProtectedOpenRouterKey="", ProtectedElevenLabsKey="";
+        public string OpenRouterModel="openai/gpt-4o-mini";
+        public string WarmupVideoMarketView="RU";
+        public string WarmupVideoPromptRu="Короткие смешные анекдоты про трейдеров и трейдинг, без мата, 1–2 предложения.";
+        public string WarmupVideoPromptEn="Short funny jokes about traders and trading, clean, 1–2 sentences.";
+        public int WarmupVideoCountRu=10, WarmupVideoCountEn=10;
+        public int WarmupVideoMaxSecRu=8, WarmupVideoMaxSecEn=8;
+        public string WarmupVideoBackgroundsRu="", WarmupVideoBackgroundsEn="";
+        public string WarmupVideoOutputRu="", WarmupVideoOutputEn="";
+        public string WarmupVideoPreviewOverlay="none";
     }
 
     public static class YouTubeTagDefaults {
@@ -346,7 +363,27 @@ namespace VideoBatch {
             if(p.ProfileLaunchStaggerMinMs<1000)p.ProfileLaunchStaggerMinMs=3000;
             if(p.ProfileLaunchStaggerMaxMs<p.ProfileLaunchStaggerMinMs)p.ProfileLaunchStaggerMaxMs=p.ProfileLaunchStaggerMinMs+2000;
             if(p.ProfileLaunchStaggerMaxMs>30000)p.ProfileLaunchStaggerMaxMs=30000;
-            if(p.YouTubeSearchTitleRu==null)p.YouTubeSearchTitleRu="";
+            if(p.YouTubeWarmupMinMinutes<1)p.YouTubeWarmupMinMinutes=5;
+            if(p.YouTubeWarmupMaxMinutes<p.YouTubeWarmupMinMinutes)p.YouTubeWarmupMaxMinutes=p.YouTubeWarmupMinMinutes;
+            if(p.YouTubeWarmupMaxMinutes>180)p.YouTubeWarmupMaxMinutes=180;
+            if(p.YouTubeWarmupWatchMinSec<3)p.YouTubeWarmupWatchMinSec=15;
+            if(p.YouTubeWarmupWatchMaxSec<p.YouTubeWarmupWatchMinSec)p.YouTubeWarmupWatchMaxSec=p.YouTubeWarmupWatchMinSec;
+            if(p.YouTubeWarmupWatchMaxSec>300)p.YouTubeWarmupWatchMaxSec=300;
+            if(p.YouTubeWarmupLikePercent<0)p.YouTubeWarmupLikePercent=0;
+            if(p.YouTubeWarmupLikePercent>100)p.YouTubeWarmupLikePercent=100;
+            if(string.IsNullOrWhiteSpace(p.OpenRouterModel))p.OpenRouterModel="openai/gpt-4o-mini";
+            if(string.IsNullOrWhiteSpace(p.WarmupVideoMarketView)||(p.WarmupVideoMarketView!="RU"&&p.WarmupVideoMarketView!="EN"))p.WarmupVideoMarketView="RU";
+            if(p.WarmupVideoCountRu<1)p.WarmupVideoCountRu=10;
+            if(p.WarmupVideoCountEn<1)p.WarmupVideoCountEn=10;
+            if(p.WarmupVideoMaxSecRu<3)p.WarmupVideoMaxSecRu=8;
+            if(p.WarmupVideoMaxSecEn<3)p.WarmupVideoMaxSecEn=8;
+            if(p.WarmupVideoPromptRu==null)p.WarmupVideoPromptRu="";
+            if(p.WarmupVideoPromptEn==null)p.WarmupVideoPromptEn="";
+            if(p.WarmupVideoBackgroundsRu==null)p.WarmupVideoBackgroundsRu="";
+            if(p.WarmupVideoBackgroundsEn==null)p.WarmupVideoBackgroundsEn="";
+            if(p.WarmupVideoOutputRu==null)p.WarmupVideoOutputRu="";
+            if(p.WarmupVideoOutputEn==null)p.WarmupVideoOutputEn="";
+            if(string.IsNullOrWhiteSpace(p.WarmupVideoPreviewOverlay))p.WarmupVideoPreviewOverlay="none";
             if(p.YouTubeSearchUrlRu==null)p.YouTubeSearchUrlRu="";
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchFilterRu))p.YouTubeSearchFilterRu="today";
             if(p.YouTubeSearchTitleEn==null)p.YouTubeSearchTitleEn="";

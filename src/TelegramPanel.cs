@@ -263,7 +263,7 @@ namespace VideoBatch {
             busy=true;try{store.Prepare();status.Text="Подготовка Telegram…";
                 var script=Path.Combine(TelegramRunner.Scripts(),"setup.ps1");
                 var info=new ProcessStartInfo("powershell.exe","-NoProfile -ExecutionPolicy Bypass -File "+Core.Quote(script)+" -Root "+Core.Quote(store.Root)){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=System.Text.Encoding.UTF8,StandardErrorEncoding=System.Text.Encoding.UTF8};
-                using(var process=Process.Start(info)){preparation=process;var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();await Task.Run(()=>process.WaitForExit());await output;await error;if(process.ExitCode!=0)throw new IOException("Подготовка не завершена. Агенту: запустите tools/telegram/setup.ps1 в PowerShell и проверьте установку Python 3.11 x64.");}
+                using(var process=Process.Start(info)){preparation=process;var output=await process.StandardOutput.ReadToEndAsync();var error=await process.StandardError.ReadToEndAsync();await Task.Run(()=>process.WaitForExit());if(process.ExitCode!=0){string detail=(error+output).Trim();if(detail.Length>400)detail=detail.Substring(0,400)+"…";throw new IOException(string.IsNullOrWhiteSpace(detail)?"Подготовка не завершена. Установите Python 3.11 или 3.12 (64-bit) с python.org и нажмите «Подготовить Telegram» снова.":detail);}}
                 status.Text="Telegram подготовлен";
             }catch(Exception e){Failure(e);}finally{preparation=null;busy=false;}
         }
