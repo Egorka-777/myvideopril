@@ -75,9 +75,13 @@ namespace VideoBatch {
                     using(var panel=new TelegramPanel(store)) {
                         form.Controls.Add(panel);form.Show();System.Windows.Forms.Application.DoEvents();
                         Directory.CreateDirectory(output);
-                        foreach(var tab in new[]{0,1}) {
+                        foreach(var tab in new[]{0,1,2}) {
                             panel.SelectTab(tab);System.Windows.Forms.Application.DoEvents();
-                            using(var bitmap=new System.Drawing.Bitmap(panel.ClientSize.Width,panel.ClientSize.Height)){panel.DrawToBitmap(bitmap,panel.ClientRectangle);bitmap.Save(Path.Combine(output,tab==0?"telegram-accounts.png":"telegram-invites.png"));}
+                            using(var bitmap=new System.Drawing.Bitmap(panel.ClientSize.Width,panel.ClientSize.Height)){panel.DrawToBitmap(bitmap,panel.ClientRectangle);bitmap.Save(Path.Combine(output,tab==0?"telegram-accounts.png":tab==1?"telegram-proxies.png":"telegram-invites.png"));}
+                        }
+                        using(var wizard=new TelegramImportDialog(store,new[]{@"C:\Downloads\700001.json"})){
+                            wizard.Show();System.Windows.Forms.Application.DoEvents();
+                            using(var bitmap=new System.Drawing.Bitmap(wizard.ClientSize.Width,wizard.ClientSize.Height)){wizard.DrawToBitmap(bitmap,wizard.ClientRectangle);bitmap.Save(Path.Combine(output,"telegram-import.png"));}wizard.Close();
                         }
                         form.Close();
                     }

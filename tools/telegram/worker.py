@@ -17,7 +17,7 @@ import time
 import zipfile
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-15-telegram-v1'
+VERSION = '2026-10-16-telegram-connect-v2'
 CANCEL = threading.Event()
 MAX_ARCHIVE = 256 * 1024 * 1024
 MAX_FILES = 10000
@@ -57,7 +57,7 @@ def parse_proxy(value):
     if not text:
         return None
     if '://' not in text:
-        parts = text.split(':')
+        parts = text.split(':', 3)
         if len(parts) == 4:
             host, port, user, password = parts
             if not host or not port.isdigit():
@@ -93,20 +93,49 @@ def api_data(meta, default_id=0, default_hash=''):
     return int(api_id), api_hash
 
 
+def read_metadata(path):
+    if path.is_symlink() or path.stat().st_size > MAX_INPUT:
+        raise ValueError('JSON аккаунта: ссылка или слишком большой файл')
+    try:
+        meta = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (UnicodeError, json.JSONDecodeError):
+        raise ValueError('Не удалось прочитать JSON аккаунта') from None
+    if not isinstance(meta, dict):
+        raise ValueError('JSON аккаунта должен быть объектом')
+    return meta
+
+
+def metadata_api(meta, defaults):
+    # A partial supplied pair must never be combined with a different app's hash.
+    keys = ('api_id', 'app_id', 'api_hash', 'app_hash')
+    if any(k in meta for k in keys):
+        return (*api_data(meta), 'json')
+    if defaults.get('api_id') or defaults.get('api_hash'):
+        return (*api_data(defaults), 'custom')
+    from opentele.api import API
+    api = API.TelegramDesktop
+    return api.api_id, api.api_hash, 'desktop_compat'
+
+
 def record(session, meta, label, defaults):
     from telethon.sessions import StringSession
     s = StringSession(session)
     if not s.auth_key or len(s.auth_key.key) != 256:
         raise ValueError('В сессии нет действующего ключа авторизации')
-    api_id, api_hash = api_data(meta, defaults.get('api_id', 0), defaults.get('api_hash', ''))
+    api_id, api_hash, source = metadata_api(meta, defaults)
+    uid = meta.get('user_id', 0)
+    if uid and (not str(uid).isdigit() or int(uid) <= 0):
+        raise ValueError('В JSON неверный user_id')
     return dict(id=hashlib.sha256(s.auth_key.key).hexdigest(), session=session,
-                api_id=api_id, api_hash=api_hash, name=label,
-                device=str(meta.get('device', meta.get('device_model', 'VideoBatch Desktop'))),
+                api_id=api_id, api_hash=api_hash, api_source=source, name=label,
+                expected_user_id=int(uid or 0),
+                device=str(meta.get('device', meta.get('device_model', 'Telegram Desktop'))),
                 system=str(meta.get('sdk', meta.get('system_version', 'Windows'))),
                 app_version=str(meta.get('app_version', '1.0')),
                 lang=str(meta.get('lang_code', meta.get('lang_pack', 'en'))),
                 system_lang=str(meta.get('system_lang_code', 'en')),
-                proxy='', status='unchecked', country='', username='', phone='', note='')
+                proxy='', status='unchecked', country='', username='',
+                phone=str(meta.get('phone', meta.get('phone_number', ''))), note='')
 
 
 def from_sqlite(path, defaults):
@@ -115,11 +144,7 @@ def from_sqlite(path, defaults):
     meta = {}
     companion = path.with_suffix('.json')
     if companion.exists():
-        if companion.stat().st_size > MAX_INPUT:
-            raise ValueError('Слишком большой JSON аккаунта')
-        meta = json.loads(companion.read_text(encoding='utf-8-sig'))
-        if not isinstance(meta, dict):
-            raise ValueError('JSON аккаунта должен быть объектом')
+        meta = read_metadata(companion)
     # Read-only URI, snapshot into memory. No .session-journal, WAL or source mutation.
     try:
         with contextlib.closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
@@ -141,7 +166,7 @@ def from_sqlite(path, defaults):
     return [record(StringSession.save(s), meta, str(meta.get('first_name') or path.stem), defaults)]
 
 
-async def from_tdata(path, passcode=''):
+async def from_tdata(path, passcode='', companion=None, defaults=None):
     from opentele.td import TDesktop
     from telethon.crypto import AuthKey
     from telethon.sessions import MemorySession, StringSession
@@ -152,6 +177,9 @@ async def from_tdata(path, passcode=''):
         raise ValueError("TData не прочитана: неверный локальный код-пароль или повреждены файлы") from None
     if not td.isLoaded() or not td.accounts:
         raise ValueError('TData не загружена; проверьте папку и локальный код-пароль')
+    supplied = read_metadata(companion) if companion else {}
+    if supplied and len(td.accounts) != 1:
+        raise ValueError('JSON нельзя однозначно связать с многопользовательской TData')
     result = []
     # opentele 1.15.1 FromTDesktop has an unbound auth_session for MemorySession.
     # Read the parsed authorization key directly: no SQLite output and no connect.
@@ -170,8 +198,21 @@ async def from_tdata(path, passcode=''):
                     system_version=api.system_version or 'Windows',
                     app_version=api.app_version or '1.0',
                     lang_code=api.lang_code or 'en', system_lang_code=api.system_lang_code or 'en')
-        row = record(StringSession.save(memory), meta, 'TData ' + str(acc.UserId), {})
-        row['user_id'] = acc.UserId
+        # TData carries the key/DC/user ID, not the original device/API metadata.
+        # The adjacent JSON wins only after its explicit identity is checked.
+        expected = supplied.get('user_id')
+        if expected is not None and str(expected) != str(acc.UserId):
+            raise ValueError('user_id в JSON не совпадает с TData; файлы не объединены')
+        if supplied:
+            merged = {k: v for k, v in meta.items() if k not in ('api_id', 'api_hash')}
+            merged.update(supplied)
+        else:
+            merged = meta
+        row = record(StringSession.save(memory), merged,
+                     str(supplied.get('first_name') or 'TData ' + str(acc.UserId)), defaults or {})
+        if not supplied:
+            row['api_source'] = 'tdata_desktop'
+        row['user_id'] = row['expected_user_id'] = acc.UserId
         result.append(row)
     return result
 
@@ -208,28 +249,75 @@ def extract_zip(path, target):
                         out.write(chunk)
 
 
+def tdata_companion(path):
+    """Only exact wrapper/account names, never the first arbitrary JSON in Downloads."""
+    candidates = set()
+    for folder in (path, path.parent):
+        stem = re.sub(r'_tdata$', '', folder.name, flags=re.I)
+        if stem.lower() == 'tdata':
+            continue
+        for candidate in (folder.with_name(stem + '.json'), folder / (stem + '.json')):
+            if candidate.is_file():
+                if candidate.is_symlink():
+                    raise ValueError('Парный JSON не должен быть ссылкой')
+                candidates.add(candidate.resolve())
+    if len(candidates) > 1:
+        raise ValueError('Найдено несколько JSON для TData; оставьте один парный файл')
+    return next(iter(candidates), None)
+
+
+def json_source(path):
+    """LZT exports: name.json beside name.session or name_tdata/tdata."""
+    candidates = [path.with_suffix('.session'), path.with_name(path.stem + '_tdata')]
+    # Also support a named TData directory beside its JSON.
+    named = path.with_suffix('')
+    if named.is_dir():
+        candidates.append(named)
+    found = [p for p in candidates if p.exists()]
+    if len(found) != 1:
+        raise ValueError('Для JSON нужен один парный .session или папка с тем же именем _tdata')
+    return found[0]
+
+
 async def import_paths(job):
-    seen = set()
-    added = 0
-    failures = 0
+    seen, visited = set(), set()
+    added = failures = count = 0
     async def load(path, depth=0, in_archive=False):
-        nonlocal added, failures
+        nonlocal added, failures, count
         cancelled()
         try:
-            if depth > 10:
-                raise ValueError("Слишком глубокая структура папок")
+            count += 1
+            if count > MAX_FILES or depth > 10:
+                raise ValueError('Слишком много файлов или слишком глубокая структура папок')
             if path.is_symlink():
-                raise ValueError("Ссылки на папки не импортируются")
+                raise ValueError('Ссылки на файлы и папки не импортируются')
+            canonical = str(path.resolve())
+            if canonical in visited:
+                return
+            visited.add(canonical)
+            if not path.exists():
+                raise ValueError('Выбранный источник не найден')
             if path.is_dir():
                 if (path / 'key_data').is_file() or (path / 'key_datas').is_file():
-                    records = await from_tdata(path, job.get('passcode', ''))
+                    records = await from_tdata(path, job.get('passcode', ''), tdata_companion(path), job)
                 else:
-                    children = sorted(p for p in path.iterdir() if p.is_dir() or p.suffix.lower() in ('.session', '.zip'))
-                    # A selected parent may contain several account folders. Reparse points rejected.
+                    children = []
+                    for child in sorted(path.iterdir()):
+                        if len(children) >= MAX_FILES:
+                            raise ValueError('Слишком много файлов в папке')
+                        if child.is_dir() or child.suffix.lower() in ('.session', '.zip'):
+                            children.append(child)
+                        # JSON is metadata, not an additional account or object.
+                        elif child.suffix.lower() == '.json':
+                            # Only discover matching sources; unrelated JSON is ignored.
+                            try:
+                                source = json_source(child)
+                            except ValueError:
+                                continue
+                            children.append(source)
                     for child in children:
-                        if child.is_symlink():
-                            continue
-                        await load(child, depth + 1, in_archive)
+                        if not child.is_symlink():
+                            await load(child, depth + 1, in_archive)
                     return
             elif path.suffix.lower() == '.zip':
                 if in_archive:
@@ -237,6 +325,11 @@ async def import_paths(job):
                 with tempfile.TemporaryDirectory(prefix='import-', dir=job['temp']) as tmp:
                     extract_zip(path, Path(tmp))
                     await load(Path(tmp), depth + 1, True)
+                return
+            elif path.suffix.lower() == '.json':
+                # Validate the chosen JSON before resolving its adjacent source.
+                read_metadata(path)
+                await load(json_source(path), depth + 1, in_archive)
                 return
             elif path.suffix.lower() == '.session':
                 records = from_sqlite(path, job)
@@ -252,13 +345,12 @@ async def import_paths(job):
             raise
         except Exception as exc:
             failures += 1
-            # Do not echo filenames or exception strings: may contain phone/session keys.
-            emit('import_error', text=str(exc) if isinstance(exc, ValueError) else 'Не удалось импортировать один источник', code=type(exc).__name__, source=path.name[:80])
+            emit('import_error', text=str(exc) if isinstance(exc, ValueError) else 'Не удалось импортировать один источник', code=type(exc).__name__)
     for p in job.get('paths', []):
         await load(Path(p))
     emit('summary', text=f'Импортировано: {added}; ошибок источников: {failures}', imported=added, failures=failures)
     if added == 0:
-        raise ValueError('Нет импортированных аккаунтов. Нужны .session + JSON, TData или ZIP с ними; проверьте API/код-пароль')
+        raise ValueError('Нет импортированных аккаунтов. Выберите TData, ZIP, .session или парный JSON; проверьте целостность файлов')
 
 
 def client_for(account):
@@ -298,7 +390,7 @@ def error_info(exc):
     return 'error', 'Операция не завершена; код ошибки указан в журнале', 0
 
 
-async def connect(client):
+async def connect(client, account=None):
     cancelled()
     await asyncio.wait_for(client.connect(), 35)
     if not await asyncio.wait_for(client.is_user_authorized(), 35):
@@ -306,6 +398,9 @@ async def connect(client):
     me = await asyncio.wait_for(client.get_me(), 35)
     if me is None or me.bot:
         raise ValueError('Нужна авторизованная пользовательская сессия')
+    expected = (account or {}).get('expected_user_id')
+    if expected and int(expected) != me.id:
+        raise ValueError('user_id аккаунта не совпадает с импортированными данными')
     return me
 
 
@@ -315,7 +410,7 @@ async def check_accounts(job):
         client = None
         try:
             client = client_for(account)
-            me = await connect(client)
+            me = await connect(client, account)
             name = ' '.join(filter(None, [me.first_name, me.last_name])) or str(me.id)
             emit('account', id=account['id'], status='ready', name=name,
                  user_id=me.id, username=me.username or '', phone=me.phone or '',
@@ -393,7 +488,7 @@ async def invite(job):
     client = client_for(account)
     ledger = InviteLedger(Path(job['root']) / 'invites.sqlite')
     try:
-        me = await connect(client)
+        me = await connect(client, account)
         target_text = job.get('target', '').strip()
         if re.fullmatch(r'-?\d+', target_text):
             # Resolve known private chats from current dialogs, no joining by invite links.

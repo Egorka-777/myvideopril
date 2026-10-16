@@ -1,7 +1,7 @@
 name: Telegram workspace
 on:
   push:
-    branches: [feat/telegram-workspace-20261015]
+    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016]
   pull_request:
     paths: ['src/Telegram*.cs','tools/telegram/**','tests/telegram/**','src/AppShell.cs','src/NavigationService.cs','.github/workflows/telegram-workspace.yml']
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
         run: |
           $env:VIDEOBATCH_HOME = $PWD.Path
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
-          foreach ($name in @('TelegramTests','StudioUploadTests','TitleCleaner','ScheduleGenerator')) {
+          foreach ($name in @('TelegramTests','TelegramConnectTests','StudioUploadTests','TitleCleaner','ScheduleGenerator')) {
             if (!$asm.GetType('VideoBatch.'+$name).GetMethod('RunSelfTests').Invoke($null,@())) { throw $name }
           }
           if (!$asm.GetType('VideoBatch.AccountLibraryTests').GetMethod('RunSyncTests').Invoke($null,@())) { throw 'Account library sync' }
@@ -60,7 +60,7 @@ jobs:
           Copy-Item bin/Release/net48/VideoBatch.exe* $dest
           Copy-Item tools/telegram/*.py,tools/telegram/*.ps1,tools/telegram/*.txt "$dest/tools/telegram"
           Copy-Item tools/uploader/*.js,tools/uploader/package*.json "$dest/tools/uploader"
-          Copy-Item docs/AGENT_TELEGRAM_20261015_RU.md $dest
+          Copy-Item docs/AGENT_TELEGRAM_CONNECT_20261016_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
       - uses: actions/upload-artifact@v4
         with:

@@ -226,7 +226,7 @@ namespace VideoBatch {
             AddPanel(settingsPanel);
             highlightsPanel = new HighlightsPanel();
             AddPanel(highlightsPanel);
-            telegramPanel = new TelegramPanel();
+            telegramPanel = new TelegramPanel(preferences:()=>settings);
             AddPanel(telegramPanel);
             assemblyStudio = new AssemblyWindow(embedded: true);
             assemblyStudio.Visible = false;

@@ -25,6 +25,9 @@ namespace VideoBatch {
         public string lang { get; set; } = "en";
         public string system_lang { get; set; } = "en";
         public string proxy { get; set; } = "";
+        public string proxy_id { get; set; } = "";
+        public string api_source { get; set; } = "";
+        public long expected_user_id { get; set; }
         public string country { get; set; } = "";
         public string note { get; set; } = "";
         public string status { get; set; } = "unchecked";
@@ -38,6 +41,8 @@ namespace VideoBatch {
         public string api_hash { get; set; } = "";
         public string target { get; set; } = "";
         public int delay { get; set; } = 60;
+        public string default_proxy_id {get;set;}="";
+        public List<TelegramProxy> proxies {get;set;}=new List<TelegramProxy>();
         public List<TelegramAccount> accounts { get; set; } = new List<TelegramAccount>();
     }
     public sealed class TelegramStore {
@@ -74,6 +79,7 @@ namespace VideoBatch {
                 plain=ProtectedData.Unprotect(bytes.Skip(Header.Length).ToArray(),null,DataProtectionScope.CurrentUser);
                 var data=Json.Deserialize<TelegramData>(Encoding.UTF8.GetString(plain));
                 if(data==null||data.version!=1||data.accounts==null||data.accounts.Any(a=>a==null||a.id==null||a.id.Length!=64)||data.accounts.Select(a=>a.id).Distinct().Count()!=data.accounts.Count)throw new InvalidDataException();
+                if(data.proxies==null)data.proxies=new List<TelegramProxy>();
                 return data;
             }catch(Exception e)when(e is CryptographicException||e is InvalidDataException||e is ArgumentException||e is InvalidOperationException){
                 throw new IOException("Не удалось открыть Telegram-хранилище. Сохранённые данные не перезаписаны. Нужен тот же пользователь Windows или восстановление резервной копии.",e);

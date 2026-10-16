@@ -103,12 +103,59 @@ class Imports(unittest.IsolatedAsyncioTestCase):
         path=self.root/'invalid.session';path.write_bytes(b'not a sqlite session')
         with self.assertRaisesRegex(ValueError,'Telethon SQLite'):
             w.from_sqlite(path,{'api_id':1234,'api_hash':'a'*32})
-    async def test_session_requires_api_pair_and_rejects_fake_dc(self):
+    async def test_session_compatibility_profile_custom_api_and_rejects_fake_dc(self):
         path=self.root/'account.session';make_session(path);path.with_suffix('.json').unlink()
-        with self.assertRaises(ValueError):w.from_sqlite(path,{})
+        self.assertEqual(w.from_sqlite(path,{})[0]['api_source'],'desktop_compat')
+        path.with_suffix('.json').write_text(json.dumps({'api_id':99}))
+        with self.assertRaises(ValueError):w.from_sqlite(path,{'api_id':12,'api_hash':'a'*32})
+        path.with_suffix('.json').unlink()
         self.assertEqual(w.from_sqlite(path,{'api_id':12,'api_hash':'a'*32})[0]['api_id'],12)
         db=sqlite3.connect(path);db.execute("UPDATE sessions SET server_address='127.0.0.1'");db.commit();db.close()
         with self.assertRaises(ValueError):w.from_sqlite(path,{'api_id':12,'api_hash':'a'*32})
+
+    async def test_lzt_json_and_nested_tdata_autodiscovery_no_source_mutation(self):
+        from opentele.tl import TelegramClient
+        from opentele.api import API,UseCurrentSession
+        wrapper=self.root/'700001_tdata';path=wrapper/'tdata';wrapper.mkdir()
+        memory=MemorySession();memory.set_dc(2,'149.154.167.51',443);memory.auth_key=AuthKey(session_bytes(6))
+        client=TelegramClient(memory,api=API.TelegramDesktop);client.UserId=700001
+        async def forbidden(*a,**k):raise AssertionError('Network on import')
+        with patch.object(TelegramClient,'connect',forbidden):
+            td=await client.ToTDesktop(flag=UseCurrentSession);td.SaveTData(str(path))
+        meta=self.root/'700001.json';meta.write_text(json.dumps(dict(user_id=700001,api_id=4321,api_hash='b'*32,device='Supplied device',first_name='Парный аккаунт')),encoding='utf-8')
+        (wrapper/'README.txt').write_text('not an account')
+        (self.root/'unrelated.json').write_text(json.dumps(dict(api_id=999,api_hash='c'*32)))
+        before={str(p.relative_to(self.root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.rglob('*') if p.is_file()}
+        for paths in ([meta],[wrapper],[meta,wrapper],[path],[self.root]):
+            events=[]
+            with patch.object(w,'emit',lambda event,**kw:events.append((event,kw))),patch('telethon.TelegramClient.connect',forbidden):
+                await w.import_paths(dict(paths=[str(p) for p in paths],temp=str(self.root/'temp')))
+            imported=[d['account'] for e,d in events if e=='imported']
+            self.assertEqual(len(imported),1);row=imported[0]
+            self.assertEqual(row['api_id'],4321);self.assertEqual(row['device'],'Supplied device')
+            self.assertEqual(row['expected_user_id'],700001);self.assertEqual(row['name'],'Парный аккаунт')
+            self.assertEqual(row['api_source'],'json')
+        after={str(p.relative_to(self.root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.rglob('*') if p.is_file()}
+        self.assertEqual(before,after)
+        meta.write_text(json.dumps(dict(user_id=777)))
+        with self.assertRaisesRegex(ValueError,'не совпадает'):
+            await w.from_tdata(path,companion=meta)
+        meta.write_text(json.dumps(dict(api_id=4321)))
+        with self.assertRaisesRegex(ValueError,'JSON'):
+            await w.from_tdata(path,companion=meta)
+    async def test_json_unpaired_ambiguous_and_bad_metadata_rejected(self):
+        path=self.root/'one.json';path.write_text('{}')
+        with self.assertRaises(ValueError):w.json_source(path)
+        make_session(path.with_suffix('.session'))
+        (self.root/'one_tdata').mkdir()
+        with self.assertRaises(ValueError):w.json_source(path)
+        path.write_text('not-json')
+        with self.assertRaises(ValueError):w.read_metadata(path)
+    async def test_supplied_user_identity_checked_before_invites(self):
+        client=FakeClient()
+        with self.assertRaisesRegex(ValueError,'user_id'):
+            await w.connect(client,{'expected_user_id':123})
+        self.assertEqual(client.calls,[])
 
 
 class Queue(unittest.IsolatedAsyncioTestCase):
