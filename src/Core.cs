@@ -147,7 +147,7 @@ namespace VideoBatch {
         /// <summary>YouTube | TikTok | Telegram | Studio — стартовый раздел интерфейса.</summary>
         public string AppPlatformView="";
         public int YouTubeWarmupMinMinutes=5, YouTubeWarmupMaxMinutes=15;
-        public int YouTubeWarmupWatchMinSec=15, YouTubeWarmupWatchMaxSec=45;
+        public int YouTubeWarmupWatchMinSec=1, YouTubeWarmupWatchMaxSec=40;
         public bool YouTubeWarmupLikesEnabled=true;
         public int YouTubeWarmupLikePercent=38;
         public bool YouTubeWarmupAutoBeforeUpload;
@@ -366,9 +366,9 @@ namespace VideoBatch {
             if(p.YouTubeWarmupMinMinutes<1)p.YouTubeWarmupMinMinutes=5;
             if(p.YouTubeWarmupMaxMinutes<p.YouTubeWarmupMinMinutes)p.YouTubeWarmupMaxMinutes=p.YouTubeWarmupMinMinutes;
             if(p.YouTubeWarmupMaxMinutes>180)p.YouTubeWarmupMaxMinutes=180;
-            if(p.YouTubeWarmupWatchMinSec<3)p.YouTubeWarmupWatchMinSec=15;
+            if(p.YouTubeWarmupWatchMinSec<1)p.YouTubeWarmupWatchMinSec=1;
             if(p.YouTubeWarmupWatchMaxSec<p.YouTubeWarmupWatchMinSec)p.YouTubeWarmupWatchMaxSec=p.YouTubeWarmupWatchMinSec;
-            if(p.YouTubeWarmupWatchMaxSec>300)p.YouTubeWarmupWatchMaxSec=300;
+            if(p.YouTubeWarmupWatchMaxSec>40)p.YouTubeWarmupWatchMaxSec=40;
             if(p.YouTubeWarmupLikePercent<0)p.YouTubeWarmupLikePercent=0;
             if(p.YouTubeWarmupLikePercent>100)p.YouTubeWarmupLikePercent=100;
             if(string.IsNullOrWhiteSpace(p.OpenRouterModel))p.OpenRouterModel="openai/gpt-4o-mini";

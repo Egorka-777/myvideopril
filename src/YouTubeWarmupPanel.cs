@@ -28,8 +28,8 @@ namespace VideoBatch {
             Controls.Add(numHost);
             minMinutes = HiddenNum(settings.YouTubeWarmupMinMinutes, 1, 120);
             maxMinutes = HiddenNum(settings.YouTubeWarmupMaxMinutes, 1, 120);
-            minWatchSec = HiddenNum(settings.YouTubeWarmupWatchMinSec, 3, 300);
-            maxWatchSec = HiddenNum(settings.YouTubeWarmupWatchMaxSec, 3, 300);
+            minWatchSec = HiddenNum(settings.YouTubeWarmupWatchMinSec, 1, 40);
+            maxWatchSec = HiddenNum(settings.YouTubeWarmupWatchMaxSec, 1, 40);
             likePercent = HiddenNum(settings.YouTubeWarmupLikePercent, 0, 100);
             likesOn = settings.YouTubeWarmupLikesEnabled;
 
@@ -63,7 +63,11 @@ namespace VideoBatch {
                 foreach (Control child in sliders.Controls) child.Width = w;
             };
             sliders.Controls.Add(new AssemblyRangeSlider("Длительность сессии", minMinutes, maxMinutes, "мин") { Width = 340 });
-            sliders.Controls.Add(new AssemblyRangeSlider("Просмотр одного ролика", minWatchSec, maxWatchSec, "сек") { Width = 340 });
+            sliders.Controls.Add(new AssemblyRangeSlider("Просмотр одного ролика (диапазон)", minWatchSec, maxWatchSec, "сек") { Width = 340 });
+            sliders.Controls.Add(new Label {
+                Text = "Внутри сессии ~80% роликов листаются за 1–10 сек., ~20% — дольше (до 40 сек., иногда до конца). Реклама пролистывается без остановки.",
+                ForeColor = Theme.TextMuted, AutoSize = false, Width = 340, MaximumSize = new Size(340, 0), Margin = new Padding(0, 0, 0, 10)
+            });
 
             var likeWrap = new Panel { Width = 340, Height = 132, BackColor = Theme.Card, Margin = new Padding(0, 4, 0, 8) };
             likeWrap.Controls.Add(new Label { Text = "Лайки", ForeColor = Theme.TextPrimary, Location = new Point(12, 8), AutoSize = true });
