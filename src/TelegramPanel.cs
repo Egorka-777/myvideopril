@@ -59,7 +59,7 @@ namespace VideoBatch {
             grid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0)EditAccount(grid.Rows[e.RowIndex].Tag as TelegramAccount);};
             grid.CurrentCellDirtyStateChanged+=(s,e)=>{if(grid.IsCurrentCellDirty)grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
             var context=new ContextMenuStrip{BackColor=Theme.Elevated,ForeColor=Theme.TextPrimary};context.Items.Add("Карточка аккаунта",null,(s,e)=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount));
-            context.Items.Add("Открыть Telegram",null,(s,e)=>OpenWeb());
+            context.Items.Add("Открыть Telegram",null,(s,e)=>OpenWeb(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Удалить из Telegram-раздела",null,(s,e)=>RemoveSelected());grid.ContextMenuStrip=context;
             grid.CellMouseDown+=(s,e)=>{if(e.Button==MouseButtons.Right&&e.RowIndex>=0){grid.ClearSelection();grid.Rows[e.RowIndex].Selected=true;grid.CurrentCell=grid.Rows[e.RowIndex].Cells[1];}};
             var table=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2};table.RowStyles.Add(new RowStyle(SizeType.Percent,100));table.RowStyles.Add(new RowStyle(SizeType.Absolute,52));table.Controls.Add(grid,0,0);
@@ -182,7 +182,8 @@ namespace VideoBatch {
                 await Run(new Dictionary<string,object>{{"action","invite"},{"accounts",list},{"target",targetValue},{"users",userValue},{"delay",seconds},{"limit",limit}});
             }catch(Exception e){Failure(e);}
         }
-        void OpenWeb(){try{if(busy)return;var a=Selected();if(a.Count!=1)throw new InvalidOperationException("Выберите один аккаунт");if(webWindows.TryGetValue(a[0].id,out var existing)&&!existing.IsDisposed){existing.Activate();return;}var window=new TelegramWebWindow(store,a[0],async token=>{if(busy)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");await Run(new Dictionary<string,object>{{"action","web_login"},{"accounts",new List<TelegramAccount>{a[0]}},{"login_token",token}});});webWindows[a[0].id]=window;window.Show(this);}catch(Exception e){Failure(e);}}
+        void OpenWeb()=>OpenWeb(null);
+        void OpenWeb(TelegramAccount current){try{if(busy)return;var a=current==null?Selected():new List<TelegramAccount>{current};if(a.Count!=1)throw new InvalidOperationException("Выберите один аккаунт");if(webWindows.TryGetValue(a[0].id,out var existing)&&!existing.IsDisposed){existing.Activate();return;}var window=new TelegramWebWindow(store,a[0],async token=>{if(busy)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");await Run(new Dictionary<string,object>{{"action","web_login"},{"accounts",new List<TelegramAccount>{a[0]}},{"login_token",token}});});webWindows[a[0].id]=window;window.Show(this);}catch(Exception e){Failure(e);}}
         async Task Run(Dictionary<string,object> job,string importProxyId=null,List<string> importedIds=null) {
             if(busy)return;busy=true;foreach(var b in workButtons)b.Enabled=false;stop.Enabled=true;grid.Enabled=false;search.Enabled=false;proxyGrid.Enabled=false;pages[2].Enabled=false;
             bool complete=false,failed=false;string finalSummary="";string task=Guid.NewGuid().ToString("N");status.Text="Выполняется…";
