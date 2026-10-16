@@ -64,6 +64,24 @@ jobs:
           Copy-Item tools/uploader/*.js,tools/uploader/package*.json "$dest/tools/uploader"
           Copy-Item docs/AGENT_TELEGRAM_STATUS_20261016_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
+          foreach ($entry in @(@('x86',0x014c),@('x64',0x8664))) {
+            $native = Join-Path $dest ('runtimes/win-'+$entry[0]+'/native/WebView2Loader.dll')
+            if (!(Test-Path $native)) { throw "Missing packaged WebView2 loader: $($entry[0])" }
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path $native))
+            $pe = [BitConverter]::ToInt32($bytes,0x3c)
+            if ([BitConverter]::ToUInt16($bytes,$pe+4) -ne $entry[1]) { throw "Wrong packaged loader architecture: $($entry[0])" }
+          }
+      - name: Native browser from packaged update
+        shell: powershell
+        run: |
+          $folder = (Resolve-Path artifacts/VideoBatch-Telegram-Update).Path
+          $arch = if ([IntPtr]::Size -eq 8) { 'x64' } else { 'x86' }
+          $loader = Join-Path $folder "runtimes/win-$arch/native"
+          $core = [Reflection.Assembly]::LoadFrom((Join-Path $folder 'Microsoft.Web.WebView2.Core.dll'))
+          $core.GetType('Microsoft.Web.WebView2.Core.CoreWebView2Environment').GetMethod('SetLoaderDllFolderPath').Invoke($null,@([string]$loader))
+          $asm = [Reflection.Assembly]::LoadFrom((Join-Path $folder 'VideoBatch.exe'))
+          if (!$asm.GetType('VideoBatch.TelegramStatusTests').GetMethod('RunBrowserTest').Invoke($null,@())) { throw 'Packaged WebView2 integration' }
+          Write-Host "Packaged WebView2 loader verified: $arch"
       - uses: actions/upload-artifact@v4
         with:
           name: Telegram-Workspace-Update
