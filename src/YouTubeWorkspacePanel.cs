@@ -42,7 +42,7 @@ namespace VideoBatch {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = Theme.Background };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 200));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
@@ -54,7 +54,7 @@ namespace VideoBatch {
             accountSearch = Theme.MakeSearchBox();
             statusFilter = Theme.MakeCombo(new[] { "Все статусы", "Готов", "Ошибка", "Отложено", "Загрузка" });
 
-            marketHint = new Label { AutoSize = true, ForeColor = Theme.TextPrimary, Font = Theme.FontPageTitle, Text = "YouTube" };
+            marketHint = new Label { AutoSize = true, ForeColor = Theme.TextPrimary, Font = Theme.FontPageTitle, Text = "Публикации" };
             var topStack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, BackColor = Theme.Background };
             topStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             topStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -75,7 +75,7 @@ namespace VideoBatch {
             contextCard.Dock = DockStyle.Fill;
             var contextRow = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, BackColor = Theme.Card, Margin = Padding.Empty };
             contextRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            contextRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            contextRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
             contextRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             var switches = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Theme.Card, Margin = new Padding(0, 2, 0, 0) };
@@ -84,6 +84,9 @@ namespace VideoBatch {
 
             var meta = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = true, BackColor = Theme.Card, Margin = new Padding(0, 2, 0, 0) };
             scheduleHint = Theme.MakeChip(ScheduleSummary());
+            scheduleHint.MaximumSize=new Size(252,0);
+            if(scheduleHint.Controls.Count>0&&scheduleHint.Controls[0] is Label scheduleLabel)scheduleLabel.MaximumSize=new Size(228,0);
+            meta.MaximumSize=new Size(260,0);
             timezoneChip = Theme.MakeAccentChip("ПК " + DateTime.Now.ToString("zzz"));
             channelBadge = Theme.MakeCountBadge("0 каналов");
             meta.Controls.Add(scheduleHint);

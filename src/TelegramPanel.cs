@@ -98,7 +98,7 @@ namespace VideoBatch {
             log=Theme.MakeLogBox();logsPage.Controls.Add(log);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
             stop=Theme.MakeButton("Остановить",ghost:true,action:async()=>await runner.Stop());stop.Enabled=false;bottom.Controls.Add(stop);
-            status=new Label{Text="Выберите аккаунт → проверьте соединение → откройте Telegram",Width=720,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,4);
+            status=new Label{Text="Выберите аккаунт → проверьте соединение → откройте Telegram",Width=720,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,4);bottom.SizeChanged+=(s,e)=>status.Width=Math.Max(120,bottom.ClientSize.Width-stop.Width-22);
             SelectTab(0);
             AllowDrop=true;DragEnter+=(s,e)=>e.Effect=!busy&&e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;
             DragDrop+=async(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))await Import((string[])e.Data.GetData(DataFormats.FileDrop));};

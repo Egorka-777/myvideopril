@@ -117,6 +117,9 @@ namespace VideoBatch {
             grid.BackgroundColor = Card;
             grid.GridColor = Border;
             grid.BorderStyle = BorderStyle.None;
+            grid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;
+            grid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
+            grid.ColumnAdded+=(s,e)=>{if(e.Column is DataGridViewButtonColumn button){button.FlatStyle=FlatStyle.Flat;button.DefaultCellStyle.BackColor=Elevated;button.DefaultCellStyle.ForeColor=TextPrimary;}};
             grid.EnableHeadersVisualStyles = false;
             grid.ColumnHeadersDefaultCellStyle.BackColor = Elevated;
             grid.ColumnHeadersDefaultCellStyle.ForeColor = TextSecondary;
@@ -153,6 +156,12 @@ namespace VideoBatch {
                 FlatStyle = FlatStyle.Flat,
                 Font = FontBody,
                 Width = 130
+            };
+            c.DrawMode=DrawMode.OwnerDrawFixed;c.ItemHeight=26;
+            c.DrawItem+=(s,e)=>{
+                using(var brush=new SolidBrush((e.State&DrawItemState.Selected)!=0?Selected:Elevated))e.Graphics.FillRectangle(brush,e.Bounds);
+                string label=e.Index>=0&&e.Index<c.Items.Count?c.GetItemText(c.Items[e.Index]):c.Text;
+                TextRenderer.DrawText(e.Graphics,label,c.Font,new Rectangle(e.Bounds.X+8,e.Bounds.Y,Math.Max(1,e.Bounds.Width-12),e.Bounds.Height),TextPrimary,TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);
             };
             if (items != null) c.Items.AddRange(items);
             if (c.Items.Count > 0) c.SelectedIndex = 0;

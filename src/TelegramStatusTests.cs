@@ -81,7 +81,9 @@ namespace VideoBatch {
                     Console.WriteLine("Shell layout: constructing");
                     using(var shell=new AppShell(new Preferences{YouTubeChannels=new System.Collections.Generic.List<YouTubeChannel>{new YouTubeChannel{Name="Sample RU",ProfileId="100001",Market="RU",Kind="shorts"}},TikTokAccounts=new System.Collections.Generic.List<TikTokAccount>{new TikTokAccount{Name="Sample EN",ProfileId="200001",Market="EN"}}})){
                         Console.WriteLine("Shell layout: showing");
-                        shell.Show();Application.DoEvents();
+                        shell.TopLevel=false;shell.FormBorderStyle=FormBorderStyle.None;
+                        using(var host=new Form{ClientSize=new Size(900,700)}){
+                        host.Controls.Add(shell);host.Show();shell.Show();Application.DoEvents();
                         var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
                         var type=typeof(AppShell);Directory.CreateDirectory(output);
                         foreach(var platform in new[]{AppPlatform.Telegram,AppPlatform.YouTube}){
@@ -90,6 +92,7 @@ namespace VideoBatch {
                             foreach(int width in new[]{1100,1280}){
                                 Console.WriteLine("Shell layout: width "+width);
                                 shell.ClientSize=new Size(width,820);shell.PerformLayout();Application.DoEvents();
+                                Check(shell.ClientSize.Width==width&&shell.ClientSize.Height==820,"Requested shell render size is not silently clamped");
                                 var bar=(Control)type.GetField("topBar",flags).GetValue(shell);
                                 foreach(string field in new[]{"settingsBtn","platformBackBtn","menuToggleBtn","pageTitleLabel","tasksLabel"}){
                                     var c=(Control)type.GetField(field,flags).GetValue(shell);if(!c.Visible)continue;
@@ -107,7 +110,8 @@ namespace VideoBatch {
                         Check(grid.Rows.Count==2,"Profiles come from existing YouTube and TikTok accounts without re-import");
                         Check(grid.Height>200,"Profiles list remains visible between filters and actions");
                         using(var bitmap=new Bitmap(shell.Width,shell.Height)){shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(output,"shell-profiles.png"));}
-                        shell.Close();
+                        shell.Close();host.Close();
+                        }
                     }
                 }catch(Exception e){failure=e;}
             });thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure!=null)throw new Exception("Shared workspace layout",failure);return true;

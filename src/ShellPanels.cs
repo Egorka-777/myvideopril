@@ -84,6 +84,7 @@ namespace VideoBatch {
 
     public sealed class ProfilesPanel : UserControl {
         readonly Preferences settings;
+        readonly Action<UnifiedProfile> openDetails;
         readonly NavigationService navigation;
         readonly YouTubeBackend youtubeBackend;
         readonly TikTokBackend tiktokBackend;
@@ -96,8 +97,8 @@ namespace VideoBatch {
         bool pullingProxies,loadedProxies;
         Label proxyState;
 
-        public ProfilesPanel(Preferences prefs, NavigationService nav, YouTubeBackend yt, TikTokBackend tk) {
-            settings = prefs;
+        public ProfilesPanel(Preferences prefs, NavigationService nav, YouTubeBackend yt, TikTokBackend tk,Action<UnifiedProfile> details=null) {
+            settings = prefs;openDetails=details;
             navigation = nav;
             youtubeBackend = yt;
             tiktokBackend = tk;
@@ -144,6 +145,7 @@ namespace VideoBatch {
             var act = new DataGridViewButtonColumn { Name = "actions", HeaderText = "", Text = "⋯", UseColumnTextForButtonValue = true, Width = 40 };
             grid.Columns.Add(act);
             foreach(string column in new[]{"sel","kind","videos","last"})grid.Columns[column].Visible=false;
+            grid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0&&grid.Rows[e.RowIndex].Tag is UnifiedProfile profile)openDetails?.Invoke(profile);};
             grid.CellContentClick += OnAction;
             grid.MouseDown += (s,e) => {
                 if (e.Button != MouseButtons.Right) return;
@@ -155,8 +157,6 @@ namespace VideoBatch {
             var bottom = Theme.MakeToolbar();
             bottom.Controls.Add(Theme.MakeButton("YouTube", accent: true, action: () => OpenPlatform(NavSection.YouTube)));
             bottom.Controls.Add(Theme.MakeButton("TikTok", action: () => OpenPlatform(NavSection.TikTok)));
-            bottom.Controls.Add(Theme.MakeButton("+ Канал YouTube", ghost: true, action: () => navigation.Navigate(NavSection.YouTube)));
-            bottom.Controls.Add(Theme.MakeButton("+ Аккаунт TikTok", ghost: true, action: () => navigation.Navigate(NavSection.TikTok)));
             bottom.Controls.Add(Theme.MakeButton("Проверить IP", ghost: true, action: async () => await CheckSelectedIp()));
             layout.Controls.Add(bottom,0,2);
             RefreshData();
@@ -181,6 +181,7 @@ namespace VideoBatch {
         public void ApplySearch(string q) { if (q != null && search.Text != q) search.Text = q; RefreshData(); }
 
         public void RefreshData() {
+            string current=(grid.CurrentRow?.Tag as UnifiedProfile)?.ProfileId;
             grid.Rows.Clear();
             rows = ProfileCatalog.Build(settings);
             foreach (var p in rows) ProfileCatalog.FinalizeLabels(p);
@@ -190,6 +191,7 @@ namespace VideoBatch {
                 int ri = grid.Rows.Add(false, p.DisplayName, p.PlatformsLabel, p.ChannelNames, p.Market, p.ContentKind,
                     p.CountryCode, p.ProfileId, ProxyFor(p.ProfileId)!=""?TelegramStore.ProxyLabel(ProxyFor(p.ProfileId)):"Не получен", p.VideoCount, p.Status, p.LastOperation, "⋯");
                 grid.Rows[ri].Tag = p;
+                if(!string.IsNullOrEmpty(current)&&p.ProfileId==current)grid.CurrentCell=grid.Rows[ri].Cells["name"];
                 grid.Rows[ri].Cells["ip"].ToolTipText="Настроенный прокси Dolphin. Ожидаемый IP: "+p.ExpectedIp;
                 if(dolphinProxies.TryGetValue(p.ProfileId??"",out var route)&&!string.IsNullOrEmpty(route.country))grid.Rows[ri].Cells["country"].Value=route.country;
                 if (p.ExpectedIp != "—" && p.CountryCode == "—")
@@ -237,7 +239,7 @@ namespace VideoBatch {
         void OpenPlatform(NavSection section) {
             var p = CurrentProfile();
             if (p == null && rows.Count > 0) p = rows[0];
-            if (p == null) { MessageBox.Show(this, "Нет профилей в settings.xml.", "Профили", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (p == null) { navigation.Navigate(section); return; }
             SelectContext(p, section == NavSection.TikTok ? "TikTok" : "YouTube");
             navigation.Navigate(section);
         }
@@ -268,6 +270,7 @@ namespace VideoBatch {
             menu.Items.Add("TikTok", null, (s, ev) => { SelectContext(p, "TikTok"); navigation.Navigate(NavSection.TikTok); });
             menu.Items.Add("Добавить видео", null, (s, ev) => { SelectContext(p, "YouTube"); navigation.Navigate(NavSection.YouTube); });
             menu.Items.Add("Проверить IP", null, async (s, ev) => { grid.Rows[e.RowIndex].Selected = true; await CheckSelectedIp(); });
+            if(openDetails!=null)menu.Items.Add("Карточка аккаунта",null,(s,ev)=>openDetails(p));
             menu.Items.Add("Dolphin Profile ID", null, (s, ev) => CopyProfileId(p));
             menu.Items.Add("Изменить имя", null, (s, ev) => RenameProfile(p));
             menu.Items.Add("Убрать из всех рабочих списков…", null, (s, ev) => RemoveProfile(p));

@@ -186,7 +186,7 @@ namespace VideoBatch {
             Console.WriteLine("UI startup: HomePanel");
             homePanel = new HomePanel(settings, navigation);
             Console.WriteLine("UI startup: ProfilesPanel");
-            profilesPanel = new ProfilesPanel(settings, navigation, youtubeBackend, tiktokBackend);
+            profilesPanel = new ProfilesPanel(settings, navigation, youtubeBackend, tiktokBackend,profile=>{navigation.Navigate(NavSection.AccountLibrary);accountLibraryPanel.SelectProfile(profile.ProfileId);});
             Console.WriteLine("UI startup: AccountLibraryPanel");
             accountLibraryPanel = new AccountLibraryPanel(null, settings, OpenLibrarySource,profilesPanel.ProxyFor);
             Deactivate += (s, e) => accountLibraryPanel.HideSecrets();
@@ -275,7 +275,7 @@ namespace VideoBatch {
             dolphinLabel.Visible=dolphinDot.Visible=dolphinRefreshBtn.Visible=section!=NavSection.Telegram;
             pageTitleLabel.Text = section==NavSection.AccountLibrary||section==NavSection.Proxy?"Профили":NavigationService.Title(section);
             platformBadge.Visible=platformBadge.Text!=pageTitleLabel.Text;
-            globalSearch.Visible=section==NavSection.Profiles||section==NavSection.AccountLibrary||section==NavSection.Tasks;
+            globalSearch.Visible=false; // Each workspace already has its own search; do not duplicate it in the shell.
             HighlightNav(section==NavSection.AccountLibrary||section==NavSection.Proxy?NavSection.Profiles:section);
             if (section == NavSection.VideoProcessing) {
                 if (processingWindow == null) {

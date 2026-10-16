@@ -73,6 +73,11 @@ namespace VideoBatch {
         }
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, string lParam);
+        public void SelectProfile(string profileId){
+            if(string.IsNullOrWhiteSpace(profileId))return;
+            var account=accounts.FirstOrDefault(a=>(a.Sources??new List<AccountSourceLink>()).Any(source=>string.Equals(source.ProfileId,profileId,StringComparison.OrdinalIgnoreCase)));
+            if(account!=null){search.Text="";platform.SelectedIndex=language.SelectedIndex=status.SelectedIndex=0;SelectId(account.Id);}
+        }
         public void ApplySearch(string query) { search.Text = query ?? ""; }
         public void RefreshData() {
             try {
