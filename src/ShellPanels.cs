@@ -91,6 +91,10 @@ namespace VideoBatch {
         readonly TextBox search;
         readonly ComboBox platformFilter, marketFilter, kindFilter, statusFilter;
         List<UnifiedProfile> rows = new List<UnifiedProfile>();
+        readonly Dictionary<string,TelegramProxy> dolphinProxies=new Dictionary<string,TelegramProxy>(StringComparer.OrdinalIgnoreCase);
+        readonly System.Threading.CancellationTokenSource lifetime=new System.Threading.CancellationTokenSource();
+        bool pullingProxies,loadedProxies;
+        Label proxyState;
 
         public ProfilesPanel(Preferences prefs, NavigationService nav, YouTubeBackend yt, TikTokBackend tk) {
             settings = prefs;
@@ -100,6 +104,8 @@ namespace VideoBatch {
             Dock = DockStyle.Fill;
             BackColor = Theme.Background;
 
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=Padding.Empty};
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(layout);
             var filters = Theme.MakeToolbar();
             search = Theme.MakeSearchBox();
             search.Width = 180;
@@ -115,10 +121,10 @@ namespace VideoBatch {
             filters.Controls.Add(search);
             filters.Controls.Add(platformFilter);
             filters.Controls.Add(marketFilter);
-            filters.Controls.Add(kindFilter);
-            filters.Controls.Add(statusFilter);
-            filters.Controls.Add(Theme.MakeButton("Обновить", ghost: true, action: RefreshData));
-            Controls.Add(filters);
+
+            filters.Controls.Add(Theme.MakeButton("Обновить", ghost: true, action: async()=>{RefreshData();await PullProxies();}));
+            proxyState=new Label{AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(4,10,0,0)};filters.Controls.Add(proxyState);
+            layout.Controls.Add(filters,0,0);
 
             grid = new DataGridView { Dock = DockStyle.Fill, AllowUserToAddRows = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
             Theme.StyleGrid(grid);
@@ -131,28 +137,45 @@ namespace VideoBatch {
             grid.Columns.Add("kind", "Тип");
             grid.Columns.Add("country", "Страна");
             grid.Columns.Add("profile", "Profile ID");
-            grid.Columns.Add("ip", "IP");
+            grid.Columns.Add("ip", "Прокси");
             grid.Columns.Add("videos", "Видео");
             grid.Columns.Add("status", "Состояние");
             grid.Columns.Add("last", "Последняя операция");
             var act = new DataGridViewButtonColumn { Name = "actions", HeaderText = "", Text = "⋯", UseColumnTextForButtonValue = true, Width = 40 };
             grid.Columns.Add(act);
+            foreach(string column in new[]{"sel","kind","videos","last"})grid.Columns[column].Visible=false;
             grid.CellContentClick += OnAction;
             grid.MouseDown += (s,e) => {
                 if (e.Button != MouseButtons.Right) return;
                 var hit=grid.HitTest(e.X,e.Y);
                 if (hit.RowIndex>=0) OnAction(grid,new DataGridViewCellEventArgs(grid.Columns["actions"].Index,hit.RowIndex));
             };
-            Controls.Add(grid);
+            layout.Controls.Add(grid,0,1);
 
             var bottom = Theme.MakeToolbar();
             bottom.Controls.Add(Theme.MakeButton("YouTube", accent: true, action: () => OpenPlatform(NavSection.YouTube)));
             bottom.Controls.Add(Theme.MakeButton("TikTok", action: () => OpenPlatform(NavSection.TikTok)));
-            bottom.Controls.Add(Theme.MakeButton("+ Канал YouTube", ghost: true, action: () => OpenPlatform(NavSection.YouTube)));
-            bottom.Controls.Add(Theme.MakeButton("+ Аккаунт TikTok", ghost: true, action: () => OpenPlatform(NavSection.TikTok)));
+            bottom.Controls.Add(Theme.MakeButton("+ Канал YouTube", ghost: true, action: () => navigation.Navigate(NavSection.YouTube)));
+            bottom.Controls.Add(Theme.MakeButton("+ Аккаунт TikTok", ghost: true, action: () => navigation.Navigate(NavSection.TikTok)));
             bottom.Controls.Add(Theme.MakeButton("Проверить IP", ghost: true, action: async () => await CheckSelectedIp()));
-            Controls.Add(bottom);
+            layout.Controls.Add(bottom,0,2);
             RefreshData();
+        }
+        protected override async void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);if(Visible&&grid!=null&&!loadedProxies)await PullProxies();}
+        protected override void Dispose(bool disposing){if(disposing&&!IsDisposed){lifetime.Cancel();lifetime.Dispose();}base.Dispose(disposing);}
+        public string ProxyFor(string profileId)=>profileId!=null&&dolphinProxies.TryGetValue(profileId,out var proxy)?proxy.url:"";
+        async Task PullProxies(){
+            if(pullingProxies||IsDisposed)return;string token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);if(string.IsNullOrWhiteSpace(token))return;
+            var ids=ProfileCatalog.Build(settings).Where(p=>!string.IsNullOrEmpty(p.ProfileId)).Select(p=>new KeyValuePair<string,string>(p.ProfileId,p.DisplayName)).ToList();if(ids.Count==0)return;
+            pullingProxies=true;proxyState.Text="Получаем прокси Dolphin…";
+            try{using(var deadline=System.Threading.CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token)){
+                deadline.CancelAfter(TimeSpan.FromSeconds(25));var result=await TelegramProxyCatalog.FetchDolphin(token,ids,null,deadline.Token);
+                if(IsDisposed)return;
+                foreach(var item in ids){string key="dolphin:profile:"+item.Key;var proxy=result.Proxies.FirstOrDefault(p=>p.source_id==key||(p.source_ids!=null&&p.source_ids.Contains(key)));if(proxy!=null)dolphinProxies[item.Key]=proxy;else dolphinProxies.Remove(item.Key);}
+                loadedProxies=true;proxyState.Text=result.Warnings.Count>0?"Часть прокси не получена · обновите позже":"Прокси из Dolphin";RefreshData();
+            }}catch(OperationCanceledException){if(!IsDisposed)proxyState.Text="Dolphin не ответил вовремя · обновите";}
+            catch(Exception){if(!IsDisposed)proxyState.Text="Не удалось получить прокси Dolphin";}
+            finally{pullingProxies=false;}
         }
 
         public void ApplySearch(string q) { if (q != null && search.Text != q) search.Text = q; RefreshData(); }
@@ -165,8 +188,10 @@ namespace VideoBatch {
             foreach (var p in rows) {
                 if (!FilterMatch(p, q)) continue;
                 int ri = grid.Rows.Add(false, p.DisplayName, p.PlatformsLabel, p.ChannelNames, p.Market, p.ContentKind,
-                    p.CountryCode, p.ProfileId, p.ExpectedIp, p.VideoCount, p.Status, p.LastOperation, "⋯");
+                    p.CountryCode, p.ProfileId, ProxyFor(p.ProfileId)!=""?TelegramStore.ProxyLabel(ProxyFor(p.ProfileId)):"Не получен", p.VideoCount, p.Status, p.LastOperation, "⋯");
                 grid.Rows[ri].Tag = p;
+                grid.Rows[ri].Cells["ip"].ToolTipText="Настроенный прокси Dolphin. Ожидаемый IP: "+p.ExpectedIp;
+                if(dolphinProxies.TryGetValue(p.ProfileId??"",out var route)&&!string.IsNullOrEmpty(route.country))grid.Rows[ri].Cells["country"].Value=route.country;
                 if (p.ExpectedIp != "—" && p.CountryCode == "—")
                     _ = ResolveCountryAsync(p, ri);
             }
@@ -322,11 +347,13 @@ namespace VideoBatch {
             Dock = DockStyle.Fill;
             BackColor = Theme.Background;
 
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));Controls.Add(layout);
             var top = Theme.MakeToolbar();
             top.Controls.Add(Theme.MakeButton("Проверить выбранные", accent: true, action: async () => await CheckSelected()));
             top.Controls.Add(Theme.MakeButton("Проверить все", ghost: true, action: async () => await CheckAll()));
             top.Controls.Add(Theme.MakeButton("Обновить", ghost: true, action: RefreshData));
-            Controls.Add(top);
+            layout.Controls.Add(top,0,0);
 
             grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
             Theme.StyleGrid(grid);
@@ -340,7 +367,7 @@ namespace VideoBatch {
             grid.Columns.Add("actual", "Фактический IP");
             grid.Columns.Add("result", "Результат");
             grid.Columns.Add("checked", "Проверка");
-            Controls.Add(grid);
+            layout.Controls.Add(grid,0,1);
             RefreshData();
         }
 

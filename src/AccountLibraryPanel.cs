@@ -10,6 +10,7 @@ namespace VideoBatch {
         readonly AccountLibraryStore store;
         readonly Preferences settings;
         readonly Action<AccountSourceLink> openSource;
+        readonly Func<string,string> profileProxy;
         readonly ListBox list = new ListBox();
         readonly TextBox search = Theme.MakeSearchBox();
         readonly ComboBox platform = Theme.MakeCombo(new[] { "Все площадки", "YouTube", "TikTok" });
@@ -28,9 +29,9 @@ namespace VideoBatch {
         string loadError = "";
         int unresolved;
         public AccountRecord SelectedAccount => list.SelectedItem as AccountRecord;
-        public AccountLibraryPanel(AccountLibraryStore accountStore = null, Preferences prefs = null, Action<AccountSourceLink> open = null) {
+        public AccountLibraryPanel(AccountLibraryStore accountStore = null, Preferences prefs = null, Action<AccountSourceLink> open = null,Func<string,string> proxyLookup=null) {
             store = accountStore ?? new AccountLibraryStore();
-            settings = prefs; openSource = open;
+            settings = prefs; openSource = open;profileProxy=proxyLookup;
             Name = "AccountLibrary"; BackColor = Theme.Background; ForeColor = Theme.TextPrimary; Font = Theme.FontBody;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -141,7 +142,8 @@ namespace VideoBatch {
                 secretFields.Add(show => { if (!reveal.IsDisposed) reveal.Text = show ? "Скрыть данные" : "Показать данные"; });
                 access.Controls.Add(reveal);
                 ValueRow(access, "Логин / почта", a.Login, true); ValueRow(access, "Пароль", a.Password, true);
-                if(!string.IsNullOrWhiteSpace(a.AccessNotes)) ValueRow(access, "Дополнительные данные", a.AccessNotes, true); ValueRow(access, "Прокси", a.Proxy, true);
+                if(!string.IsNullOrWhiteSpace(a.AccessNotes)) ValueRow(access, "Дополнительные данные", a.AccessNotes, true); string configured=a.Proxy;if(string.IsNullOrWhiteSpace(configured)&&profileProxy!=null)configured=(a.Sources??new List<AccountSourceLink>()).Select(source=>profileProxy(source.ProfileId)).FirstOrDefault(value=>!string.IsNullOrWhiteSpace(value))??"";
+                ValueRow(access, "Прокси", configured, true);
                 var source = Card("Покупка и заметки"); ValueRow(source, "Где покупал", a.PurchaseUrl, false, true);
                 AddText(source, string.IsNullOrWhiteSpace(a.Notes) ? "Заметок пока нет. Добавь их через «Изменить»." : a.Notes);
             }

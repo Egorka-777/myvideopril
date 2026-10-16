@@ -189,9 +189,9 @@ namespace VideoBatch {
             }catch(Exception e){Failure(e);}
         }
         void OpenWeb()=>OpenWeb(null);
-        void OpenWeb(TelegramAccount current){try{if(busy)return;var a=current==null?Selected():new List<TelegramAccount>{current};if(a.Count!=1)throw new InvalidOperationException("Выберите один аккаунт");if(webWindows.TryGetValue(a[0].id,out var existing)&&!existing.IsDisposed){existing.Activate();return;}var window=new TelegramWebWindow(store,a[0],async token=>{if(busy)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");await Run(new Dictionary<string,object>{{"action","web_login"},{"accounts",new List<TelegramAccount>{a[0]}},{"login_token",token}});});webWindows[a[0].id]=window;window.Show(this);}catch(Exception e){Failure(e);}}
-        async Task Run(Dictionary<string,object> job,string importProxyId=null,List<string> importedIds=null) {
-            if(busy)return;busy=true;foreach(var b in workButtons)b.Enabled=false;stop.Enabled=true;grid.Enabled=false;search.Enabled=false;proxyGrid.Enabled=false;pages[2].Enabled=false;
+        void OpenWeb(TelegramAccount current){try{if(busy)return;var a=current==null?Selected():new List<TelegramAccount>{current};if(a.Count!=1)throw new InvalidOperationException("Выберите один аккаунт");if(webWindows.TryGetValue(a[0].id,out var existing)&&!existing.IsDisposed){existing.Activate();return;}var window=new TelegramWebWindow(store,a[0],async token=>{if(busy)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");if(!await Run(new Dictionary<string,object>{{"action","web_login"},{"accounts",new List<TelegramAccount>{a[0]}},{"login_token",token}}))throw new IOException("Вход не подтверждён: "+status.Text);});webWindows[a[0].id]=window;window.Show(this);}catch(Exception e){Failure(e);}}
+        async Task<bool> Run(Dictionary<string,object> job,string importProxyId=null,List<string> importedIds=null) {
+            if(busy)return false;busy=true;foreach(var b in workButtons)b.Enabled=false;stop.Enabled=true;grid.Enabled=false;search.Enabled=false;proxyGrid.Enabled=false;pages[2].Enabled=false;
             bool complete=false,failed=false;string finalSummary="";string task=Guid.NewGuid().ToString("N");status.Text="Выполняется…";
             TaskQueueStore.Upsert(task,t=>{t.Platform="Telegram";t.UploadMethod="MTProto";t.Account=job.ContainsKey("accounts")?string.Join(", ",((List<TelegramAccount>)job["accounts"]).Select(a=>a.name)):"Импорт аккаунтов";t.Stage=Convert.ToString(job["action"]);t.Status=TaskQueueStatus.Preparing;},true);
             try {
@@ -222,6 +222,7 @@ namespace VideoBatch {
                 if(code!=0&&code!=2)throw new IOException("Telegram: "+status.Text);
                 if(code==0&&!string.IsNullOrEmpty(finalSummary))status.Text=finalSummary;if(code==2)status.Text="Остановлено";
                 TaskQueueStore.Upsert(task,t=>{t.Status=code==2?TaskQueueStatus.Stopped:failed?TaskQueueStatus.Error:TaskQueueStatus.Done;t.Progress=code==0?100:0;t.Result=status.Text;},true);
+                return code==0&&!failed;
             }catch{TaskQueueStore.Upsert(task,t=>{t.Status=TaskQueueStatus.Error;t.Result="Проверьте журнал Telegram";},true);throw;}finally{busy=false;foreach(var b in workButtons)b.Enabled=true;stop.Enabled=false;grid.Enabled=true;search.Enabled=true;proxyGrid.Enabled=true;pages[2].Enabled=true;RefreshData();RefreshProxies();}
         }
         static string Get(Dictionary<string,object> ev,string key)=>ev.TryGetValue(key,out var value)?Convert.ToString(value):"";

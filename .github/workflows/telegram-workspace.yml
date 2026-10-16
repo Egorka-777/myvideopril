@@ -95,6 +95,7 @@ jobs:
           name: Telegram-Workspace-Update
           path: artifacts/VideoBatch-Telegram-Update
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: Telegram-UI
           path: artifacts/telegram-ui

@@ -28,6 +28,8 @@ namespace VideoBatch {
         TikTokBackend tiktokBackend;
         HomePanel homePanel;
         ProfilesPanel profilesPanel;
+        Panel profilesWorkspace;
+        Action<int> selectProfilesPage;
         AccountLibraryPanel accountLibraryPanel;
         ProxyPanel proxyPanel;
         YouTubeWorkspacePanel youtubeWorkspace;
@@ -66,6 +68,7 @@ namespace VideoBatch {
             shellRoot.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             Controls.Add(shellRoot);
 
+            Console.WriteLine("UI startup: sidebar");
             sidebar = BuildSidebar();
             shellRoot.Controls.Add(sidebar, 0, 0);
 
@@ -74,6 +77,7 @@ namespace VideoBatch {
             right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             shellRoot.Controls.Add(right, 1, 0);
 
+            Console.WriteLine("UI startup: top bar");
             topBar = BuildTopBar();
             right.Controls.Add(topBar, 0, 0);
 
@@ -117,7 +121,7 @@ namespace VideoBatch {
             var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Sidebar, Padding = new Padding(8, 12, 8, 12), AutoScroll = true };
             int y = 0;
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
-            y = AddNavGroup(panel, "Аккаунты", y, NavItem("Аккаунты", NavSection.AccountLibrary), NavItem("Профили браузера", NavSection.Profiles), NavItem("Прокси", NavSection.Proxy));
+            y = AddNavGroup(panel, "Аккаунты", y, NavItem("Профили", NavSection.Profiles));
             y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram));
             y = AddNavGroup(panel, "YouTube", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогревочные ролики", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
@@ -175,29 +179,43 @@ namespace VideoBatch {
         }
 
         void BuildPanels() {
+            Console.WriteLine("UI startup: YouTubeBackend");
             youtubeBackend = new YouTubeBackend(settings);
+            Console.WriteLine("UI startup: TikTokBackend");
             tiktokBackend = new TikTokBackend(settings);
+            Console.WriteLine("UI startup: HomePanel");
             homePanel = new HomePanel(settings, navigation);
+            Console.WriteLine("UI startup: ProfilesPanel");
             profilesPanel = new ProfilesPanel(settings, navigation, youtubeBackend, tiktokBackend);
-            accountLibraryPanel = new AccountLibraryPanel(null, settings, OpenLibrarySource);
+            Console.WriteLine("UI startup: AccountLibraryPanel");
+            accountLibraryPanel = new AccountLibraryPanel(null, settings, OpenLibrarySource,profilesPanel.ProxyFor);
             Deactivate += (s, e) => accountLibraryPanel.HideSecrets();
+            Console.WriteLine("UI startup: ProxyPanel");
             proxyPanel = new ProxyPanel(settings, navigation, youtubeBackend, tiktokBackend);
+            Console.WriteLine("UI startup: YouTubeWorkspacePanel");
             youtubeWorkspace = new YouTubeWorkspacePanel(settings, youtubeBackend, navigation);
+            Console.WriteLine("UI startup: TikTokWorkspacePanel");
             tiktokWorkspace = new TikTokWorkspacePanel(settings, tiktokBackend);
+            Console.WriteLine("UI startup: ViewsSearchPanel");
             viewsSearchPanel = new ViewsSearchPanel(settings, youtubeBackend);
+            Console.WriteLine("UI startup: YouTubeWarmupPanel");
             youtubeWarmupPanel = new YouTubeWarmupPanel(settings, youtubeBackend);
+            Console.WriteLine("UI startup: WarmupVideoPanel");
             warmupVideoPanel = new WarmupVideoPanel(settings);
+            Console.WriteLine("UI startup: PlatformHubPanel");
             platformHub = new PlatformHubPanel();
             platformHub.PlatformChosen += p => { HidePlatformHub(); ApplyPlatform(p, navigate: true); };
             AddPanel(platformHub);
+            Console.WriteLine("UI startup: TasksPanel");
             tasksPanel = new TasksPanel(settings);
+            Console.WriteLine("UI startup: LogsPanel");
             logsPanel = new LogsPanel(settings);
+            Console.WriteLine("UI startup: StatisticsPanel");
             statsPanel = new StatisticsPanel(settings);
+            Console.WriteLine("UI startup: SettingsPanel");
             settingsPanel = new SettingsPanel(settings, () => SaveSettings());
             AddPanel(homePanel);
-            AddPanel(profilesPanel);
-            AddPanel(accountLibraryPanel);
-            AddPanel(proxyPanel);
+            profilesWorkspace=BuildProfilesWorkspace();AddPanel(profilesWorkspace);
             AddPanel(youtubeWorkspace);
             AddPanel(tiktokWorkspace);
             AddPanel(viewsSearchPanel);
@@ -207,10 +225,13 @@ namespace VideoBatch {
             AddPanel(logsPanel);
             AddPanel(statsPanel);
             AddPanel(settingsPanel);
+            Console.WriteLine("UI startup: HighlightsPanel");
             highlightsPanel = new HighlightsPanel();
             AddPanel(highlightsPanel);
+            Console.WriteLine("UI startup: TelegramPanel");
             telegramPanel = new TelegramPanel(preferences:()=>settings);
             AddPanel(telegramPanel);
+            Console.WriteLine("UI startup: AssemblyWindow");
             assemblyStudio = new AssemblyWindow(embedded: true);
             assemblyStudio.Visible = false;
             contentHost.Controls.Add(assemblyStudio);
@@ -219,6 +240,19 @@ namespace VideoBatch {
                 processingWindow.Visible = false;
                 contentHost.Controls.Add(processingWindow);
             }
+        }
+
+        Panel BuildProfilesWorkspace(){
+            var root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute,46));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            var tabs=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+            var host=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty};
+            var views=new Control[]{profilesPanel,accountLibraryPanel,proxyPanel};var buttons=new System.Collections.Generic.List<Button>();
+            selectProfilesPage=index=>{for(int i=0;i<views.Length;i++){views[i].Visible=i==index;buttons[i].BackColor=i==index?Theme.Selected:Theme.Background;}views[index].BringToFront();};
+            foreach(var view in views){view.Dock=DockStyle.Fill;view.Visible=false;host.Controls.Add(view);}
+            string[] captions={"Профили","Карточки аккаунтов","Проверка сети"};
+            for(int i=0;i<views.Length;i++){int page=i;var button=Theme.MakeButton(captions[i],action:()=>{accountLibraryPanel.RefreshData();profilesPanel.RefreshData();proxyPanel.RefreshData();selectProfilesPage(page);});buttons.Add(button);tabs.Controls.Add(button);}
+            root.Controls.Add(tabs,0,0);root.Controls.Add(host,0,1);selectProfilesPage(0);return root;
         }
 
         void AddPanel(Control panel) {
@@ -239,10 +273,10 @@ namespace VideoBatch {
 
         void ShowSection(NavSection section) {
             dolphinLabel.Visible=dolphinDot.Visible=dolphinRefreshBtn.Visible=section!=NavSection.Telegram;
-            pageTitleLabel.Text = NavigationService.Title(section);
+            pageTitleLabel.Text = section==NavSection.AccountLibrary||section==NavSection.Proxy?"Профили":NavigationService.Title(section);
             platformBadge.Visible=platformBadge.Text!=pageTitleLabel.Text;
             globalSearch.Visible=section==NavSection.Profiles||section==NavSection.AccountLibrary||section==NavSection.Tasks;
-            HighlightNav(section);
+            HighlightNav(section==NavSection.AccountLibrary||section==NavSection.Proxy?NavSection.Profiles:section);
             if (section == NavSection.VideoProcessing) {
                 if (processingWindow == null) {
                     if (!ToolsLocator.TryResolve(out _, out _, out var hint))
@@ -258,9 +292,9 @@ namespace VideoBatch {
                 case NavSection.Home: next = homePanel; homePanel.RefreshStats(); break;
                 case NavSection.Tasks: next = tasksPanel; tasksPanel.RefreshData(); break;
                 case NavSection.Statistics: next = statsPanel; statsPanel.RefreshData(); break;
-                case NavSection.Profiles: next = profilesPanel; profilesPanel.RefreshData(); break;
-                case NavSection.AccountLibrary: next = accountLibraryPanel; accountLibraryPanel.RefreshData(); break;
-                case NavSection.Proxy: next = proxyPanel; proxyPanel.RefreshData(); break;
+                case NavSection.Profiles: next=profilesWorkspace;accountLibraryPanel.RefreshData();profilesPanel.RefreshData();selectProfilesPage(0);break;
+                case NavSection.AccountLibrary: next=profilesWorkspace;accountLibraryPanel.RefreshData();selectProfilesPage(1);break;
+                case NavSection.Proxy: next=profilesWorkspace;proxyPanel.RefreshData();selectProfilesPage(2);break;
                 case NavSection.VideoAssembly: next = assemblyStudio; break;
                 case NavSection.Highlights: next = highlightsPanel; break;
                 case NavSection.Telegram: next = telegramPanel; telegramPanel.RefreshData(); break;
