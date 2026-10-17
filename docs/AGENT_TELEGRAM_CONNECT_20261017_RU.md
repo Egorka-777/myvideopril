@@ -1,7 +1,9 @@
 # Telegram: подключение аккаунтов — 17.10.2026
 
-Ветка: `fix/telegram-connect-flow-20261017`. Основа: main `05bae91c992c406064f740e53b3e8a1b883b9a66`.
-YouTube, TikTok и автопрогрев в этой доработке не изменялись.
+Ветка разработки: `fix/telegram-connect-flow-20261017` (слита в **`main`**).
+Telegram worker: **`2026-10-17-telegram-connect-v2`**.
+
+На **`main`** также есть правки YouTube автопрогрева (`0973704`): мягкий лайк Shorts без падения сессии, «Стоп» не считается ошибкой, ПКМ профилей без скрытой ячейки. Studio/uploader — см. коммиты до merge.
 
 ## Задача агенту на ПК
 
@@ -14,14 +16,14 @@ YouTube, TikTok и автопрогрев в этой доработке не и
 
 1. Закрыть приложение. Сохранить резервную копию установленной папки и каталога данных Telegram.
    Обычно данные — `%LOCALAPPDATA%\VideoBatchDesktop\telegram`, но при переносном режиме проверить фактический путь в существующей установке. Сохранить `telegram.vault` и `web`.
-2. В репозитории выполнить `git status --short`; локальные изменения сохранить отдельно. Затем:
+2. В репозитории:
    ```powershell
    git fetch origin
-   git switch --track origin/fix/telegram-connect-flow-20261017
+   git switch main
+   git pull --ff-only
    ```
-   Если локальная ветка существует: `git switch fix/telegram-connect-flow-20261017`, `git pull --ff-only`.
-   Не выполнять `reset --hard`, `clean` и не переключать main принудительно.
-3. В GitHub Actions → **Telegram workspace** выбрать успешный запуск именно этой ветки и скачать **Telegram-Connect-Update**.
+   Локальные правки сохранить отдельно; не выполнять `reset --hard` / `clean` на рабочих данных.
+3. В GitHub Actions → **Telegram workspace** — артефакт **Telegram-Connect-Update** с успешного запуска **`main`** (или той же ревизии, что в `SOURCE_COMMIT.txt`).
    Распаковать целиком: EXE, DLL, `runtimes/win-x86/native`, `runtimes/win-x64/native`, `tools/telegram`, `tools/uploader`.
    Сверить `SOURCE_COMMIT.txt` с коммитом запуска. Одного EXE недостаточно.
    Существующие Node/node_modules, FFmpeg, пользовательские файлы и настройки оставить.
