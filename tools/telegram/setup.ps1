@@ -14,6 +14,7 @@ function Resolve-Python {
         (Join-Path $env:LOCALAPPDATA 'Programs/Python/Python311/python.exe'),
         (Join-Path $env:ProgramFiles 'Python311/python.exe')
     )
+    if ($env:pythonLocation) { $candidates = @((Join-Path $env:pythonLocation 'python.exe')) + $candidates }
     $candidates += @(Get-Command python.exe -ErrorAction SilentlyContinue | ForEach-Object Source)
     $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($launcher) {
@@ -24,8 +25,10 @@ function Resolve-Python {
     }
     foreach ($candidate in $candidates) {
         if (!(Test-Path $candidate)) { continue }
-        & $candidate -c 'import sys,struct; sys.exit(0 if sys.version_info[:2]==(3,11) and struct.calcsize("P")==8 else 1)' 2>$null
-        if ($LASTEXITCODE -eq 0) { return $candidate }
+        try {
+            & $candidate -I -c 'import sys; sys.exit(0 if sys.version_info[:2]==(3,11) and sys.maxsize>2**32 else 1)' 2>$null
+            if ($LASTEXITCODE -eq 0) { return $candidate }
+        } catch { } # Broken installations / Store aliases must not abort discovery.
     }
     return $null
 }
