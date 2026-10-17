@@ -326,7 +326,7 @@ namespace VideoBatch {
 
         void OnAction(object sender, DataGridViewCellEventArgs e) {
             if (e.RowIndex < 0 || grid.Columns[e.ColumnIndex].Name != "actions") return;
-            grid.CurrentCell = grid.Rows[e.RowIndex].Cells[0];
+            grid.CurrentCell = grid.Rows[e.RowIndex].Cells["name"];
             var p = (UnifiedProfile)grid.Rows[e.RowIndex].Tag;
             var menu = Theme.MakeContextMenu();
             menu.Items.Add("Рынок: RU", null, (s, ev) => SetProfileMarket(p, "RU"));

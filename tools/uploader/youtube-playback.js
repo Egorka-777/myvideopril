@@ -114,9 +114,13 @@ async function isVideoLiked(page) {
   }).catch(() => false);
 }
 
-async function likeCurrentVideo(page, report) {
+async function likeCurrentVideo(page, report, opts) {
   report = report || (() => {});
-  await require("./youtube-interaction-safety.js").assertNoAds(page);
+  opts = opts || {};
+  const soft = !!opts.soft;
+  const safety = require("./youtube-interaction-safety.js");
+  if (soft) await safety.skipAdDuringWarmup(page, report);
+  else await safety.assertNoAds(page);
   report("youtube", "Ставлю лайк…");
   await page.evaluate(() => {
     const actions = document.querySelector("#actions, #actions-inner, ytd-menu-renderer, like-button-view-model");
@@ -130,6 +134,7 @@ async function likeCurrentVideo(page, report) {
   }
 
   const candidates = [
+    page.locator("ytd-reel-video-renderer[is-active] like-button-view-model button, ytd-reel-video-renderer[is-active] reel-like-button button").first(),
     page.locator("reel-like-button button, ytd-reel-video-renderer like-button-view-model button").first(),
     page.locator("like-button-view-model button").first(),
     page.locator("ytd-segmented-like-dislike-button-renderer like-button-view-model button").first(),
@@ -147,17 +152,36 @@ async function likeCurrentVideo(page, report) {
     const label = ((await btn.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
     if (/dislike|не нрав/.test(label) && !/^нрав|^like/.test(label)) continue;
     await btn.scrollIntoViewIfNeeded().catch(() => {});
-    await require("./youtube-interaction-safety.js").assertNoAds(page);
+    if (soft) await safety.skipAdDuringWarmup(page, report);
+    else await safety.assertNoAds(page);
     await btn.click({ timeout: 5000 });
     clicked = true;
     break;
   }
 
+  if (!clicked && soft) {
+    await page.keyboard.press("l").catch(() => {});
+    await page.waitForTimeout(900);
+    if (await isVideoLiked(page)) {
+      report("youtube", "Лайк поставлен (клавиша L).");
+      return;
+    }
+  }
 
-  if (!clicked) throw new Error("Не найдена кнопка «Нравится». Профиль оставлен открытым — поставьте лайк вручную.");
+  if (!clicked) {
+    if (soft) {
+      report("youtube", "Shorts: кнопка «Нравится» не найдена — продолжаю просмотр.");
+      return;
+    }
+    throw new Error("Не найдена кнопка «Нравится». Профиль оставлен открытым — поставьте лайк вручную.");
+  }
 
   await page.waitForTimeout(1500);
   if (!(await isVideoLiked(page))) {
+    if (soft) {
+      report("youtube", "Shorts: лайк не подтверждён — продолжаю просмотр.");
+      return;
+    }
     throw new Error("Лайк не подтверждён. Проверьте вход в аккаунт YouTube в профиле Dolphin.");
   }
   report("youtube", "Лайк поставлен.");

@@ -128,13 +128,14 @@ async function maybeLike(page, job, report, watchSec) {
   }
   const playback = require("./youtube-playback.js");
   try {
-    await playback.likeCurrentVideo(page, report);
+    await playback.likeCurrentVideo(page, report, { soft: true });
   } catch (e) {
-    if (/реклама/i.test(String(e.message || e))) {
-      report("youtube", "Shorts: лайк пропущен (реклама).");
+    const msg = String(e.message || e);
+    if (/реклама|нрав/i.test(msg)) {
+      report("youtube", "Shorts: лайк пропущен — " + (msg.length > 80 ? msg.slice(0, 80) + "…" : msg));
       return;
     }
-    throw e;
+    report("youtube", "Shorts: лайк пропущен — продолжаю просмотр.");
   }
 }
 

@@ -1527,6 +1527,11 @@ namespace VideoBatch {
             string m=(e?.Message??"").ToLowerInvariant();
             return m.Contains("отмен")||m.Contains("cancel");
         }
+        static bool IsWarmupStopNoise(Exception e){
+            if(IsUploadCancellation(e)) return true;
+            string m=(e?.Message??"").ToLowerInvariant();
+            return m.Contains("target page")||m.Contains("browser has been closed")||m.Contains("context or browser")||m.Contains("connection closed");
+        }
         void DisposeUploadCancellationLocked(){
             if(uploadCts==null) return;
             try{ uploadCts.Dispose(); }catch{}
@@ -1908,7 +1913,15 @@ namespace VideoBatch {
                             System.Threading.Interlocked.Increment(ref ok);
                         }catch(Exception) when(cancellation.IsCancellationRequested){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено пользователем");throw new OperationCanceledException(cancellation.Token);}
                         catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено");throw;}
-                        catch(Exception e){errors.Add(ch.Name+": "+e.Message);Status(row,"Ошибка · "+e.Message);}
+                        catch(Exception e){
+                            if(cancellation.IsCancellationRequested||IsWarmupStopNoise(e)){
+                                if(launched)System.Threading.Interlocked.Increment(ref interrupted);
+                                Status(row,"Остановлено");
+                                return;
+                            }
+                            errors.Add(ch.Name+": "+e.Message);
+                            Status(row,"Ошибка · "+e.Message);
+                        }
                     })).ToArray();
                     try{await Task.WhenAll(tasks).ConfigureAwait(true);}
                     catch(OperationCanceledException){Write("Прогрев остановлен.");cancelled=true;}
