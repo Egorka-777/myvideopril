@@ -31,6 +31,9 @@ namespace VideoBatch {
                 if(data.accounts.Count!=1||imported.api_id!=2||imported.name!="Saved"||imported.note!="Keep"||imported.proxy!="socks5://localhost:1080"||imported.source_format!="pyrogram"||imported.status!="unchecked")throw new Exception("Reimport repair/preserve user settings");
                 bool wrongIdentity=false;try{TelegramStore.ImportAccount(data,new TelegramAccount{id=imported.id,expected_user_id=10});}catch(IOException){wrongIdentity=true;}
                 if(!wrongIdentity||imported.api_id!=2)throw new Exception("Reimport identity mismatch");
+                imported.api_source="json";
+                TelegramStore.ImportAccount(data,new TelegramAccount{id=imported.id,api_source="tdata_desktop",api_id=99,api_hash="fallback",session="key"});
+                if(imported.api_id!=2||imported.api_hash!="new"||imported.api_source!="json")throw new Exception("Fallback import replaced explicit API metadata");
                 Directory.CreateDirectory(Path.Combine(temp,"venv","Scripts"));File.WriteAllText(Path.Combine(temp,"venv","Scripts","python.exe"),"");
                 if(TelegramRunner.Prepared(store))throw new Exception("Python file alone is not a prepared runtime");
                 File.WriteAllText(Path.Combine(temp,"runtime.ready"),"old");if(TelegramRunner.Prepared(store))throw new Exception("Stale runtime marker");

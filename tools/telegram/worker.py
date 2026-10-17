@@ -265,7 +265,7 @@ def from_sqlite(path, defaults):
                 dc, stored_api, test_mode, key, user_id, is_bot = pyrows[0]
                 if test_mode or is_bot or not user_id:
                     raise ValueError('Нужна обычная пользовательская Pyrogram-сессия, не бот и не тестовый сервер')
-                api_id, api_hash, _ = metadata_api(meta, defaults)
+                api_id, api_hash, api_source = metadata_api(meta, defaults)
                 if stored_api and int(stored_api) != api_id:
                     raise ValueError('Для Pyrogram выберите парный JSON с API этой сессии или импортируйте TData / Telethon-выгрузку')
                 if meta.get('user_id') and int(meta['user_id']) != int(user_id):
@@ -291,6 +291,8 @@ def from_sqlite(path, defaults):
     s.auth_key = AuthKey(key)
     row = record(StringSession.save(s), meta, str(meta.get('first_name') or path.stem), defaults)
     row['source_format'] = source_format
+    if source_format == 'pyrogram':
+        row['api_source'] = api_source
     return [row]
 
 
