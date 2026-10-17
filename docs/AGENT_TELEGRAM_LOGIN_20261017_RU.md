@@ -1,7 +1,7 @@
 # Исправление входа Telegram после проверки на ПК
 
-Ветка: `fix/telegram-login-diagnostics-20261017`.
-Основа: main `59d67b1cf26c22f9485408abec15c3db442eb92a`. YouTube/TikTok не изменялись.
+Ветка разработки: `fix/telegram-login-diagnostics-20261017` (слита в **`main`**).
+Worker / runtime: **`2026-10-17-telegram-login-v3`**. Базовый сценарий импорта — **`docs/AGENT_TELEGRAM_CONNECT_20261017_RU.md`**. YouTube автопрогрев на `main` — коммит `0973704`.
 
 ## Что показал скриншот и что исправлено
 
@@ -25,13 +25,13 @@
 ## Установка агентом
 
 1. Закрыть приложение. Сохранить установленную папку и данные Telegram (`telegram.vault`, `web`, настройки). Не удалять файлы и не сбрасывать сессии.
-2. Проверить `git status --short`. Сохранить локальные изменения отдельно. Выполнить:
-   ```powershell
+2. ```powershell
    git fetch origin
-   git switch --track origin/fix/telegram-login-diagnostics-20261017
+   git switch main
+   git pull --ff-only
    ```
-   Если ветка уже существует: переключиться на неё и выполнить `git pull --ff-only`. Не использовать `reset --hard` или `clean`.
-3. Скачать **Telegram-Login-Update** из успешного запуска **Telegram workspace** на точном SHA этой ветки. Установить EXE, DLL, оба каталога `runtimes` и workers целиком. Сверить `SOURCE_COMMIT.txt`.
+   Локальные изменения сохранить отдельно; не использовать `reset --hard` / `clean` на данных Telegram.
+3. Скачать **Telegram-Login-Update** (или **Telegram-Connect-Update**) из успешного **Telegram workspace** на SHA **`main`** / `SOURCE_COMMIT.txt`. Установить EXE, DLL, оба каталога `runtimes`, `tools/telegram`, `tools/uploader`.
    Существующие Node/node_modules, FFmpeg и материалы пользователя оставить. Альтернатива: `dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=` и установка полного выхода.
 4. Telegram → Настройки → **Подготовить Telegram**. Версия среды — `2026-10-17-telegram-login-v3`; нужна работающая среда Python 3.11 x64 и WebView2 Runtime. Старый `runtime.ready` сам по себе больше не принимается.
 5. **Повторно импортировать исходную папку TData пользователя через «Добавить аккаунт → Открыть… → Папка TData».** Старый импорт не сохранил сетевую конфигурацию, восстановить её из одной старой записи vault нельзя. Тот же ключ обновляет запись без дубликата; прокси, имя и заметки сохраняются. Можно перетащить папку или импортировать ZIP.
