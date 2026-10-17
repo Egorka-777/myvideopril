@@ -1,7 +1,7 @@
 name: Telegram workspace
 on:
   push:
-    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016, feat/telegram-polish-20261016]
+    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016, feat/telegram-polish-20261016, fix/telegram-connect-flow-20261017]
   pull_request:
     paths: ['src/Telegram*.cs','tools/telegram/**','tests/telegram/**','src/AppShell.cs','src/NavigationService.cs','.github/workflows/telegram-workspace.yml']
   workflow_dispatch:
@@ -71,7 +71,7 @@ jobs:
           if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes "$dest/runtimes" -Recurse }
           Copy-Item tools/telegram/*.py,tools/telegram/*.ps1,tools/telegram/*.txt "$dest/tools/telegram"
           Copy-Item tools/uploader/*.js,tools/uploader/package*.json "$dest/tools/uploader"
-          Copy-Item docs/AGENT_TELEGRAM_POLISH_20261016_RU.md $dest
+          Copy-Item docs/AGENT_TELEGRAM_CONNECT_20261017_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
           foreach ($entry in @(@('x86',0x014c),@('x64',0x8664))) {
             $native = Join-Path $dest ('runtimes/win-'+$entry[0]+'/native/WebView2Loader.dll')
@@ -93,7 +93,7 @@ jobs:
           Write-Host "Packaged WebView2 loader verified: $arch"
       - uses: actions/upload-artifact@v4
         with:
-          name: Telegram-Workspace-Update
+          name: Telegram-Connect-Update
           path: artifacts/VideoBatch-Telegram-Update
       - uses: actions/upload-artifact@v4
         if: always()

@@ -7,17 +7,24 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 New-Item -ItemType Directory -Force $Root | Out-Null
 $venv = Join-Path $Root 'venv'
 $runtime = Join-Path $venv 'Scripts\python.exe'
+Remove-Item (Join-Path $Root 'runtime.ready') -ErrorAction SilentlyContinue
 
 function Resolve-Python {
     $candidates = @(
         (Join-Path $env:LOCALAPPDATA 'Programs/Python/Python311/python.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs/Python/Python312/python.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs/Python/Python313/python.exe')
+        (Join-Path $env:ProgramFiles 'Python311/python.exe')
     )
     $candidates += @(Get-Command python.exe -ErrorAction SilentlyContinue | ForEach-Object Source)
+    $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($launcher) {
+        try {
+            $found = & $launcher.Source -3.11 -c 'import sys; print(sys.executable)' 2>$null
+            if ($LASTEXITCODE -eq 0) { $candidates += $found }
+        } catch { } # No 3.11 registered: continue with known paths.
+    }
     foreach ($candidate in $candidates) {
         if (!(Test-Path $candidate)) { continue }
-        & $candidate -c 'import sys; sys.exit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)' 2>$null
+        & $candidate -c 'import sys,struct; sys.exit(0 if sys.version_info[:2]==(3,11) and struct.calcsize("P")==8 else 1)' 2>$null
         if ($LASTEXITCODE -eq 0) { return $candidate }
     }
     return $null
@@ -25,7 +32,7 @@ function Resolve-Python {
 
 if (!(Test-Path $runtime)) {
     $python = Resolve-Python
-    if (!$python) { throw 'Install Python 3.11 or 3.12 (64-bit) from python.org, then click Prepare again.' }
+    if (!$python) { throw 'Install Python 3.11 x64 from python.org, then click Prepare again. This runtime uses prebuilt Windows dependencies for Python 3.11.' }
     & $python -m venv $venv
     if ($LASTEXITCODE -ne 0) { throw 'Could not create Telegram Python environment.' }
 }
@@ -36,7 +43,7 @@ if ($LASTEXITCODE -ne 0) {
     & $runtime -m pip install --disable-pip-version-check -r (Join-Path $scriptDir 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Telegram dependencies installation failed. Check internet connection.' }
 }
-& $runtime -c "import telethon, opentele, python_socks"
-if ($LASTEXITCODE -ne 0) { throw 'Telegram dependency verification failed after install.' }
+& $runtime (Join-Path $scriptDir 'runtime_check.py') $Root
+if ($LASTEXITCODE -ne 0) { throw 'Telegram runtime smoke test failed. Do not start accounts until preparation succeeds.' }
 
 Write-Output 'Telegram ready'

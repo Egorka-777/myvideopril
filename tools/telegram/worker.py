@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json
 import os
+import queue
 from pathlib import Path
 import re
 import sqlite3
@@ -17,10 +18,13 @@ import time
 import zipfile
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-16-telegram-polish-v1'
+VERSION = '2026-10-17-telegram-connect-v2'
 PROXY_TIMEOUT = 7
 ACCOUNT_TIMEOUT = 22
 CANCEL = threading.Event()
+LOGIN_TOKENS = queue.Queue(maxsize=4)
+DC_SERVERS = {1: '149.154.175.50', 2: '149.154.167.51', 3: '149.154.175.100',
+              4: '149.154.167.91', 5: '149.154.171.5'}
 MAX_ARCHIVE = 256 * 1024 * 1024
 MAX_FILES = 10000
 MAX_INPUT = 8 * 1024 * 1024
@@ -46,10 +50,30 @@ async def pause(seconds):
         await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
 
 
-def watch_input():
+def watch_input(cancel_on_eof=False):
     for line in sys.stdin:
         if line.strip() == 'cancel':
             CANCEL.set()
+        elif line.startswith('web_login:'):
+            token = line.strip()[len('web_login:'):]
+            if re.fullmatch(r'[A-Za-z0-9_-]{16,1024}', token):
+                with contextlib.suppress(queue.Full):
+                    LOGIN_TOKENS.put_nowait(token)
+    if cancel_on_eof:
+        CANCEL.set()  # Interactive authorization must not outlive its parent.
+
+
+async def fresh_login_token(account, attempt, timeout=45):
+    emit('web_token_request', id=account['id'], attempt=attempt,
+         text='Сессия подключена. Читаем свежий QR из выбранного веб-окна…')
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        cancelled()
+        try:
+            return LOGIN_TOKENS.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(.1)
+    raise ValueError('Telegram Web не передал свежий QR за 45 сек. Обновите веб-окно и повторите вход')
 
 
 def parse_proxy(value):
@@ -140,8 +164,13 @@ async def account_route(account):
         host = StringSession(account['session']).server_address
     emit('stage', id=account['id'], text='Проверка прокси…' if value else 'Подключение без прокси…')
     result = await probe_proxy(value, host)
+    if result['status'] == 'failed' and value:
+        web = await probe_proxy(value, 'web.telegram.org')
+        if web['status'] == 'ready':
+            result.update(status='limited', code='mtproto_unreachable',
+                          text='Прокси открывает Telegram Web, но не соединение с DC аккаунта. Для проверки сессии выберите прокси с доступом к MTProto')
     emit('proxy', id=account['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(), **result)
-    if result['status'] == 'failed':
+    if result['status'] in ('failed', 'limited'):
         raise RouteError(result['text'])
 
 
@@ -153,7 +182,9 @@ async def check_proxies(job):
     ready = failed = 0
     for p in job.get('proxies', []):
         cancelled()
-        result = await probe_proxy(p.get('url', ''))
+        result = await probe_proxy(p.get('url', ''), 'web.telegram.org')
+        if result['status'] == 'ready':
+            result['text'] = 'Прокси открыл туннель до Telegram Web; аккаунт ещё не проверен'
         emit('proxy', proxy_id=p['id'], proxy_key=hashlib.sha256(p.get('url','').strip().encode()).hexdigest(), **result)
         ready += result['status'] == 'ready'
         failed += result['status'] == 'failed'
@@ -223,7 +254,27 @@ def from_sqlite(path, defaults):
     # Read-only URI, snapshot into memory. No .session-journal, WAL or source mutation.
     try:
         with contextlib.closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
-            rows = db.execute('SELECT dc_id, server_address, port, auth_key FROM sessions').fetchmany(2)
+            columns = {row[1] for row in db.execute('PRAGMA table_info(sessions)')}
+            if {'dc_id', 'server_address', 'port', 'auth_key'} <= columns:
+                rows = db.execute('SELECT dc_id, server_address, port, auth_key FROM sessions').fetchmany(2)
+                source_format = 'telethon'
+            elif {'dc_id', 'api_id', 'test_mode', 'auth_key', 'user_id', 'is_bot'} <= columns:
+                pyrows = db.execute('SELECT dc_id, api_id, test_mode, auth_key, user_id, is_bot FROM sessions').fetchmany(2)
+                if len(pyrows) != 1:
+                    raise ValueError('Ожидалась одна Pyrogram SQLite-сессия')
+                dc, stored_api, test_mode, key, user_id, is_bot = pyrows[0]
+                if test_mode or is_bot or not user_id:
+                    raise ValueError('Нужна обычная пользовательская Pyrogram-сессия, не бот и не тестовый сервер')
+                api_id, api_hash, _ = metadata_api(meta, defaults)
+                if stored_api and int(stored_api) != api_id:
+                    raise ValueError('Для Pyrogram выберите парный JSON с API этой сессии или импортируйте TData / Telethon-выгрузку')
+                if meta.get('user_id') and int(meta['user_id']) != int(user_id):
+                    raise ValueError('user_id в JSON не совпадает с Pyrogram-сессией')
+                meta = dict(meta, api_id=api_id, api_hash=api_hash, user_id=user_id)
+                rows = [(dc, DC_SERVERS.get(int(dc), ''), 443, key)]
+                source_format = 'pyrogram'
+            else:
+                raise ValueError('Неизвестный формат .session. Скачайте Telethon .session + JSON или TData')
     except sqlite3.DatabaseError:
         raise ValueError('Файл не является поддерживаемой Telethon SQLite-сессией; для другого формата используйте TData') from None
     if len(rows) != 1:
@@ -232,13 +283,15 @@ def from_sqlite(path, defaults):
     if not isinstance(key, bytes) or len(key) != 256 or not 1 <= int(dc) <= 5:
         raise ValueError('Нет авторизованной сессии')
     # Never connect to arbitrary endpoints embedded in an untrusted SQLite file.
-    allowed = {'149.154.175.50', '149.154.167.51', '149.154.175.100', '149.154.167.91', '149.154.171.5'}
+    allowed = set(DC_SERVERS.values())
     if str(host) not in allowed or int(port) != 443:
         raise ValueError('Неизвестный DC/порт в сессии: импорт остановлен')
     s = MemorySession()
     s.set_dc(int(dc), str(host), int(port))
     s.auth_key = AuthKey(key)
-    return [record(StringSession.save(s), meta, str(meta.get('first_name') or path.stem), defaults)]
+    row = record(StringSession.save(s), meta, str(meta.get('first_name') or path.stem), defaults)
+    row['source_format'] = source_format
+    return [row]
 
 
 async def from_tdata(path, passcode='', companion=None, defaults=None):
@@ -288,6 +341,7 @@ async def from_tdata(path, passcode='', companion=None, defaults=None):
         if not supplied:
             row['api_source'] = 'tdata_desktop'
         row['user_id'] = row['expected_user_id'] = acc.UserId
+        row['source_format'] = 'tdata'
         result.append(row)
     return result
 
@@ -343,7 +397,12 @@ def tdata_companion(path):
 
 def json_source(path):
     """LZT exports: name.json beside name.session or name_tdata/tdata."""
-    candidates = [path.with_suffix('.session'), path.with_name(path.stem + '_tdata')]
+    # A market export may contain both representations of one account.
+    # An exact session+JSON pair is explicit and takes precedence over TData.
+    session = path.with_suffix('.session')
+    if session.is_file():
+        return session
+    candidates = [path.with_name(path.stem + '_tdata')]
     # Also support a named TData directory beside its JSON.
     named = path.with_suffix('')
     if named.is_dir():
@@ -521,7 +580,8 @@ async def check_accounts(job):
             emit('account', id=account['id'], status=state, text=text, seconds=seconds, code=type(exc).__name__)
         finally:
             if client:
-                await client.disconnect()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(client.disconnect(), 3)
 
     emit('summary', text=f'Проверка: доступны {ready}; ошибок {failed}', ready=ready, failures=failed)
 
@@ -616,7 +676,8 @@ async def web_login(job):
     from telethon import functions
     accounts = job.get('accounts', [])
     token = job.get('login_token','')
-    if len(accounts)!=1 or not re.fullmatch(r'[A-Za-z0-9_-]{16,1024}', token):
+    refresh = job.get('refresh_token') is True
+    if len(accounts)!=1 or not refresh and not re.fullmatch(r'[A-Za-z0-9_-]{16,1024}', token):
         raise ValueError('Не удалось прочитать действующий QR-код Telegram Web')
     account = accounts[0]
     client = client_for(account)
@@ -629,10 +690,50 @@ async def web_login(job):
             emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, ValueError) else text, seconds=seconds, code=type(exc).__name__)
             raise
         emit('account', id=account['id'], status='ready', text='Telegram подтвердил аккаунт', username=me.username or '', name=me.first_name or '', phone=me.phone or '', user_id=me.id)
-        await asyncio.wait_for(client(functions.auth.AcceptLoginTokenRequest(base64.urlsafe_b64decode(token+'='*((-len(token))%4)))), 35)
-        emit('summary', text='Вход в Telegram Web подтверждён. Дождитесь загрузки; при запросе 2FA введите пароль в веб-окне')
+        # Do network/identity checks BEFORE reading a short-lived QR token.
+        # Only an explicitly expired token may be replaced, never a lost response.
+        for attempt in range(1, 4 if refresh else 2):
+            if refresh:
+                token = await fresh_login_token(account, attempt)
+            try:
+                await asyncio.wait_for(client(functions.auth.AcceptLoginTokenRequest(base64.urlsafe_b64decode(token+'='*((-len(token))%4)))), 12)
+                break
+            except Exception as exc:
+                if refresh and type(exc).__name__ == 'AuthTokenExpiredError' and attempt < 3:
+                    emit('stage', id=account['id'], text='QR истёк. Ожидаем новый QR, сессию повторно не подключаем…')
+                    continue
+                raise
+        emit('web_accepted', id=account['id'], user_id=me.id, text='Telegram принял QR выбранного аккаунта')
+        emit('summary', text='QR принят Telegram. Дождитесь открытия аккаунта; при запросе 2FA введите пароль в веб-окне')
     finally:
-        await client.disconnect()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(client.disconnect(), 3)
+
+
+async def invite_link(job):
+    """An opt-in link for an administrated destination; never sends DMs/invitations."""
+    from telethon import functions
+    accounts = job.get('accounts', [])
+    if len(accounts) != 1:
+        raise ValueError('Выберите один аккаунт администратора')
+    account = accounts[0]
+    client = None
+    try:
+        await account_route(account)
+        client = client_for(account)
+        await connect(client, account)
+        target = await resolve_target(client, job.get('target', ''))
+        result = await asyncio.wait_for(client(functions.messages.ExportChatInviteRequest(
+            peer=target, request_needed=True, title='VideoBatch')), 20)
+        link = getattr(result, 'link', '')
+        if not re.fullmatch(r'https://t\.me/\+[A-Za-z0-9_-]+', link):
+            raise ValueError('Telegram не вернул ссылку приглашения')
+        emit('invite_link', link=link, text='Ссылка создана. Пользователь открывает её сам; заявка подтверждается администратором')
+        emit('summary', text='Пригласительная ссылка готова; сообщения и массовые приглашения не отправлялись')
+    finally:
+        if client:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(client.disconnect(), 3)
 
 
 async def invite(job):
@@ -773,6 +874,8 @@ async def run(job):
             await check_proxies(job)
         elif action == 'web_login':
             await web_login(job)
+        elif action == 'invite_link':
+            await invite_link(job)
         else:
             raise ValueError('Неизвестное действие Telegram')
         emit('complete', text='Задача завершена')
@@ -790,12 +893,15 @@ def main():
         emit('error', text='Слишком большое задание'); return 1
     try:
         job = json.loads(line)
-        threading.Thread(target=watch_input, daemon=True).start()
+        threading.Thread(target=watch_input, args=(job.get('action') == 'web_login' and job.get('refresh_token') is True,), daemon=True).start()
         asyncio.run(run(job))
         return 0
     except StopJob as exc:
         emit('stopped', text=str(exc)); return 2
     except Exception as exc:
+        if isinstance(exc, (ImportError, ModuleNotFoundError)):
+            emit('error', status='configuration', code='RuntimeDependency', text='Компоненты Telegram не готовы. Выполните «Подготовить Telegram» и обновите EXE вместе с tools/telegram')
+            return 1
         state, text, seconds = error_info(exc)
         if isinstance(exc, ValueError):
             text = str(exc)

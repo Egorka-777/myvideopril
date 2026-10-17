@@ -27,6 +27,7 @@ namespace VideoBatch {
         public string proxy { get; set; } = "";
         public string proxy_id { get; set; } = "";
         public string api_source { get; set; } = "";
+        public string source_format { get; set; } = "";
         public long expected_user_id { get; set; }
         public string country { get; set; } = "";
         public string note { get; set; } = "";
@@ -59,6 +60,24 @@ namespace VideoBatch {
         public string Root { get; }
         public string Vault => Path.Combine(Root,"telegram.vault");
         public TelegramStore(string root=null) { Root = root ?? Path.Combine(Store.Root,"telegram"); }
+        public static bool ImportAccount(TelegramData data,TelegramAccount incoming) {
+            var current=data.accounts.FirstOrDefault(a=>a.id==incoming.id);
+            if(current==null){data.accounts.Add(incoming);return true;}
+            if(current.expected_user_id!=0&&incoming.expected_user_id!=0&&current.expected_user_id!=incoming.expected_user_id)
+                throw new IOException("Парный JSON указывает другой аккаунт. Сохранённые данные не изменены.");
+            // Explicit reimport repairs metadata for the same authorization key.
+            // Keep the user's proxy, name, notes and confirmed Telegram limitations.
+            bool changed=current.api_id!=incoming.api_id||current.api_hash!=incoming.api_hash||current.session!=incoming.session;
+            current.session=incoming.session;current.api_id=incoming.api_id;current.api_hash=incoming.api_hash;
+            current.api_source=incoming.api_source;current.source_format=incoming.source_format;
+            current.device=incoming.device;current.system=incoming.system;current.app_version=incoming.app_version;
+            current.lang=incoming.lang;current.system_lang=incoming.system_lang;
+            if(incoming.expected_user_id!=0)current.expected_user_id=incoming.expected_user_id;
+            if(changed&&!new[]{"blocked","deactivated","unauthorized"}.Contains(current.status)){
+                current.status="unchecked";current.last_error="Данные сессии обновлены; проверьте аккаунт";current.last_code="";
+            }
+            return false;
+        }
         public void Prepare() {
             Directory.CreateDirectory(Root);
             // Secrets and transient TData readable only by this Windows user and SYSTEM.

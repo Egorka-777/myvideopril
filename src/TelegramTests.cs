@@ -25,6 +25,17 @@ namespace VideoBatch {
                 bool rejected=false;try{store.Change(d=>d.accounts.Clear());}catch(IOException){rejected=true;}
                 if(!rejected||!File.ReadAllBytes(store.Vault).SequenceEqual(corrupt))throw new Exception("Corrupt vault overwritten");
                 if(NavigationService.Title(NavSection.Telegram)!="Telegram")throw new Exception("Navigation");
+                var imported=new TelegramAccount{id=new string('d',64),name="Saved",proxy="socks5://localhost:1080",note="Keep",api_id=1,api_hash="old",session="key",expected_user_id=9,status="configuration"};
+                var data=new TelegramData();data.accounts.Add(imported);
+                if(TelegramStore.ImportAccount(data,new TelegramAccount{id=imported.id,api_id=2,api_hash="new",session="key",source_format="pyrogram",expected_user_id=9}))throw new Exception("Duplicate import");
+                if(data.accounts.Count!=1||imported.api_id!=2||imported.name!="Saved"||imported.note!="Keep"||imported.proxy!="socks5://localhost:1080"||imported.source_format!="pyrogram"||imported.status!="unchecked")throw new Exception("Reimport repair/preserve user settings");
+                bool wrongIdentity=false;try{TelegramStore.ImportAccount(data,new TelegramAccount{id=imported.id,expected_user_id=10});}catch(IOException){wrongIdentity=true;}
+                if(!wrongIdentity||imported.api_id!=2)throw new Exception("Reimport identity mismatch");
+                Directory.CreateDirectory(Path.Combine(temp,"venv","Scripts"));File.WriteAllText(Path.Combine(temp,"venv","Scripts","python.exe"),"");
+                if(TelegramRunner.Prepared(store))throw new Exception("Python file alone is not a prepared runtime");
+                File.WriteAllText(Path.Combine(temp,"runtime.ready"),"old");if(TelegramRunner.Prepared(store))throw new Exception("Stale runtime marker");
+                File.WriteAllText(Path.Combine(temp,"runtime.ready"),TelegramRunner.ExpectedWorker);if(!TelegramRunner.Prepared(store))throw new Exception("Prepared runtime contract");
+
                 return true;
             } finally {if(Directory.Exists(temp))Directory.Delete(temp,true);}
         }
@@ -78,7 +89,7 @@ namespace VideoBatch {
                         Directory.CreateDirectory(output);
                         foreach(var tab in new[]{0,1,2}) {
                             panel.SelectTab(tab);System.Windows.Forms.Application.DoEvents();
-                            if(tab==2){foreach(System.Windows.Forms.Control c in Descendants(panel))if(c.Name=="InviteUsers")c.Text="@test_user_one";}
+                            if(tab==2){foreach(System.Windows.Forms.Control c in Descendants(panel))if(c.Name=="InviteLink")c.Text="https://t.me/+local_fixture";}
                             using(var bitmap=new System.Drawing.Bitmap(panel.ClientSize.Width,panel.ClientSize.Height)){panel.DrawToBitmap(bitmap,panel.ClientRectangle);bitmap.Save(Path.Combine(output,tab==0?"telegram-accounts.png":tab==1?"telegram-proxies.png":"telegram-invites.png"));}
                         }
                         using(var wizard=new TelegramImportDialog(store,new[]{@"C:\Downloads\700001.json"})){

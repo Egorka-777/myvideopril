@@ -30,6 +30,7 @@ namespace VideoBatch {
             a.wait_until=DateTime.UtcNow.AddMinutes(2).ToString("o");Check(TelegramHealth.AccountLabel(a).Contains("Пауза"),"Successful check cannot erase FloodWait");
             var proxy=TelegramProxyCatalog.Add(d,"socks5://u:p@localhost:1080");TelegramProxyCatalog.Assign(d,new[]{a.id},proxy.id);
             TelegramHealth.ApplyProxy(d,new Dictionary<string,object>{{"proxy_key",TelegramHealth.Key(proxy.url)},{"status","failed"},{"text","No tunnel"}});Check(proxy.status=="failed"&&a.proxy_status=="failed"&&a.status!="blocked","Proxy failure does not imply account ban");
+            TelegramHealth.ApplyProxy(d,new Dictionary<string,object>{{"proxy_key",TelegramHealth.Key(proxy.url)},{"status","limited"},{"text","Web only"}});Check(TelegramHealth.ProxyLabel(a).Contains("Только Web")&&proxy.status=="limited","MTProto limitation is visible");
             a.status="blocked";a.last_error="Telegram ban";TelegramProxyCatalog.Assign(d,new[]{a.id},"");Check(a.status=="blocked"&&a.last_error=="Telegram ban"&&TelegramHealth.AccountLabel(a).Contains("Заблокирован"),"Proxy reassignment cannot erase a confirmed ban");
             Check(TelegramWebWindow.TrustedOrigin("https://web.telegram.org/a/")&&!TelegramWebWindow.TrustedOrigin("https://web.telegram.org.evil.test/a/")&&!TelegramWebWindow.TrustedOrigin("http://web.telegram.org/a/"),"Browser trust boundary");
             string token=new string('a',32);using(var qr=new ZXing.BarcodeWriter{Format=ZXing.BarcodeFormat.QR_CODE,Options=new ZXing.Common.EncodingOptions{Width=300,Height=300,Margin=4}}.Write("tg://login?token="+token))Check(TelegramWebWindow.DecodeQr(qr)==token,"Actual QR decoding, no clipboard injection");
@@ -58,9 +59,13 @@ namespace VideoBatch {
                                 browser.CoreWebView2.Navigate("https://web.telegram.org/a/");
                                 if(await Task.WhenAny(received.Task,Task.Delay(20000))!=received.Task)throw new Exception("WebView2 never authenticated to configured local proxy");await received.Task;
                                 var loaded=new TaskCompletionSource<bool>();browser.CoreWebView2.NavigationCompleted+=(s,e)=>loaded.TrySetResult(e.IsSuccess);
-                                browser.CoreWebView2.NavigateToString("<html><body><div id='auth-qr-form'><div class='qr-container' style='width:250px;height:250px'>Login fixture</div></div></body></html>");
+                                string token=new string('b',32),image;
+                                using(var qr=new ZXing.BarcodeWriter{Format=ZXing.BarcodeFormat.QR_CODE,Options=new ZXing.Common.EncodingOptions{Width=300,Height=300,Margin=4}}.Write("tg://login?token="+token))
+                                using(var png=new MemoryStream()){qr.Save(png,System.Drawing.Imaging.ImageFormat.Png);image=Convert.ToBase64String(png.ToArray());}
+                                browser.CoreWebView2.NavigateToString("<html><body><div id='auth-qr-form'><div class='qr-container' style='width:300px;height:300px;margin:40px'><img width='300' height='300' src='data:image/png;base64,"+image+"'></div></div></body></html>");
                                 if(await Task.WhenAny(loaded.Task,Task.Delay(10000))!=loaded.Task)throw new Exception("WebView2 fixture rendering timeout");await Task.Delay(200);
                                 string rect=await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginRectScript);Check(rect!="null"&&rect.Contains("viewportWidth"),"Login-screen-only DOM selector");
+                                Check(await TelegramWebWindow.ReadLoginToken(browser.CoreWebView2)==token,"Rendered WebView2 QR capture/crop/decode");
                                 Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"waiting\"","QR page is not a signed-in account");
                                 await browser.CoreWebView2.ExecuteScriptAsync("document.body.innerHTML='<div id=Main>Account fixture</div>'");
                                 Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"ready\"","Authorized Web A detection");
