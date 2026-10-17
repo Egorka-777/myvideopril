@@ -29,7 +29,7 @@ jobs:
       - name: Offline import and RPC queue tests
         shell: powershell
         run: |
-          & "$env:RUNNER_TEMP/telegram-runtime/venv/Scripts/python.exe" -m unittest discover -s tests/telegram -v
+          & "$env:RUNNER_TEMP/telegram-runtime/venv/Scripts/python.exe" -X utf8 -m unittest discover -s tests/telegram -v
           if ($LASTEXITCODE -ne 0) { throw 'Telegram tests' }
       - name: Compile desktop
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=

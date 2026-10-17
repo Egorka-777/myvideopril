@@ -1,6 +1,7 @@
 """Synthetic formats, fresh QR protocol and route diagnosis. No real accounts."""
 import asyncio
 import base64
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -21,9 +22,9 @@ class Formats(unittest.TestCase):
     def test_pyrogram_readonly_conversion_and_identity(self):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'account.session'
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db:
                 db.execute('CREATE TABLE sessions(dc_id INTEGER,api_id INTEGER,test_mode INTEGER,auth_key BLOB,user_id INTEGER,is_bot INTEGER)')
-                db.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?)',(4,1234,0,session_bytes(),999,0))
+                db.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?)',(4,1234,0,session_bytes(),999,0));db.commit()
             path.with_suffix('.json').write_text(json.dumps(dict(api_id=1234,api_hash='a'*32,user_id=999)))
             before={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in Path(folder).iterdir()}
             row=w.from_sqlite(path,{})[0];session=StringSession(row['session'])
@@ -35,7 +36,7 @@ class Formats(unittest.TestCase):
                 with self.assertRaises(ValueError):w.from_sqlite(path,{})
             path.with_suffix('.json').unlink()
             with self.assertRaisesRegex(ValueError,'Pyrogram'):w.from_sqlite(path,{})
-            with sqlite3.connect(path) as db:db.execute('UPDATE sessions SET test_mode=1')
+            with contextlib.closing(sqlite3.connect(path)) as db:db.execute('UPDATE sessions SET test_mode=1');db.commit()
             with self.assertRaisesRegex(ValueError,'тестовый'):w.from_sqlite(path,{})
 
 
