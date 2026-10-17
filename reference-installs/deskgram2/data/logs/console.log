@@ -1,0 +1,41 @@
+2026-10-17 09:51:06,818 [INFO] telethon.crypto.libssl: Failed to load SSL library: <class 'OSError'> (no library called "ssl" found)
+2026-10-17 09:51:06,819 [INFO] telethon.crypto.aes: cryptg module not installed and libssl not found, falling back to (slower) Python encryption
+2026-10-17 09:51:07,425 [INFO] db: Created tables: ['account_availability_states', 'account_limit_states', 'accounts', 'autonomous_warmup_plans', 'blacklist', 'chat_meta', 'chat_reminders', 'crm_collection_items', 'crm_collections', 'lead_events', 'lead_profiles', 'lead_sources', 'message_templates', 'notifications', 'proxies', 'settings', 'statistics', 'task_batch_items', 'task_batches', 'task_flow_run_steps', 'task_flow_runs', 'task_flow_templates', 'task_schedules', 'tasks', 'webhook_deliveries', 'webhook_endpoints']
+2026-10-17 09:51:07,426 [INFO] db: Database file created at: C:\Deskgram2\data\app.db
+2026-10-17 09:51:07,429 [INFO] db.migrate: === Миграция Tasktracker99: Оптимизация statistics ===
+2026-10-17 09:51:07,429 [INFO] db.migrate: Начинаем слияние дубликатов статистики...
+2026-10-17 09:51:07,429 [INFO] db.migrate: Дубликатов не найдено
+2026-10-17 09:51:07,435 [INFO] db.migrate: Индексы statistics созданы
+2026-10-17 09:51:07,435 [INFO] db.migrate: === Миграция Tasktracker99 завершена успешно ===
+2026-10-17 09:51:07,445 [INFO] db.migrate: Колонки standalone CRM в lead_profiles проверены
+2026-10-17 09:51:07,458 [INFO] db.migrate: Индексы Tasktracker402 (CRM primitives) проверены
+2026-10-17 09:51:07,462 [INFO] db.migrate: Индексы Tasktracker406 (webhook tables) проверены
+2026-10-17 09:51:07,462 [INFO] db.migrate: === Миграция Tasktracker240: проверка композитных индексов tasks ===
+2026-10-17 09:51:07,466 [INFO] db.migrate: Миграция Tasktracker240 (индексы tasks) проверена
+2026-10-17 09:51:07,471 [WARNING] core.settings_manager: Файл настроек не найден в C:\Deskgram2\settings\program_settings.json. Используются настройки по умолчанию.
+2026-10-17 09:51:08,687 [INFO] pyrogram.crypto.aes: Using TgCrypto
+2026-10-17 09:51:08,876 [INFO] web.routes.api.accounts.services.file_service: Инициализация FileService с путем к директории сессий: C:\Deskgram2\sessions
+2026-10-17 09:51:08,881 [INFO] core.account_manager: AccountManager инициализирован: retries=3, delay=5s, auto_delete=False
+2026-10-17 09:51:10,597 [INFO] web.routes.api.doorway_panel: doorway_panel: подключён sub-router 'channels'
+2026-10-17 09:51:10,601 [INFO] web.routes.api.doorway_panel: doorway_panel: подключён sub-router 'categories'
+2026-10-17 09:51:10,603 [INFO] web.routes.api.doorway_panel: doorway_panel: подключён sub-router 'tags'
+2026-10-17 09:51:10,612 [INFO] web.routes.api.doorway_panel: doorway_panel: подключён sub-router 'analytics'
+2026-10-17 09:51:10,619 [INFO] web.routes.api.doorway_panel: doorway_panel: подключён sub-router 'scheduler'
+2026-10-17 09:51:10,624 [INFO] web.routes.api.doorway_panel: doorway_panel: подключён sub-router 'migration'
+2026-10-17 09:51:10,629 [INFO] web.routes.api.doorway_panel: doorway_panel: подключён sub-router 'bots'
+2026-10-17 09:51:10,655 [INFO] web.routes.api.content_plan: content_plan: подключён sub-router 'posts'
+2026-10-17 09:51:10,664 [INFO] web.routes.api.content_plan: content_plan: подключён sub-router 'channels'
+2026-10-17 09:51:11,263 [INFO] web.routes.api.update_checker: Версия программы из __main__.VERSION: 1.1.74
+2026-10-17 09:51:11,266 [INFO] web.routes.api.ws_handlers: Кастомные AI провайдеры не найдены в настройках
+2026-10-17 09:51:11,268 [INFO] root: 📁 Создана директория для статики: C:\Deskgram2\web\static\img
+2026-10-17 09:51:11,589 [INFO] web.spa_static: Vue dist найден (Nuitka extraction): C:\Users\HACKER~1\AppData\Local\DESKGR~1\DESKGR~2\1174~1.0\vue_dist
+2026-10-17 09:51:11,589 [INFO] web.spa_static: Vue dist найден и закэширован: C:\Users\HACKER~1\AppData\Local\DESKGR~1\DESKGR~2\1174~1.0\vue_dist
+2026-10-17 09:51:11,591 [INFO] web.spa_static: === SPA Static Configuration ===
+2026-10-17 09:51:11,591 [INFO] web.spa_static: Frozen (PyInstaller): False
+2026-10-17 09:51:11,591 [INFO] web.spa_static: Base directory: C:\Deskgram2
+2026-10-17 09:51:11,591 [INFO] web.spa_static: Vue dist directory: C:\Users\HACKER~1\AppData\Local\DESKGR~1\DESKGR~2\1174~1.0\vue_dist
+2026-10-17 09:51:11,592 [INFO] web.spa_static:   - index.html: ✓
+2026-10-17 09:51:11,592 [INFO] web.spa_static:   - assets/: ✓
+2026-10-17 09:51:11,592 [INFO] web.spa_static: ================================
+🛑 Закрытие окна, останавливаем сервер...
+✅ Сервер остановлен

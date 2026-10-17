@@ -17,6 +17,7 @@ tools/uploader/node_modules/
 
 # Runtime / local data (never commit secrets)
 *.log
+!reference-installs/**/*.log
 settings.xml
 accounts.vault*
 youtube-live.xml*

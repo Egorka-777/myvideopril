@@ -1,0 +1,17 @@
+10-17-2026 09:55:41 | INFO | Task #tdata_import_7291c5171b (module: converter) logger initialized -> converter_tdata_import_7291c5171b_20261017_095541.log
+10-17-2026 09:55:41 | INFO | [INFO] 📥 Получено файлов tdata: 1
+10-17-2026 09:55:41 | INFO | [INFO] 📦 Распакован архив 264521121_tdata.zip: 4 файлов
+10-17-2026 09:55:41 | INFO | [INFO] 📂 Найдено tdata-аккаунтов: 1
+10-17-2026 09:55:41 | INFO | [INFO] 📱 Конвертация TData → Telethon
+10-17-2026 09:55:41 | INFO | [INFO] 💡 Локальная конвертация (без подключения к серверу)
+10-17-2026 09:55:41 | INFO | [INFO] 📊 Найдено 1 TData папок
+10-17-2026 09:55:41 | INFO | [INFO] 📁 Результаты: C:\Users\HACKER~1\AppData\Local\Temp\deskgram_tdata_output_1doecxwb
+10-17-2026 09:55:41 | INFO | [INFO] 🖥️ Device-поля для новых сессий будут взяты из tdata, а недостающие поля — из Telegram Desktop fallback 2040
+10-17-2026 09:55:41 | INFO | [INFO] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10-17-2026 09:55:41 | INFO | [INFO] [1/1] 264521121_tdata
+10-17-2026 09:55:41 | INFO | [INFO] 🔧 Загружаю TDesktop из C:\Users\HACKER~1\AppData\Local\Temp\deskgram_tdata_input_lfcm_jp5\264521121_tdata\264521121_tdata\tdata...
+10-17-2026 09:55:41 | INFO | [INFO] 👤 UserId: 8750050684, DC: 4
+10-17-2026 09:55:41 | INFO | [INFO] 🔄 Создаю Telethon session...
+10-17-2026 09:55:41 | INFO | [INFO] ✅ Session → C:\Users\HACKER~1\AppData\Local\Temp\deskgram_tdata_output_1doecxwb\264521121_tdata.session (28672 bytes)
+10-17-2026 09:55:41 | INFO | [INFO] 📄 JSON → C:\Users\HACKER~1\AppData\Local\Temp\deskgram_tdata_output_1doecxwb\264521121_tdata.json
+10-17-2026 09:55:41 | INFO | [INFO] ✅ Успешно сконвертирован!

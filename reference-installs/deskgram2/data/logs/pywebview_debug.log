@@ -1,0 +1,32 @@
+[2026-10-17 09:51:05] ============================================================
+[2026-10-17 09:51:05] 🚀 app_launcher_webview.py ЗАГРУЖЕН
+[2026-10-17 09:51:05] 📁 CWD: C:\Deskgram2
+[2026-10-17 09:51:05] 📁 sys.executable: C:\Users\HACKER~1\AppData\Local\DESKGR~1\DESKGR~2\1174~1.0\unis.exe
+[2026-10-17 09:51:05] 🔧 Frozen (PyInstaller): False
+[2026-10-17 09:51:05] 🔧 Nuitka compiled: __nuitka_version__(major=4, minor=2, micro=1, releaselevel='release', containing_dir='C:\\Deskgram2', standalone=True, onefile=True, macos_bundle_mode=False, no_asserts=False, no_docstrings=False, no_annotations=False, module=False, main='__main__', original_argv0='C:\\Deskgram2\\unis.exe', extension_filename=None)
+[2026-10-17 09:51:05] ============================================================
+[2026-10-17 09:51:05] 🔧 Импорт webview...
+[2026-10-17 09:51:05] ✅ webview импортирован: C:\Users\HACKER~1\AppData\Local\DESKGR~1\DESKGR~2\1174~1.0\webview\__init__.py
+[2026-10-17 09:51:05] >>> launch_app_webview() ВЫЗВАН
+[2026-10-17 09:51:05] 🔍 Проверка WebView2...
+[2026-10-17 09:51:05] ✅ WebView2 обнаружен
+[2026-10-17 09:51:05] Файл лицензионного ключа не найден
+[2026-10-17 09:51:12] HTTP healthcheck ok: http://127.0.0.1:5000/api/health
+[2026-10-17 09:51:12] Frontend probe /: ok=True status=200 bytes=2756 has_app=True has_script=True
+[2026-10-17 09:51:12] Frontend probe asset: /assets/index-6p1j5r1O.js ok=True status=200 bytes=4096
+[2026-10-17 09:51:12] Frontend probe asset: /assets/index-t0ymClJ5.css ok=True status=200 bytes=4096
+[2026-10-17 09:51:12] Frontend probe asset: /assets/vendor-DQLr9EdZ.js ok=True status=200 bytes=4096
+[2026-10-17 09:51:12] Frontend probe asset: /assets/vendor-bootstrap-BXlLtOap.js ok=True status=200 bytes=4096
+[2026-10-17 09:51:12] Frontend probe asset: /assets/vendor-bootstrap-CWQEq8SN.css ok=True status=200 bytes=4096
+[2026-10-17 09:51:12] Frontend probe asset: /assets/vendor-misc-DB0Q8XAf.css ok=True status=200 bytes=3938
+[2026-10-17 09:51:12] Frontend probe asset: /assets/vendor-misc-DeDGc7iB.js ok=True status=200 bytes=4096
+[2026-10-17 09:51:12] Frontend probe asset: /assets/vendor-vue-Btj2exyR.js ok=True status=200 bytes=4096
+[2026-10-17 09:51:12] Frontend probe asset: /assets/vendor-ybeVSQkp.css ok=True status=200 bytes=4095
+[2026-10-17 09:51:12] 🪟 Создание окна PyWebView...
+[2026-10-17 09:51:12] >>> webview.create_window(url=http://127.0.0.1:5000)...
+[2026-10-17 09:51:12] ✅ webview.create_window() успешно
+[2026-10-17 09:51:12] >>> webview.start() ВЫЗОВ...
+[2026-10-17 09:51:14] ✅ Главное окно PyWebView развернуто
+[2026-10-17 09:51:17] WebView page state: {"href":"http://127.0.0.1:5000/login","readyState":"complete","title":"Deskgram 2.0","hasApp":true,"appHtmlLength":3405,"appHtmlPreview":"<div data-v-724c1286=\"\" class=\"app-container\"><div data-v-724c1286=\"\" class=\"app-bg-grid\" aria-hidden=\"true\"></div><div data-v-724c1286=\"\" class=\"app-scanlines\" aria-hidden=\"true\"></div><!----><div data-v-d063fbad=\"\" data-v-724c1286=\"\" clas","bodyLength":202,"bodyPreview":"AUTH.EXE\nБЕЗОПАСНОЕ СОЕДИНЕНИЕ\nРУССКИЙ\nDESKGRAM 2\n> Авторизация системы_\nАккаунт\nКлюч\nВход в существующий аккаунт\nEMAIL\n>\nПАРОЛЬ\n>\nВОЙТИ\nСоздать аккаунт\nЗабыли пароль?\n© 2025 DESKGRAM // PROD BY YARMOLA","scripts":["http://127.0.0.1:5000/assets/index-6p1j5r1O.js","[inline]"],"modulePreloads":["http://127.0.0.1:5000/assets/vendor-DQLr9EdZ.js","http://127.0.0.1:5000/assets/vendor-vue-Btj2exyR.js","http://127.0.0.1:5000/assets/vendor-misc-DeDGc7iB.js","http://127.0.0.1:5000/assets/vendor-bootstrap-BXlLtOap.js","http://127.0.0.1:5000/assets/Notification-BqpUidQF.js","http://127.0.0.1:5000/assets/ConfirmActionModal-BeTVUHZV.js","http://127.0.0.1:5000/assets/PromptInputModal-Ouze_5Pg.js","http://127.0.0.1:5000/assets/InAppNotification-Cw2S3LeR.js","http://127.0.0.1:5000/assets/Dashboard-Dukp7RMh.js","http://127.0.0.1:5000/assets/SupportFloatingWidget-z9c8wCQ4.js","http://127.0.0.1:5000/assets/support-3JMFKwUz.js","http://127.0.0.1:5000/assets/useAppNotify-a4-uQ0vZ.js","http://127.0.0.1:5000/assets/MascotAssistant-CFS7cYb7.js","http://127.0.0.1:5000/assets/WelcomeOnboarding-BhyT3t_r.js","http://127.0.0.1:5000/assets/tourService-DQCgMzSG.js","http://127.0.0.1:5000/assets/Login-BLXbPK3t.js","http://127.0.0.1:5000/assets/ru-CA6UFEvV.js","http://127.0.0.1:5000/assets/branchingAnswersUi-EWZcCZmi.js"],"stylesheets":["https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css","http://127.0.0.1:5000/assets/vendor-ybeVSQkp.css","http://127.0.0.1:5000/assets/vendor-misc-DB0Q8XAf.css","http://127.0.0.1:5000/assets/vendor-bootstrap-CWQEq8SN.css","http://127.0.0.1:5000/assets/index-t0ymClJ5.css","http://127.0.0.1:5000/assets/Notification-DGqzMF46.css","http://127.0.0.1:5000/assets/ConfirmActionModal-D8G_U4HT.css","http://127.0.0.1:5000/assets/PromptInputModal-CQSMxtjF.css","http://127.0.0.1:5000/assets/InAppNotification-BTfXa8Dn.css","http://127.0.0.1:5000/assets/Dashboard-CCAZZ7CL.css","http://127.0.0.1:5000/assets/SupportFloatingWidget-DBluoVO0.css","http://127.0.0.1:5000/assets/MascotAssistant-Cu-MnFX1.css","http://127.0.0.1:5000/assets/WelcomeOnboarding-CvqvfuUm.css","http://127.0.0.1:5000/assets/Login-BMLAcXn8.css"],"styles":15,"startupEvents":[{"type":"vue-mounted","payload":{},"ts":"2026-10-17T02:51:15.158Z"},{"type":"post-mount-bootstrap-complete","payload":{"failed":0},"ts":"2026-10-17T02:51:16.775Z"}]}
+[2026-10-17 10:04:35] >>> finally: вызов on_window_closing()
+[2026-10-17 10:04:35] >>> launch_app_webview() ЗАВЕРШЁН
