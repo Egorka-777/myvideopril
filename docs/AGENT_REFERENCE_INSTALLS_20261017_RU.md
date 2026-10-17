@@ -13,7 +13,7 @@
 
 ## Безопасность
 
-В Git **нет** живых `.session`, TData JSON, лицензий, HWID, SQLite Telespace с аккаунтами. Для локальной отладки секреты остаются только на ПК в исходных путях (см. `SOURCE_AND_OMISSIONS.md` в каждой папке).
+В Git **нет только данных аккаунтов**: `.session`, `*_tdata.json`, `telespace.db*`, `app.db`. Лицензии, HWID, ключи приложения, логи и настройки — в снимке. См. `SOURCE_AND_OMISSIONS.md`.
 
 ## С чем сравнивать в myvideopril
 

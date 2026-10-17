@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "task_id": "4887397",
+    "module_name": "profile_setup",
+    "saved_at": "2026-10-17T10:00:33.097569",
+    "version": "2.0"
+  },
+  "result": {
+    "task_id": "4887397",
+    "module_name": "profile_setup",
+    "statistics": {
+      "total": 1,
+      "sent": 0,
+      "errors": 1,
+      "skipped": 0,
+      "accounts_total": 1,
+      "accounts_completed": 0,
+      "accounts_running": 0,
+      "accounts_failed": 1,
+      "start_time": "2026-10-17T02:58:51.780246"
+    },
+    "accounts_progress": {
+      "264521121_tdata": {
+        "account_id": "264521121_tdata",
+        "status": "failed",
+        "current": 0,
+        "total": 0,
+        "percent": 0.0,
+        "message": "Прокси не подключаются: проверьте настройки прокси",
+        "result": null,
+        "error": "Прокси 62.93.164.201:50101 недоступен после 3 попыток подключения",
+        "started_at": null,
+        "completed_at": "2026-10-17T03:00:33.079564"
+      }
+    },
+    "logs_count": 2,
+    "logs_tail_count": 2,
+    "completed_at": "2026-10-17T03:00:33.095567",
+    "data": {
+      "results": [
+        {
+          "status": "proxy_error",
+          "account_id": "264521121_tdata",
+          "phone": "264521121_tdata",
+          "message": "Прокси не подключаются: проверьте настройки прокси",
+          "error": "Прокси 62.93.164.201:50101 недоступен после 3 попыток подключения",
+          "account_status_update": null
+        }
+      ],
+      "summary": {
+        "total": 1,
+        "success": 0,
+        "warnings": 0,
+        "errors": 1,
+        "stopped": 0
+      },
+      "status": "completed"
+    }
+  }
+}

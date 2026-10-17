@@ -22,8 +22,8 @@
         "sms_man_api": ""
     },
     "settings": {
-        "username": "",
-        "password": "",
+        "username": "admin",
+        "password": "admin",
         "connection_timeout": 30,
         "connection_retries": 3,
         "timeout": 20,

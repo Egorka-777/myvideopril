@@ -1,0 +1,233 @@
+{
+    "apiKeys": {
+        "io_api": "",
+        "openrouter_api": "",
+        "mistral_api": "",
+        "anticaptcha_api": "",
+        "shardx_api": "",
+        "antisafety_api": "",
+        "antisafety_aid": ""
+    },
+    "proxyProviders": {
+        "floppydata_api_key": "",
+        "sx_org_api_key": "",
+        "asocks_api_key": ""
+    },
+    "smsServices": {
+        "sms_activate_api": "",
+        "smsbower_api": "",
+        "grizzly_sms_api": "",
+        "vak_sms_api": "",
+        "five_sim_api": "",
+        "sms_man_api": ""
+    },
+    "settings": {
+        "username": "admin",
+        "password": "admin",
+        "connection_timeout": 30,
+        "connection_retries": 3,
+        "timeout": 20,
+        "retry_delay": 5,
+        "request_retries": 3,
+        "auto_delete_account": false,
+        "auto_hold_temporary_spam_block": false,
+        "continue_without_proxy": false,
+        "skip_login": false,
+        "check_proxies_use": true,
+        "proxy_source": "program",
+        "proxy_replacement": {
+            "enabled": false,
+            "provider": "floppydata",
+            "api_key": "",
+            "max_attempts": 2,
+            "save_to_db": true,
+            "save_to_account_json": false,
+            "use_account_geo": false,
+            "proxy_type": "residential",
+            "protocol": "socks5",
+            "country": "US",
+            "state": "",
+            "city": "",
+            "asn": "",
+            "rotation": 15,
+            "session": "",
+            "sx_type_id": 1,
+            "sx_proxy_type_id": 1,
+            "sx_server_port_type_id": 1
+        },
+        "sleep_threads": false,
+        "sleep_min_wait": 1,
+        "sleep_max_wait": 5
+    },
+    "rotation": {
+        "rot_reg": false,
+        "rot_transfer": false,
+        "rot_accounts": false,
+        "rot_message": false,
+        "rot_invite": false,
+        "rot_parsing": false,
+        "rot_channels": false
+    },
+    "crmIntegration": {
+        "enabled": false,
+        "webhook_url": "",
+        "webhook_secret": "",
+        "agent_label": ""
+    },
+    "notifications": {
+        "center": {
+            "enabled": true,
+            "taskCompleted": true,
+            "taskStopped": true,
+            "taskError": true,
+            "scheduleCreated": false,
+            "schedulePaused": true,
+            "scheduleResumed": true,
+            "scheduleExecuted": true,
+            "scheduleAccountsSkipped": true,
+            "scheduleExecutionBlocked": true,
+            "scheduleExecutionError": true,
+            "scheduleDeactivated": true,
+            "adminBroadcast": true,
+            "system": true
+        },
+        "telegram": {
+            "enabled": false,
+            "botToken": "",
+            "chatId": "",
+            "taskCompleted": true,
+            "taskStopped": true,
+            "taskError": true,
+            "scheduleExecuted": true,
+            "scheduleExecutionError": true,
+            "adminBroadcast": true
+        }
+    },
+    "pushNotifications": {
+        "enabled": false,
+        "permission": "default",
+        "onlyWhenPageHidden": true,
+        "taskCompleted": true,
+        "taskStopped": true,
+        "taskError": true
+    },
+    "customProviders": [],
+    "accountLimits": {
+        "enabled": false,
+        "firstTouchOnly": true,
+        "periodType": "calendar_day",
+        "modules": {
+            "spam_pm": {
+                "enabled": true
+            },
+            "spam_chat": {
+                "enabled": true
+            },
+            "spam_comments": {
+                "enabled": true
+            },
+            "neuro_commenting": {
+                "enabled": true
+            },
+            "invite": {
+                "enabled": true
+            },
+            "neuro_mailing": {
+                "enabled": true
+            },
+            "neuro_chatting": {
+                "enabled": true
+            }
+        },
+        "actions": {
+            "pm_first_touch": {
+                "enabled": true,
+                "limit": 3,
+                "stopMode": "soft"
+            },
+            "chat_first_touch": {
+                "enabled": true,
+                "limit": 10,
+                "stopMode": "soft"
+            },
+            "comment_first_touch": {
+                "enabled": true,
+                "limit": 10,
+                "stopMode": "hard"
+            },
+            "invite_first_touch": {
+                "enabled": true,
+                "limit": 10,
+                "stopMode": "hard"
+            }
+        }
+    },
+    "taskSafety": {
+        "accountBlockStop": {
+            "enabled": false,
+            "thresholdPercent": 20
+        }
+    },
+    "mcp": {
+        "enabled": false,
+        "host": "127.0.0.1",
+        "port": 8765,
+        "token": "",
+        "allow_without_token": false,
+        "allow_dangerous_tools": false,
+        "allow_webhook_management": false,
+        "allow_telegram_web_control": false,
+        "default_dry_run": true,
+        "audit_enabled": true,
+        "max_accounts_per_call": 50,
+        "max_recipients_per_call": 500,
+        "allowed_modules": [
+            "spam_pm",
+            "spam_chat",
+            "spam_comments",
+            "neuro_commenting",
+            "invite",
+            "neuro_mailing",
+            "neuro_chatting",
+            "collect_audience",
+            "search_channels_groups",
+            "scheduler"
+        ]
+    },
+    "pwa": {
+        "pwa_installed": true,
+        "pwa_mode": true
+    },
+    "custom": {
+        "ui": {
+            "theme": "default",
+            "zoom": 80,
+            "locale": "ru",
+            "welcomeInstructionSeen": false,
+            "homeBoard": {
+                "primary": [
+                    "stats",
+                    "tasks",
+                    "scheduler"
+                ],
+                "secondary": [
+                    "updates",
+                    "tariff",
+                    "ads"
+                ],
+                "hidden": []
+            },
+            "dashboardBlocks": {
+                "total": true,
+                "premium": true,
+                "tempSpamBlock": true,
+                "permSpamBlock": true,
+                "frozen": true,
+                "banned": true,
+                "archived": true,
+                "proxy": true
+            },
+            "dashboardHidden": false
+        }
+    }
+}
