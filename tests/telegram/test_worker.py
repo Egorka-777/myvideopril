@@ -143,12 +143,12 @@ class Imports(unittest.IsolatedAsyncioTestCase):
         meta.write_text(json.dumps(dict(api_id=4321)))
         with self.assertRaisesRegex(ValueError,'JSON'):
             await w.from_tdata(path,companion=meta)
-    async def test_json_unpaired_ambiguous_and_bad_metadata_rejected(self):
+    async def test_json_requires_source_and_prefers_exact_session_pair(self):
         path=self.root/'one.json';path.write_text('{}')
         with self.assertRaises(ValueError):w.json_source(path)
         make_session(path.with_suffix('.session'))
         (self.root/'one_tdata').mkdir()
-        with self.assertRaises(ValueError):w.json_source(path)
+        self.assertEqual(w.json_source(path),path.with_suffix('.session'))
         path.write_text('not-json')
         with self.assertRaises(ValueError):w.read_metadata(path)
     async def test_supplied_user_identity_checked_before_invites(self):

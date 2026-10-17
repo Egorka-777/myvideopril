@@ -49,7 +49,7 @@ namespace VideoBatch {
         void RefreshProxies() {
             if(proxyGrid==null)return;
             var data=store.Load();string current=(proxyGrid.CurrentRow?.Tag as TelegramProxy)?.id;proxyGrid.Rows.Clear();
-            foreach(var p in data.proxies){int row=proxyGrid.Rows.Add(p.name,TelegramStore.ProxyLabel(p.url),p.source,TelegramHealth.Dot(p.status)+" "+(p.status=="ready"?"Доступен":p.status=="failed"?"Ошибка":"Не проверен"),data.accounts.Count(a=>TelegramHealth.Key(a.proxy)==TelegramHealth.Key(p.url))+" / "+data.accounts.Count(a=>TelegramHealth.Key(a.proxy)==TelegramHealth.Key(p.url)&&a.status=="blocked"),p.id==data.default_proxy_id?"По умолчанию":"—");proxyGrid.Rows[row].Tag=p;proxyGrid.Rows[row].Cells[3].Style.ForeColor=p.status=="ready"?Theme.Success:p.status=="failed"?Theme.Error:Theme.TextMuted;proxyGrid.Rows[row].Cells[3].ToolTipText=p.detail;if(current==p.id)proxyGrid.CurrentCell=proxyGrid.Rows[row].Cells[0];}
+            foreach(var p in data.proxies){int row=proxyGrid.Rows.Add(p.name,TelegramStore.ProxyLabel(p.url),p.source,TelegramHealth.Dot(p.status)+" "+(p.status=="ready"?"Доступен":p.status=="failed"?"Ошибка":p.status=="limited"?"Только Web":"Не проверен"),data.accounts.Count(a=>TelegramHealth.Key(a.proxy)==TelegramHealth.Key(p.url))+" / "+data.accounts.Count(a=>TelegramHealth.Key(a.proxy)==TelegramHealth.Key(p.url)&&a.status=="blocked"),p.id==data.default_proxy_id?"По умолчанию":"—");proxyGrid.Rows[row].Tag=p;proxyGrid.Rows[row].Cells[3].Style.ForeColor=p.status=="ready"?Theme.Success:p.status=="failed"?Theme.Error:p.status=="limited"?Theme.Warning:Theme.TextMuted;proxyGrid.Rows[row].Cells[3].ToolTipText=p.detail;if(current==p.id)proxyGrid.CurrentCell=proxyGrid.Rows[row].Cells[0];}
         }
         async Task SyncDolphin() {
             if(busy)return;busy=true;foreach(var b in workButtons)b.Enabled=false;grid.Enabled=false;proxyGrid.Enabled=false;
@@ -104,6 +104,7 @@ namespace VideoBatch {
             return combo;
         }
         public TelegramImportDialog(TelegramStore store,string[] initial=null):base("Добавить аккаунты","Выберите папку, JSON, .session или ZIP. Вложенная TData и парные данные будут найдены автоматически. Исходники не изменяются."){
+            AddInfo("Рекомендуется Telethon .session + парный JSON в одной папке или TData. Pyrogram распознаётся отдельно и требует API этой сессии в JSON.");
             this.store=store;Name="TelegramImport";
             var buttons=new FlowLayoutPanel{Width=450,Height=46,WrapContents=false};
             buttons.Controls.Add(Theme.MakeButton("Выбрать папку",action:()=>{var dir=Ui.PickFolder(this,null,"Выберите папку аккаунта или папку с несколькими аккаунтами");if(dir!=null)SetPaths(new[]{dir});}));

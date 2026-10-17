@@ -20,7 +20,7 @@ namespace VideoBatch {
             if(a.status=="ready"&&DateTime.TryParse(a.last_success_utc,null,System.Globalization.DateTimeStyles.RoundtripKind,out var success)&&DateTime.UtcNow-success.ToUniversalTime()>TimeSpan.FromMinutes(15))return "○ Проверить снова";
             return Dot(a.status)+" "+TelegramStore.Status(a.status);
         }
-        public static string ProxyLabel(TelegramAccount a)=>string.IsNullOrWhiteSpace(a.proxy)?"○ Без прокси":Dot(a.proxy_status)+" "+(a.proxy_status=="ready"?"Доступен":a.proxy_status=="failed"?"Ошибка":"Не проверен");
+        public static string ProxyLabel(TelegramAccount a)=>string.IsNullOrWhiteSpace(a.proxy)?"○ Без прокси":Dot(a.proxy_status)+" "+(a.proxy_status=="ready"?"Доступен":a.proxy_status=="failed"?"Ошибка":a.proxy_status=="limited"?"Только Web":"Не проверен");
         public static void ApplyAccount(TelegramData data,Dictionary<string,object> e){
             var a=data.accounts.FirstOrDefault(x=>x.id==S(e,"id"));if(a==null)return;
             a.status=S(e,"status");a.checked_at=DateTime.Now.ToString("dd.MM HH:mm");a.last_attempt_utc=DateTime.UtcNow.ToString("o");a.last_error=a.status=="ready"?"":S(e,"text");a.last_code=S(e,"code");
