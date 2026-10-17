@@ -148,7 +148,7 @@ async def probe_proxy(value, host='149.154.167.51', port=443):
         elif isinstance(exc, ProxyConnectionError):
             code, text = 'connection', 'Не удалось подключиться к адресу прокси'
         elif isinstance(exc, ProxyError):
-            code, text = 'handshake', 'Прокси отказал: проверьте протокол, логин/пароль и доступ до Telegram'
+            code, text = 'handshake', 'Прокси отказал (SOCKS/HTTP handshake). Проверьте тип SOCKS5 vs HTTP, логин/пароль и что провайдер пускает MTProto до DC Telegram, не только сайт Web.'
         else:
             code, text = 'network', 'Не удалось открыть туннель через прокси'
         return dict(status='failed', text=text, code=code, diagnostic=type(exc).__name__, latency_ms=int((time.monotonic()-start)*1000))
@@ -317,6 +317,13 @@ def valid_endpoint(host, port):
         return False
 
 
+def is_ipv4(host):
+    try:
+        return isinstance(ipaddress.ip_address(host), ipaddress.IPv4Address)
+    except (ValueError, TypeError):
+        return False
+
+
 def tdata_endpoints(account):
     from opentele.td import MTP, Storage
     from opentele.exception import OpenTeleException
@@ -359,8 +366,18 @@ def tdata_endpoints(account):
             if valid_endpoint(ep.ip, ep.port) and item not in result:
                 result.append(item)
     if not result:
+        servers = {1: ('149.154.175.50', 443), 2: ('149.154.167.51', 443), 3: ('149.154.175.100', 443),
+                   4: ('149.154.167.91', 443), 5: ('149.154.171.5', 443)}
+        dc = int(account.MainDcId)
+        if dc in servers:
+            host, port = servers[dc]
+            item = dict(host=host, port=port)
+            if valid_endpoint(host, port):
+                return [item]
         raise ValueError('В TData нет поддерживаемого адреса сервера Telegram')
-    return result[:8]
+    ipv4 = [x for x in result if is_ipv4(x['host'])]
+    ordered = (ipv4 or result) + [x for x in result if x not in (ipv4 or result)]
+    return ordered[:8]
 
 
 async def from_tdata(path, passcode='', companion=None, defaults=None):
@@ -637,6 +654,12 @@ def connection_candidates(account):
         endpoint = dict(host=item.get('host'), port=item.get('port'))
         if valid_endpoint(endpoint['host'], endpoint['port']) and endpoint not in routes:
             routes.append(endpoint)
+    if (account.get('proxy') or '').strip():
+        routes = [r for r in routes if is_ipv4(r['host'])]
+        if not routes:
+            raise ValueError('Для прокси нужен IPv4-адрес DC; переимпортируйте TData или проверьте SOCKS5.')
+    else:
+        routes.sort(key=lambda r: (0 if is_ipv4(r['host']) else 1, r['host']))
     result = []
     for endpoint in routes[:3]:
         if not valid_endpoint(endpoint['host'], endpoint['port']):
