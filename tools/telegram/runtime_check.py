@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '2026-10-17-telegram-connect-v2'
+VERSION = '2026-10-17-telegram-login-v3'
 
 
 def check():

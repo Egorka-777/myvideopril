@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -22,13 +23,25 @@ namespace VideoBatch {
         public string checked_at {get;set;}="";
         public int latency_ms {get;set;}
         public List<string> source_ids {get;set;}=new List<string>();
-        public override string ToString()=>string.IsNullOrWhiteSpace(url)?(string.IsNullOrWhiteSpace(name)?"Без прокси":name):string.IsNullOrWhiteSpace(name)?TelegramStore.ProxyLabel(url):name+" · "+TelegramStore.ProxyLabel(url);
+        public override string ToString(){string label=TelegramProxyCatalog.SafeName(name,url),address=TelegramStore.ProxyLabel(url);return string.IsNullOrWhiteSpace(url)?(label==""?"Без прокси":label):label==address?TelegramProxyCatalog.Protocol(url)+" · "+address:label+" · "+address;}
     }
     public sealed class TelegramProxySync {
         public List<TelegramProxy> Proxies=new List<TelegramProxy>();
         public List<string> Warnings=new List<string>();
     }
     public static class TelegramProxyCatalog {
+        public static string SafeName(string name,string url=""){
+            string value=(name??"").Trim();
+            if(value=="")return string.IsNullOrWhiteSpace(url)?"":TelegramStore.ProxyLabel(url);
+            value=Regex.Replace(value,@"(?i)(?:socks5|socks4|https?)://[^\s]+",m=>TelegramStore.ProxyLabel(m.Value));
+            if(Regex.IsMatch(value,@"^[^:\s]+:\d+:.+:.+$"))return TelegramStore.ProxyLabel(value);
+            return value;
+        }
+        public static string Protocol(string url)=>Uri.TryCreate(url,UriKind.Absolute,out var uri)?uri.Scheme.ToUpperInvariant():"—";
+        public static string Login(string url){if(!Uri.TryCreate(url,UriKind.Absolute,out var uri))return "";return Uri.UnescapeDataString(uri.UserInfo.Split(new[]{':'},2)[0]);}
+        public static string Password(string url){if(!Uri.TryCreate(url,UriKind.Absolute,out var uri))return "";var parts=uri.UserInfo.Split(new[]{':'},2);return parts.Length==2?Uri.UnescapeDataString(parts[1]):"";}
+        public static int Assigned(TelegramData data,TelegramProxy proxy)=>data.accounts.Count(a=>a.proxy_id==proxy.id||a.proxy==proxy.url);
+        public static int Blocked(TelegramData data,TelegramProxy proxy)=>data.accounts.Count(a=>(a.proxy_id==proxy.id||a.proxy==proxy.url)&&a.status=="blocked");
         public static string Normalize(string value) {
             string raw=(value??"").Trim();
             if(raw=="")throw new ArgumentException("Вставьте адрес прокси");
@@ -49,7 +62,7 @@ namespace VideoBatch {
             item=item??data.proxies.FirstOrDefault(p=>p.url==url);
             if(item==null){item=new TelegramProxy();data.proxies.Add(item);}
             bool changed=item.url!=url;if(changed){item.status="unchecked";item.detail="";item.checked_at="";}
-            item.url=url;item.name=string.IsNullOrWhiteSpace(name)?TelegramStore.ProxyLabel(url):name;item.source=source;item.country=country;
+            item.url=url;item.name=SafeName(name,url);item.source=source;item.country=country;
             if(item.source_ids==null)item.source_ids=new List<string>();
             if(sourceId!=""){if(item.source_id=="")item.source_id=sourceId;if(!item.source_ids.Contains(sourceId))item.source_ids.Add(sourceId);}
             // Update only accounts explicitly bound to this entry; never reassign at random.
@@ -77,14 +90,16 @@ namespace VideoBatch {
             string name=Str(row,"name");var last=Object(row.TryGetValue("lastCheck",out var l)?l:null);
             return new TelegramProxy{url=Normalize(type+"://"+auth+host+":"+port),name=label!=""?label:name,source="Dolphin",source_id=sourceId,country=Str(last,"country")};
         }
-        public static async Task<TelegramProxySync> FetchDolphin(string token,IEnumerable<KeyValuePair<string,string>> profiles,HttpMessageHandler handler=null,CancellationToken cancel=default(CancellationToken)) {
+        public static async Task<TelegramProxySync> FetchDolphin(string token,IEnumerable<KeyValuePair<string,string>> profiles,HttpMessageHandler handler=null,CancellationToken cancel=default(CancellationToken),int timeoutMs=25000) {
             if(string.IsNullOrWhiteSpace(token))throw new InvalidOperationException("В настройках приложения не сохранён токен Dolphin. Добавьте его там или вставьте прокси вручную.");
             var result=new TelegramProxySync();
+            using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel))
             using(var client=new HttpClient(handler??new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false})) {
+                deadline.CancelAfter(timeoutMs);
                 client.Timeout=TimeSpan.FromSeconds(20);client.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",token);
                 var json=new JavaScriptSerializer{MaxJsonLength=8*1024*1024};
                 async Task<Dictionary<string,object>> get(string path) {
-                    using(var response=await client.GetAsync("https://dolphin-anty-api.com"+path,cancel).ConfigureAwait(false)) {
+                    using(var response=await client.GetAsync("https://dolphin-anty-api.com"+path,deadline.Token).ConfigureAwait(false)) {
                         if(!response.IsSuccessStatusCode)throw new InvalidOperationException("Dolphin: HTTP "+(int)response.StatusCode);
                         var value=json.DeserializeObject(await response.Content.ReadAsStringAsync().ConfigureAwait(false));return Object(value)??throw new InvalidOperationException("Dolphin вернул неожиданный формат ответа");
                     }
@@ -103,17 +118,17 @@ namespace VideoBatch {
                         if(int.TryParse(Str(body,"current_page"),out var current)&&current!=page)throw new InvalidOperationException("Dolphin не подтвердил страницу прокси; список может быть неполным");
                         if(page==100)throw new InvalidOperationException("Слишком много страниц прокси; список неполный");
                     }
-                }catch(OperationCanceledException){throw;}catch(Exception e)when(e is InvalidOperationException||e is HttpRequestException){result.Warnings.Add(e is InvalidOperationException?e.Message:"Не удалось получить общий список прокси Dolphin");}
+                }catch(OperationCanceledException){cancel.ThrowIfCancellationRequested();result.Warnings.Add("Получение прокси Dolphin не завершено за отведённое время; полученная часть сохранена");return result;}catch(Exception e)when(e is InvalidOperationException||e is HttpRequestException){result.Warnings.Add(e is InvalidOperationException?e.Message:"Не удалось получить общий список прокси Dolphin");}
                 // These are only the YT/TikTok profiles already configured in this application.
                 foreach(var profile in profiles.GroupBy(p=>p.Key).Select(g=>g.First())) {
-                    cancel.ThrowIfCancellationRequested();
+                    cancel.ThrowIfCancellationRequested();if(deadline.IsCancellationRequested){result.Warnings.Add("Часть профилей Dolphin не получена за отведённое время");break;}
                     if(!System.Text.RegularExpressions.Regex.IsMatch(profile.Key,@"^\d+$")){result.Warnings.Add("Профиль Dolphin с нечисловым ID пропущен");continue;}
                     try {
                         var body=await get("/browser_profiles/"+Uri.EscapeDataString(profile.Key)).ConfigureAwait(false);
                         var data=Object(body.TryGetValue("data",out var d)?d:null)??body;
                         var row=Object(data.TryGetValue("proxy",out var p)?p:null);
                         if(row!=null&&Str(row,"host")!="")result.Proxies.Add(Parse(row,"dolphin:profile:"+profile.Key,profile.Value));
-                    }catch(OperationCanceledException){throw;}catch(Exception e)when(e is InvalidOperationException||e is HttpRequestException||e is ArgumentException){result.Warnings.Add("Не получен прокси одного профиля Dolphin");}
+                    }catch(OperationCanceledException){cancel.ThrowIfCancellationRequested();result.Warnings.Add("Часть профилей Dolphin не получена за отведённое время; список прокси сохранён");return result;}catch(Exception e)when(e is InvalidOperationException||e is HttpRequestException||e is ArgumentException){result.Warnings.Add("Не получен прокси одного профиля Dolphin");}
                 }
             }
             return result;

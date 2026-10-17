@@ -4,6 +4,7 @@ Import never connects. Network operations use a MemorySession, never source file
 import asyncio
 import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 import queue
@@ -18,7 +19,7 @@ import time
 import zipfile
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-17-telegram-connect-v2'
+VERSION = '2026-10-17-telegram-login-v3'
 PROXY_TIMEOUT = 7
 ACCOUNT_TIMEOUT = 22
 CANCEL = threading.Event()
@@ -157,21 +158,10 @@ async def probe_proxy(value, host='149.154.167.51', port=443):
 
 
 async def account_route(account):
-    value = account.get('proxy', '')
-    host = '149.154.167.51'
-    if value and account.get('session'):
-        from telethon.sessions import StringSession
-        host = StringSession(account['session']).server_address
-    emit('stage', id=account['id'], text='Проверка прокси…' if value else 'Подключение без прокси…')
-    result = await probe_proxy(value, host)
-    if result['status'] == 'failed' and value:
-        web = await probe_proxy(value, 'web.telegram.org')
-        if web['status'] == 'ready':
-            result.update(status='limited', code='mtproto_unreachable',
-                          text='Прокси открывает Telegram Web, но не соединение с DC аккаунта. Для проверки сессии выберите прокси с доступом к MTProto')
-    emit('proxy', id=account['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(), **result)
-    if result['status'] in ('failed', 'limited'):
-        raise RouteError(result['text'])
+    # Validate the configured route; a disposable probe must not veto a real login.
+    parse_proxy(account.get('proxy', ''))
+    cancelled()
+    emit('stage', id=account['id'], text='Подключение сессии через назначенный прокси…' if account.get('proxy') else 'Подключение сессии без прокси…')
 
 
 class RouteError(ConnectionError):
@@ -179,16 +169,32 @@ class RouteError(ConnectionError):
 
 
 async def check_proxies(job):
+    from telethon.sessions import StringSession
     ready = failed = 0
     for p in job.get('proxies', []):
         cancelled()
-        result = await probe_proxy(p.get('url', ''), 'web.telegram.org')
-        if result['status'] == 'ready':
-            result['text'] = 'Прокси открыл туннель до Telegram Web; аккаунт ещё не проверен'
-        emit('proxy', proxy_id=p['id'], proxy_key=hashlib.sha256(p.get('url','').strip().encode()).hexdigest(), **result)
-        ready += result['status'] == 'ready'
-        failed += result['status'] == 'failed'
-    emit('summary', text=f'Прокси: доступны {ready}; ошибок {failed}', failures=failed)
+        value = p.get('url','')
+        targets = []
+        for account in job.get('accounts', []):
+            if account.get('proxy') == value and account.get('session'):
+                session = StringSession(account['session'])
+                item = (session.server_address, session.port, session.dc_id)
+                if item not in targets and valid_endpoint(item[0], item[1]):
+                    targets.append(item)
+        targets = targets[:3] or [('149.154.167.51',443,2)]
+        # Independent, bounded socket probes; this is not an account authorization.
+        results = await asyncio.gather(probe_proxy(value,'web.telegram.org'),
+                                       *(probe_proxy(value,host,port) for host,port,dc in targets))
+        states = [r['status']=='ready' for r in results]
+        state = 'ready' if all(states) else 'partial' if any(states) else 'failed'
+        labels = ['Web'] + [f'DC{dc} {host}:{port}' for host,port,dc in targets]
+        detail = '; '.join(label+': '+('доступен' if r['status']=='ready' else r.get('code','нет ответа')) for label,r in zip(labels,results))
+        emit('proxy', proxy_id=p['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(),
+             status=state, text=detail+'. Проверены туннели; авторизация аккаунта проверяется отдельно.',
+             latency_ms=max(r.get('latency_ms',0) for r in results))
+        ready += state=='ready'
+        failed += state!='ready'
+    emit('summary', text=f'Прокси: туннели доступны {ready}; требуют проверки {failed}', failures=failed)
 
 
 def api_data(meta, default_id=0, default_hash=''):
@@ -283,8 +289,7 @@ def from_sqlite(path, defaults):
     if not isinstance(key, bytes) or len(key) != 256 or not 1 <= int(dc) <= 5:
         raise ValueError('Нет авторизованной сессии')
     # Never connect to arbitrary endpoints embedded in an untrusted SQLite file.
-    allowed = set(DC_SERVERS.values())
-    if str(host) not in allowed or int(port) != 443:
+    if not valid_endpoint(str(host), port):
         raise ValueError('Неизвестный DC/порт в сессии: импорт остановлен')
     s = MemorySession()
     s.set_dc(int(dc), str(host), int(port))
@@ -294,6 +299,68 @@ def from_sqlite(path, defaults):
     if source_format == 'pyrogram':
         row['api_source'] = api_source
     return [row]
+
+
+# https://core.telegram.org/resources/cidr.txt, verified 2026-10-17.
+TELEGRAM_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    '91.108.56.0/22', '91.108.4.0/22', '91.108.8.0/22', '91.108.16.0/22',
+    '91.108.12.0/22', '149.154.160.0/20', '91.105.192.0/23', '91.108.20.0/22',
+    '185.76.151.0/24', '2001:b28:f23d::/48', '2001:b28:f23f::/48',
+    '2001:67c:4e8::/48', '2001:b28:f23c::/48', '2a0a:f280::/32'))
+
+
+def valid_endpoint(host, port):
+    try:
+        address = ipaddress.ip_address(host)
+        return int(port) in (80, 443, 5222) and (str(address)=='95.161.76.100' or any(address in network for network in TELEGRAM_NETWORKS))
+    except (ValueError, TypeError):
+        return False
+
+
+def tdata_endpoints(account):
+    from opentele.td import MTP, Storage
+    from opentele.exception import OpenTeleException
+    from PyQt5.QtCore import QByteArray, QDataStream
+    config = MTP.Config(MTP.Environment.Production)
+    try:
+        local = account._local
+        file = Storage.ReadEncryptedFile('config', local.basePath, local.localKey)
+    except OpenTeleException:
+        file = None  # Minimal TData exports may legitimately omit cached config.
+    if file is not None:
+        serialized = QByteArray()
+        file.stream >> serialized
+        if file.stream.status() != QDataStream.Ok or len(serialized) > MAX_INPUT:
+            raise ValueError('Повреждена сетевая конфигурация TData')
+        stream = QDataStream(serialized)
+        stream.setVersion(QDataStream.Qt_5_1)
+        version, environment = stream.readInt32(), stream.readInt32()
+        if version != 1 or environment != int(MTP.Environment.Production):
+            raise ValueError('Неподдерживаемая или тестовая сетевая конфигурация TData')
+        options = QByteArray()
+        stream >> options
+        if stream.status() != QDataStream.Ok:
+            raise ValueError('Не удалось прочитать адреса серверов TData')
+        # opentele 1.15.1 Config.FromSerialized reads this QByteArray but omits
+        # constructFromSerialized. Apply it explicitly, as official Desktop does.
+        # Only network options are used, not the remaining UI/client settings.
+        config._dcOptions.constructFromSerialized(options)
+    if config._dcOptions.isTestMode():
+        raise ValueError('Тестовая TData не поддерживается')
+    table = config.endpoints(account.MainDcId)
+    flags = MTP.DcOptions.Flag
+    result = []
+    for address in (MTP.DcOptions.Address.IPv4, MTP.DcOptions.Address.IPv6):
+        endpoints = table[address][MTP.DcOptions.Protocol.Tcp]
+        for ep in sorted(endpoints, key=lambda ep: not bool(ep.flags & flags.f_static)):
+            if ep.flags & (flags.f_media_only | flags.f_cdn | flags.f_tcpo_only | flags.f_secret):
+                continue
+            item = dict(host=ep.ip, port=int(ep.port))
+            if valid_endpoint(ep.ip, ep.port) and item not in result:
+                result.append(item)
+    if not result:
+        raise ValueError('В TData нет поддерживаемого адреса сервера Telegram')
+    return result[:8]
 
 
 async def from_tdata(path, passcode='', companion=None, defaults=None):
@@ -321,7 +388,8 @@ async def from_tdata(path, passcode='', companion=None, defaults=None):
         if dc not in servers:
             raise ValueError('Неизвестный DC в TData')
         memory = MemorySession()
-        memory.set_dc(dc, servers[dc], 443)
+        endpoints = tdata_endpoints(acc)
+        memory.set_dc(dc, endpoints[0]['host'], endpoints[0]['port'])
         memory.auth_key = AuthKey(acc.authKey.key)
         meta = dict(api_id=api.api_id, api_hash=api.api_hash,
                     device_model=api.device_model or 'Telegram Desktop',
@@ -344,6 +412,7 @@ async def from_tdata(path, passcode='', companion=None, defaults=None):
             row['api_source'] = 'tdata_desktop'
         row['user_id'] = row['expected_user_id'] = acc.UserId
         row['source_format'] = 'tdata'
+        row['dc_options'] = endpoints
         result.append(row)
     return result
 
@@ -497,7 +566,7 @@ def client_for(account):
     if proxy is not None:
         import python_socks  # Required: Telethon 1.45 can otherwise ignore configured proxies.
     session = StringSession(account['session'])  # MemorySession, no writes of auth key.
-    return TelegramClient(session, api_id=api_id, api_hash=api_hash, proxy=proxy, timeout=15,
+    return TelegramClient(session, api_id=api_id, api_hash=api_hash, proxy=proxy, use_ipv6=':' in session.server_address, timeout=15,
                           connection_retries=0, request_retries=0, auto_reconnect=False,
                           flood_sleep_threshold=0, receive_updates=False,
                           device_model=account.get('device') or 'VideoBatch Desktop',
@@ -523,7 +592,7 @@ def error_info(exc):
         return 'privacy', 'Приглашение недоступно из-за ограничений пользователя', 0
     if isinstance(exc, errors.ChatAdminRequiredError):
         return 'permissions', 'У аккаунта нет права приглашать в выбранную группу/канал', 0
-    if isinstance(exc, RouteError):
+    if isinstance(exc, (RouteError, SessionConnectionError)):
         return 'network', str(exc), 0
     from python_socks import ProxyError
     if isinstance(exc, ProxyError):
@@ -549,16 +618,91 @@ async def connect(client, account=None):
     return await asyncio.wait_for(handshake(), ACCOUNT_TIMEOUT)
 
 
+class SessionConnectionError(ConnectionError):
+    def __init__(self, text, cause):
+        super().__init__(text)
+        self.cause_code = type(cause).__name__
+
+
+def connection_candidates(account):
+    from telethon.sessions import StringSession
+    if not account.get('session'):
+        return [account]  # client_for validates real inputs; useful for injected test clients.
+    original = StringSession(account['session'])
+    primary = dict(host=original.server_address, port=original.port)
+    routes = [primary]
+    for item in account.get('dc_options') or []:
+        if not isinstance(item, dict):
+            raise ValueError('Неверная конфигурация адресов Telegram')
+        endpoint = dict(host=item.get('host'), port=item.get('port'))
+        if valid_endpoint(endpoint['host'], endpoint['port']) and endpoint not in routes:
+            routes.append(endpoint)
+    result = []
+    for endpoint in routes[:3]:
+        if not valid_endpoint(endpoint['host'], endpoint['port']):
+            raise ValueError('Неизвестный адрес сервера Telegram в сессии')
+        session = StringSession(account['session'])
+        session.set_dc(original.dc_id, endpoint['host'], int(endpoint['port']))
+        result.append(dict(account, session=StringSession.save(session)))
+    return result
+
+
+async def open_account(account):
+    from telethon.sessions import StringSession
+    from python_socks import ProxyError
+    await account_route(account)
+    candidates = connection_candidates(account)
+    started = time.monotonic()
+    failure = None
+    for index, candidate in enumerate(candidates):
+        cancelled()
+        remaining = ACCOUNT_TIMEOUT - (time.monotonic() - started)
+        if remaining <= 0:
+            break
+        client = client_for(candidate)
+        endpoint = StringSession(candidate['session']) if candidate.get('session') else None
+        address = f'DC{endpoint.dc_id} {endpoint.server_address}:{endpoint.port}' if endpoint else 'DC аккаунта'
+        emit('stage', id=account['id'], text=f'Подключение {index+1}/{len(candidates)}: {address}…')
+        try:
+            # All alternatives share the SAME key/DC/proxy. Never switch identities,
+            # retry an authorization error, or fall back to a direct connection.
+            budget = remaining if len(candidates) == 1 else min(remaining, max(5, ACCOUNT_TIMEOUT / len(candidates)))
+            me = await asyncio.wait_for(connect(client, account), budget)
+            value = account.get('proxy', '')
+            emit('proxy', id=account['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(),
+                 status='ready' if value else 'direct', text='Соединение с Telegram подтверждено' if value else 'Без прокси',
+                 latency_ms=int((time.monotonic()-started)*1000))
+            emit('connection', id=account['id'], session=candidate.get('session',''), text='Рабочий адрес сервера сохранён')
+            return client, me
+        except BaseException as exc:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(client.disconnect(), 1)
+            if not isinstance(exc, (TimeoutError, OSError, ConnectionError, ProxyError)):
+                raise
+            failure = exc
+            emit('log', id=account['id'], code=type(exc).__name__, text=f'{address}: соединение не подтверждено')
+    if failure is None:
+        failure = TimeoutError()
+    value = account.get('proxy','')
+    web = await probe_proxy(value, 'web.telegram.org') if value else dict(status='direct')
+    text = ('Сайт Telegram Web доступен, но подключить импортированную сессию не удалось. '
+            'Это не подтверждает блокировку аккаунта. Проверьте прокси в карточке и повторите; '
+            'для TData импортируйте папку заново, чтобы обновить адреса серверов.') if web['status']=='ready' else (
+            'Не удалось подключить сессию Telegram. Проверьте адрес, протокол и авторизацию прокси в его карточке.' if value else
+            'Не удалось подключить сессию Telegram без прокси. Проверьте доступ к Telegram.')
+    emit('proxy', id=account['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(),
+         status='partial' if web['status']=='ready' else 'failed' if value else 'direct',
+         text=text, code=type(failure).__name__, latency_ms=int((time.monotonic()-started)*1000))
+    raise SessionConnectionError(text, failure)
+
+
 async def check_accounts(job):
     ready = failed = 0
     for account in job.get('accounts', []):
         cancelled()
         client = None
         try:
-            await account_route(account)
-            emit('stage', id=account['id'], text='Проверка аккаунта в Telegram…')
-            client = client_for(account)
-            me = await connect(client, account)
+            client, me = await open_account(account)
             ready += 1
             name = ' '.join(filter(None, [me.first_name, me.last_name])) or str(me.id)
             emit('account', id=account['id'], status='ready', name=name,
@@ -579,7 +723,7 @@ async def check_accounts(job):
                     state, text = 'unauthorized', 'Сессия не авторизована'
                 elif 'user_id' in str(exc):
                     state, text = 'configuration', 'user_id не совпал: проверьте парный JSON'
-            emit('account', id=account['id'], status=state, text=text, seconds=seconds, code=type(exc).__name__)
+            emit('account', id=account['id'], status=state, text=text, seconds=seconds, code=getattr(exc, 'cause_code', type(exc).__name__))
         finally:
             if client:
                 with contextlib.suppress(Exception):
@@ -656,9 +800,7 @@ async def invite_preview(job):
     client = None
     me = None
     try:
-        await account_route(account)
-        client = client_for(account)
-        me = await connect(client, account)
+        client, me = await open_account(account)
         emit('account', id=account['id'], status='ready', user_id=me.id, text='Telegram подтвердил аккаунт')
         target = await resolve_target(client, job.get('target',''))
         emit('target', title=target.title, target_id=target.id, text='Права подтверждены: '+target.title)
@@ -666,7 +808,7 @@ async def invite_preview(job):
     except Exception as exc:
         if me is None:
             state, text, seconds = error_info(exc)
-            emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, ValueError) else text, seconds=seconds, code=type(exc).__name__)
+            emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, (ValueError, SessionConnectionError)) else text, seconds=seconds, code=getattr(exc, 'cause_code', type(exc).__name__))
         raise
     finally:
         if client:
@@ -682,14 +824,13 @@ async def web_login(job):
     if len(accounts)!=1 or not refresh and not re.fullmatch(r'[A-Za-z0-9_-]{16,1024}', token):
         raise ValueError('Не удалось прочитать действующий QR-код Telegram Web')
     account = accounts[0]
-    client = client_for(account)
+    client = None
     try:
         try:
-            await account_route(account)
-            me = await connect(client, account)
+            client, me = await open_account(account)
         except Exception as exc:
             state, text, seconds = error_info(exc)
-            emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, ValueError) else text, seconds=seconds, code=type(exc).__name__)
+            emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, (ValueError, SessionConnectionError)) else text, seconds=seconds, code=getattr(exc, 'cause_code', type(exc).__name__))
             raise
         emit('account', id=account['id'], status='ready', text='Telegram подтвердил аккаунт', username=me.username or '', name=me.first_name or '', phone=me.phone or '', user_id=me.id)
         # Do network/identity checks BEFORE reading a short-lived QR token.
@@ -708,8 +849,9 @@ async def web_login(job):
         emit('web_accepted', id=account['id'], user_id=me.id, text='Telegram принял QR выбранного аккаунта')
         emit('summary', text='QR принят Telegram. Дождитесь открытия аккаунта; при запросе 2FA введите пароль в веб-окне')
     finally:
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(client.disconnect(), 3)
+        if client:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(client.disconnect(), 3)
 
 
 async def invite_link(job):
@@ -721,9 +863,8 @@ async def invite_link(job):
     account = accounts[0]
     client = None
     try:
-        await account_route(account)
-        client = client_for(account)
-        await connect(client, account)
+        client, me = await open_account(account)
+        emit('account', id=account['id'], status='ready', user_id=me.id, text='Telegram подтвердил аккаунт')
         target = await resolve_target(client, job.get('target', ''))
         result = await asyncio.wait_for(client(functions.messages.ExportChatInviteRequest(
             peer=target, request_needed=True, title='VideoBatch')), 20)
@@ -824,7 +965,7 @@ async def invite(job):
         raise
     except Exception as exc:
         state, text, seconds = error_info(exc)
-        emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, ValueError) else text, seconds=seconds, code=type(exc).__name__)
+        emit('account', id=account['id'], status=state, text=str(exc) if isinstance(exc, (ValueError, SessionConnectionError)) else text, seconds=seconds, code=getattr(exc, 'cause_code', type(exc).__name__))
         raise
     finally:
         ledger.close()

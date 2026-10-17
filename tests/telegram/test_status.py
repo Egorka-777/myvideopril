@@ -15,14 +15,15 @@ from web_proxy import Bridge,allowed_host
 
 
 class Status(unittest.IsolatedAsyncioTestCase):
-    async def test_failed_route_never_checks_or_marks_account_blocked(self):
-        events=[]
-        async def failed(*a,**kw):return dict(status='failed',text='Прокси отказал',latency_ms=0)
-        with patch.object(w,'probe_proxy',failed),patch.object(w,'client_for') as factory,patch.object(w,'emit',lambda e,**d:events.append((e,d))):
+    async def test_failed_real_connection_never_marks_account_blocked(self):
+        events=[];client=FakeClient()
+        async def fail():raise ConnectionError('synthetic')
+        client.connect=fail
+        async def failed(*a,**kw):return dict(status='failed',text='fixture',latency_ms=0)
+        with patch.object(w,'probe_proxy',failed),patch.object(w,'client_for',return_value=client),patch.object(w,'emit',lambda e,**d:events.append((e,d))):
             await w.check_accounts(dict(action='check',accounts=[dict(id='a',proxy='socks5://host:1080')]))
-        factory.assert_not_called()
         account=[d for e,d in events if e=='account'][0]
-        self.assertEqual(account['status'],'network');self.assertEqual(account['text'],'Прокси отказал')
+        self.assertEqual(account['status'],'network');self.assertNotEqual(account['status'],'blocked')
         self.assertEqual(events[-1][1]['failures'],1)
     async def test_success_requires_get_me_not_merely_proxy_connection(self):
         client=FakeClient();client.get_me=lambda:asyncio.sleep(0,result=None)

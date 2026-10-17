@@ -28,6 +28,7 @@ namespace VideoBatch {
         public string proxy_id { get; set; } = "";
         public string api_source { get; set; } = "";
         public string source_format { get; set; } = "";
+        public List<TelegramEndpoint> dc_options {get;set;}=new List<TelegramEndpoint>();
         public long expected_user_id { get; set; }
         public string country { get; set; } = "";
         public string note { get; set; } = "";
@@ -43,6 +44,7 @@ namespace VideoBatch {
         public string wait_until { get; set; } = "";
         public override string ToString() => string.IsNullOrWhiteSpace(name) ? id.Substring(0,Math.Min(10,id.Length)) : name;
     }
+    public sealed class TelegramEndpoint {public string host {get;set;}="";public int port {get;set;}=443;}
     public sealed class TelegramData {
         public int version { get; set; } = 1;
         public int api_id { get; set; }
@@ -71,6 +73,7 @@ namespace VideoBatch {
             bool keepMetadata=new[]{"json","custom"}.Contains(current.api_source)&&new[]{"desktop_compat","tdata_desktop"}.Contains(incoming.api_source);
             bool changed=current.session!=incoming.session||!keepMetadata&&(current.api_id!=incoming.api_id||current.api_hash!=incoming.api_hash);
             current.session=incoming.session;current.source_format=incoming.source_format;
+            if(incoming.dc_options!=null&&incoming.dc_options.Count>0)current.dc_options=incoming.dc_options;
             if(!keepMetadata){
                 current.api_id=incoming.api_id;current.api_hash=incoming.api_hash;current.api_source=incoming.api_source;
                 current.device=incoming.device;current.system=incoming.system;current.app_version=incoming.app_version;

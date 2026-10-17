@@ -43,7 +43,7 @@ namespace VideoBatch {
         readonly Label hint;
         readonly Button login;
         TelegramWebProxy proxy;
-        bool closed,stopping,signing,polling,autoAttempted;
+        bool closed,stopping,signing,polling,autoAttempted,loginFailed,sessionAccepted;
         readonly System.Windows.Forms.Timer loginTimer=new System.Windows.Forms.Timer{Interval=900};
         DateTime loginDeadline;
         internal const string LoginStateScript=@"(()=>{const visible=e=>e&&e.getClientRects().length>0;if(visible(document.querySelector('#Main')))return 'ready';if(visible(document.querySelector('#auth-password-form')))return 'password';return 'waiting';})()";
@@ -61,10 +61,10 @@ namespace VideoBatch {
             this.store=store;this.account=account;this.authorize=authorize;this.stopLogin=stopLogin;
             Text="Telegram · "+account.name;ClientSize=new Size(1080,760);MinimumSize=new Size(800,620);BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;StartPosition=FormStartPosition.CenterParent;
             Theme.StyleModal(this);
-            var bar=new FlowLayoutPanel{Dock=DockStyle.Top,Height=54,Padding=new Padding(10,7,0,0),WrapContents=false};
+            var bar=new FlowLayoutPanel{Dock=DockStyle.Top,Height=82,Padding=new Padding(10,7,0,0),WrapContents=false};
             login=Theme.MakeButton("Повторить вход",ghost:true,action:async()=>{autoAttempted=false;await SignIn();});login.Enabled=false;bar.Controls.Add(login);
             bar.Controls.Add(Theme.MakeButton("Обновить",ghost:true,action:()=>view?.CoreWebView2?.Reload()));
-            hint=new Label{Text="Загрузка Telegram Web…",Width=740,Height=38,ForeColor=Theme.TextSecondary};bar.Controls.Add(hint);
+            hint=new Label{Text="Загрузка Telegram Web…",Width=740,Height=64,ForeColor=Theme.TextSecondary};bar.Controls.Add(hint);
             bar.SizeChanged+=(s,e)=>hint.Width=Math.Max(180,bar.ClientSize.Width-login.Width-150);
             view=new WebView2{Dock=DockStyle.Fill,DefaultBackgroundColor=Theme.Background};Controls.Add(view);Controls.Add(bar);
             loginTimer.Tick+=async(s,e)=>await PollLogin();
@@ -101,8 +101,9 @@ namespace VideoBatch {
             try{
                 if(!TrustedOrigin(view.CoreWebView2.Source))return;
                 string state=await view.CoreWebView2.ExecuteScriptAsync(LoginStateScript);
-                if(state=="\"ready\""){hint.Text="Telegram открыт · "+account.name;AppDiagnostics.Write("Telegram",account.id,"","web_ready","Официальный Telegram Web открыл аккаунт");login.Enabled=false;loginTimer.Stop();return;}
+                if(state=="\"ready\""){hint.Text=sessionAccepted?"Telegram открыт · "+account.name:"Telegram Web открыт · проверьте имя аккаунта на странице";AppDiagnostics.Write("Telegram",account.id,"","web_ready",sessionAccepted?"Веб-вход подтверждён импортированной сессией":"Главный экран Web открыт; соответствие импортированной сессии не проверено");login.Enabled=false;loginTimer.Stop();return;}
                 if(state=="\"password\""){hint.Text="Telegram запросил пароль 2FA. Введите его на странице.";return;}
+                if(loginFailed)return; // Keep the exact failure visible, still detect a manual login.
                 if(DateTime.UtcNow>loginDeadline){loginTimer.Stop();hint.Text=autoAttempted?"Telegram Web не подтвердил загрузку аккаунта. Повторите вход и сохраните журнал.":"QR входа не появился или не прочитан. Обновите страницу и повторите вход.";return;}
                 if(!autoAttempted&&await view.CoreWebView2.ExecuteScriptAsync(LoginRectScript)!="null")await SignIn(true);
             }catch{loginTimer.Stop();if(!closed)hint.Text="Не удалось продолжить вход. Обновите страницу и проверьте журнал Telegram.";}
@@ -137,16 +138,16 @@ namespace VideoBatch {
             throw new IOException("Свежий QR не появился. Обновите Telegram Web и повторите вход.");
         }
         async Task SignIn(bool automatic=false){
-            if(signing)return;signing=true;login.Enabled=false;
+            if(signing)return;signing=true;loginFailed=false;login.Enabled=false;loginTimer.Start();
             try{
                 if(view.CoreWebView2==null||!TrustedOrigin(view.CoreWebView2.Source))throw new InvalidOperationException("Дождитесь официальной страницы Telegram Web");
                 if(await view.CoreWebView2.ExecuteScriptAsync(LoginRectScript)=="null")throw new InvalidOperationException("QR входа не найден. Возможно, вы уже вошли; иначе выберите вход по QR на странице");
                 autoAttempted=true;hint.Text="Подключаем выбранный аккаунт…";
-                await authorize(); // The worker requests a fresh QR only after identity verification.
+                await authorize();sessionAccepted=true; // The worker requests a fresh QR only after identity verification.
                 loginDeadline=DateTime.UtcNow.AddSeconds(60);
                 hint.Text="QR принят. Ожидаем открытие аккаунта; пароль 2FA при необходимости введите на странице.";
             }catch(InvalidOperationException e){if(!automatic||autoAttempted)hint.Text=e.Message;}
-            catch(IOException e){hint.Text=e.Message;}
+            catch(IOException e){loginFailed=true;hint.Text=e.Message+" Можно войти обычным способом на странице Telegram.";}
             catch{hint.Text="Вход не подтверждён. Проверьте журнал Telegram; затем повторите вход.";}
             finally{signing=false;if(!closed)login.Enabled=true;}
         }

@@ -8,6 +8,7 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -91,16 +92,40 @@ class Login(unittest.IsolatedAsyncioTestCase):
             w.watch_input(cancel_on_eof=True)
         self.assertTrue(w.CANCEL.is_set());self.assertEqual(w.LOGIN_TOKENS.get_nowait(),token);emit.assert_not_called()
 
-    async def test_web_only_proxy_cannot_mark_account_ready(self):
-        events=[];calls=[]
-        async def probe(value,host):
-            calls.append(host)
-            return dict(status='ready' if host=='web.telegram.org' else 'failed',text='fixture',latency_ms=1)
+    async def test_probe_cannot_veto_successful_real_session_login(self):
+        events=[];client=FakeClient()
+        with patch.object(w,'probe_proxy',side_effect=AssertionError('Probe before login')),patch.object(w,'client_for',return_value=client),patch.object(w,'emit',lambda e,**d:events.append((e,d))):
+            result,me=await w.open_account(dict(id='a',proxy='socks5://host:1080'))
+        self.assertIs(result,client);self.assertEqual(me.id,999)
+        self.assertTrue(any(e=='proxy' and d['status']=='ready' for e,d in events))
+        await client.disconnect()
+
+    async def test_web_access_is_not_claimed_as_session_or_account_success(self):
+        events=[];client=FakeClient()
+        async def fail():raise ConnectionError('private-password')
+        client.connect=fail
+        async def probe(value,host):return dict(status='ready',text='fixture',latency_ms=1)
+        with patch.object(w,'probe_proxy',probe),patch.object(w,'client_for',return_value=client),patch.object(w,'emit',lambda e,**d:events.append((e,d))):
+            with self.assertRaises(w.SessionConnectionError):await w.open_account(dict(id='a',proxy='socks5://host:1080'))
+        self.assertTrue(any(e=='proxy' and d['status']=='partial' for e,d in events))
+        self.assertFalse(any(e=='account' and d.get('status')=='ready' for e,d in events))
+        self.assertNotIn('private-password',str(events))
+
+    async def test_proxy_checker_reports_web_and_assigned_dc_separately(self):
+        from telethon.sessions import MemorySession
+        from telethon.crypto import AuthKey
+        memory=MemorySession();memory.set_dc(4,'149.154.167.91',443);memory.auth_key=AuthKey(session_bytes())
+        url='socks5://user:private-password@localhost:1080';events=[];calls=[]
+        async def probe(value,host,port=443):
+            calls.append((host,port));await asyncio.sleep(.02)
+            return dict(status='ready' if host=='web.telegram.org' else 'failed',code='timeout',latency_ms=20)
+        start=asyncio.get_running_loop().time()
         with patch.object(w,'probe_proxy',probe),patch.object(w,'emit',lambda e,**d:events.append((e,d))):
-            with self.assertRaises(w.RouteError):await w.account_route(dict(id='a',proxy='fixture'))
-        self.assertEqual(calls,['149.154.167.51','web.telegram.org'])
-        self.assertTrue(any(e=='proxy' and d['status']=='limited' and d['code']=='mtproto_unreachable' for e,d in events))
-        self.assertFalse(any(e=='account' for e,d in events))
+            await w.check_proxies(dict(proxies=[dict(id='p',url=url)],accounts=[dict(proxy=url,session=StringSession.save(memory))]))
+        self.assertEqual(set(calls),{('web.telegram.org',443),('149.154.167.91',443)})
+        self.assertTrue(any(e=='proxy' and d['status']=='partial' and 'DC4' in d['text'] for e,d in events))
+        self.assertNotIn('private-password',str(events))
+        self.assertLess(asyncio.get_running_loop().time()-start,.2)
 
     async def test_opt_in_link_checks_admin_and_never_sends_to_users(self):
         class Links(FakeClient):
@@ -116,6 +141,64 @@ class Login(unittest.IsolatedAsyncioTestCase):
         with patch.object(w,'client_for',return_value=client),patch.object(w,'emit'):
             with self.assertRaises(ValueError):await w.invite_link(job)
         self.assertEqual(client.calls,[])
+
+
+class EndpointRoutes(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):w.CANCEL.clear()
+    def account(self):
+        from telethon.crypto import AuthKey
+        from telethon.sessions import MemorySession
+        memory=MemorySession();memory.set_dc(2,'149.154.167.51',443);memory.auth_key=AuthKey(session_bytes())
+        return dict(id='a',session=StringSession.save(memory),api_id=1234,api_hash='a'*32,
+                    proxy='socks5://user:private-password@localhost:1080',
+                    dc_options=[dict(host='149.154.167.50',port=443),dict(host='127.0.0.1',port=443)])
+    async def test_alternate_same_dc_preserves_auth_and_configured_proxy(self):
+        a=self.account();first=FakeClient();second=FakeClient();seen=[];events=[]
+        async def failed():raise ConnectionError()
+        first.connect=failed
+        def factory(row):seen.append(row);return first if len(seen)==1 else second
+        with patch.object(w,'client_for',factory),patch.object(w,'emit',lambda e,**d:events.append((e,d))):
+            client,me=await w.open_account(a)
+        self.assertEqual(len(seen),2);self.assertFalse(first.connected)
+        self.assertTrue(second.connected);self.assertEqual(me.id,999)
+        for row in seen:
+            s=StringSession(row['session']);self.assertEqual(s.dc_id,2);self.assertEqual(s.auth_key.key,session_bytes())
+            self.assertEqual(row['proxy'],a['proxy'])
+        self.assertEqual(StringSession(seen[1]['session']).server_address,'149.154.167.50')
+        # The connection event contains a vault update; logs must not echo it.
+        self.assertNotIn(a['proxy'],str([(e,d) for e,d in events if e!='connection']))
+        await client.disconnect()
+    async def test_revoked_auth_is_never_retried_on_another_endpoint(self):
+        a=self.account();client=FakeClient()
+        async def revoked():raise errors.AuthKeyUnregisteredError(request=None)
+        client.get_me=revoked
+        with patch.object(w,'client_for',return_value=client) as factory,patch.object(w,'emit'):
+            with self.assertRaises(errors.AuthKeyUnregisteredError):await w.open_account(a)
+        self.assertEqual(factory.call_count,1);self.assertFalse(client.connected)
+    async def test_tdata_config_endpoint_instead_of_hardcoded_address(self):
+        from opentele.td import MTP
+        from opentele.tl import TelegramClient
+        from opentele.api import API,UseCurrentSession
+        from telethon.crypto import AuthKey
+        from telethon.sessions import MemorySession
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)/'tdata';memory=MemorySession();memory.set_dc(2,'149.154.167.51',443);memory.auth_key=AuthKey(session_bytes())
+            client=TelegramClient(memory,api=API.TelegramDesktop);client.UserId=999
+            td=await client.ToTDesktop(flag=UseCurrentSession)
+            # Use an official Telegram range but a different endpoint from the defaults.
+            td.accounts[0].MtpConfig._dcOptions._data[2]=[MTP.DcOptions.Endpoint(2,MTP.DcOptions.Flag.f_static,'149.154.167.50',443,b'')]
+            from PyQt5.QtCore import QByteArray
+            ip=b'149.154.167.50'
+            # Official Desktop layout: version, count, id, flags, PORT, IP size,
+            # IP, secret size, CDN key count. opentele's test writer omits port.
+            options=struct.pack('>iiiiii',-2,1,2,16,443,len(ip))+ip+struct.pack('>ii',0,0)
+            with patch.object(type(td),'kPerformanceMode',False),patch.object(td.accounts[0].MtpConfig._dcOptions,'Serialize',return_value=QByteArray(options)):
+                td.SaveTData(str(root))
+            before={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()}
+            row=(await w.from_tdata(root))[0]
+            self.assertEqual(StringSession(row['session']).server_address,'149.154.167.50')
+            self.assertEqual(row['dc_options'][0],dict(host='149.154.167.50',port=443))
+            self.assertEqual(before,{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()})
 
 
 class Runtime(unittest.TestCase):

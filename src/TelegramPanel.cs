@@ -48,14 +48,14 @@ namespace VideoBatch {
             summary=new Label{Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary,TextAlign=ContentAlignment.MiddleLeft};layout.Controls.Add(summary,0,1);
             tabStrip=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(tabStrip,0,2);
             pageHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(pageHost,0,3);
-            var accountsPage=Page("Аккаунты");var proxiesPage=Page("Прокси");var invitePage=Page("Приглашения");var logsPage=Page("Журнал");
+            var accountsPage=Page("Аккаунты");var proxiesPage=Page("Прокси");var invitePage=Page("Ссылка в группу");var logsPage=Page("Журнал");
             BuildProxyPage(proxiesPage);
             grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,ReadOnly=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=true,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(grid);
             grid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;grid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
             grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="selected",HeaderText="✓",AutoSizeMode=DataGridViewAutoSizeColumnMode.None,Width=40,MinimumWidth=40,DefaultCellStyle=new DataGridViewCellStyle{Padding=Padding.Empty}});
             foreach(var spec in new[]{new[]{"name","Аккаунт"},new[]{"username","Username"},new[]{"status","Состояние"},new[]{"proxy","Прокси"},new[]{"country","Страна"},new[]{"checked","Попытка"},new[]{"detail","Результат / причина"}}){var i=grid.Columns.Add(spec[0],spec[1]);grid.Columns[i].ReadOnly=true;}
             foreach(var spec in new[]{new[]{"name","95","120"},new[]{"username","80","90"},new[]{"status","90","110"},new[]{"proxy","155","170"},new[]{"country","45","60"},new[]{"checked","65","80"},new[]{"detail","170","180"}}){grid.Columns[spec[0]].FillWeight=int.Parse(spec[1]);grid.Columns[spec[0]].MinimumWidth=int.Parse(spec[2]);}
-            grid.Columns["detail"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;
+            grid.Columns["detail"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.DisplayedCellsExceptHeaders;
             grid.Columns["username"].Visible=false;grid.Columns["country"].Visible=false;
             grid.Columns["name"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.RowTemplate.Height=60;
             grid.ColumnHeaderMouseClick+=(s,e)=>{if(e.ColumnIndex==0){bool select=grid.Rows.Cast<DataGridViewRow>().Any(row=>!Convert.ToBoolean(row.Cells[0].Value));foreach(DataGridViewRow row in grid.Rows)row.Cells[0].Value=select;}};
@@ -130,7 +130,8 @@ namespace VideoBatch {
         void PaintHealth(DataGridViewRow row,TelegramAccount a){
             string label=TelegramHealth.AccountLabel(a);row.Cells["status"].Value=label;
             row.Cells["status"].Style.ForeColor=label.StartsWith("○")?Theme.TextMuted:a.status=="ready"&&!label.Contains("Пауза")?Theme.Success:new[]{"network","blocked","deactivated","unauthorized","configuration","error"}.Contains(a.status)?Theme.Error:Theme.Warning;
-            row.Cells["proxy"].Value=string.IsNullOrWhiteSpace(a.proxy)?"○ Без прокси":TelegramHealth.ProxyLabel(a)+" · "+TelegramStore.ProxyLabel(a.proxy);row.Cells["proxy"].Style.ForeColor=string.IsNullOrWhiteSpace(a.proxy)?Theme.TextMuted:a.proxy_status=="ready"?Theme.Success:a.proxy_status=="failed"?Theme.Error:a.proxy_status=="limited"?Theme.Warning:Theme.TextMuted;row.Cells["proxy"].ToolTipText=a.proxy_detail;
+            row.Cells["proxy"].Value=string.IsNullOrWhiteSpace(a.proxy)?"○ Без прокси":TelegramHealth.ProxyLabel(a)+" · "+TelegramStore.ProxyLabel(a.proxy);row.Cells["proxy"].Style.ForeColor=string.IsNullOrWhiteSpace(a.proxy)?Theme.TextMuted:a.proxy_status=="ready"?Theme.Success:a.proxy_status=="failed"?Theme.Error:new[]{"limited","partial"}.Contains(a.proxy_status)?Theme.Warning:Theme.TextMuted;row.Cells["proxy"].ToolTipText=a.proxy_detail;
+            row.Cells["status"].Style.SelectionForeColor=row.Cells["status"].Style.ForeColor;row.Cells["proxy"].Style.SelectionForeColor=row.Cells["proxy"].Style.ForeColor;
             row.Cells["name"].Value=a.name+(string.IsNullOrEmpty(a.username)?"":"\n@"+a.username);
             row.Cells["name"].ToolTipText=string.Join(" · ",a.country,a.note).Trim(' ','·');
             row.Cells["checked"].Value=string.IsNullOrEmpty(a.checked_at)?"—":a.checked_at;
@@ -183,9 +184,7 @@ namespace VideoBatch {
                 if(selected.Count!=1)throw new InvalidOperationException("Выберите один аккаунт");
                 var account=store.Load().accounts.First(a=>a.id==selected[0].id);
                 if(webWindows.TryGetValue(account.id,out var existing)&&!existing.IsDisposed){existing.Activate();return;}
-                // A dead session/proxy is shown in the row, not hidden behind a login page.
-                if(!await Run(new Dictionary<string,object>{{"action","check"},{"accounts",new List<TelegramAccount>{account}}}))return;
-                account=store.Load().accounts.First(a=>a.id==account.id);
+                if(!TelegramRunner.Prepared(store)){await Prepare();if(!TelegramRunner.Prepared(store))return;}
                 TelegramWebWindow window=null;bool authenticating=false;
                 window=new TelegramWebWindow(store,account,async()=>{
                     if(busy)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");
@@ -216,6 +215,11 @@ namespace VideoBatch {
                     if(type=="invite_link"){
                         string link=Get(ev,"link");if(!Regex.IsMatch(link,@"^https://t\.me/\+[A-Za-z0-9_-]+$"))throw new IOException("Telegram не вернул корректную ссылку");
                         users.Text=link;
+                    }
+                    if(type=="connection"){
+                        string id=Get(ev,"id"),session=Get(ev,"session");
+                        if(session!="")store.Change(d=>{var a=d.accounts.FirstOrDefault(x=>x.id==id);if(a!=null)a.session=session;});
+                        return; // Authorization data is never written to the log.
                     }
                     if(type=="imported") {
                         var account=new JavaScriptSerializer().ConvertToType<TelegramAccount>(ev["account"]);
