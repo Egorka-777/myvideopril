@@ -13,7 +13,7 @@ function fixture(lang,state,editor=false){
  if(editor)return body;
  body=body.replace('<style>','<style>ytcp-uploads-dialog:not([hidden]){display:block;width:0;height:0}');
  body=body.replace('<ytcp-uploads-dialog hidden>','<ytcp-uploads-dialog hidden><div role="dialog" style="position:fixed;left:10px;top:10px;width:700px;max-height:90vh;overflow:auto">').replace('</ytcp-uploads-dialog>','</div></ytcp-uploads-dialog>');
- body=body.replace('<ytcp-uploads-dialog hidden><div id="details">','<ytcp-uploads-dialog hidden><ytcp-video-upload-dialog><div id="details">')
+ body=body.replace('<div id="details">','<ytcp-video-upload-dialog><div id="details">')
   .replace('<ytcp-visibility-scheduler hidden>','</ytcp-video-upload-dialog><ytcp-visibility-scheduler hidden>')
   .replace('<button id="next-button">','<ytcp-video-upload-progress><span class="progress-label">'+(lang==='ru'?'Загружено: 38 %':'Uploading: 38 %')+'</span></ytcp-video-upload-progress><div hidden class="progress-label">Upload complete</div><button id="next-button">');
  return body.replace('</body>',`<button id="create-icon">${lang==='ru'?'Создать':'Create'}</button><div id="upload-menu" hidden><button role="menuitem">${lang==='ru'?'Загрузить видео':'Upload videos'}</button></div><ytcp-uploads-file-picker id="picker" hidden></ytcp-uploads-file-picker><script>

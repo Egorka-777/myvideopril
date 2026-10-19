@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-19-studio-upload-cdp-v3-shorts-public";
+const WORKER_BUILD = "2026-10-19-studio-state-v4";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function studioCheckpoint(item,packIndex){
@@ -1696,8 +1696,8 @@ function sendMeshChannel(target, channelUrl) {
   }
 }
 
-async function setThumbnail(page, thumbPath) {
-  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{progress:text=>send("thumbnail",text)});
+async function setThumbnail(page, thumbPath, options={}) {
+  return require("./youtube-thumbnail").uploadThumbnail(page,thumbPath,{...options,progress:text=>send("thumbnail",text)});
 }
 
 async function progressText(page) {

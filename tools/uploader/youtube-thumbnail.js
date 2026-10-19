@@ -23,12 +23,33 @@ async function compareImages(page,shot,reference,style){
 }
 async function matches(page,img,reference){
  if(!await img.isVisible()||!await img.evaluate(e=>e.complete&&e.naturalWidth>0))return false;
+ const rect=await img.evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&r.width>=8&&r.height>=8?{x:r.left,y:r.top,width:r.width,height:r.height}:null;});
+ if(!rect)return false;
  const style=await img.evaluate(e=>{const css=getComputedStyle(e);let p=e,bg='rgb(255,255,255)';while(p){const color=getComputedStyle(p).backgroundColor;if(color!=='rgba(0, 0, 0, 0)'&&color!=='transparent'){bg=color;break;}p=p.parentElement;}return {fit:css.objectFit,position:css.objectPosition,bg};});
- const shot=await img.screenshot({timeout:5000});
+ // Locator.screenshot scrolls to every suggestion and waits for its animations.
+ // Capture only the already-visible rectangle; never move the upload wizard.
+ const shot=await page.screenshot({clip:rect,scale:'css',animations:'allow',caret:'initial',timeout:5000});
  return compareImages(page,shot,reference,style);
 }
-async function matchingImage(page,editor,reference,{persistent=false}={}){const imgs=editor.locator('img');for(let i=0;i<await imgs.count();i++){const img=imgs.nth(i),src=await img.evaluate(e=>e.currentSrc||e.src);if(persistent&&!/^https:\/\//.test(src||''))continue;if(await matches(page,img,reference))return await img.evaluate(e=>e.currentSrc||e.src);}return null;}
-async function verifyThumbnail(page,file,{scope=page,timeout=30000}={}){const reference=fileData(file);return until(page,async()=>{const editor=await editorRoot(scope);return editor?matchingImage(page,editor,reference,{persistent:true}):null;},timeout);}
+async function matchingImage(page,editor,reference,{persistent=false,cache=new Map()}={}){
+ const imgs=editor.locator('img');
+ for(let i=0;i<await imgs.count();i++){
+  const img=imgs.nth(i),info=await img.evaluate(e=>{const r=e.getBoundingClientRect();return {src:e.currentSrc||e.src,ready:e.complete&&e.naturalWidth>0,key:JSON.stringify([e.currentSrc||e.src,e.naturalWidth,e.naturalHeight,r.x,r.y,r.width,r.height])};});
+  if(!info.ready||persistent&&!/^https:\/\//.test(info.src||''))continue;
+  const old=cache.get(info.key);if(old&&Date.now()-old.at<2000){if(old.match)return info.src;continue;}
+  const match=await matches(page,img,reference);cache.set(info.key,{at:Date.now(),match});if(match)return info.src;
+ }return null;
+}
+async function revealEditor(editor){
+ const images=editor.locator('img');
+ for(const img of await images.all())if(await img.isVisible()&&await img.evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;}))return;
+ for(const img of await images.all())if(await img.isVisible()){await img.scrollIntoViewIfNeeded();return;}
+ await editor.scrollIntoViewIfNeeded();
+}
+async function verifyThumbnail(page,file,{scope=page,timeout=30000}={}){
+ const reference=fileData(file),cache=new Map();const editor=await until(page,()=>editorRoot(scope),timeout);await revealEditor(editor);
+ return until(page,()=>matchingImage(page,editor,reference,{persistent:true,cache}),timeout);
+}
 async function pngPayload(page,file,reference){
  if(reference.type!=='image/webp')return file;
  const data=await page.evaluate(source=>new Promise((resolve,reject)=>{const i=new Image();i.onerror=()=>reject(new Error('WebP не читается'));i.onload=()=>{const c=document.createElement('canvas');c.width=i.width;c.height=i.height;c.getContext('2d').drawImage(i,0,0);resolve(c.toDataURL('image/png').split(',')[1]);};i.src=source;}),reference.data);
@@ -37,7 +58,7 @@ async function pngPayload(page,file,reference){
 }
 async function uploadThumbnail(page,file,{scope=page,save=false,verifyReload=false,timeout=30000,progress=()=>{}}={}){
  if(!file)return null;const reference=fileData(file);progress('Превью: открываю редактор изображения');
- const editor=await until(page,()=>editorRoot(scope),timeout);await editor.scrollIntoViewIfNeeded();
+ const editor=await until(page,()=>editorRoot(scope),timeout);await revealEditor(editor);
  if(save&&verifyReload&&await matchingImage(page,editor,reference,{persistent:true})) {
   await page.reload({waitUntil:'domcontentloaded',timeout:90000});
   const confirmed=await verifyThumbnail(page,file,{timeout});progress('Превью: выбранная картинка уже сохранена, подтверждено после перезагрузки');return confirmed;
@@ -45,7 +66,8 @@ async function uploadThumbnail(page,file,{scope=page,save=false,verifyReload=fal
  let inputs=editor.locator('input[type="file"]');if(!await inputs.count()){const open=await oneVisible(editor.getByRole('button',{name:UPLOAD}));if(open)await open.click();inputs=scope.locator('input[type="file"][accept*="image" i],input[type="file"][accept*="png" i],input[type="file"][accept*="jpeg" i]');}
  if(await inputs.count()!==1)throw new Error('Не найдено однозначное поле изображения в редакторе превью.');
  await inputs.setInputFiles(await pngPayload(page,file,reference));
- const selected=await until(page,async()=>{const errors=await editor.locator('[role="alert"],.error,ytcp-error-tip').allTextContents();if(errors.some(t=>t.trim()))throw new Error('YouTube отклонил превью: '+errors.join(' ').slice(0,180));return matchingImage(page,editor,reference);},timeout);
+ const cache=new Map();
+ const selected=await until(page,async()=>{const errors=await editor.locator('[role="alert"],.error,ytcp-error-tip').allTextContents();if(errors.some(t=>t.trim()))throw new Error('YouTube отклонил превью: '+errors.join(' ').slice(0,180));return matchingImage(page,editor,reference,{cache});},timeout);
  progress('Превью: выбранная картинка подтверждена в редакторе');
  if(save){const button=await until(page,async()=>{const b=await oneVisible(scope.getByRole('button',{name:SAVE}));return b&&!await b.isDisabled()?b:null;},timeout);await button.click();
   await until(page,async()=>!await button.isVisible()||await button.isDisabled()||await scope.getByText(/changes saved|изменения сохранены/i).first().isVisible().catch(()=>false),timeout);

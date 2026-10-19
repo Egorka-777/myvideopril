@@ -3,6 +3,15 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
+const BUILD='2026-10-19-studio-state-v4';
+const traces=new WeakMap();
+function tracePage(page){
+ const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
+ const navigation=frame=>{if(frame!==page.mainFrame())return;try{const u=new URL(frame.url());trace.navigations.push({time:new Date().toISOString(),host:u.hostname,path:u.pathname});trace.navigations=trace.navigations.slice(-12);}catch{}};
+ const failed=request=>{try{const u=new URL(request.url());if(!/^(studio\.youtube\.com|upload\.youtube\.com|i\.ytimg\.com)$/.test(u.hostname))return;trace.networkErrors.push({host:u.hostname,type:request.resourceType(),error:request.failure()?.errorText});trace.networkErrors=trace.networkErrors.slice(-12);}catch{}};
+ page.on('framenavigated',navigation);page.on('requestfailed',failed);
+ return {trace,dispose:()=>{page.off('framenavigated',navigation);page.off('requestfailed',failed);}};
+}
 async function scopeAlive(scope){
  if(await scope.isVisible())return true;
  // A component host can have no box while its positioned dialog and fields
@@ -180,21 +189,47 @@ async function details(page,scope,item,opts,{verify=false}={}){
  report('metadata_ready','Название, описание и настройки проверены.');
 }
 async function pickNextButton(scope){
- const seen=new Set(),candidates=[];
- for(const btn of await scope.locator('#next-button').or(scope.getByRole('button',{name:L.next})).all()){
-  if(!await btn.isVisible())continue;
-  const key=await btn.evaluate(e=>`${e.tagName}#${e.id}:${e.getAttribute('aria-label')||''}:${Math.round(e.getBoundingClientRect().top)}:${Math.round(e.getBoundingClientRect().left)}`);
-  if(seen.has(key))continue;seen.add(key);candidates.push(btn);
+ return actionButton(scope,'next-button',L.next);
+}
+async function actionButton(scope,id,label){
+ // A ytcp-button wrapper and its native child are one control, not two buttons.
+ for(const host of await scope.locator('#'+id).all()){
+  const inner=await one(host.getByRole('button',{name:label}),{optional:true});
+  if(inner)return inner;if(await host.isVisible())return host;
  }
- if(!candidates.length)return null;
- if(candidates.length===1)return candidates[0];
- let best=null,bestTop=-1;
- for(const btn of candidates){
-  if(await btn.isDisabled()||await btn.getAttribute('aria-disabled')==='true')continue;
-  const top=await btn.evaluate(e=>e.getBoundingClientRect().top);
-  if(top>=bestTop){bestTop=top;best=btn;}
+ return one(scope.getByRole('button',{name:label}),{optional:true});
+}
+async function enabled(button){return button&&await button.evaluate(e=>{
+ for(let p=e;p;p=p.parentElement||p.getRootNode().host){if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true')return false;}
+ return true;
+});}
+async function scheduleCard(scope){
+ const byId=await one(scope.locator('#schedule-radio-button,[name=SCHEDULE]'),{optional:true});if(byId)return byId;
+ const radio=await one(scope.getByRole('radio',{name:L.schedule}),{optional:true});if(radio)return radio;
+ const cards=[];
+ for(const node of await scope.getByText(L.schedule).all())if(await node.isVisible()&&!await node.evaluate(e=>!!e.closest('#done-button,footer,#footer,ytcp-dialog-footer'))){
+  // Do not confuse the final Schedule button with the card that opens its fields.
+  cards.push(node);
  }
- return best||candidates[candidates.length-1];
+ if(cards.length>1)throw new Error('Studio: несколько карточек планирования');return cards[0]||null;
+}
+async function wizardState(scope){
+ const card=await scheduleCard(scope);
+ const publicRadio=await one(scope.locator('#public-radio-button,[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
+ const publishLabel=await one(scope.getByText(/^(Save or publish|Сохранить или опубликовать)$/i),{optional:true});
+ const panels=[];
+ for(const selector of ['#details','ytcp-video-metadata-editor','ytcp-video-elements','#video-elements','ytcp-video-checks','ytcp-video-upload-checks','#checks','ytcp-visibility-scheduler','ytcp-video-visibility-select'])
+  for(const panel of await scope.locator(selector).all())if(await scopeAlive(panel)){panels.push(selector);break;}
+ const selected=await scope.locator('ytcp-stepper [aria-selected=true],ytcp-stepper [aria-current=step],#stepper [aria-selected=true],#stepper [aria-current=step],[role=tab][aria-selected=true],ytcp-stepper [selected],ytcp-stepper [active]').evaluateAll(nodes=>nodes.filter(e=>e.getAttribute('selected')!=='false'&&e.getAttribute('active')!=='false').map(e=>e.getAttribute('id')||e.getAttribute('data-step')||e.textContent.trim().slice(0,80)).slice(0,8));
+ const stepper=await scope.locator('ytcp-stepper,#stepper').evaluateAll(nodes=>nodes.map(e=>Object.fromEntries(['selected','selected-step','active-step','current-step','data-step'].filter(a=>e.hasAttribute(a)).map(a=>[a,e.getAttribute(a)]))));
+ const controls=[];
+ for(const button of await scope.getByRole('button').all())if(await button.isVisible()&&!await button.evaluate(e=>!!e.closest('#next-button,#done-button,#stepper,ytcp-stepper,footer,ytcp-dialog-footer'))){
+  const label=norm(await button.getAttribute('aria-label')||await button.innerText()).slice(0,80);if(!L.next.test(label))controls.push(label);
+ }
+ const visibility=!!(card||publicRadio||publishLabel);
+ const next=await pickNextButton(scope);
+ const state={stage:visibility?'visibility':panels.includes('#details')||panels.includes('ytcp-video-metadata-editor')?'details':'intermediate',panels,selected,stepper,controls:controls.slice(0,30),next:!!next,nextEnabled:!!await enabled(next)};
+ state.key=JSON.stringify({stage:state.stage,panels,selected,stepper,controls:state.controls});return state;
 }
 const MONTHS=[['january','январ','янв'],['february','феврал','фев'],['march','марта','март','мар'],['april','апрел','апр'],['may','мая','май'],['june','июня','июнь','июн'],['july','июля','июль','июл'],['august','август','авг'],['september','сентябр','сен'],['october','октябр','окт'],['november','ноябр','ноя'],['december','декабр','дек']];
 function parseDate(text){
@@ -291,27 +326,32 @@ async function syncClock(page,plan,progress){
  if(actual.offset!==plan.offset)progress('timezone',`Пояс браузера ${actual.zone} отличается от ПК; обязательна проверка выбранного пояса Studio.`);
  progress('timezone',`Время ПК: ${plan.date} ${plan.time} · ${zone} · UTC${plan.offset>=0?'+':''}${plan.offset/60}`);return zone;
 }
-async function visibility(page,scope){
+async function visibility(page,scope,{progress=()=>{},readyMs=120000,transitionMs=30000}={}){
  for(let i=0;i<10;i++){
-  if(await one(scope.locator('ytcp-visibility-scheduler'),{optional:true})||await one(scope.locator('#schedule-radio-button,[name=SCHEDULE]'),{optional:true}))return;
-  if(await one(scope.getByText(/^(Save or publish|Сохранить или опубликовать)$/i),{optional:true}))return;
-  const next=await until(()=>pickNextButton(scope),60000,'Не найдена кнопка Далее / Next');
-  await until(async()=>!await next.isDisabled()&&await next.getAttribute('aria-disabled')!=='true',120000,'Кнопка Далее не стала доступна');await next.click();await pause(250);
+  // Re-evaluate BOTH the terminal screen and Next while the UI changes. Waiting
+  // only for Next after its removal used to miss the final Visibility screen.
+  const before=await until(async()=>{const state=await wizardState(scope);return state.stage==='visibility'||state.nextEnabled?state:null;},readyMs,'Studio не показал доступный следующий шаг или экран «Доступ».');
+  if(before.stage==='visibility'){progress('studio_steps','Открыт экран «Доступ / Visibility»; «Далее» больше не требуется.');return;}
+  progress('studio_steps','Подтверждён текущий шаг Studio; нажимаю «Далее / Next» один раз.');
+  const next=await pickNextButton(scope);if(!await enabled(next))continue;
+  await next.click();
+  await until(async()=>{const state=await wizardState(scope);return state.stage==='visibility'||state.key!==before.key?state:null;},transitionMs,'Studio не подтвердил переход после «Далее». Повторные клики остановлены; проверьте обязательные поля и отчёт.');
  }
- throw new Error('Studio не открыл экран Доступ / Visibility');
+ throw new Error('Studio показал больше 10 шагов. Автоматический переход остановлен.');
 }
 async function schedule(page,scope,plan,zone){
  if(!await one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input'),{optional:true})){
-  const expand=await one(scope.locator('#schedule-radio-button,[name=SCHEDULE]').or(scope.getByText(L.schedule)));
+  const expand=await until(()=>scheduleCard(scope),10000,'Studio не показал карточку «Запланировать публикацию / Schedule».');
   await expand.click();
  }
+ await until(async()=>await one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input'),{optional:true}),10000,'Studio не открыл поля даты/времени после карточки планирования');
  const privateLater=await one(scope.getByRole('radio',{name:/private.*(?:then|to).*public|сначала закрытый, потом открытый/i}),{optional:true});if(privateLater){await privateLater.click();await until(async()=>await privateLater.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked')),4000,'Studio не подтвердил доступ после публикации');}
  await fillDate(scope,plan.date);await setZone(scope,plan,zone);await fillDate(scope,plan.date);
  const time=await timeControl(scope);if(await time.getAttribute('type')==='time'){await time.fill(plan.time);await time.press('Tab');}else await typeText(time,plan.time,{delay:45});
  if(parseTime(await read(time))!==plan.time)throw new Error('Studio не подтвердил время');
  if(parseDate(await controlValue(await dateControl(scope)))!==plan.date)throw new Error('Studio не подтвердил дату');
- const button=await until(async()=>{const x=await one(scope.locator('#done-button').or(scope.getByRole('button',{name:L.schedule})),{optional:true});if(!x||await x.isDisabled()||await x.getAttribute('aria-disabled')==='true')return null;return x;},120000,'Кнопка Запланировать недоступна');
- const label=norm(await button.innerText());if(!L.schedule.test(label)&&!/^Save$|^Done$|^Сохранить$|^Готово$/i.test(label))throw new Error('Studio предлагает «'+label+'» вместо планирования. Публикация остановлена.');
+ const button=await until(async()=>{const x=await actionButton(scope,'done-button',L.schedule);return await enabled(x)&&L.schedule.test(norm(await x.innerText()))?x:null;},120000,'Кнопка Запланировать недоступна');
+ const label=norm(await button.innerText());if(!L.schedule.test(label))throw new Error('Studio предлагает «'+label+'» вместо планирования. Публикация остановлена.');
  return button;
 }
 async function publishPublic(page,scope){
@@ -321,8 +361,8 @@ async function publishPublic(page,scope){
   if(label)await label.click();else throw new Error('Studio: не найден режим «Открытый доступ»');
  }else await publicRadio.click();
  const button=await until(async()=>{
-  const x=await one(scope.locator('#done-button').or(scope.getByRole('button',{name:/^(Publish|Опубликовать|Save|Сохранить|Done|Готово)$/i})),{optional:true});
-  if(!x||await x.isDisabled()||await x.getAttribute('aria-disabled')==='true')return null;
+  const x=await actionButton(scope,'done-button',/^(Publish|Опубликовать|Save|Сохранить|Done|Готово)$/i);
+  if(!await enabled(x))return null;
   const label=norm(await x.innerText());
   if(L.schedule.test(label))return null;
   return x;
@@ -370,15 +410,19 @@ async function waitUpload(page,{stallMs=1200000,unknownMs=30000,progress=()=>{}}
 }
 async function diagnostics(page,error,folder){
  const path=require('path');fs.mkdirSync(folder,{recursive:true});
- const data={time:new Date().toISOString(),error:String(error.message||error),url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
+ const data={build:BUILD,time:new Date().toISOString(),error:String(error.message||error),flow:traces.get(page)||null,url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
  if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url())){
   data.controls=await page.locator('button,ytcp-button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
   data.fields=await page.locator('#title-textarea,#description-textarea,[contenteditable=true]').evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,id:e.id,visible:!!e.getClientRects().length,editable:e.isContentEditable,role:e.getAttribute('role'),length:(e.innerText||'').length,focused:e===document.activeElement||e.contains(document.activeElement)})));
   data.dialogs=await page.locator(UPLOAD_DIALOG).evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,visible:!!e.getClientRects().length,next:e.querySelectorAll('#next-button').length,fields:e.querySelectorAll('[contenteditable=true]').length})));
+  const scope=await uploadScope(page);if(scope)data.wizard=await wizardState(scope);
  }
  const file=path.join(folder,'youtube-studio-'+Date.now()+'-'+process.pid+'.json');fs.writeFileSync(file,JSON.stringify(data,null,2));return file;
 }
 async function runSequential(page,pack,opts,host){
+ const monitor=tracePage(page);try{return await runItems(page,pack,opts,{...host,progress:(stage,text,extra)=>{monitor.trace.lastStage=stage;host.progress(stage,text,extra);}});}finally{monitor.dispose();}
+}
+async function runItems(page,pack,opts,host){
  const results=[];
  // Preflight all items before uploading even the first file.
  pack.forEach(item=>{
@@ -404,12 +448,12 @@ async function runSequential(page,pack,opts,host){
   const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex,...extra});
   await bounded(()=>details(page,scope,item,{...opts,progress}),metadataBudget(item,opts),'Studio не завершил ввод метаданных в рассчитанное время');
   progress('upload_transfer','Проверяю завершение передачи файла.');await host.waitUpload(page,{progress});
-  if(!immediate&&item.thumbnail)await host.thumbnail(page,item.thumbnail);
   // The video link may appear only after processing starts. Do not block typing on it.
   const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},60000,'YouTube не показал ID ролика');
   if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
   host.progress('item_accepted','Studio создал видео, сохраняю ID',{packIndex,videoId:id,localJobId:item.localJobId});
-  progress('studio_steps','Перехожу через «Далее / Next» к доступу.');await visibility(page,scope);
+  if(!immediate&&item.thumbnail)await host.thumbnail(page,item.thumbnail,{scope});
+  progress('studio_steps','Перехожу через «Далее / Next» к доступу.');await visibility(page,scope,{progress});
   let submit;
   if(immediate){
    progress('studio_publish','Публикую Shorts в открытый доступ.');
@@ -431,4 +475,4 @@ async function runSequential(page,pack,opts,host){
  }
  return results;
 }
-module.exports={L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
