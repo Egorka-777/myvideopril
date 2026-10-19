@@ -36,8 +36,14 @@ const L={
  ai:/altered content|synthetic content|synthetic media|AI.generated content|was AI used|use of AI|AI usage|использование ИИ|изменённый контент|измененный контент/i,
  no:/^(No(?:,.*)?|Нет(?:,.*)?)$/i, yes:/^(Yes(?:,.*)?|Да(?:,.*)?)$/i,
  private:/^(Private|Ограниченный доступ|Закрытый доступ|Скрыт)/i,
+ public:/^(Public|Открытый доступ|Доступно всем|Public access)/i,
  scheduled:/Scheduled|Запланирован|Публикация запланирована/i
 };
+function isImmediatePublish(item){
+ const kind=String(item.contentKind||'').trim().toLowerCase();
+ const mode=String(item.publishMode||'').trim().toLowerCase();
+ return kind==='shorts'||kind==='short'||mode==='immediate';
+}
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function one(locator,{optional=false}={}){
  const all=[];for(const x of await locator.all())if(await x.isVisible())all.push(x);
@@ -163,15 +169,32 @@ async function details(page,scope,item,opts,{verify=false}={}){
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
  if(kids&&!verify)await kids.click();
- report('metadata_options','Открываю настройки рекламы, ИИ и тегов.');await showMore(scope);
+ report('metadata_options','Открываю настройки рекламы и ИИ.');await showMore(scope);
  // Expansion mounts these controls asynchronously, so a one-shot lookup is too early.
  await until(async()=>{
   const text=await scope.innerText();return L.paid.test(text)&&L.ai.test(text);
  },10000,'Studio не показал настройки рекламы и ИИ после «Развернуть»');
  await question(scope,'paid',opts.paidPromotion===true,{verify});
  await question(scope,'ai',opts.alteredContent===true,{verify});
- if(item.tags!==null&&item.tags!==undefined){report('metadata_tags','Проверяю теги.');await setTags(scope,tags(item.tags),{verify});}
+ if(opts.writeTags===true&&item.tags!==null&&item.tags!==undefined){report('metadata_tags','Проверяю теги.');await setTags(scope,tags(item.tags),{verify});}
  report('metadata_ready','Название, описание и настройки проверены.');
+}
+async function pickNextButton(scope){
+ const seen=new Set(),candidates=[];
+ for(const btn of await scope.locator('#next-button').or(scope.getByRole('button',{name:L.next})).all()){
+  if(!await btn.isVisible())continue;
+  const key=await btn.evaluate(e=>`${e.tagName}#${e.id}:${e.getAttribute('aria-label')||''}:${Math.round(e.getBoundingClientRect().top)}:${Math.round(e.getBoundingClientRect().left)}`);
+  if(seen.has(key))continue;seen.add(key);candidates.push(btn);
+ }
+ if(!candidates.length)return null;
+ if(candidates.length===1)return candidates[0];
+ let best=null,bestTop=-1;
+ for(const btn of candidates){
+  if(await btn.isDisabled()||await btn.getAttribute('aria-disabled')==='true')continue;
+  const top=await btn.evaluate(e=>e.getBoundingClientRect().top);
+  if(top>=bestTop){bestTop=top;best=btn;}
+ }
+ return best||candidates[candidates.length-1];
 }
 const MONTHS=[['january','январ','янв'],['february','феврал','фев'],['march','марта','март','мар'],['april','апрел','апр'],['may','мая','май'],['june','июня','июнь','июн'],['july','июля','июль','июл'],['august','август','авг'],['september','сентябр','сен'],['october','октябр','окт'],['november','ноябр','ноя'],['december','декабр','дек']];
 function parseDate(text){
@@ -272,7 +295,7 @@ async function visibility(page,scope){
  for(let i=0;i<10;i++){
   if(await one(scope.locator('ytcp-visibility-scheduler'),{optional:true})||await one(scope.locator('#schedule-radio-button,[name=SCHEDULE]'),{optional:true}))return;
   if(await one(scope.getByText(/^(Save or publish|Сохранить или опубликовать)$/i),{optional:true}))return;
-  const next=await until(()=>one(scope.locator('#next-button').or(scope.getByRole('button',{name:L.next})),{optional:true}),20000,'Не найдена кнопка Далее / Next');
+  const next=await until(()=>pickNextButton(scope),60000,'Не найдена кнопка Далее / Next');
   await until(async()=>!await next.isDisabled()&&await next.getAttribute('aria-disabled')!=='true',120000,'Кнопка Далее не стала доступна');await next.click();await pause(250);
  }
  throw new Error('Studio не открыл экран Доступ / Visibility');
@@ -289,6 +312,21 @@ async function schedule(page,scope,plan,zone){
  if(parseDate(await controlValue(await dateControl(scope)))!==plan.date)throw new Error('Studio не подтвердил дату');
  const button=await until(async()=>{const x=await one(scope.locator('#done-button').or(scope.getByRole('button',{name:L.schedule})),{optional:true});if(!x||await x.isDisabled()||await x.getAttribute('aria-disabled')==='true')return null;return x;},120000,'Кнопка Запланировать недоступна');
  const label=norm(await button.innerText());if(!L.schedule.test(label)&&!/^Save$|^Done$|^Сохранить$|^Готово$/i.test(label))throw new Error('Studio предлагает «'+label+'» вместо планирования. Публикация остановлена.');
+ return button;
+}
+async function publishPublic(page,scope){
+ let publicRadio=await one(scope.locator('#public-radio-button,[name=PUBLIC],tp-yt-paper-radio-button[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
+ if(!publicRadio){
+  const label=await one(scope.getByText(/^(Public|Открытый доступ|Доступно всем)$/i),{optional:true});
+  if(label)await label.click();else throw new Error('Studio: не найден режим «Открытый доступ»');
+ }else await publicRadio.click();
+ const button=await until(async()=>{
+  const x=await one(scope.locator('#done-button').or(scope.getByRole('button',{name:/^(Publish|Опубликовать|Save|Сохранить|Done|Готово)$/i})),{optional:true});
+  if(!x||await x.isDisabled()||await x.getAttribute('aria-disabled')==='true')return null;
+  const label=norm(await x.innerText());
+  if(L.schedule.test(label))return null;
+  return x;
+ },120000,'Кнопка публикации Shorts недоступна');
  return button;
 }
 function videoId(value){return String(value||'').match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([A-Za-z0-9_-]{11})(?:\b|\/|$)/)?.[1]||'';}
@@ -343,11 +381,20 @@ async function diagnostics(page,error,folder){
 async function runSequential(page,pack,opts,host){
  const results=[];
  // Preflight all items before uploading even the first file.
- const plans=pack.map(item=>{if(!fs.existsSync(item.video))throw new Error('Не найден файл '+item.video);if(!norm(item.title)||item.title.length>100||/[<>]/.test(item.title))throw new Error('Некорректный заголовок');validateTags(tags(item.tags));if(item.description&&/[<>]/.test(item.description))throw new Error('Описание не должно содержать < или >');if(item.description?.length>5000)throw new Error('Описание превышает 5000 символов');return planFor(item);});
+ pack.forEach(item=>{
+  if(!fs.existsSync(item.video))throw new Error('Не найден файл '+item.video);
+  if(!norm(item.title)||item.title.length>100||/[<>]/.test(item.title))throw new Error('Некорректный заголовок');
+  if(opts.writeTags===true&&item.tags!=null)validateTags(tags(item.tags));
+  if(item.description&&/[<>]/.test(item.description))throw new Error('Описание не должно содержать < или >');
+  if(item.description?.length>5000)throw new Error('Описание превышает 5000 символов');
+  if(!isImmediatePublish(item))planFor(item);
+ });
  const usedIds=new Set();
  for(let i=0;i<pack.length;i++){
-  const item=pack[i],plan=planFor(item),packIndex=item._packIndex||i+1;
-  const zone=await syncClock(page,plan,host.progress);
+  const item=pack[i],immediate=isImmediatePublish(item),packIndex=item._packIndex||i+1;
+  let plan=null,zone=null;
+  if(!immediate){plan=planFor(item);zone=await syncClock(page,plan,host.progress);}
+  else host.progress('upload_mode','Shorts: сразу в открытый доступ, без превью и расписания.',{packIndex});
   host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
   await host.openFile(page,item.video,()=>host.checkpoint(item,packIndex));
   host.progress('studio_editor','Файл передан; ищу активное окно и редактируемое поле названия.',{packIndex});
@@ -356,23 +403,32 @@ async function runSequential(page,pack,opts,host){
   host.progress('metadata','Удаляю название файла и печатаю заголовок из приложения.',{packIndex});
   const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex,...extra});
   await bounded(()=>details(page,scope,item,{...opts,progress}),metadataBudget(item,opts),'Studio не завершил ввод метаданных в рассчитанное время');
-  if(item.thumbnail)await host.thumbnail(page,item.thumbnail);
   progress('upload_transfer','Проверяю завершение передачи файла.');await host.waitUpload(page,{progress});
+  if(!immediate&&item.thumbnail)await host.thumbnail(page,item.thumbnail);
   // The video link may appear only after processing starts. Do not block typing on it.
-  const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},30000,'YouTube не показал ID ролика');
+  const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},60000,'YouTube не показал ID ролика');
   if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
   host.progress('item_accepted','Studio создал видео, сохраняю ID',{packIndex,videoId:id,localJobId:item.localJobId});
   progress('studio_steps','Перехожу через «Далее / Next» к доступу.');await visibility(page,scope);
-  progress('studio_schedule','Устанавливаю дату, время и часовой пояс.');const submit=await schedule(page,scope,plan,zone);
-  // Scheduling may have become past during a slow upload. Never silently publish immediately.
-  planFor(item);await submit.click();
+  let submit;
+  if(immediate){
+   progress('studio_publish','Публикую Shorts в открытый доступ.');
+   submit=await publishPublic(page,scope);
+  }else{
+   progress('studio_schedule','Устанавливаю дату, время и часовой пояс.');
+   submit=await schedule(page,scope,plan,zone);
+   planFor(item);
+  }
+  await submit.click();
   await until(async()=>!await scopeAlive(scope)||await one(page.locator('ytcp-video-share-dialog,ytcp-video-upload-success'),{optional:true}),120000,'YouTube не подтвердил сохранение. Проверьте Studio; повторная загрузка заблокирована.');
-  progress('studio_verify','Проверяю сохранённые метаданные и расписание в Studio.');
-  const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
-  const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,schedule:plan};results.push(result);
-  host.progress('item_confirmed',`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
+  if(!immediate){
+   progress('studio_verify','Проверяю сохранённые метаданные и расписание в Studio.');
+   const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
+  }else progress('studio_verify','Shorts опубликованы; проверка расписания не требуется.');
+  const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,schedule:immediate?null:plan};results.push(result);
+  host.progress('item_confirmed',immediate?`Studio опубликовал Shorts · ${id}`:`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
   await host.dismiss(page);
  }
  return results;
 }
-module.exports={L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,visibility,readback,runSequential,videoId,waitUpload,diagnostics};
+module.exports={L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};

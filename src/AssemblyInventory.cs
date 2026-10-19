@@ -23,7 +23,22 @@ namespace VideoBatch {
         public BigInteger Variants;
         public bool Exact;
         public int BatchLimit;
-        public string Caption { get { return (Exact ? "Осталось " : "До ") + Variants.ToString("N0") + " связок" + (Variants!=BatchLimit ? " · сейчас до "+BatchLimit.ToString("N0")+" роликов" : ""); } }
+        /// <summary>Saved signatures in the active history ledger (RU/EN/…).</summary>
+        public int UsedCombinations;
+        /// <summary>When Exact, remaining + blocked-for-this-template (same materials/scenes).</summary>
+        public BigInteger TotalCombinations;
+        public string Caption {
+            get {
+                string head = UsedCombinations > 0 ? "Использовано " + UsedCombinations.ToString("N0") + " · " : "";
+                string body = (Exact ? "осталось " : "до ") + Variants.ToString("N0");
+                string ofTotal = Exact && TotalCombinations > 0 && TotalCombinations >= Variants
+                    ? " из " + TotalCombinations.ToString("N0")
+                    : "";
+                string batch = Variants != BatchLimit ? " · сейчас до " + BatchLimit.ToString("N0") + " роликов" : "";
+                if (body.Length > 0) body = char.ToUpper(body[0]) + body.Substring(1);
+                return head + body + ofTotal + " связок" + batch;
+            }
+        }
     }
     // Content identity matters: copies and renamed files do not create new combinations.
     public sealed class AssemblyInventory {

@@ -251,7 +251,7 @@ namespace VideoBatch {
                     Invoke(window,"SetFormat",1080,1350); Invoke(window,"Save"); if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Width != 1080) throw new Exception("Studio checkpoint 8 failed"); Invoke(window,"SetFormat",1080,1920);
                     if (screenshots != null) {
                         Directory.CreateDirectory(screenshots); l.Start = 0; l.Unique = false;
-                        Invoke(window,"Save"); WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Осталось 36 "),"Live capacity should show 18 video orders * 2 pictures = 36; music excluded");
+                        Invoke(window,"Save"); WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.Contains("осталось 36 "),"Live capacity should show 18 video orders * 2 pictures = 36; music excluded");
                         var background = new Bitmap(360,640); using (var g = Graphics.FromImage(background)) { g.Clear(Color.FromArgb(16,26,25)); using (var pen = new Pen(Theme.Accent,3)) g.DrawLines(pen,new[] {new Point(0,420),new Point(70,380),new Point(120,430),new Point(190,250),new Point(240,270),new Point(320,130),new Point(360,155)}); } canvas.SetBackground(background);
                         Capture(window,Path.Combine(screenshots,"studio-scenes.png"));
                         using (var pool = (System.Windows.Forms.Form)Invoke(window,"CreatePoolWindow",2)) { pool.Show(window); System.Windows.Forms.Application.DoEvents(); Capture(pool,Path.Combine(screenshots,"studio-files.png")); pool.Close(); }

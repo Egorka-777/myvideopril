@@ -8,28 +8,33 @@ async function editorRoot(scope){const candidates=scope.locator(HOST),roots=[];f
 async function imageSources(scope){const editor=await editorRoot(scope);return editor?editor.locator('img').evaluateAll(nodes=>nodes.map(n=>n.currentSrc||n.src).filter(Boolean)):[];}
 async function until(page,read,timeout=30000){const end=Date.now()+timeout;do{const result=await read();if(result)return result;await page.waitForTimeout(250);}while(Date.now()<end);throw new Error('YouTube не подтвердил выбранное превью. Видео повторно не загружай; проверь редактор существующего ролика.');}
 function fileData(file){if(!fs.existsSync(file)||!/^\.(png|jpe?g|webp)$/i.test(path.extname(file)))throw new Error('Превью: нужен существующий JPG/PNG/WebP.');if(fs.statSync(file).size>50*1024*1024)throw new Error('Превью превышает 50 МБ.');const type=/\.webp$/i.test(file)?'image/webp':/\.png$/i.test(file)?'image/png':'image/jpeg';return {type,data:'data:'+type+';base64,'+fs.readFileSync(file).toString('base64')};}
-// Compare the actual rendered image, including after reload. Screenshots avoid CDN CORS,
-// mutable URLs/cache signatures and Node requests outside the Dolphin browser's proxy.
-async function matches(page,img,reference){
- if(!await img.isVisible()||!await img.evaluate(e=>e.complete&&e.naturalWidth>0))return false;
- const style=await img.evaluate(e=>{const css=getComputedStyle(e);let p=e,bg='rgb(255,255,255)';while(p){const color=getComputedStyle(p).backgroundColor;if(color!=='rgba(0, 0, 0, 0)'&&color!=='transparent'){bg=color;break;}p=p.parentElement;}return {fit:css.objectFit,position:css.objectPosition,bg};});
- const shot=await img.screenshot({timeout:5000}),compare=await page.context().newPage();
- try{return await compare.evaluate(async ({actual,source,style})=>{
-  const load=src=>new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=()=>reject(new Error('Не удалось прочитать изображение превью'));i.src=src;});
+async function compareImages(page,shot,reference,style){
+ return page.evaluate(async ({actual,source,style})=>{
+  const load=src=>new Promise((resolve,reject)=>{const i=new Image();i.onerror=()=>reject(new Error('Не удалось прочитать изображение превью'));i.onload=()=>resolve(i);i.src=src;});
   const [a,s]=await Promise.all([load(actual),load(source)]),canvas=document.createElement('canvas');canvas.width=a.width;canvas.height=a.height;const c=canvas.getContext('2d',{willReadFrequently:true});
   c.drawImage(a,0,0);const got=c.getImageData(0,0,a.width,a.height);c.fillStyle=style.bg;c.fillRect(0,0,a.width,a.height);
   let w=a.width,h=a.height,x=0,y=0;
   if(style.fit==='contain'||style.fit==='cover'){const scale=style.fit==='cover'?Math.max(w/s.width,h/s.height):Math.min(w/s.width,h/s.height);w=s.width*scale;h=s.height*scale;const pos=style.position.split(' ').map(v=>parseFloat(v)/100);x=(a.width-w)*(Number.isFinite(pos[0])?pos[0]:.5);y=(a.height-h)*(Number.isFinite(pos[1])?pos[1]:.5);}
   c.drawImage(s,x,y,w,h);const expected=c.getImageData(0,0,a.width,a.height);let abs=0,square=0,n=0;
-  // Skip a thin selection border; compare pixels inside the actual image element.
   const edge=Math.min(2,Math.floor(Math.min(a.width,a.height)/10));
   for(let py=edge;py<a.height-edge;py++)for(let px=edge;px<a.width-edge;px++){const at=(py*a.width+px)*4;for(let ch=0;ch<3;ch++){const d=got.data[at+ch]-expected.data[at+ch];abs+=Math.abs(d);square+=d*d;n++;}}
   return n>0 && abs/n<=10 && Math.sqrt(square/n)<=25;
- },{actual:'data:image/png;base64,'+shot.toString('base64'),source:reference.data,style});}finally{await compare.close();}
+ },{actual:'data:image/png;base64,'+shot.toString('base64'),source:reference.data,style});
+}
+async function matches(page,img,reference){
+ if(!await img.isVisible()||!await img.evaluate(e=>e.complete&&e.naturalWidth>0))return false;
+ const style=await img.evaluate(e=>{const css=getComputedStyle(e);let p=e,bg='rgb(255,255,255)';while(p){const color=getComputedStyle(p).backgroundColor;if(color!=='rgba(0, 0, 0, 0)'&&color!=='transparent'){bg=color;break;}p=p.parentElement;}return {fit:css.objectFit,position:css.objectPosition,bg};});
+ const shot=await img.screenshot({timeout:5000});
+ return compareImages(page,shot,reference,style);
 }
 async function matchingImage(page,editor,reference,{persistent=false}={}){const imgs=editor.locator('img');for(let i=0;i<await imgs.count();i++){const img=imgs.nth(i),src=await img.evaluate(e=>e.currentSrc||e.src);if(persistent&&!/^https:\/\//.test(src||''))continue;if(await matches(page,img,reference))return await img.evaluate(e=>e.currentSrc||e.src);}return null;}
 async function verifyThumbnail(page,file,{scope=page,timeout=30000}={}){const reference=fileData(file);return until(page,async()=>{const editor=await editorRoot(scope);return editor?matchingImage(page,editor,reference,{persistent:true}):null;},timeout);}
-async function pngPayload(page,file,reference){if(reference.type!=='image/webp')return file;const tab=await page.context().newPage();try{const data=await tab.evaluate(source=>new Promise((resolve,reject)=>{const i=new Image();i.onerror=()=>reject(new Error('WebP не читается'));i.onload=()=>{const c=document.createElement('canvas');c.width=i.width;c.height=i.height;c.getContext('2d').drawImage(i,0,0);resolve(c.toDataURL('image/png').split(',')[1]);};i.src=source;}),reference.data);const buffer=Buffer.from(data,'base64');if(buffer.length>50*1024*1024)throw new Error('PNG после преобразования больше 50 МБ.');return {name:path.basename(file,path.extname(file))+'.png',mimeType:'image/png',buffer};}finally{await tab.close();}}
+async function pngPayload(page,file,reference){
+ if(reference.type!=='image/webp')return file;
+ const data=await page.evaluate(source=>new Promise((resolve,reject)=>{const i=new Image();i.onerror=()=>reject(new Error('WebP не читается'));i.onload=()=>{const c=document.createElement('canvas');c.width=i.width;c.height=i.height;c.getContext('2d').drawImage(i,0,0);resolve(c.toDataURL('image/png').split(',')[1]);};i.src=source;}),reference.data);
+ const buffer=Buffer.from(data,'base64');if(buffer.length>50*1024*1024)throw new Error('PNG после преобразования больше 50 МБ.');
+ return {name:path.basename(file,path.extname(file))+'.png',mimeType:'image/png',buffer};
+}
 async function uploadThumbnail(page,file,{scope=page,save=false,verifyReload=false,timeout=30000,progress=()=>{}}={}){
  if(!file)return null;const reference=fileData(file);progress('Превью: открываю редактор изображения');
  const editor=await until(page,()=>editorRoot(scope),timeout);await editor.scrollIntoViewIfNeeded();

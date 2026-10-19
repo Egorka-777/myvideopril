@@ -56,7 +56,7 @@ function fixture(lang,state,editor=false){
    await B.openStudio(p,'',()=>{});
    const date='2030-01-02',time='12:35',at=new Date(date+'T'+time+':00');
    const item={localJobId:'job-'+lang,video:file,title:lang==='ru'?'Новый заголовок':'New title',description:'Описание\nSecond line',tags:['binodex'],scheduleDate:date,scheduleTime:time,scheduledUnixSeconds:at.getTime()/1000,scheduledUtcOffsetMinutes:-at.getTimezoneOffset()};
-   const output=await S.runSequential(p,[item],{titleDelay:1,descriptionDelay:1},{
+   const output=await S.runSequential(p,[item],{titleDelay:1,descriptionDelay:1,writeTags:true},{
     progress:(stage,text)=>events.push({stage,text}),checkpoint:async()=>{checkpoints++;},
     openFile:(page,file,checkpoint)=>B.openFile(page,file,checkpoint,(stage,text)=>events.push({stage,text})),
     waitUpload:S.waitUpload,thumbnail:async()=>{},dismiss:async()=>{}

@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-16-studio-details-v3";
+const WORKER_BUILD = "2026-10-19-studio-upload-cdp-v3-shorts-public";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function studioCheckpoint(item,packIndex){
@@ -2884,7 +2884,7 @@ async function uploadPackBulk(page,pack){
  await studioBrowser.openStudio(page,job.channelUrl,send);
  const selected=pack.map((item,index)=>({...item,title:cleanUploadTitle(item.title),_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true},{
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send),
   thumbnail:setThumbnail,waitUpload:studio.waitUpload,dismiss:dismissAfterPublish

@@ -31,24 +31,35 @@ namespace VideoBatch {
                 localPort=localPort,
                 profileId=Channel.ProfileId,channelUrl=Channel.ChannelUrl,
                 expectedIp=Channel.ExpectedIp,
-                items=Items.Select(it=>new UploadItemJob{
+                items=Items.Select(it=>{
+                    string kind=QueueManager.NormKindPublic(it.Kind??Channel?.Kind);
+                    bool shorts=kind=="shorts";
+                    long unix=0;int offsetMin=0;
+                    if(!shorts&&!string.IsNullOrWhiteSpace(it.ScheduleDate)&&!string.IsNullOrWhiteSpace(it.ScheduleTime)){
+                        var slot=ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime);
+                        unix=new DateTimeOffset(slot).ToUnixTimeSeconds();
+                        offsetMin=(int)TimeZoneInfo.Local.GetUtcOffset(slot).TotalMinutes;
+                    }
+                    return new UploadItemJob{
                     video=it.StagedVideo,
                     title=it.UploadTitle,
                     localJobId=it.Source.StudioUploadId,studioPending=it.Source.StudioPending,
-                    scheduledUnixSeconds=new DateTimeOffset(ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime)).ToUnixTimeSeconds(),
-                    scheduledUtcOffsetMinutes=(int)TimeZoneInfo.Local.GetUtcOffset(ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime)).TotalMinutes,
-                    thumbnail=YouTubeThumbnailSync.ForItem(Channel,it.Source,it.Index-1),
-                    scheduleDate=it.ScheduleDate,
-                    scheduleTime=it.ScheduleTime,
+                    scheduledUnixSeconds=unix,
+                    scheduledUtcOffsetMinutes=offsetMin,
+                    contentKind=kind,
+                    publishMode=shorts?"immediate":"scheduled",
+                    thumbnail=shorts?null:YouTubeThumbnailSync.ForItem(Channel,it.Source,it.Index-1),
+                    scheduleDate=shorts?null:it.ScheduleDate,
+                    scheduleTime=shorts?null:it.ScheduleTime,
                     publishedVideoId=it.Source.PublishedVideoId??"",
                     publishedUrl=it.Source.PublishedUrl??""
-                }).ToArray(),
+                };}).ToArray(),
                 skipQueueDelay=true,
                 checkOnly=false,
                 draftOnly=false,
                 video=first.StagedVideo,
                 title=first.UploadTitle,
-                thumbnail=YouTubeThumbnailSync.ForItem(Channel,first.Source,first.Index-1),
+                thumbnail=QueueManager.NormKindPublic(first.Kind??Channel?.Kind)=="shorts"?null:YouTubeThumbnailSync.ForItem(Channel,first.Source,first.Index-1),
                 scheduleDate=first.ScheduleDate,
                 scheduleTime=first.ScheduleTime
             };
@@ -75,7 +86,7 @@ namespace VideoBatch {
                 if(string.IsNullOrWhiteSpace(job.ch.ProfileId))throw new Exception(job.ch.Name+": вставьте Profile ID из Dolphin.");
                 if(string.IsNullOrWhiteSpace(NormTitle(job.item.Title)))throw new Exception(ctx+": введите заголовок.");
                 if(string.IsNullOrWhiteSpace(job.item.Video)||!File.Exists(job.item.Video))throw new Exception(ctx+": файл видео не найден.");
-                if(!string.IsNullOrWhiteSpace(job.item.Thumbnail)&&!File.Exists(job.item.Thumbnail))throw new Exception(ctx+": файл превью не найден.");
+                if(NormKind(job.ch.Kind)!="shorts"&&!string.IsNullOrWhiteSpace(job.item.Thumbnail)&&!File.Exists(job.item.Thumbnail))throw new Exception(ctx+": файл превью не найден.");
                 string uploadTitle=TitleCleaner.CleanForUpload(NormTitle(job.item.Title));
                 if(string.IsNullOrWhiteSpace(uploadTitle))throw new Exception(ctx+": пустой заголовок после очистки.");
                 string planned=plannedFileName(job.ch,job.item,job.index,job.total);
@@ -218,6 +229,7 @@ namespace VideoBatch {
             k=(k??"").Trim().ToLowerInvariant();
             return k=="shorts"||k=="short"?"shorts":"long";
         }
+        public static string NormKindPublic(string k)=>NormKind(k);
         static string NormTitle(string title){
             if(string.IsNullOrWhiteSpace(title))return "";
             return System.Text.RegularExpressions.Regex.Replace(title.Trim(),@"\s*[·•]\s*\+\d+\s*$","").Trim();

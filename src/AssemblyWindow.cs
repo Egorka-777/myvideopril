@@ -350,7 +350,12 @@ namespace VideoBatch {
             assembleButton.Enabled=ready;
         }
         void ApplyCapacity(AssemblyCapacity capacity) {
-            capacityLabel.Text=template.Scenes.Count==0 ? "Добавь сцену для сборки" : capacity.Caption; batchMaximum=capacity.BatchLimit;
+            if (template.Scenes.Count==0) capacityLabel.Text="Добавь сцену для сборки";
+            else {
+                string journal="Журнал "+AssemblyHistoryScope.ShortLabel(AssemblyHistoryScope.Normalize(template.HistoryScope));
+                capacityLabel.Text=journal+" · "+capacity.Caption;
+            }
+            batchMaximum=capacity.BatchLimit;
             count.Maximum=Math.Max(1,batchMaximum); UpdateCountControls();
         }
         void CountMenu() {
@@ -565,8 +570,16 @@ namespace VideoBatch {
             finally { cancellation?.Dispose(); cancellation = null; Busy(false); capacityKey=null; RequestCapacity(); if (closeAfter) Close(); }
         }
         void ShowAssemblyBatchResult(BatchResult result, string title) {
-            if (result.Errors.Count == 0) return;
             foreach (var error in result.Errors) AppDiagnostics.Write("Сборка", studioProfile, "", "error", error, "error");
+            if (result.Errors.Count == 0) {
+                try {
+                    var history = AssemblyHistoryStore.Load(historyFolder, template.HistoryScope);
+                    status.Text = "Готово: " + result.Outputs.Count + " ролик(ов). Журнал "
+                        + AssemblyHistoryScope.ShortLabel(AssemblyHistoryScope.Normalize(template.HistoryScope))
+                        + ": " + history.Combinations.Count.ToString("N0") + " связок сохранено — повторы блокируются.";
+                } catch { status.Text = "Готово: " + result.Outputs.Count + " ролик(ов)."; }
+                return;
+            }
             string details = "Готовых роликов: " + result.Outputs.Count + "\n\n" + string.Join("\n\n", result.Errors);
             MessageBox.Show(this, details, title, MessageBoxButtons.OK, result.Outputs.Count == 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
         }

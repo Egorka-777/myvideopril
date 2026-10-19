@@ -56,24 +56,73 @@ async function openStudio(page, channelUrl, report) {
   report('studio_ready', 'YouTube Studio готов.');
 }
 async function videoInput(page) {
-  const inputs = page.locator('ytcp-uploads-dialog input[type=file], ytcp-upload-dialog input[type=file], ytcp-uploads-file-picker input[type=file], input[type=file][accept*="video"]');
-  const candidates = [];
+  const inputs = page.locator('ytcp-uploads-dialog input[type=file], ytcp-upload-dialog input[type=file], ytcp-uploads-file-picker input[type=file], ytcp-video-upload-dialog input[type=file], input[type=file][accept*="video"]');
+  let best = null;
+  let bestScore = -999;
   for (const input of await inputs.all()) {
-    const accept = await input.getAttribute('accept') || '';
-    if (/image/i.test(accept) && !/video/i.test(accept)) continue;
-    const active = await input.evaluate(e => {
-      for (let p = e.parentElement || e.getRootNode().host; p; p = p.parentElement || p.getRootNode().host)
-        if (p.hidden || getComputedStyle(p).display === 'none' || getComputedStyle(p).visibility === 'hidden') return false;
-      return true;
-    });
-    if (!active) continue;
-    candidates.push(input);
+    const score = await input.evaluate(el => {
+      const accept = (el.getAttribute('accept') || '').toLowerCase();
+      if (/image/i.test(accept) && !/video/i.test(accept)) return -100;
+      for (let p = el.parentElement || el.getRootNode().host; p; p = p.parentElement || (p.getRootNode && p.getRootNode().host)) {
+        if (p.hidden || getComputedStyle(p).display === 'none' || getComputedStyle(p).visibility === 'hidden') return -100;
+      }
+      let s = 0;
+      if (/video/i.test(accept)) s += 40;
+      const host = el.getRootNode && el.getRootNode().host;
+      const hostTag = (host && host.tagName) || '';
+      if (/ytcp-uploads|ytcp-video-upload|ytcp-upload-dialog/i.test(hostTag)) s += 55;
+      if (el.closest('ytcp-uploads-dialog, ytcp-uploads-file-picker, ytcp-video-upload-dialog, ytcp-upload-dialog')) s += 60;
+      if (location.hostname.includes('studio.youtube.com')) s += 10;
+      if (location.pathname.includes('/videos/upload')) s += 15;
+      if (el.getAttribute('aria-hidden') === 'true') s -= 5;
+      return s;
+    }).catch(() => -100);
+    if (score > bestScore) { bestScore = score; best = input; }
   }
-  if (candidates.length === 1) return candidates[0];
-  const videos = [];
-  for (const input of candidates) if (/video/i.test(await input.getAttribute('accept') || '')) videos.push(input);
-  if (videos.length === 1) return videos[0];
+  return bestScore >= 8 ? best : null;
+}
+async function ensureUploadPicker(page, channelUrl) {
+  let input = await videoInput(page);
+  if (input) return input;
+  const channelId = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
+  if (!channelId) return null;
+  const urls = [
+    `https://studio.youtube.com/channel/${channelId}/videos/upload?d=ud`,
+    `https://studio.youtube.com/channel/${channelId}/videos/upload`
+  ];
+  for (const url of urls) {
+    if (!page.url().includes('/videos/upload')) {
+      await page.goto(url, { waitUntil: 'commit', timeout: 35000 }).catch(() => {});
+    }
+    input = await waitFor(() => videoInput(page), 8000, 'Studio не ответил при открытии страницы загрузки.').catch(() => null);
+    if (input) return input;
+  }
   return null;
+}
+async function transferFile(page, input, file, report, { forceCdp = false } = {}) {
+  const size = fs.statSync(file).size;
+  const hidden = await input.evaluate(e => e.getAttribute('aria-hidden') === 'true' || Number(e.tabIndex) < 0).catch(() => true);
+  const useCdpFirst = forceCdp || size > 49 * 1024 * 1024 || hidden;
+  const viaCdp = async () => {
+    const cdp = await prepareCdpFile(page, input);
+    try {
+      await bounded(() => cdp.send(file), 45000, 'Studio не подтвердил приём файла. Повторная передача заблокирована.');
+    } finally {
+      await cdp.dispose();
+    }
+  };
+  if (useCdpFirst) {
+    await viaCdp();
+    return;
+  }
+  try {
+    await input.setInputFiles(file, { timeout: 30000 });
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (!/Timeout|not attached|not visible|exceeded|Target closed/i.test(msg)) throw e;
+    report('file_select', 'Playwright не передал файл — повтор через CDP…');
+    await viaCdp();
+  }
 }
 function findMarkedNode(node, marker) {
   const attrs = node.attributes || [];
@@ -103,29 +152,25 @@ async function prepareCdpFile(page, input) {
       dispose };
   } catch (e) { await dispose(); throw e; }
 }
-async function openFile(page, file, beforeSelection, report, { forceCdp = false } = {}) {
+async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '' } = {}) {
   file = path.resolve(file);
-  const size = fs.statSync(file).size;
-  let input = await bounded(() => videoInput(page), 8000, 'Studio не ответил при поиске выбора видео. Файл не передавался.');
+  if (!fs.existsSync(file)) throw new Error('Не найден файл ' + file);
+  let input = await ensureUploadPicker(page, channelUrl);
   if (!input) {
     const create = await bounded(() => visible(page.locator('#create-icon').or(page.getByRole('button', { name: /^(Create|Создать)$/i }))), 8000, 'Studio не ответил при поиске кнопки «Создать». Файл не передавался.');
     if (!create) throw new Error('Studio: нет кнопки «Создать». Файл не передавался.');
     await create.click({ timeout: 8000 });
     const upload = await waitFor(() => visible(page.getByRole('menuitem', { name: /^(Upload videos?|Загрузить видео|Добавить видео)$/i })
       .or(page.locator('tp-yt-paper-item,ytcp-text-menu ytcp-ve').filter({ hasText: /^(Upload videos?|Загрузить видео|Добавить видео)$/i }))),
-    8000, 'Studio не открыл пункт «Загрузить видео». Файл не передавался.');
+    12000, 'Studio не открыл пункт «Загрузить видео». Файл не передавался.');
     await upload.click({ timeout: 8000 });
-    input = await waitFor(() => videoInput(page), 15000, 'Studio не открыл выбор видео за 15 секунд. Файл не передавался.');
+    input = await waitFor(() => videoInput(page), 25000, 'Studio не открыл выбор видео за 25 секунд. Файл не передавался.');
   }
   // Resolve the input BEFORE marking the durable checkpoint. Never retry a possibly
   // accepted file: an uncertain response remains pending for manual inspection.
-  const cdp = size > 49 * 1024 * 1024 || forceCdp ? await prepareCdpFile(page, input) : null;
-  try {
-    await beforeSelection();
-    report('file_select', 'Передаю видео в Studio: ' + path.basename(file));
-    if (cdp) await bounded(() => cdp.send(file), 20000, 'Studio не подтвердил приём файла. Повторная передача заблокирована.');
-    else await input.setInputFiles(file, { timeout: 20000 });
-    report('file_selected','Файл передан. Ожидаю поле названия в редакторе Studio.');
-  } finally { if (cdp) await cdp.dispose(); }
+  await beforeSelection();
+  report('file_select', 'Передаю видео в Studio: ' + path.basename(file));
+  await transferFile(page, input, file, report, { forceCdp });
+  report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
-module.exports = { bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode };
+module.exports = { bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile };
