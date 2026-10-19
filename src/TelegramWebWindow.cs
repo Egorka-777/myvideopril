@@ -100,7 +100,7 @@ namespace VideoBatch {
                 view.CoreWebView2.DownloadStarting+=(s,e)=>e.Cancel=true;
                 view.CoreWebView2.PermissionRequested+=(s,e)=>e.State=CoreWebView2PermissionState.Deny;
                 view.CoreWebView2.ServerCertificateErrorDetected+=(s,e)=>{
-                    if(phase=="ready"||e.Action==CoreWebView2ServerCertificateErrorAction.AlwaysAllow)return;
+                    if(phase=="ready")return;
                     navigationError=e.ErrorStatus.ToString();loginFailed=true;
                     hint.Text="Telegram Web не прошёл проверку сертификата. Проверьте дату и время Windows; подробности — в отчёте.";Report("failed","WebCertificateRejected");
                 };
@@ -121,6 +121,10 @@ namespace VideoBatch {
             phase=value;
             string next=value=="ready"?"Telegram Web открыт.":value=="password"?"Введите пароль 2FA в официальном веб-окне.":
                 value=="failed"?"Проверьте маршруты в этом отчёте. При failed/proxy_tunnel провайдер не открыл соединение к указанному серверу Telegram Web.":"Ожидаем готовый QR; подтверждение выполняется автоматически.";
+            if(code=="WebCertificateRejected")next="Проверьте дату и время Windows, WebView2 и сертификат соединения. Проверку TLS не отключать.";
+            if(code=="WebNavigationFailed")next="Страница не загрузилась. Сопоставьте navigation_error с маршрутами; рабочую импортированную сессию удалять не нужно.";
+            if(code=="WebSessionApprovalFailed")next="Смотрите точную ошибку задачи входа в журнале Telegram и результат диагностики аккаунта.";
+            if(code=="WebQrUnreadable"||code=="WebAccountNotOpened")next="Нажмите «Обновить» для новой попытки. При повторе передайте агенту этот отчёт.";
             string folder=Path.Combine(store.Root,"diagnostics");
             var data=new Dictionary<string,object>{{"version",TelegramRunner.ExpectedWorker},{"utc",DateTime.UtcNow.ToString("o")},{"phase",value},{"code",code},{"page_state",lastQrState},{"navigation_error",navigationError},{"recoveries",recoveries},{"routes",new List<Dictionary<string,object>>(routes.Values)},{"next_action",next}};
             try{

@@ -34,6 +34,7 @@ jobs:
       - name: Compile desktop
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
       - name: Windows vault, serialization and UI tests
+        timeout-minutes: 5
         shell: powershell
         run: |
           $env:VIDEOBATCH_HOME = $PWD.Path
@@ -90,6 +91,7 @@ jobs:
           ./tests/telegram/doctor_contract.ps1 -AppRoot (Resolve-Path artifacts/VideoBatch-Telegram-Update).Path -Root "$env:RUNNER_TEMP/telegram-runtime"
           if ($LASTEXITCODE -ne 0) { throw 'Automatic diagnostics' }
       - name: Native browser from packaged update
+        timeout-minutes: 4
         shell: powershell
         run: |
           $folder = (Resolve-Path artifacts/VideoBatch-Telegram-Update).Path

@@ -94,7 +94,7 @@ namespace VideoBatch {
                     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true")throw new InvalidOperationException("Local TLS fixture runs only on CI");
                     string pem=File.ReadAllText(Path.Combine(sourceRoot,"tests","telegram","fixtures","web-test-root.pem"));
                     testRoot=new X509Certificate2(Convert.FromBase64String(pem.Replace("-----BEGIN CERTIFICATE-----","").Replace("-----END CERTIFICATE-----","")));
-                    trust=new X509Store(StoreName.Root,StoreLocation.CurrentUser);trust.Open(OpenFlags.ReadWrite);
+                    trust=new X509Store(StoreName.Root,StoreLocation.LocalMachine);trust.Open(OpenFlags.ReadWrite);
                     if(trust.Certificates.Find(X509FindType.FindByThumbprint,testRoot.Thumbprint,false).Count==0){trust.Add(testRoot);addedRoot=true;}
                     SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
                     var job=Execute();var deadline=DateTime.UtcNow.AddSeconds(100);
