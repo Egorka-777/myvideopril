@@ -14,6 +14,14 @@ $report=Run-Doctor -extra @()
 if ($code -ne 1 -or $report.checks[-1].status -ne 'RuntimeMarkerStale') { throw 'Stale marker not detected' }
 $report=Run-Doctor -extra @('-Repair')
 if ($code -ne 0 -or (Get-Content $marker -Raw).Trim() -ne '2026-10-19-telegram-proxy-v4') { throw 'Safe marker repair' }
+$vault=Join-Path $Root 'telegram.vault'
+$before=(Get-FileHash $vault -Algorithm SHA256).Hash
+# Version metadata alone still says installed: force-reinstall must repair an
+# actually missing module, without changing the encrypted accounts/proxies.
+$module=Join-Path $Root 'venv/Lib/site-packages/websockets/__init__.py'
+Remove-Item -LiteralPath $module -Force
+$report=Run-Doctor -extra @('-Repair')
+if ($code -ne 0 -or !(Test-Path $module) -or (Get-FileHash $vault -Algorithm SHA256).Hash -ne $before) { throw 'Actual dependency repair/vault preservation' }
 $worker=Join-Path $AppRoot 'tools/telegram/worker.py'
 $bytes=[IO.File]::ReadAllBytes($worker)
 try {
@@ -29,5 +37,5 @@ $detail=Get-Content (Join-Path $Root 'diagnostics/doctor-latest.json') -Raw -Enc
 $account=$detail | ConvertFrom-Json
 if ($account.accounts[0].status -ne 'network' -or $account.accounts[0].attempts[0].transport -ne 'wss') { throw 'Account diagnosis missing transport failure' }
 if ($detail -match 'session|api_hash|proxy://|127.0.0.1|fixture-secret') { throw 'Diagnostic secret leak' }
-Write-Output 'PASS: package/runtime/marker repair/mixed package rejection/account transport report'
+Write-Output 'PASS: package/runtime/marker repair/actual dependency repair/vault preservation/mixed package rejection/account transport report'
 exit 0
