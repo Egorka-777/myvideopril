@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '2026-10-19-telegram-proxy-v4'
+VERSION = '2026-10-19-telegram-web-v5'
 
 
 def check():

@@ -13,7 +13,7 @@ $marker=Join-Path $Root 'runtime.ready'
 $report=Run-Doctor -extra @()
 if ($code -ne 1 -or $report.checks[-1].status -ne 'RuntimeMarkerStale') { throw 'Stale marker not detected' }
 $report=Run-Doctor -extra @('-Repair')
-if ($code -ne 0 -or (Get-Content $marker -Raw).Trim() -ne '2026-10-19-telegram-proxy-v4') { throw 'Safe marker repair' }
+if ($code -ne 0 -or (Get-Content $marker -Raw).Trim() -ne '2026-10-19-telegram-web-v5') { throw 'Safe marker repair' }
 $vault=Join-Path $Root 'telegram.vault'
 $before=(Get-FileHash $vault -Algorithm SHA256).Hash
 # Version metadata alone still says installed: force-reinstall must repair an

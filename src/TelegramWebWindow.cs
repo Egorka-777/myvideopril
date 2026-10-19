@@ -16,9 +16,10 @@ namespace VideoBatch {
     internal sealed class TelegramWebProxy {
         Process process;
         StreamWriter input;
+        Task monitor;
         public int Port{get;private set;}
         public string Secret{get;}=Guid.NewGuid().ToString("N")+Guid.NewGuid().ToString("N");
-        public async Task Start(TelegramStore store,string proxy){
+        public async Task Start(TelegramStore store,string proxy,Action<Dictionary<string,object>> onRoute=null){
             string python=Path.Combine(store.Root,"venv","Scripts","python.exe");
             if(!TelegramRunner.Prepared(store))throw new InvalidOperationException("Подготовьте Telegram в настройках приложения");
             var start=new ProcessStartInfo(python,Core.Quote(Path.Combine(TelegramRunner.Scripts(),"web_proxy.py"))){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
@@ -28,6 +29,12 @@ namespace VideoBatch {
             var line=process.StandardOutput.ReadLineAsync();if(await Task.WhenAny(line,Task.Delay(15000))!=line)throw new IOException("Локальный маршрут прокси не запустился вовремя");
             var result=json.Deserialize<Dictionary<string,object>>(await line??"{}");
             if(!result.TryGetValue("port",out var port)||Convert.ToInt32(port)<1)throw new IOException("Не удалось запустить локальный маршрут прокси");Port=Convert.ToInt32(port);
+            monitor=ReadRoutes(process,onRoute);
+        }
+        static async Task ReadRoutes(Process process,Action<Dictionary<string,object>> receive){
+            try{string line;var json=new JavaScriptSerializer();while((line=await process.StandardOutput.ReadLineAsync())!=null){
+                var ev=json.Deserialize<Dictionary<string,object>>(line);if(ev.TryGetValue("event",out var kind)&&Convert.ToString(kind)=="route")receive?.Invoke(ev);
+            }}catch(IOException){}catch(InvalidOperationException){}
         }
         public async Task Stop(){var p=process;if(p==null)return;process=null;try{if(input!=null)await input.WriteLineAsync("cancel");if(!await Task.Run(()=>p.WaitForExit(3000)))p.Kill();}catch{}finally{input=null;p.Dispose();}}
         internal static void BindAuthentication(CoreWebView2 core,int port,string secret){
@@ -43,13 +50,16 @@ namespace VideoBatch {
         readonly Label hint;
         readonly Button login;
         TelegramWebProxy proxy;
-        bool closed,stopping,signing,polling,autoAttempted,loginFailed,sessionAccepted;
+        bool closed,stopping,signing,polling,autoAttempted,loginFailed,sessionAccepted,recovering;
+        int generation,recoveries;
+        string phase="loading",lastQrState="loading",navigationError="";
+        readonly Dictionary<string,Dictionary<string,object>> routes=new Dictionary<string,Dictionary<string,object>>();
         readonly System.Windows.Forms.Timer loginTimer=new System.Windows.Forms.Timer{Interval=900};
         DateTime loginDeadline;
-        internal const string LoginStateScript=@"(()=>{const visible=e=>e&&e.getClientRects().length>0;if(visible(document.querySelector('#Main')))return 'ready';if(visible(document.querySelector('#auth-password-form')))return 'password';return 'waiting';})()";
+        internal const string LoginStateScript=@"(()=>{const visible=e=>e&&e.getClientRects().length>0;if(visible(document.querySelector('#Main')))return 'ready';if(visible(document.querySelector('#auth-password-form')))return 'password';const form=document.querySelector('#auth-qr-form');if(form){const qr=form.querySelector('.qr-container');return visible(qr)&&qr.querySelector('svg,canvas,img')?'qr':'qr_loading';}if(visible(document.querySelector('#auth-phone-number-form')))return 'phone';return 'loading';})()";
         // Verified against Telegram Web A's AuthQrCode.tsx. Read only the login QR,
         // never a QR embedded in a chat or a page with different origin.
-        internal const string LoginRectScript=@"(()=>{const e=document.querySelector('#auth-qr-form .qr-container');if(!e||!e.getClientRects().length)return null;const r=e.getBoundingClientRect();if(r.width<80||r.height<80||r.x<0||r.y<0)return null;const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);if(!top||!top.closest('#auth-qr-form'))return null;return {x:r.x,y:r.y,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight};})()";
+        internal const string LoginRectScript=@"(()=>{const e=document.querySelector('#auth-qr-form .qr-container');if(!e||!e.getClientRects().length||!e.querySelector('svg,canvas,img'))return null;const r=e.getBoundingClientRect();if(r.width<80||r.height<80||r.x<0||r.y<0)return null;const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);if(!top||!top.closest('#auth-qr-form'))return null;return {x:r.x,y:r.y,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight};})()";
         internal static bool TrustedOrigin(string source)=>Uri.TryCreate(source,UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&uri.Host=="web.telegram.org"&&uri.Port==443;
         internal static string DecodeQr(Bitmap image){
             var reader=new ZXing.BarcodeReader{AutoRotate=true,Options=new ZXing.Common.DecodingOptions{TryHarder=true,PossibleFormats=new[]{ZXing.BarcodeFormat.QR_CODE}}};
@@ -63,7 +73,7 @@ namespace VideoBatch {
             Theme.StyleModal(this);
             var bar=new FlowLayoutPanel{Dock=DockStyle.Top,Height=82,Padding=new Padding(10,7,0,0),WrapContents=false};
             login=Theme.MakeButton("Повторить вход",ghost:true,action:async()=>{autoAttempted=false;await SignIn();});login.Enabled=false;bar.Controls.Add(login);
-            bar.Controls.Add(Theme.MakeButton("Обновить",ghost:true,action:()=>view?.CoreWebView2?.Reload()));
+            bar.Controls.Add(Theme.MakeButton("Обновить",ghost:true,action:async()=>await Reload()));
             hint=new Label{Text="Загрузка Telegram Web…",Width=740,Height=64,ForeColor=Theme.TextSecondary};bar.Controls.Add(hint);
             bar.SizeChanged+=(s,e)=>hint.Width=Math.Max(180,bar.ClientSize.Width-login.Width-150);
             view=new WebView2{Dock=DockStyle.Fill,DefaultBackgroundColor=Theme.Background};Controls.Add(view);Controls.Add(bar);
@@ -76,7 +86,7 @@ namespace VideoBatch {
                 if(closed)return;store.Prepare();string root=Path.Combine(store.Root,"web",account.id);Directory.CreateDirectory(root);
                 string args="--disable-quic --force-webrtc-ip-handling-policy=disable_non_proxied_udp";
                 if(!string.IsNullOrWhiteSpace(account.proxy)){
-                    proxy=new TelegramWebProxy();await proxy.Start(store,account.proxy);
+                    proxy=new TelegramWebProxy();await proxy.Start(store,account.proxy,Route);
                     args+=" --proxy-server=http://127.0.0.1:"+proxy.Port+" --proxy-bypass-list=<-loopback>";
                 }
                 if(string.IsNullOrWhiteSpace(account.proxy))args+=" --no-proxy-server";
@@ -89,23 +99,64 @@ namespace VideoBatch {
                 view.CoreWebView2.NewWindowRequested+=(s,e)=>e.Handled=true;
                 view.CoreWebView2.DownloadStarting+=(s,e)=>e.Cancel=true;
                 view.CoreWebView2.PermissionRequested+=(s,e)=>e.State=CoreWebView2PermissionState.Deny;
-                view.CoreWebView2.NavigationCompleted+=(s,e)=>{login.Enabled=e.IsSuccess;if(!e.IsSuccess){loginTimer.Stop();hint.Text="Страница не загрузилась: "+e.WebErrorStatus+". Проверьте прокси";}else{loginDeadline=DateTime.UtcNow.AddSeconds(40);loginTimer.Start();}};
+                view.CoreWebView2.ServerCertificateErrorDetected+=(s,e)=>{
+                    if(phase=="ready"||e.Action==CoreWebView2ServerCertificateErrorAction.AlwaysAllow)return;
+                    navigationError=e.ErrorStatus.ToString();loginFailed=true;
+                    hint.Text="Telegram Web не прошёл проверку сертификата. Проверьте дату и время Windows; подробности — в отчёте.";Report("failed","WebCertificateRejected");
+                };
+                view.CoreWebView2.NavigationCompleted+=(s,e)=>{navigationError=e.IsSuccess?"":e.WebErrorStatus.ToString();login.Enabled=e.IsSuccess;if(!e.IsSuccess){loginTimer.Stop();hint.Text="Страница не загрузилась: "+e.WebErrorStatus+". Проверьте прокси";Report("failed","WebNavigationFailed");}else{loginDeadline=DateTime.UtcNow.AddSeconds(40);loginTimer.Start();Report("waiting_qr","WebPageLoaded");}};
                 hint.Text="Открываем аккаунт автоматически. Пароль 2FA, если потребуется, вводится в Telegram.";
                 view.CoreWebView2.Navigate("https://web.telegram.org/a/");
             }catch(WebView2RuntimeNotFoundException){hint.Text="Нужен Microsoft Edge WebView2 Runtime. Инструкция установки — у агента.";}
             catch(IOException e){hint.Text=e.Message;if(proxy!=null)await proxy.Stop();}
             catch(Exception e){AppDiagnostics.Write("Telegram",account.id,"","web_error",e.GetType().Name,"error");hint.Text="Не удалось открыть Telegram Web. Проверьте подготовку Telegram и файлы WebView2 из обновления.";if(proxy!=null)await proxy.Stop();}
         }
+        void Route(Dictionary<string,object> ev){
+            if(closed)return;string host=Convert.ToString(ev["host"]),target=Convert.ToString(ev["target"]),state=Convert.ToString(ev["status"]);
+            if(!Regex.IsMatch(host,@"^(other\.telegram\.org|(?:(?:[kz]ws[1-5]|pluto|venus|aurora|vesta|flora)(?:-1)?\.)?web\.telegram\.org)$"))return;
+            routes[host]=new Dictionary<string,object>{{"host",host},{"target",target},{"status",state},{"code",Convert.ToString(ev["code"])}};
+            AppDiagnostics.Write("Telegram",account.id,"","web_route",host+" → "+target+": "+state);
+        }
+        void Report(string value,string code){
+            phase=value;
+            string next=value=="ready"?"Telegram Web открыт.":value=="password"?"Введите пароль 2FA в официальном веб-окне.":
+                value=="failed"?"Проверьте маршруты в этом отчёте. При failed/proxy_tunnel провайдер не открыл соединение к указанному серверу Telegram Web.":"Ожидаем готовый QR; подтверждение выполняется автоматически.";
+            string folder=Path.Combine(store.Root,"diagnostics");Directory.CreateDirectory(folder);
+            var data=new Dictionary<string,object>{{"version",TelegramRunner.ExpectedWorker},{"utc",DateTime.UtcNow.ToString("o")},{"phase",value},{"code",code},{"page_state",lastQrState},{"navigation_error",navigationError},{"recoveries",recoveries},{"routes",new List<Dictionary<string,object>>(routes.Values)},{"next_action",next}};
+            string path=Path.Combine(folder,"doctor-web-latest.json"),temp=path+".tmp";
+            File.WriteAllText(temp,new JavaScriptSerializer().Serialize(data),new UTF8Encoding(false));
+            if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
+            AppDiagnostics.Write("Telegram",account.id,"","web_"+value,code);
+        }
+        async Task Reload(bool recovery=false){
+            if(closed||stopping||recovering||view.CoreWebView2==null)return;recovering=true;++generation;
+            try{
+                if(signing&&stopLogin!=null)await stopLogin();
+                autoAttempted=loginFailed=sessionAccepted=false;signing=false;routes.Clear();
+                if(recovery){++recoveries;await view.CoreWebView2.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache);}
+                else recoveries=0;
+                hint.Text=recovery?"Telegram ещё не выдал QR. Обновляем веб-клиент один раз…":"Загружаем Telegram заново…";
+                loginDeadline=DateTime.UtcNow.AddSeconds(40);loginTimer.Start();view.CoreWebView2.Reload();
+            }catch{hint.Text="Не удалось обновить Telegram. Закройте веб-окно и откройте его снова.";Report("failed","WebReloadFailed");}
+            finally{recovering=false;}
+        }
         async Task PollLogin(){
-            if(closed||polling||signing||view.CoreWebView2==null)return;polling=true;
+            if(closed||polling||signing||recovering||view.CoreWebView2==null)return;polling=true;
             try{
                 if(!TrustedOrigin(view.CoreWebView2.Source))return;
                 string state=await view.CoreWebView2.ExecuteScriptAsync(LoginStateScript);
-                if(state=="\"ready\""){hint.Text=sessionAccepted?"Telegram открыт · "+account.name:"Telegram Web открыт · проверьте имя аккаунта на странице";AppDiagnostics.Write("Telegram",account.id,"","web_ready",sessionAccepted?"Веб-вход подтверждён импортированной сессией":"Главный экран Web открыт; соответствие импортированной сессии не проверено");login.Enabled=false;loginTimer.Stop();return;}
-                if(state=="\"password\""){hint.Text="Telegram запросил пароль 2FA. Введите его на странице.";return;}
+                lastQrState=new JavaScriptSerializer().Deserialize<string>(state);
+                if(state=="\"ready\""){hint.Text=sessionAccepted?"Telegram открыт · "+account.name:"Telegram Web открыт · проверьте имя аккаунта на странице";Report("ready",sessionAccepted?"WebSessionConfirmed":"WebIdentityUnconfirmed");login.Enabled=false;loginTimer.Stop();return;}
+                if(state=="\"password\""){hint.Text="Telegram запросил пароль 2FA. Введите его на странице.";if(phase!="password")Report("password","WebTwoFactorRequired");return;}
                 if(loginFailed)return; // Keep the exact failure visible, still detect a manual login.
-                if(DateTime.UtcNow>loginDeadline){loginTimer.Stop();hint.Text=autoAttempted?"Telegram Web не подтвердил загрузку аккаунта. Повторите вход и сохраните журнал.":"QR входа не появился или не прочитан. Обновите страницу и повторите вход.";return;}
-                if(!autoAttempted&&await view.CoreWebView2.ExecuteScriptAsync(LoginRectScript)!="null")await SignIn(true);
+                if(DateTime.UtcNow>loginDeadline){
+                    if(!autoAttempted&&recoveries==0&&state=="\"qr_loading\""){await Reload(true);return;}
+                    loginTimer.Stop();Report("failed",autoAttempted?"WebAccountNotOpened":state=="\"qr\""?"WebQrUnreadable":"WebQrNotReady");
+                    hint.Text=autoAttempted?"Telegram не подтвердил веб-вход. Причина — в doctor-web-latest.json.":"Telegram Web не выдал готовый QR. Проверьте маршруты в doctor-web-latest.json; сессию переимпортировать не нужно.";return;
+                }
+                if(!autoAttempted&&state=="\"qr\""){
+                    try{await ReadLoginToken(view.CoreWebView2);await SignIn(true);}catch(InvalidOperationException){}
+                }else if(!autoAttempted)hint.Text=state=="\"phone\""?"Выберите вход по QR на странице Telegram — приложение подтвердит его автоматически.":"Telegram подключается к своим серверам. Ожидаем готовый QR для автоматического входа…";
             }catch{loginTimer.Stop();if(!closed)hint.Text="Не удалось продолжить вход. Обновите страницу и проверьте журнал Telegram.";}
             finally{polling=false;}
         }
@@ -138,18 +189,20 @@ namespace VideoBatch {
             throw new IOException("Свежий QR не появился. Обновите Telegram Web и повторите вход.");
         }
         async Task SignIn(bool automatic=false){
-            if(signing)return;signing=true;loginFailed=false;login.Enabled=false;loginTimer.Start();
+            if(signing||recovering)return;int attempt=generation;signing=true;loginFailed=false;login.Enabled=false;loginTimer.Start();
             try{
                 if(view.CoreWebView2==null||!TrustedOrigin(view.CoreWebView2.Source))throw new InvalidOperationException("Дождитесь официальной страницы Telegram Web");
-                if(await view.CoreWebView2.ExecuteScriptAsync(LoginRectScript)=="null")throw new InvalidOperationException("QR входа не найден. Возможно, вы уже вошли; иначе выберите вход по QR на странице");
+                if(await view.CoreWebView2.ExecuteScriptAsync(LoginRectScript)=="null"){
+                    hint.Text="Telegram ещё не подготовил QR. Вход продолжится автоматически, когда он появится.";loginDeadline=DateTime.UtcNow.AddSeconds(40);return;
+                }
                 autoAttempted=true;hint.Text="Подключаем выбранный аккаунт…";
-                await authorize();sessionAccepted=true; // The worker requests a fresh QR only after identity verification.
+                Report("authorizing","WebQrReady");await authorize();if(attempt!=generation||closed)return;sessionAccepted=true;
                 loginDeadline=DateTime.UtcNow.AddSeconds(60);
                 hint.Text="QR принят. Ожидаем открытие аккаунта; пароль 2FA при необходимости введите на странице.";
-            }catch(InvalidOperationException e){if(!automatic||autoAttempted)hint.Text=e.Message;}
-            catch(IOException e){loginFailed=true;hint.Text=e.Message+" Можно войти обычным способом на странице Telegram.";}
-            catch{hint.Text="Вход не подтверждён. Проверьте журнал Telegram; затем повторите вход.";}
-            finally{signing=false;if(!closed)login.Enabled=true;}
+            }catch(InvalidOperationException e){if(attempt==generation&&(!automatic||autoAttempted))hint.Text=e.Message;}
+            catch(IOException e){if(attempt==generation){loginFailed=true;Report("failed","WebSessionApprovalFailed");hint.Text=e.Message;}}
+            catch{if(attempt==generation){loginFailed=true;Report("failed","WebSessionApprovalFailed");hint.Text="Вход не подтверждён. Проверьте журнал Telegram и doctor-web-latest.json.";}}
+            finally{if(attempt==generation){signing=false;if(!closed)login.Enabled=true;}}
         }
         public async Task Shutdown(){
             if(closed)return;if(stopping){while(!closed)await Task.Delay(50);return;}stopping=true;

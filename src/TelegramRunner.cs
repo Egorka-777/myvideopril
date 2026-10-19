@@ -59,7 +59,7 @@ namespace VideoBatch {
         StreamWriter commands;
         bool stopRequested;
         public bool IsRunning => active!=null;
-        public const string ExpectedWorker="2026-10-19-telegram-proxy-v4";
+        public const string ExpectedWorker="2026-10-19-telegram-web-v5";
         public static bool Prepared(TelegramStore store){
             try{return File.Exists(Path.Combine(store.Root,"venv","Scripts","python.exe"))&&File.ReadAllText(Path.Combine(store.Root,"runtime.ready"),Encoding.UTF8).Trim()==ExpectedWorker;}catch(IOException){return false;}
         }

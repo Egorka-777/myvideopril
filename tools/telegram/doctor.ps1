@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $env:PYTHONUTF8 = '1'
-$expected = '2026-10-19-telegram-proxy-v4'
+$expected = '2026-10-19-telegram-web-v5'
 $checks = [Collections.Generic.List[object]]::new()
 $exitCode = 1
 $stage = 'package'

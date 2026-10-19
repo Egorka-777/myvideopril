@@ -20,7 +20,7 @@ import zipfile
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-19-telegram-proxy-v4'
+VERSION = '2026-10-19-telegram-web-v5'
 PROXY_TIMEOUT = 7
 ACCOUNT_TIMEOUT = 22
 CANCEL = threading.Event()
