@@ -69,6 +69,7 @@ namespace VideoBatch {
                 var listener=new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback,0);listener.Start();
                 try {
                     var account=store.Load().accounts.Single();account.proxy="socks5://127.0.0.1:"+((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+                    store.Change(d=>d.accounts[0].proxy=account.proxy); // CLI doctor reloads this fixture from the vault.
                     var accept=listener.AcceptTcpClientAsync();
                     var running=runner.Run(new System.Collections.Generic.Dictionary<string,object>{{"action","check"},{"accounts",new[]{account}}},ev=>{});
                     if(await System.Threading.Tasks.Task.WhenAny(accept,System.Threading.Tasks.Task.Delay(15000))!=accept){await runner.Stop();await running;throw new Exception("Worker never connected to configured SOCKS proxy");}
