@@ -85,7 +85,7 @@ namespace VideoBatch {
         }
         public static bool RunWebLoginFlowTest(string runtime,string sourceRoot){
             Exception failure=null;var thread=new Thread(()=>{
-                Process fixture=null;Task errors=null;TelegramWebWindow window=null;
+                Process fixture=null;Task<string> errors=null;TelegramWebWindow window=null;
                 try{
                     SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
                     var job=Execute();var deadline=DateTime.UtcNow.AddSeconds(100);
@@ -96,7 +96,8 @@ namespace VideoBatch {
                         using(var png=new MemoryStream()){qr.Save(png,System.Drawing.Imaging.ImageFormat.Png);image=Convert.ToBase64String(png.ToArray());}
                         var info=new ProcessStartInfo(Path.Combine(runtime,"venv","Scripts","python.exe"),Core.Quote(Path.Combine(sourceRoot,"tests","telegram","web_fixture.py"))){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
                         fixture=Process.Start(info);errors=fixture.StandardError.ReadToEndAsync();
-                        await fixture.StandardInput.WriteLineAsync(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new{image}));await fixture.StandardInput.FlushAsync();
+                        var input=new StreamWriter(fixture.StandardInput.BaseStream,new UTF8Encoding(false)){AutoFlush=true};
+                        await input.WriteLineAsync(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new{image}));
                         var first=fixture.StandardOutput.ReadLineAsync();if(await Task.WhenAny(first,Task.Delay(10000))!=first)throw new Exception("TLS fixture startup");
                         var started=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,object>>(await first);
                         int port=Convert.ToInt32(started["port"]);
@@ -137,10 +138,10 @@ namespace VideoBatch {
                             Check(!report.Contains("local-test-password")&&!report.Contains(new string('b',32)),"No proxy password or QR token in report");
                             await window.Shutdown();window.Dispose();window=null;
                         }
-                        await fixture.StandardInput.WriteLineAsync("cancel");await fixture.StandardInput.FlushAsync();
+                        await input.WriteLineAsync("cancel");
                         if(!await Task.Run(()=>fixture.WaitForExit(5000)))fixture.Kill();await errors;
                     }
-                }catch(Exception e){failure=e;}
+                }catch(Exception e){failure=e;Console.WriteLine("Web fixture failure: "+e);if(fixture!=null&&fixture.HasExited&&errors!=null&&errors.IsCompleted)Console.WriteLine("Fixture stderr: "+errors.GetAwaiter().GetResult());}
                 finally{if(window!=null)window.Dispose();try{if(fixture!=null&&!fixture.HasExited)fixture.Kill();}catch{}fixture?.Dispose();}
             });thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure!=null)throw new Exception("Native Telegram Web login flow",failure);return true;
         }

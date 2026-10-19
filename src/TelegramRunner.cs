@@ -9,6 +9,8 @@ using System.Web.Script.Serialization;
 
 namespace VideoBatch {
     public static class TelegramDoctor {
+        public static string LatestReport(string root)=>new[]{"doctor-latest.json","doctor-web-latest.json","doctor-system.json"}
+            .Select(name=>Path.Combine(root,"diagnostics",name)).Where(File.Exists).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
         public static bool CheckAccount(string root,int index){
             return Task.Run(async()=>{
                 var store=new TelegramStore(root);var data=store.Load();

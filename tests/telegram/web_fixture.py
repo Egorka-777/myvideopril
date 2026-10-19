@@ -72,4 +72,7 @@ worker.onmessage=()=>{document.querySelector('.qr-container').innerHTML='<img wi
     socks.close();await socks.wait_closed();web.close();await web.wait_closed()
 
 
-if __name__=='__main__':asyncio.run(main(json.loads(sys.stdin.readline())))
+if __name__=='__main__':
+    sys.stdin.reconfigure(encoding='utf-8-sig')
+    sys.stdout.reconfigure(encoding='utf-8')
+    asyncio.run(main(json.loads(sys.stdin.readline())))

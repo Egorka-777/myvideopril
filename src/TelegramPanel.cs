@@ -91,8 +91,8 @@ namespace VideoBatch {
             form.Controls.Add(new Label{Text="Человек открывает ссылку и подаёт заявку сам. Вы подтверждаете её в Telegram. Новая кнопка создаёт новую ссылку; ссылки управляются в Telegram.",Dock=DockStyle.Fill,ForeColor=Theme.TextMuted},0,6);invitePage.Controls.Add(form);
             log=Theme.MakeLogBox();logsPage.Controls.Add(log);
             var reportButton=Theme.MakeButton("Открыть отчёт диагностики",ghost:true,action:()=>{
-                string path=Path.Combine(store.Root,"diagnostics","doctor-latest.json");
-                if(File.Exists(path))Process.Start(new ProcessStartInfo(path){UseShellExecute=true});
+                string path=TelegramDoctor.LatestReport(store.Root);
+                if(path!=null)Process.Start(new ProcessStartInfo(path){UseShellExecute=true});
                 else status.Text="Выберите аккаунт → Диагностика. Отчёт появится после проверки.";
             });reportButton.Dock=DockStyle.Top;logsPage.Controls.Add(reportButton);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};

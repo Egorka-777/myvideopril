@@ -121,11 +121,13 @@ namespace VideoBatch {
             phase=value;
             string next=value=="ready"?"Telegram Web открыт.":value=="password"?"Введите пароль 2FA в официальном веб-окне.":
                 value=="failed"?"Проверьте маршруты в этом отчёте. При failed/proxy_tunnel провайдер не открыл соединение к указанному серверу Telegram Web.":"Ожидаем готовый QR; подтверждение выполняется автоматически.";
-            string folder=Path.Combine(store.Root,"diagnostics");Directory.CreateDirectory(folder);
+            string folder=Path.Combine(store.Root,"diagnostics");
             var data=new Dictionary<string,object>{{"version",TelegramRunner.ExpectedWorker},{"utc",DateTime.UtcNow.ToString("o")},{"phase",value},{"code",code},{"page_state",lastQrState},{"navigation_error",navigationError},{"recoveries",recoveries},{"routes",new List<Dictionary<string,object>>(routes.Values)},{"next_action",next}};
-            string path=Path.Combine(folder,"doctor-web-latest.json"),temp=path+".tmp";
-            File.WriteAllText(temp,new JavaScriptSerializer().Serialize(data),new UTF8Encoding(false));
-            if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
+            try{
+                Directory.CreateDirectory(folder);string path=Path.Combine(folder,"doctor-web-latest.json"),temp=path+".tmp";
+                File.WriteAllText(temp,new JavaScriptSerializer().Serialize(data),new UTF8Encoding(false));
+                if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
+            }catch(Exception e)when(e is IOException||e is UnauthorizedAccessException){AppDiagnostics.Write("Telegram",account.id,"","web_report_error",e.GetType().Name,"error");}
             AppDiagnostics.Write("Telegram",account.id,"","web_"+value,code);
         }
         async Task Reload(bool recovery=false){

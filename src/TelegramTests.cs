@@ -42,6 +42,8 @@ namespace VideoBatch {
                 TelegramDoctor.SaveReport(temp,diagnostic);TelegramDoctor.SaveReport(temp,diagnostic);
                 string report=File.ReadAllText(Path.Combine(temp,"diagnostics","doctor-latest.json"));
                 if(report.Contains("secret")||!report.Contains("proxy_tunnel")||!report.Contains("attempts"))throw new Exception("Diagnostic allowlist/atomic report");
+                string webReport=Path.Combine(temp,"diagnostics","doctor-web-latest.json");File.WriteAllText(webReport,"{}");File.SetLastWriteTimeUtc(webReport,DateTime.UtcNow.AddSeconds(1));
+                if(TelegramDoctor.LatestReport(temp)!=webReport)throw new Exception("Newest web report must be accessible from the existing Journal button");
 
                 return true;
             } finally {if(Directory.Exists(temp))Directory.Delete(temp,true);}
