@@ -20,16 +20,19 @@ async def main(job):
     html="""<!doctype html><meta charset=utf-8><style>body{margin:0}#auth-qr-form{padding:50px}.qr-container{width:300px;height:300px}.qr-inner{display:none}</style>
 <div id=auth-qr-form><div class=qr-inner><div class=qr-container></div></div><div class=qr-loading>Loading QR...</div></div>
 <script>
-const worker=new Worker(URL.createObjectURL(new Blob([`const s=new WebSocket('wss://zws2.web.telegram.org/apiws','binary');s.onopen=()=>s.send('qr');s.onmessage=e=>postMessage(e.data);`],{type:'text/javascript'})));
-worker.onmessage=()=>{document.querySelector('.qr-container').innerHTML='<img width=300 height=300 src="data:image/png;base64,IMAGE">';document.querySelector('.qr-inner').style.display='block';document.querySelector('.qr-loading').remove();};
+const worker=new Worker(URL.createObjectURL(new Blob([`const s=new WebSocket('wss://zws2.web.telegram.org/apiws','binary');s.onopen=()=>s.send('qr');s.onmessage=e=>postMessage(e.data);s.onerror=()=>postMessage('wss_error');`],{type:'text/javascript'})));
+worker.onerror=e=>document.body.dataset.workerError=e.message;
+worker.onmessage=e=>{if(e.data!=='qr'){document.body.dataset.websocketError=e.data;return;}document.querySelector('.qr-container').innerHTML='<img width=300 height=300 src="data:image/png;base64,IMAGE">';document.querySelector('.qr-inner').style.display='block';document.querySelector('.qr-loading').remove();};
 </script>""".replace('IMAGE',image)
     async def request(connection,request):
         if request.path=='/a/':
+            print('fixture: HTTPS page',flush=True)
             response=connection.respond(HTTPStatus.OK,html)
             del response.headers['Content-Type']
             response.headers['Content-Type']='text/html; charset=utf-8'
             return response
     async def websocket(ws):
+        print('fixture: worker WSS upgrade',flush=True)
         if await ws.recv()!='qr':return
         await asyncio.sleep(1)
         await ws.send('qr')
@@ -50,6 +53,7 @@ worker.onmessage=()=>{document.querySelector('.qr-container').innerHTML='<img wi
             if head!=b'\x05\x01\x00\x03':return
             size=(await reader.readexactly(1))[0];host=(await reader.readexactly(size)).decode()
             port=int.from_bytes(await reader.readexactly(2),'big')
+            print('fixture: SOCKS '+host+':'+str(port),flush=True)
             if port!=443 or host not in ('web.telegram.org','zws2.web.telegram.org','venus.web.telegram.org'):return
             if host=='zws2.web.telegram.org':
                 writer.write(b'\x05\x05\x00\x01'+b'\x00'*6);await writer.drain();return

@@ -85,7 +85,7 @@ namespace VideoBatch {
         }
         public static bool RunWebLoginFlowTest(string runtime,string sourceRoot){
             Exception failure=null;var thread=new Thread(()=>{
-                Process fixture=null;Task<string> errors=null;TelegramWebWindow window=null;
+                Process fixture=null;Task<string> errors=null,trace=null;TelegramWebWindow window=null;
                 try{
                     SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
                     var job=Execute();var deadline=DateTime.UtcNow.AddSeconds(100);
@@ -100,6 +100,7 @@ namespace VideoBatch {
                         await input.WriteLineAsync(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new{image}));
                         var first=fixture.StandardOutput.ReadLineAsync();if(await Task.WhenAny(first,Task.Delay(10000))!=first)throw new Exception("TLS fixture startup");
                         var started=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,object>>(await first);
+                        trace=fixture.StandardOutput.ReadToEndAsync();
                         int port=Convert.ToInt32(started["port"]);
                         string certificate=System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(Path.Combine(sourceRoot,"tests","telegram","fixtures","web-test-cert.pem")),@"\s","");
                         foreach(bool failFirst in new[]{false,true}){
@@ -120,11 +121,17 @@ namespace VideoBatch {
                                 // hosts. Production Initialize never overrides TLS verification.
                                 view.CoreWebView2.ServerCertificateErrorDetected+=(sender,cert)=>{
                                     var uri=new Uri(cert.RequestUri);string pem=System.Text.RegularExpressions.Regex.Replace(cert.ServerCertificate.ToPemEncoding(),@"\s","");
+                                    Console.WriteLine("Fixture certificate: "+uri.Host+" match="+(pem==certificate));
                                     cert.Action=new[]{"web.telegram.org","zws2.web.telegram.org","venus.web.telegram.org"}.Contains(uri.Host)&&pem==certificate?CoreWebView2ServerCertificateErrorAction.AlwaysAllow:CoreWebView2ServerCertificateErrorAction.Cancel;
                                 };
                             };
                             window.Show();
-                            async Task Wait(Func<bool> done,string label){var until=DateTime.UtcNow.AddSeconds(25);while(!done()&&DateTime.UtcNow<until)await Task.Delay(50);Check(done(),label);}
+                            async Task Wait(Func<bool> done,string label){var until=DateTime.UtcNow.AddSeconds(25);while(!done()&&DateTime.UtcNow<until)await Task.Delay(50);
+                                if(!done()){
+                                    Console.WriteLine("Web hint: "+((Label)typeof(TelegramWebWindow).GetField("hint",flags).GetValue(window)).Text);
+                                    Console.WriteLine("Fixture DOM: "+await view.CoreWebView2.ExecuteScriptAsync("JSON.stringify({title:document.title,body:document.body.innerText.slice(0,160),workerError:document.body.dataset.workerError,websocketError:document.body.dataset.websocketError,images:document.querySelectorAll('.qr-container img').length})"));
+                                    string reportPath=Path.Combine(runtime,"diagnostics","doctor-web-latest.json");if(File.Exists(reportPath))Console.WriteLine("Web report: "+File.ReadAllText(reportPath));
+                                }Check(done(),label);}
                             if(failFirst){
                                 await Wait(()=>approvals==1&&Convert.ToBoolean(typeof(TelegramWebWindow).GetField("loginFailed",flags).GetValue(window)),"Approval failure becomes actionable");
                                 await (Task)typeof(TelegramWebWindow).GetMethod("Reload",flags).Invoke(window,new object[]{false});
@@ -142,7 +149,7 @@ namespace VideoBatch {
                         if(!await Task.Run(()=>fixture.WaitForExit(5000)))fixture.Kill();await errors;
                     }
                 }catch(Exception e){failure=e;Console.WriteLine("Web fixture failure: "+e);if(fixture!=null&&fixture.HasExited&&errors!=null&&errors.IsCompleted)Console.WriteLine("Fixture stderr: "+errors.GetAwaiter().GetResult());}
-                finally{if(window!=null)window.Dispose();try{if(fixture!=null&&!fixture.HasExited)fixture.Kill();}catch{}fixture?.Dispose();}
+                finally{if(window!=null)window.Dispose();try{if(fixture!=null&&!fixture.HasExited){fixture.Kill();fixture.WaitForExit(3000);}if(failure!=null){if(trace!=null&&trace.IsCompleted)Console.WriteLine(trace.GetAwaiter().GetResult());if(errors!=null&&errors.IsCompleted)Console.WriteLine(errors.GetAwaiter().GetResult());}}catch{}fixture?.Dispose();}
             });thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure!=null)throw new Exception("Native Telegram Web login flow",failure);return true;
         }
         public static bool RunShellLayoutTest(string output){
