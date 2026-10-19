@@ -1,7 +1,7 @@
 # Telegram: подключение через прокси и автоматическая диагностика
 
-Ветка: `fix/telegram-proxy-wss-20261019`. База: main `c7882c94b4a9ed69769e5840490bc0f9288e3c18`.
-Версия EXE / worker / runtime: `2026-10-19-telegram-proxy-v4`.
+Ветка разработки: `fix/telegram-proxy-wss-20261019` (слита в **`main`**).
+Версия EXE / worker / runtime: **`2026-10-19-telegram-proxy-v4`**. См. также `AGENT_TELEGRAM_LOGIN_20261019_RU.md`, `AGENT_TELEGRAM_CONNECT_20261017_RU.md`.
 
 ## Что установлено по журналам
 
@@ -14,7 +14,7 @@ WSS реализован по https://core.telegram.org/mtproto/transports: `/ap
 ## Установка агентом
 
 1. Закрыть VideoBatch. Сохранить прежний комплект приложения для отката. Не удалять `%LOCALAPPDATA%/VideoBatchDesktop/telegram`, `telegram.vault`, его резервные копии, TData, JSON или session.
-2. Скачать артефакт **Telegram-Proxy-Update** из успешного запуска **Telegram workspace** для этой ветки. Развернуть весь комплект в папку приложения: EXE, DLL, обе папки native WebView2, `tools/telegram`, `tools/uploader`, `TELEGRAM_PACKAGE.json`, `SOURCE_COMMIT.txt`. Не смешивать отдельные файлы разных сборок. `node_modules` и пользовательские данные не переносятся из CI.
+2. Скачать артефакт **Telegram-Proxy-Update** из успешного **Telegram workspace** на SHA **`main`** / `SOURCE_COMMIT.txt`, либо `git pull origin main` + Release-сборка. Развернуть весь комплект в папку приложения: EXE, DLL, обе папки native WebView2, `tools/telegram`, `tools/uploader`, `TELEGRAM_PACKAGE.json`, `SOURCE_COMMIT.txt`. Не смешивать отдельные файлы разных сборок. `node_modules` и пользовательские данные не переносятся из CI.
 3. В PowerShell выполнить из папки приложения:
 
 ```powershell
