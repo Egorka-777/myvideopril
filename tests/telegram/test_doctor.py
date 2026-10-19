@@ -60,6 +60,8 @@ class Doctor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['code'],'proxy_tunnel')
         self.assertEqual(row['repair'],'check_proxy')
         self.assertEqual(row['attempts'][0],dict(transport='wss',code='proxy_tunnel'))
+        shown=next(d for e,d in events if e=='account')
+        self.assertEqual(shown['text'],row['next_action'])
         self.assertTrue(all(a['proxy']==account['proxy'] for a in seen))
         self.assertNotIn('must-not-leak-password',str(events))
 

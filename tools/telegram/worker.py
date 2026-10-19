@@ -786,8 +786,11 @@ async def check_accounts(job):
                 elif 'user_id' in str(exc):
                     state, text = 'configuration', 'user_id не совпал: проверьте парный JSON'
             code = getattr(exc, 'cause_code', getattr(exc, 'diagnostic_code', type(exc).__name__))
+            row = diagnostic_row(slot, state, code, attempts=getattr(exc, 'attempts', []))
+            if job['action'] == 'doctor':
+                text = row['next_action']
             emit('account', id=account['id'], status=state, text=text, seconds=seconds, code=code)
-            report.append(diagnostic_row(slot, state, code, attempts=getattr(exc, 'attempts', [])))
+            report.append(row)
         finally:
             if client:
                 with contextlib.suppress(Exception):
