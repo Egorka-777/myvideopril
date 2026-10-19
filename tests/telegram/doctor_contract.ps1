@@ -18,10 +18,16 @@ $vault=Join-Path $Root 'telegram.vault'
 $before=(Get-FileHash $vault -Algorithm SHA256).Hash
 # Version metadata alone still says installed: force-reinstall must repair an
 # actually missing module, without changing the encrypted accounts/proxies.
-$module=Join-Path $Root 'venv/Lib/site-packages/websockets/__init__.py'
+$module=Join-Path $Root 'venv/Lib/site-packages/websockets/asyncio/client.py'
 Remove-Item -LiteralPath $module -Force
+$report=Run-Doctor -extra @()
+if ($code -ne 1 -or $report.checks[-1].status -ne 'RuntimeNotReady') { throw 'Broken dependency was not detected by actual imports' }
 $report=Run-Doctor -extra @('-Repair')
-if ($code -ne 0 -or !(Test-Path $module) -or (Get-FileHash $vault -Algorithm SHA256).Hash -ne $before) { throw 'Actual dependency repair/vault preservation' }
+if ($code -ne 0 -or !(Test-Path $module) -or (Get-FileHash $vault -Algorithm SHA256).Hash -ne $before) {
+    Write-Host ($report | ConvertTo-Json -Depth 8)
+    Write-Host ('Repaired module exists: '+(Test-Path $module)+'; vault unchanged: '+((Get-FileHash $vault -Algorithm SHA256).Hash -eq $before))
+    throw 'Actual dependency repair/vault preservation'
+}
 $worker=Join-Path $AppRoot 'tools/telegram/worker.py'
 $bytes=[IO.File]::ReadAllBytes($worker)
 try {
