@@ -9,6 +9,8 @@ using System.Web.Script.Serialization;
 
 namespace VideoBatch {
     public static class TelegramDoctor {
+        public static string LatestReport(string root)=>new[]{"doctor-latest.json","doctor-web-latest.json","doctor-system.json"}
+            .Select(name=>Path.Combine(root,"diagnostics",name)).Where(File.Exists).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
         public static bool CheckAccount(string root,int index){
             return Task.Run(async()=>{
                 var store=new TelegramStore(root);var data=store.Load();
@@ -59,7 +61,7 @@ namespace VideoBatch {
         StreamWriter commands;
         bool stopRequested;
         public bool IsRunning => active!=null;
-        public const string ExpectedWorker="2026-10-19-telegram-proxy-v4";
+        public const string ExpectedWorker="2026-10-19-telegram-profile-v6";
         public static bool Prepared(TelegramStore store){
             try{return File.Exists(Path.Combine(store.Root,"venv","Scripts","python.exe"))&&File.ReadAllText(Path.Combine(store.Root,"runtime.ready"),Encoding.UTF8).Trim()==ExpectedWorker;}catch(IOException){return false;}
         }

@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,7 +68,9 @@ namespace VideoBatch {
                                 if(await Task.WhenAny(loaded.Task,Task.Delay(10000))!=loaded.Task)throw new Exception("WebView2 fixture rendering timeout");await Task.Delay(200);
                                 string rect=await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginRectScript);Check(rect!="null"&&rect.Contains("viewportWidth"),"Login-screen-only DOM selector");
                                 Check(await TelegramWebWindow.ReadLoginToken(browser.CoreWebView2)==token,"Rendered WebView2 QR capture/crop/decode");
-                                Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"waiting\"","QR page is not a signed-in account");
+                                Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"qr\"","QR page is not a signed-in account");
+                                await browser.CoreWebView2.ExecuteScriptAsync("document.querySelector('.qr-container').innerHTML=''");
+                                Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"qr_loading\""&&await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginRectScript)=="null","Empty QR placeholder never triggers approval");
                                 await browser.CoreWebView2.ExecuteScriptAsync("document.body.innerHTML='<div id=Main>Account fixture</div>'");
                                 Check(await browser.CoreWebView2.ExecuteScriptAsync(TelegramWebWindow.LoginStateScript)=="\"ready\"","Authorized Web A detection");
                                 await browser.CoreWebView2.ExecuteScriptAsync("document.body.innerHTML='<div id=auth-password-form>2FA fixture</div>'");
@@ -79,6 +83,72 @@ namespace VideoBatch {
                 }catch(Exception e){failure=e;}
                 finally{stop.Cancel();listener.Stop();try{if(Directory.Exists(root))Directory.Delete(root,true);}catch{}}
             });thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure!=null)throw new Exception("Telegram browser integration",failure);return true;
+        }
+        public static bool RunWebLoginFlowTest(string runtime,string sourceRoot){
+            Exception failure=null;var thread=new Thread(()=>{
+                Process fixture=null;Task<string> errors=null,trace=null;TelegramWebWindow window=null;
+                X509Store trust=null;X509Certificate2 testRoot=null;bool addedRoot=false;
+                try{
+                    // Only in the disposable CI runner. Trust the fixture root for
+                    // this test and remove it in finally; production TLS stays intact.
+                    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true")throw new InvalidOperationException("Local TLS fixture runs only on CI");
+                    string pem=File.ReadAllText(Path.Combine(sourceRoot,"tests","telegram","fixtures","web-test-root.pem"));
+                    testRoot=new X509Certificate2(Convert.FromBase64String(pem.Replace("-----BEGIN CERTIFICATE-----","").Replace("-----END CERTIFICATE-----","")));
+                    trust=new X509Store(StoreName.Root,StoreLocation.LocalMachine);trust.Open(OpenFlags.ReadWrite);
+                    if(trust.Certificates.Find(X509FindType.FindByThumbprint,testRoot.Thumbprint,false).Count==0){trust.Add(testRoot);addedRoot=true;}
+                    SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
+                    var job=Execute();var deadline=DateTime.UtcNow.AddSeconds(100);
+                    while(!job.IsCompleted&&DateTime.UtcNow<deadline){Application.DoEvents();Thread.Sleep(10);}
+                    if(!job.IsCompleted)throw new Exception("Native Web login flow deadline");job.GetAwaiter().GetResult();
+                    async Task Execute(){
+                        string image;using(var qr=new ZXing.BarcodeWriter{Format=ZXing.BarcodeFormat.QR_CODE,Options=new ZXing.Common.EncodingOptions{Width=300,Height=300,Margin=4}}.Write("tg://login?token="+new string('b',32)))
+                        using(var png=new MemoryStream()){qr.Save(png,System.Drawing.Imaging.ImageFormat.Png);image=Convert.ToBase64String(png.ToArray());}
+                        var info=new ProcessStartInfo(Path.Combine(runtime,"venv","Scripts","python.exe"),Core.Quote(Path.Combine(sourceRoot,"tests","telegram","web_fixture.py"))){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+                        fixture=Process.Start(info);errors=fixture.StandardError.ReadToEndAsync();
+                        var input=new StreamWriter(fixture.StandardInput.BaseStream,new UTF8Encoding(false)){AutoFlush=true};
+                        await input.WriteLineAsync(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new{image}));
+                        var first=fixture.StandardOutput.ReadLineAsync();if(await Task.WhenAny(first,Task.Delay(10000))!=first)throw new Exception("TLS fixture startup");
+                        var started=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,object>>(await first);
+                        trace=fixture.StandardOutput.ReadToEndAsync();
+                        int port=Convert.ToInt32(started["port"]);
+                        foreach(bool failFirst in new[]{false,true}){
+                            var store=new TelegramStore(runtime);int approvals=0;bool shownMain=false;
+                            var account=new TelegramAccount{id=Guid.NewGuid().ToString("N"),name="Web fixture",proxy="socks5://fixture:local-test-password@127.0.0.1:"+port};
+                            window=new TelegramWebWindow(store,account,async()=>{
+                                approvals++;
+                                string token=await window.CurrentLoginToken("");Check(token==new string('b',32),"Fresh rendered login QR only");
+                                if(failFirst&&approvals==1)throw new IOException("Synthetic approval failure");
+                                var field=typeof(TelegramWebWindow).GetField("view",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
+                                var native=(WebView2)field.GetValue(window);await native.CoreWebView2.ExecuteScriptAsync("document.body.innerHTML='<div id=Main>Signed-in fixture</div>'");shownMain=true;
+                            });
+                            var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                            var view=(WebView2)typeof(TelegramWebWindow).GetField("view",flags).GetValue(window);
+                            window.Show();
+                            async Task Wait(Func<bool> done,string label){var until=DateTime.UtcNow.AddSeconds(25);while(!done()&&DateTime.UtcNow<until)await Task.Delay(50);
+                                if(!done()){
+                                    Console.WriteLine("Web hint: "+((Label)typeof(TelegramWebWindow).GetField("hint",flags).GetValue(window)).Text);
+                                    Console.WriteLine("Fixture DOM: "+await view.CoreWebView2.ExecuteScriptAsync("JSON.stringify({title:document.title,body:document.body.innerText.slice(0,160),workerError:document.body.dataset.workerError,websocketError:document.body.dataset.websocketError,images:document.querySelectorAll('.qr-container img').length})"));
+                                    string reportPath=Path.Combine(runtime,"diagnostics","doctor-web-latest.json");if(File.Exists(reportPath))Console.WriteLine("Web report: "+File.ReadAllText(reportPath));
+                                }Check(done(),label);}
+                            if(failFirst){
+                                await Wait(()=>approvals==1&&Convert.ToBoolean(typeof(TelegramWebWindow).GetField("loginFailed",flags).GetValue(window)),"Approval failure becomes actionable");
+                                await (Task)typeof(TelegramWebWindow).GetMethod("Reload",flags).Invoke(window,new object[]{false});
+                            }
+                            await Wait(()=>shownMain,"Worker WSS -> rendered QR -> automatic account approval");
+                            await Wait(()=>!Convert.ToBoolean(typeof(TelegramWebWindow).GetField("signing",flags).GetValue(window)),"Approval completed");
+                            await (Task)typeof(TelegramWebWindow).GetMethod("PollLogin",flags).Invoke(window,null);
+                            Check(approvals==(failFirst?2:1),"Exactly one approval per page, refresh permits a new attempt");
+                            string report=File.ReadAllText(Path.Combine(runtime,"diagnostics","doctor-web-latest.json"));
+                            Check(report.Contains("WebSessionConfirmed")&&report.Contains("zws2.web.telegram.org"),"Native worker's actual route recorded");
+                            Check(!report.Contains("local-test-password")&&!report.Contains(new string('b',32)),"No proxy password or QR token in report");
+                            await window.Shutdown();window.Dispose();window=null;
+                        }
+                        await input.WriteLineAsync("cancel");
+                        if(!await Task.Run(()=>fixture.WaitForExit(5000)))fixture.Kill();await errors;
+                    }
+                }catch(Exception e){failure=e;Console.WriteLine("Web fixture failure: "+e);if(fixture!=null&&fixture.HasExited&&errors!=null&&errors.IsCompleted)Console.WriteLine("Fixture stderr: "+errors.GetAwaiter().GetResult());}
+                finally{if(window!=null)window.Dispose();try{if(fixture!=null&&!fixture.HasExited){fixture.Kill();fixture.WaitForExit(3000);}if(failure!=null){if(trace!=null&&trace.IsCompleted)Console.WriteLine(trace.GetAwaiter().GetResult());if(errors!=null&&errors.IsCompleted)Console.WriteLine(errors.GetAwaiter().GetResult());}}catch{}fixture?.Dispose();if(addedRoot)trust.Remove(testRoot);trust?.Close();testRoot?.Dispose();}
+            });thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure!=null)throw new Exception("Native Telegram Web login flow",failure);return true;
         }
         public static bool RunShellLayoutTest(string output){
             Exception failure=null;var thread=new Thread(()=>{

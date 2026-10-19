@@ -20,7 +20,7 @@ import zipfile
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-19-telegram-proxy-v4'
+VERSION = '2026-10-19-telegram-profile-v6'
 PROXY_TIMEOUT = 7
 ACCOUNT_TIMEOUT = 22
 CANCEL = threading.Event()
@@ -945,6 +945,84 @@ async def web_login(job):
                 await asyncio.wait_for(client.disconnect(), 3)
 
 
+class ProfileChangeError(ValueError):
+    pass
+
+
+def profile_plan(job):
+    accounts=job.get('accounts',[])
+    if len(accounts)!=1:
+        raise ValueError('Для изменения профиля выберите один аккаунт')
+    profile=job.get('profile')
+    if not isinstance(profile,dict):raise ValueError('Выберите шаблон профиля')
+    first=profile.get('first_name');last=profile.get('last_name')
+    if not isinstance(first,str) or not first.strip() or len(first)>64 or not isinstance(last,str) or len(last)>64:
+        raise ValueError('Имя обязательно; имя и фамилия — до 64 символов в приложении')
+    if any(ord(c)<32 or ord(c)==127 for c in first+last):raise ValueError('Имя и фамилия должны быть в одну строку')
+    avatar=profile.get('avatar','');digest=profile.get('avatar_sha256','');data=None
+    if avatar:
+        root=(Path(job['root'])/'profile-avatars').resolve();path=Path(avatar)
+        if path.is_symlink() or path.resolve().parent!=root or not re.fullmatch(r'[a-f0-9]{64}\.jpg',path.name):
+            raise ValueError('Фото должно быть сохранено в шаблоне приложения')
+        if not path.is_file() or path.stat().st_size>5*1024*1024:raise ValueError('Фото шаблона отсутствует или слишком велико')
+        data=path.read_bytes()
+        if not data.startswith(b'\xff\xd8') or not data.endswith(b'\xff\xd9') or hashlib.sha256(data).hexdigest()!=digest or path.stem!=digest:
+            raise ValueError('Фото шаблона изменилось. Выберите его заново')
+    elif digest:raise ValueError('Фото шаблона отсутствует')
+    return accounts[0],first.strip(),last.strip(),data,digest
+
+
+async def apply_profile_template(job):
+    """One selected owner session, native API, no other users/chats or write retries."""
+    from telethon import functions
+    account,first,last,image,digest=profile_plan(job)
+    client=None;me=None;stage='connect';submitted=False
+    try:
+        client,me=await open_account(account)
+        expected=account.get('expected_user_id') or account.get('user_id')
+        if expected and int(expected)!=me.id:raise ValueError('Подключён другой аккаунт; профиль не изменён')
+        emit('account',id=account['id'],status='ready',user_id=me.id,text='Telegram подтвердил аккаунт')
+        old_photo=str(getattr(getattr(me,'photo',None),'photo_id',''))
+        photo_id=old_photo
+        cancelled()
+        if (me.first_name or '',me.last_name or '')!=(first,last):
+            stage='names';submitted=True;emit('stage',id=account['id'],text='Изменяю имя и фамилию…')
+            await asyncio.wait_for(client(functions.account.UpdateProfileRequest(first_name=first,last_name=last)),20)
+        if image is not None and not (account.get('profile_avatar_hash')==digest and account.get('profile_photo_id')==old_photo and old_photo):
+            cancelled();stage='upload';emit('stage',id=account['id'],text='Загружаю фото шаблона…')
+            upload=await asyncio.wait_for(client.upload_file(image,file_name='profile.jpg'),30)
+            cancelled();stage='photo';submitted=True
+            result=await asyncio.wait_for(client(functions.photos.UploadProfilePhotoRequest(file=upload)),20)
+            photo_id=str(getattr(getattr(result,'photo',None),'id',''))
+            if not photo_id:raise ProfileChangeError('Telegram не вернул ID новой аватарки')
+        stage='verify';emit('stage',id=account['id'],text='Проверяю сохранённые данные Telegram…')
+        confirmed=None
+        for attempt in range(3):
+            cancelled();current=await asyncio.wait_for(client.get_me(),12)
+            current_photo=str(getattr(getattr(current,'photo',None),'photo_id',''))
+            if current and current.id==me.id and (current.first_name or '',current.last_name or '')==(first,last) and (image is None or current_photo==photo_id):
+                confirmed=current;break
+            if attempt<2:await pause(.4)
+        if confirmed is None:raise ProfileChangeError('Telegram не подтвердил сохранённые имя, фамилию или фото')
+        confirmed_photo=str(getattr(getattr(confirmed,'photo',None),'photo_id',''))
+        verified_hash=digest if image is not None else account.get('profile_avatar_hash','') if account.get('profile_photo_id')==confirmed_photo else ''
+        emit('profile_updated',id=account['id'],first_name=first,last_name=last,photo_id=confirmed_photo,avatar_sha256=verified_hash,
+             text='Имя, фамилия и фото проверены Telegram' if image is not None else 'Имя и фамилия проверены Telegram; фото сохранено')
+        emit('summary',text='Шаблон применён к выбранному аккаунту и проверен Telegram')
+    except Exception as exc:
+        state,text,seconds=error_info(exc)
+        if isinstance(exc,(ValueError,StopJob)):text=str(exc)
+        if me is None or state=='flood_wait':emit('account',id=account['id'],status=state,text=text,seconds=seconds,code=type(exc).__name__)
+        prefix='Изменения могли сохраниться частично. Проверьте профиль перед повтором. ' if submitted else 'Профиль не изменён. '
+        message=prefix+text
+        emit('profile_failed',id=account['id'],stage=stage,code=type(exc).__name__,text=message)
+        if isinstance(exc,StopJob):raise
+        raise ProfileChangeError(message) from exc
+    finally:
+        if client:
+            with contextlib.suppress(Exception):await asyncio.wait_for(client.disconnect(),3)
+
+
 async def invite_link(job):
     """An opt-in link for an administrated destination; never sends DMs/invitations."""
     from telethon import functions
@@ -1108,6 +1186,8 @@ async def run(job):
             await check_proxies(job)
         elif action == 'web_login':
             await web_login(job)
+        elif action == 'profile_template':
+            await apply_profile_template(job)
         elif action == 'invite_link':
             await invite_link(job)
         else:

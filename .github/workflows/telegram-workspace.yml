@@ -1,7 +1,7 @@
 name: Telegram workspace
 on:
   push:
-    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016, feat/telegram-polish-20261016, fix/telegram-connect-flow-20261017, fix/telegram-login-diagnostics-20261017, fix/telegram-proxy-wss-20261019]
+    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016, feat/telegram-polish-20261016, fix/telegram-connect-flow-20261017, fix/telegram-login-diagnostics-20261017, fix/telegram-proxy-wss-20261019, fix/telegram-web-login-20261019, feat/telegram-profile-templates-20261019]
   pull_request:
     paths: ['src/Telegram*.cs','tools/telegram/**','tests/telegram/**','src/AppShell.cs','src/NavigationService.cs','.github/workflows/telegram-workspace.yml']
   workflow_dispatch:
@@ -34,6 +34,7 @@ jobs:
       - name: Compile desktop
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
       - name: Windows vault, serialization and UI tests
+        timeout-minutes: 5
         shell: powershell
         run: |
           $env:VIDEOBATCH_HOME = $PWD.Path
@@ -44,10 +45,13 @@ jobs:
           }
           if (!$asm.GetType('VideoBatch.AssemblyMarketTests').GetMethod('RunInitializationTests').Invoke($null,@())) { throw 'Assembly repeated initialization' }
           if (!$asm.GetType('VideoBatch.AccountLibraryTests').GetMethod('RunSyncTests').Invoke($null,@())) { throw 'Account library sync' }
+          if (!$asm.GetType('VideoBatch.TelegramTests').GetMethod('RunProfileTemplateTests').Invoke($null,@())) { throw 'Profile templates' }
           Write-Host 'Running real worker protocol'
           if (!$asm.GetType('VideoBatch.TelegramTests').GetMethod('RunWorkerProtocolTest').Invoke($null,@("$env:RUNNER_TEMP/telegram-runtime"))) { throw 'Desktop worker protocol' }
           Write-Host 'Running native WebView2'
           if (!$asm.GetType('VideoBatch.TelegramStatusTests').GetMethod('RunBrowserTest').Invoke($null,@())) { throw 'Native WebView2 proxy/QR integration' }
+          Write-Host 'Running real WebView2 worker WebSocket and automatic login'
+          if (!$asm.GetType('VideoBatch.TelegramStatusTests').GetMethod('RunWebLoginFlowTest').Invoke($null,@("$env:RUNNER_TEMP/telegram-runtime",$PWD.Path))) { throw 'Native Web login flow' }
           $dest = Join-Path $PWD 'artifacts/telegram-ui'
           New-Item -ItemType Directory -Force $dest | Out-Null
           Write-Host 'Running Telegram UI capture'
@@ -71,7 +75,7 @@ jobs:
           if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes "$dest/runtimes" -Recurse }
           Copy-Item tools/telegram/*.py,tools/telegram/*.ps1,tools/telegram/*.txt "$dest/tools/telegram"
           Copy-Item tools/uploader/*.js,tools/uploader/package*.json "$dest/tools/uploader"
-          Copy-Item docs/AGENT_TELEGRAM_PROXY_20261019_RU.md $dest
+          Copy-Item docs/AGENT_TELEGRAM_WEB_20261019_RU.md,docs/AGENT_TELEGRAM_PROFILE_20261019_RU.md,docs/AGENT_STUDIO_STATE_20261019_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
           foreach ($entry in @(@('x86',0x014c),@('x64',0x8664))) {
             $native = Join-Path $dest ('runtimes/win-'+$entry[0]+'/native/WebView2Loader.dll')
@@ -88,6 +92,7 @@ jobs:
           ./tests/telegram/doctor_contract.ps1 -AppRoot (Resolve-Path artifacts/VideoBatch-Telegram-Update).Path -Root "$env:RUNNER_TEMP/telegram-runtime"
           if ($LASTEXITCODE -ne 0) { throw 'Automatic diagnostics' }
       - name: Native browser from packaged update
+        timeout-minutes: 4
         shell: powershell
         run: |
           $folder = (Resolve-Path artifacts/VideoBatch-Telegram-Update).Path
@@ -97,10 +102,11 @@ jobs:
           $core.GetType('Microsoft.Web.WebView2.Core.CoreWebView2Environment').GetMethod('SetLoaderDllFolderPath').Invoke($null,@([string]$loader))
           $asm = [Reflection.Assembly]::LoadFrom((Join-Path $folder 'VideoBatch.exe'))
           if (!$asm.GetType('VideoBatch.TelegramStatusTests').GetMethod('RunBrowserTest').Invoke($null,@())) { throw 'Packaged WebView2 integration' }
+          if (!$asm.GetType('VideoBatch.TelegramStatusTests').GetMethod('RunWebLoginFlowTest').Invoke($null,@("$env:RUNNER_TEMP/telegram-runtime",$PWD.Path))) { throw 'Packaged native login flow' }
           Write-Host "Packaged WebView2 loader verified: $arch"
       - uses: actions/upload-artifact@v4
         with:
-          name: Telegram-Proxy-Update
+          name: Telegram-Profile-Update
           path: artifacts/VideoBatch-Telegram-Update
       - uses: actions/upload-artifact@v4
         if: always()

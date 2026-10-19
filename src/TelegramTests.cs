@@ -42,9 +42,35 @@ namespace VideoBatch {
                 TelegramDoctor.SaveReport(temp,diagnostic);TelegramDoctor.SaveReport(temp,diagnostic);
                 string report=File.ReadAllText(Path.Combine(temp,"diagnostics","doctor-latest.json"));
                 if(report.Contains("secret")||!report.Contains("proxy_tunnel")||!report.Contains("attempts"))throw new Exception("Diagnostic allowlist/atomic report");
+                string webReport=Path.Combine(temp,"diagnostics","doctor-web-latest.json");File.WriteAllText(webReport,"{}");File.SetLastWriteTimeUtc(webReport,DateTime.UtcNow.AddSeconds(1));
+                if(TelegramDoctor.LatestReport(temp)!=webReport)throw new Exception("Newest web report must be accessible from the existing Journal button");
 
                 return true;
             } finally {if(Directory.Exists(temp))Directory.Delete(temp,true);}
+        }
+        public static bool RunProfileTemplateTests(){
+            string root=Path.Combine(Path.GetTempPath(),"TelegramProfiles-"+Guid.NewGuid().ToString("N"));
+            try{
+                var store=new TelegramStore(root);var account=new TelegramAccount{id=new string('f',64),session="synthetic-secret",name="Owner",proxy="socks5://localhost:1080"};store.Change(d=>d.accounts.Add(account));
+                if(store.Load().profile_templates.Count!=0)throw new Exception("Existing vault migration");
+                string source=Path.Combine(root,"source.png");using(var bitmap=new System.Drawing.Bitmap(300,200)){using(var g=System.Drawing.Graphics.FromImage(bitmap))g.Clear(System.Drawing.Color.CornflowerBlue);bitmap.Save(source,System.Drawing.Imaging.ImageFormat.Png);}
+                byte[] original=File.ReadAllBytes(source),image=TelegramProfileTemplates.ReadImage(source);
+                var template=TelegramProfileTemplates.Save(store,new TelegramProfileTemplate{id=Guid.NewGuid().ToString("N"),title="Шаблон один",first_name="Имя",last_name="Фамилия"},image);
+                if(!original.SequenceEqual(File.ReadAllBytes(source)))throw new Exception("Avatar source changed");File.Delete(source);
+                var loaded=new TelegramStore(root).Load();var saved=loaded.profile_templates.Single();string photo=TelegramProfileTemplates.AvatarPath(store,saved.avatar);
+                using(var bitmap=System.Drawing.Image.FromFile(photo))if(bitmap.Width!=200||bitmap.Height!=200)throw new Exception("Avatar preview/save square crop");
+                if(loaded.accounts.Single().session!="synthetic-secret"||loaded.accounts.Single().proxy!=account.proxy)throw new Exception("Template changed account credentials");
+                template.last_name="";TelegramProfileTemplates.Save(store,template);
+                TelegramProfileTemplates.Save(store,new TelegramProfileTemplate{id=Guid.NewGuid().ToString("N"),title="Второй",first_name="Second",last_name=""},image);
+                if(Directory.GetFiles(Path.Combine(root,"profile-avatars")).Length!=1)throw new Exception("Duplicate avatar assets");
+                var job=TelegramProfileTemplates.Job(store,account,store.Load().profile_templates.First());var profile=(System.Collections.Generic.Dictionary<string,object>)job["profile"];
+                if((string)profile["last_name"]!=""||!File.Exists((string)profile["avatar"])||!profile.ContainsKey("avatar_sha256"))throw new Exception("Profile worker wire contract");
+                byte[] before=File.ReadAllBytes(store.Vault);bool rejected=false;template.first_name="";
+                try{TelegramProfileTemplates.Save(store,template);}catch(IOException){rejected=true;}
+                if(!rejected||!before.SequenceEqual(File.ReadAllBytes(store.Vault)))throw new Exception("Invalid template changed vault");
+                rejected=false;try{TelegramProfileTemplates.AvatarPath(store,"../other.jpg");}catch(IOException){rejected=true;}if(!rejected)throw new Exception("Avatar path traversal");
+                Console.WriteLine("Telegram profile templates: vault/reload, account preservation, square preview, dedup, validation and worker contract PASS");return true;
+            }finally{if(Directory.Exists(root))Directory.Delete(root,true);}
         }
         public static bool RunWorkerProtocolTest(string root) {
             return System.Threading.Tasks.Task.Run(async()=>{
@@ -103,6 +129,14 @@ namespace VideoBatch {
                         using(var wizard=new TelegramImportDialog(store,new[]{@"C:\Downloads\700001.json"})){
                             wizard.Show();System.Windows.Forms.Application.DoEvents();
                             using(var bitmap=new System.Drawing.Bitmap(wizard.Width,wizard.Height)){wizard.DrawToBitmap(bitmap,new System.Drawing.Rectangle(0,0,wizard.Width,wizard.Height));bitmap.Save(Path.Combine(output,"telegram-import.png"));}wizard.Close();
+                        }
+                        using(var dialog=new TelegramProfileTemplateDialog(store,new TelegramAccount{name="Тестовый аккаунт"})){
+                            dialog.Show();System.Windows.Forms.Application.DoEvents();
+                            foreach(var c in Descendants(dialog).Where(c=>new[]{"ProfileTemplateChoice","ProfileFirstName","ProfileLastName","ProfileAvatarPreview","ApplyProfileTemplate"}.Contains(c.Name))){
+                                var bounds=dialog.RectangleToClient(c.RectangleToScreen(c.ClientRectangle));
+                                if(!c.Visible||bounds.Left<0||bounds.Top<0||bounds.Right>dialog.ClientSize.Width||bounds.Bottom>dialog.ClientSize.Height)throw new Exception("Profile control clipped: "+c.Name);
+                            }
+                            using(var bitmap=new System.Drawing.Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new System.Drawing.Rectangle(0,0,dialog.Width,dialog.Height));bitmap.Save(Path.Combine(output,"telegram-profile-template.png"));}dialog.Close();
                         }
                         form.Close();
                     }

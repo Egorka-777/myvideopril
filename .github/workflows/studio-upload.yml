@@ -1,7 +1,7 @@
 name: YouTube Studio RU EN upload
 on:
   push:
-    branches: [feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016, fix/studio-details-chain-20261016, fix/studio-state-flow-20261019]
+    branches: [feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016, fix/studio-details-chain-20261016, fix/studio-state-flow-20261019, feat/telegram-profile-templates-20261019]
   pull_request:
     paths: ['src/Uploader.cs','src/QueueManager.cs','src/TaskQueueStore.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','tools/uploader/studio-browser.js','tools/uploader/youtube-studio-upload.js','tools/uploader/youtube-thumbnail.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/studio-details-chain.js','tests/browser/studio-state-flow.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
   workflow_dispatch:

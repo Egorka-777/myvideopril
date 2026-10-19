@@ -63,6 +63,7 @@ namespace VideoBatch {
             grid.CurrentCellDirtyStateChanged+=(s,e)=>{if(grid.IsCurrentCellDirty)grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
             var context=Theme.MakeContextMenu();context.Items.Add("Карточка аккаунта",null,(s,e)=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Открыть Telegram",null,(s,e)=>OpenWeb(grid.CurrentRow?.Tag as TelegramAccount));
+            context.Items.Add("Изменить данные · шаблон",null,async(s,e)=>await ApplyProfileTemplate(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Удалить из Telegram-раздела",null,(s,e)=>RemoveSelected());grid.ContextMenuStrip=context;
             grid.CellMouseDown+=(s,e)=>{if(e.Button==MouseButtons.Right&&e.RowIndex>=0){grid.ClearSelection();grid.Rows[e.RowIndex].Selected=true;grid.CurrentCell=grid.Rows[e.RowIndex].Cells[1];}};
             var table=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2};table.RowStyles.Add(new RowStyle(SizeType.Percent,100));table.RowStyles.Add(new RowStyle(SizeType.Absolute,52));table.Controls.Add(grid,0,0);
@@ -70,6 +71,7 @@ namespace VideoBatch {
             foot.Controls.Add(Theme.MakeButton("Карточка",ghost:true,action:()=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount)));
             foot.Controls.Add(Theme.MakeButton("Назначить прокси",ghost:true,action:AssignProxy));
             foot.Controls.Add(Theme.MakeButton("Открыть Telegram",accent:true,action:OpenWeb));
+            foot.Controls.Add(Theme.MakeButton("Изменить данные",ghost:true,action:async()=>await ApplyProfileTemplate()));
             foreach(var button in foot.Controls.OfType<Button>())workButtons.Add(button);
             foot.Controls.Add(new Label{Text="",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,0,0)});table.Controls.Add(foot,0,1);accountsPage.Controls.Add(table);
             var form=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=7,Padding=new Padding(16)};
@@ -91,8 +93,8 @@ namespace VideoBatch {
             form.Controls.Add(new Label{Text="Человек открывает ссылку и подаёт заявку сам. Вы подтверждаете её в Telegram. Новая кнопка создаёт новую ссылку; ссылки управляются в Telegram.",Dock=DockStyle.Fill,ForeColor=Theme.TextMuted},0,6);invitePage.Controls.Add(form);
             log=Theme.MakeLogBox();logsPage.Controls.Add(log);
             var reportButton=Theme.MakeButton("Открыть отчёт диагностики",ghost:true,action:()=>{
-                string path=Path.Combine(store.Root,"diagnostics","doctor-latest.json");
-                if(File.Exists(path))Process.Start(new ProcessStartInfo(path){UseShellExecute=true});
+                string path=TelegramDoctor.LatestReport(store.Root);
+                if(path!=null)Process.Start(new ProcessStartInfo(path){UseShellExecute=true});
                 else status.Text="Выберите аккаунт → Диагностика. Отчёт появится после проверки.";
             });reportButton.Dock=DockStyle.Top;logsPage.Controls.Add(reportButton);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
@@ -142,6 +144,7 @@ namespace VideoBatch {
             row.Cells["checked"].Value=string.IsNullOrEmpty(a.checked_at)?"—":a.checked_at;
             row.Cells["detail"].Value=string.IsNullOrEmpty(a.last_error)?(a.status=="ready"?"Telegram подтвердил аккаунт":"—"):a.last_error;
             row.Cells["detail"].ToolTipText=a.last_error+(string.IsNullOrEmpty(a.last_code)?"":" · "+a.last_code);
+            if(!string.IsNullOrWhiteSpace(a.profile_result)&&string.IsNullOrEmpty(a.last_error)){row.Cells["detail"].Value=a.profile_result;row.Cells["detail"].ToolTipText=a.profile_result;}
         }
         void RefreshHealthRows(){var accounts=store.Load().accounts.ToDictionary(a=>a.id);foreach(DataGridViewRow row in grid.Rows){if(row.Tag is TelegramAccount old&&accounts.TryGetValue(old.id,out var a)){row.Tag=a;PaintHealth(row,a);}}}
         List<TelegramAccount> Selected() {
@@ -171,6 +174,23 @@ namespace VideoBatch {
                     using(var f=new TelegramFields("Прогрев сессий","Проверяет подключение и получает до 20 доступных диалогов. Не отправляет сообщения, не ставит реакции и не накручивает просмотры. Защиту от блокировок не гарантирует."))if(f.ShowDialog(this)!=DialogResult.OK)return;
                 }
                 await Run(new Dictionary<string,object>{{"action",action},{"accounts",Selected()}});
+            }catch(Exception e){Failure(e);}
+        }
+        async Task ApplyProfileTemplate(TelegramAccount current=null){
+            try{
+                if(busy)return;var selected=current==null?Selected():new List<TelegramAccount>{current};
+                if(selected.Count!=1)throw new InvalidOperationException("Для изменения данных выберите один аккаунт");
+                var account=store.Load().accounts.First(a=>a.id==selected[0].id);
+                using(var dialog=new TelegramProfileTemplateDialog(store,account)){
+                    if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+                    account=store.Load().accounts.First(a=>a.id==account.id);
+                    var job=TelegramProfileTemplates.Job(store,account,dialog.Result);
+                    store.Change(data=>data.accounts.First(a=>a.id==account.id).profile_result="Ожидаю подтверждения изменения данных…");
+                    bool ok=await Run(job);
+                    if(!ok)store.Change(data=>{var a=data.accounts.First(x=>x.id==account.id);if(a.profile_result=="Ожидаю подтверждения изменения данных…")a.profile_result="Изменение не подтверждено; проверьте профиль и журнал.";});
+                    if(ok&&webWindows.TryGetValue(account.id,out var opened)&&!opened.IsDisposed)opened.ProfileChanged(store.Load().accounts.First(a=>a.id==account.id).name);
+                    RefreshData();
+                }
             }catch(Exception e){Failure(e);}
         }
         List<TelegramAccount> InviteSender(){if(!(senderChoice.SelectedItem is TelegramAccount a))throw new InvalidOperationException("Выберите отправителя");return new List<TelegramAccount>{store.Load().accounts.First(x=>x.id==a.id)};}
@@ -225,6 +245,11 @@ namespace VideoBatch {
                         string id=Get(ev,"id"),session=Get(ev,"session");
                         if(session!="")store.Change(d=>{var a=d.accounts.FirstOrDefault(x=>x.id==id);if(a!=null)a.session=session;});
                         return; // Authorization data is never written to the log.
+                    }
+                    if(type=="profile_updated"||type=="profile_failed"){
+                        string accountId=Get(ev,"id");store.Change(data=>{var a=data.accounts.FirstOrDefault(x=>x.id==accountId);if(a==null)return;
+                            a.profile_result=Get(ev,"text");if(type=="profile_updated"){a.name=(Get(ev,"first_name")+" "+Get(ev,"last_name")).Trim();a.profile_photo_id=Get(ev,"photo_id");a.profile_avatar_hash=Get(ev,"avatar_sha256");}
+                        });if(type=="profile_failed")failed=true;RefreshHealthRows();
                     }
                     if(type=="diagnostic_report"){
                         TelegramDoctor.SaveReport(store.Root,ev["report"]);

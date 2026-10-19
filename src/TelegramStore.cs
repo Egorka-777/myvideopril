@@ -42,6 +42,9 @@ namespace VideoBatch {
         public string proxy_detail {get;set;}="";
         public string proxy_checked_at {get;set;}="";
         public string wait_until { get; set; } = "";
+        public string profile_avatar_hash {get;set;}="";
+        public string profile_photo_id {get;set;}="";
+        public string profile_result {get;set;}="";
         public override string ToString() => string.IsNullOrWhiteSpace(name) ? id.Substring(0,Math.Min(10,id.Length)) : name;
     }
     public sealed class TelegramEndpoint {public string host {get;set;}="";public int port {get;set;}=443;}
@@ -55,6 +58,7 @@ namespace VideoBatch {
         public string default_proxy_id {get;set;}="";
         public List<TelegramProxy> proxies {get;set;}=new List<TelegramProxy>();
         public List<TelegramAccount> accounts { get; set; } = new List<TelegramAccount>();
+        public List<TelegramProfileTemplate> profile_templates {get;set;}=new List<TelegramProfileTemplate>();
     }
     public sealed class TelegramStore {
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 8*1024*1024 };
@@ -114,6 +118,7 @@ namespace VideoBatch {
                 var data=Json.Deserialize<TelegramData>(Encoding.UTF8.GetString(plain));
                 if(data==null||data.version!=1||data.accounts==null||data.accounts.Any(a=>a==null||a.id==null||a.id.Length!=64)||data.accounts.Select(a=>a.id).Distinct().Count()!=data.accounts.Count)throw new InvalidDataException();
                 if(data.proxies==null)data.proxies=new List<TelegramProxy>();
+                if(data.profile_templates==null)data.profile_templates=new List<TelegramProfileTemplate>();
                 return data;
             }catch(Exception e)when(e is CryptographicException||e is InvalidDataException||e is ArgumentException||e is InvalidOperationException){
                 throw new IOException("Не удалось открыть Telegram-хранилище. Сохранённые данные не перезаписаны. Нужен тот же пользователь Windows или восстановление резервной копии.",e);

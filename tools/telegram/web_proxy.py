@@ -7,6 +7,7 @@ import contextlib
 import hmac
 import ipaddress
 import json
+import re
 import sys
 import threading
 from worker import proxy_connector
@@ -14,17 +15,56 @@ from worker import proxy_connector
 
 def allowed_host(host):
     value=host.lower().rstrip('.')
-    return value=='telegram.org' or value.endswith('.telegram.org')
+    return bool(re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)*',value)) and (value=='telegram.org' or value.endswith('.telegram.org'))
+
+
+def route_hosts(host):
+    """Same-DC official aliases only; never another proxy or another DC.
+
+    Web A uses zwsN (Ajaxy/telegram-tt, gramjs/Utils.ts), while the public
+    MTProto TLS endpoints use these names (core.telegram.org/mtproto/transports).
+    Browser TLS/SNI and certificate verification are left untouched.
+    """
+    host=host.lower().rstrip('.')
+    match=re.fullmatch(r'[kz]ws([1-5])(-1)?\.web\.telegram\.org',host)
+    if not match:return [host]
+    name={1:'pluto',2:'venus',3:'aurora',4:'vesta',5:'flora'}[int(match[1])]
+    return [host,name+(match[2] or '')+'.web.telegram.org']
+
+
+def safe_host(host):
+    if re.fullmatch(r'(?:(?:[kz]ws[1-5]|pluto|venus|aurora|vesta|flora)(?:-1)?\.)?web\.telegram\.org',host):
+        return host
+    return 'other.telegram.org'
 
 
 class Bridge:
-    def __init__(self, proxy, secret, allow_host=allowed_host):
+    def __init__(self, proxy, secret, allow_host=allowed_host, on_route=None):
         self.connector=proxy_connector(proxy)
         if self.connector is None:
             raise ValueError('Bridge requires configured upstream proxy')
         self.secret=secret
         self.allow_host=allow_host
         self.connections=set()
+        self.on_route=on_route or (lambda **data:None)
+        self.preferred={}
+
+    async def connect(self,host):
+        from python_socks import ProxyError,ProxyConnectionError,ProxyTimeoutError
+        failure=None
+        targets=route_hosts(host)
+        targets.sort(key=lambda target:target!=self.preferred.get(host))
+        for target in targets:
+            try:
+                sock=await asyncio.wait_for(self.connector.connect(dest_host=target,dest_port=443,timeout=6),6)
+                self.on_route(host=safe_host(host),target=safe_host(target),status='ready',code='tunnel_ready')
+                self.preferred[host]=target
+                return sock
+            except asyncio.CancelledError:raise
+            except (OSError,TimeoutError,ProxyError,ProxyConnectionError,ProxyTimeoutError) as exc:
+                failure=exc
+                self.on_route(host=safe_host(host),target=safe_host(target),status='failed',code='proxy_tunnel')
+        raise ConnectionError('Telegram Web proxy tunnel failed') from failure
 
     async def handle(self, reader, writer):
         self.connections.add(writer)
@@ -47,7 +87,7 @@ class Bridge:
             host,port=authority.rsplit(':',1);host=host.strip('[]')
             if port!='443' or not self.allow_host(host):
                 writer.write(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');await writer.drain();return
-            sock=await self.connector.connect(dest_host=host,dest_port=443,timeout=15)
+            sock=await self.connect(host)
             try:
                 remote_reader,upstream=await asyncio.open_connection(sock=sock)
             except BaseException:
@@ -82,7 +122,9 @@ class Bridge:
 
 
 async def serve(job):
-    bridge=Bridge(job.get('proxy',''),job['secret'])
+    def report(**data):
+        print(json.dumps(dict(event='route',**data)),flush=True)
+    bridge=Bridge(job.get('proxy',''),job['secret'],on_route=report)
     stopped=threading.Event()
     def watch():
         for line in sys.stdin:
