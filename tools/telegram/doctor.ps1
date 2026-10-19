@@ -45,14 +45,27 @@ try {
         # Repairs dependencies only. The encrypted vault, accounts and proxies stay intact.
         if (Get-Process VideoBatch -ErrorAction SilentlyContinue) { throw 'CloseAppBeforeRepair' }
         $setup = Join-Path $AppRoot 'tools/telegram/setup.ps1'
-        $repairLog = Join-Path ([IO.Path]::GetTempPath()) ('telegram-setup-'+[Guid]::NewGuid().ToString('N'))
+        # Own the Process directly. Windows PowerShell Start-Process -PassThru
+        # with redirected streams may return a null ExitCode (PowerShell #5421).
+        $process = [Diagnostics.Process]::new()
         try {
             $setupArgs = '-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -Root "'+$Root+'" -Repair'
-            $process = Start-Process powershell.exe -ArgumentList $setupArgs -PassThru -NoNewWindow -RedirectStandardOutput ($repairLog+'.out') -RedirectStandardError ($repairLog+'.err')
+            $info = [Diagnostics.ProcessStartInfo]::new('powershell.exe',$setupArgs)
+            $info.UseShellExecute = $false
+            $info.CreateNoWindow = $true
+            $info.RedirectStandardOutput = $true
+            $info.RedirectStandardError = $true
+            $process.StartInfo = $info
+            if (!$process.Start()) { throw 'RuntimeRepairFailed' }
+            $repairOutput = $process.StandardOutput.ReadToEndAsync()
+            $repairErrors = $process.StandardError.ReadToEndAsync()
             if (!$process.WaitForExit(300000)) { & taskkill.exe /PID $process.Id /T /F | Out-Null; throw 'RuntimeRepairTimeout' }
+            $process.WaitForExit()
+            $null = $repairOutput.GetAwaiter().GetResult()
+            $null = $repairErrors.GetAwaiter().GetResult()
             if ($process.ExitCode -ne 0) { throw 'RuntimeRepairFailed' }
         } finally {
-            Remove-Item ($repairLog+'.out'),($repairLog+'.err') -Force -ErrorAction SilentlyContinue
+            $process.Dispose()
         }
         $result = & $python -X utf8 $smoke 2>&1
         $ok = $LASTEXITCODE -eq 0
