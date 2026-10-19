@@ -6,24 +6,24 @@ function Run-Doctor($extra) {
     $script:code=$LASTEXITCODE
     return ($script:output -join "`n" | ConvertFrom-Json)
 }
-$report=Run-Doctor @()
+$report=Run-Doctor -extra @()
 if ($code -ne 0 -or $report.checks[0].status -ne 'ready' -or $report.checks[-1].status -ne 'not_run') { throw 'Offline diagnosis' }
 $marker=Join-Path $Root 'runtime.ready'
 'old' | Set-Content $marker
-$report=Run-Doctor @()
+$report=Run-Doctor -extra @()
 if ($code -ne 1 -or $report.checks[-1].status -ne 'RuntimeMarkerStale') { throw 'Stale marker not detected' }
-$report=Run-Doctor @('-Repair')
+$report=Run-Doctor -extra @('-Repair')
 if ($code -ne 0 -or (Get-Content $marker -Raw).Trim() -ne '2026-10-19-telegram-proxy-v4') { throw 'Safe marker repair' }
 $worker=Join-Path $AppRoot 'tools/telegram/worker.py'
 $bytes=[IO.File]::ReadAllBytes($worker)
 try {
     [IO.File]::AppendAllText($worker,"`n# deliberate package mismatch fixture")
-    $report=Run-Doctor @('-Repair')
+    $report=Run-Doctor -extra @('-Repair')
     if ($code -ne 1 -or $report.checks[-1].status -ne 'PackageFileChanged') { throw 'Mixed package accepted or repair ran on mismatched code' }
 } finally {[IO.File]::WriteAllBytes($worker,$bytes)}
 # The previous native worker test left a synthetic account on a closed localhost
 # proxy. This must produce an actionable report, never a direct Telegram request.
-$report=Run-Doctor @('-AccountIndex','1')
+$report=Run-Doctor -extra @('-AccountIndex','1')
 if ($code -ne 1 -or $report.checks[-1].status -ne 'AccountCheckFailed') { throw 'Network failure exit contract' }
 $detail=Get-Content (Join-Path $Root 'diagnostics/doctor-latest.json') -Raw -Encoding UTF8
 $account=$detail | ConvertFrom-Json

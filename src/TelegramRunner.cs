@@ -64,7 +64,13 @@ namespace VideoBatch {
             try{return File.Exists(Path.Combine(store.Root,"venv","Scripts","python.exe"))&&File.ReadAllText(Path.Combine(store.Root,"runtime.ready"),Encoding.UTF8).Trim()==ExpectedWorker;}catch(IOException){return false;}
         }
         public TelegramRunner(TelegramStore store){this.store=store;}
-        public static string Scripts() => AppPaths.CandidateInstallRoots().Select(p=>Path.Combine(p,"tools","telegram")).FirstOrDefault(p=>File.Exists(Path.Combine(p,"worker.py"))) ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tools","telegram");
+        public static string Scripts() {
+            // Also correct when a PC agent loads this assembly from PowerShell:
+            // prefer scripts beside this EXE over a remembered older installation.
+            string local=Path.Combine(Path.GetDirectoryName(typeof(TelegramRunner).Assembly.Location),"tools","telegram");
+            if(File.Exists(Path.Combine(local,"worker.py")))return local;
+            return AppPaths.CandidateInstallRoots().Select(p=>Path.Combine(p,"tools","telegram")).FirstOrDefault(p=>File.Exists(Path.Combine(p,"worker.py"))) ?? local;
+        }
         public async Task<int> Run(Dictionary<string,object> job,Action<Dictionary<string,object>> receive) {
             if(active!=null)throw new InvalidOperationException("Дождитесь завершения Telegram-задачи");
             stopRequested=false;
