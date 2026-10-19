@@ -38,6 +38,10 @@ namespace VideoBatch {
                 if(TelegramRunner.Prepared(store))throw new Exception("Python file alone is not a prepared runtime");
                 File.WriteAllText(Path.Combine(temp,"runtime.ready"),"old");if(TelegramRunner.Prepared(store))throw new Exception("Stale runtime marker");
                 File.WriteAllText(Path.Combine(temp,"runtime.ready"),TelegramRunner.ExpectedWorker);if(!TelegramRunner.Prepared(store))throw new Exception("Prepared runtime contract");
+                var diagnostic=new JavaScriptSerializer().DeserializeObject("{\"version\":\"v4\",\"utc\":\"fixture\",\"session\":\"secret\",\"accounts\":[{\"slot\":1,\"status\":\"network\",\"code\":\"proxy_tunnel\",\"repair\":\"check_proxy\",\"proxy\":\"secret\",\"attempts\":[{\"transport\":\"wss\",\"code\":\"proxy_tunnel\",\"session\":\"secret\"}]}]}");
+                TelegramDoctor.SaveReport(temp,diagnostic);TelegramDoctor.SaveReport(temp,diagnostic);
+                string report=File.ReadAllText(Path.Combine(temp,"diagnostics","doctor-latest.json"));
+                if(report.Contains("secret")||!report.Contains("proxy_tunnel")||!report.Contains("attempts"))throw new Exception("Diagnostic allowlist/atomic report");
 
                 return true;
             } finally {if(Directory.Exists(temp))Directory.Delete(temp,true);}

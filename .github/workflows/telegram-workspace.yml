@@ -1,7 +1,7 @@
 name: Telegram workspace
 on:
   push:
-    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016, feat/telegram-polish-20261016, fix/telegram-connect-flow-20261017, fix/telegram-login-diagnostics-20261017]
+    branches: [feat/telegram-workspace-20261015, feat/telegram-connect-proxies-20261016, feat/telegram-status-invites-20261016, feat/telegram-polish-20261016, fix/telegram-connect-flow-20261017, fix/telegram-login-diagnostics-20261017, fix/telegram-proxy-wss-20261019]
   pull_request:
     paths: ['src/Telegram*.cs','tools/telegram/**','tests/telegram/**','src/AppShell.cs','src/NavigationService.cs','.github/workflows/telegram-workspace.yml']
   workflow_dispatch:
@@ -71,7 +71,7 @@ jobs:
           if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes "$dest/runtimes" -Recurse }
           Copy-Item tools/telegram/*.py,tools/telegram/*.ps1,tools/telegram/*.txt "$dest/tools/telegram"
           Copy-Item tools/uploader/*.js,tools/uploader/package*.json "$dest/tools/uploader"
-          Copy-Item docs/AGENT_TELEGRAM_LOGIN_20261017_RU.md $dest
+          Copy-Item docs/AGENT_TELEGRAM_PROXY_20261019_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
           foreach ($entry in @(@('x86',0x014c),@('x64',0x8664))) {
             $native = Join-Path $dest ('runtimes/win-'+$entry[0]+'/native/WebView2Loader.dll')
@@ -80,6 +80,13 @@ jobs:
             $pe = [BitConverter]::ToInt32($bytes,0x3c)
             if ([BitConverter]::ToUInt16($bytes,$pe+4) -ne $entry[1]) { throw "Wrong packaged loader architecture: $($entry[0])" }
           }
+          python tools/telegram/build_manifest.py $dest
+          if ($LASTEXITCODE -ne 0) { throw 'Package manifest' }
+      - name: Packaged automatic diagnostics and repair contracts
+        shell: powershell
+        run: |
+          ./tests/telegram/doctor_contract.ps1 -AppRoot (Resolve-Path artifacts/VideoBatch-Telegram-Update).Path -Root "$env:RUNNER_TEMP/telegram-runtime"
+          if ($LASTEXITCODE -ne 0) { throw 'Automatic diagnostics' }
       - name: Native browser from packaged update
         shell: powershell
         run: |
@@ -93,7 +100,7 @@ jobs:
           Write-Host "Packaged WebView2 loader verified: $arch"
       - uses: actions/upload-artifact@v4
         with:
-          name: Telegram-Login-Update
+          name: Telegram-Proxy-Update
           path: artifacts/VideoBatch-Telegram-Update
       - uses: actions/upload-artifact@v4
         if: always()

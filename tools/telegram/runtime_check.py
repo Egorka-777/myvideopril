@@ -6,10 +6,12 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '2026-10-17-telegram-login-v3'
+VERSION = '2026-10-19-telegram-proxy-v4'
 
 
 def check():
+    if sys.version_info[:2] != (3, 11) or sys.maxsize <= 2**32:
+        raise RuntimeError('Python 3.11 x64 is required')
     expected = {}
     for line in Path(__file__).with_name('requirements.txt').read_text().splitlines():
         match = re.fullmatch(r'([A-Za-z0-9_-]+)(?:\[[^]]+\])?==([^\s]+)', line.strip())
@@ -23,6 +25,9 @@ def check():
     from PyQt5 import QtCore
     import tgcrypto
     from worker import proxy_connector
+    from wss_transport import ConnectionWss, dc_host
+    if dc_host(4) != 'vesta.web.telegram.org' or ConnectionWss.packet_codec is None:
+        raise RuntimeError('WSS transport is unavailable')
     async def proxy_smoke():
         for value in ('socks5://127.0.0.1:1080', 'http://127.0.0.1:8080'):
             if proxy_connector(value) is None:

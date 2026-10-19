@@ -41,7 +41,7 @@ namespace VideoBatch {
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,54));Controls.Add(layout);
             actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};layout.Controls.Add(actions,0,0);
             WorkButton("＋ Добавить аккаунты",ChooseImport,true);
-            WorkButton("Проверить выбранные",async()=>await RunSelected("check"));
+            WorkButton("Диагностика",async()=>await RunSelected("doctor"));
             WorkButton("Настройки",Settings);
             actions.Controls.Add(new Label{Text="Поиск",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,4,0)});
             search=Theme.MakeSearchBox();search.Width=160;search.Margin=new Padding(4,7,0,0);search.TextChanged+=(s,e)=>RefreshData();actions.Controls.Add(search);
@@ -90,6 +90,11 @@ namespace VideoBatch {
             users=Theme.MakeSearchBox();users.ReadOnly=true;users.Dock=DockStyle.Fill;users.Name="InviteLink";form.Controls.Add(users,0,5);
             form.Controls.Add(new Label{Text="Человек открывает ссылку и подаёт заявку сам. Вы подтверждаете её в Telegram. Новая кнопка создаёт новую ссылку; ссылки управляются в Telegram.",Dock=DockStyle.Fill,ForeColor=Theme.TextMuted},0,6);invitePage.Controls.Add(form);
             log=Theme.MakeLogBox();logsPage.Controls.Add(log);
+            var reportButton=Theme.MakeButton("Открыть отчёт диагностики",ghost:true,action:()=>{
+                string path=Path.Combine(store.Root,"diagnostics","doctor-latest.json");
+                if(File.Exists(path))Process.Start(new ProcessStartInfo(path){UseShellExecute=true});
+                else status.Text="Выберите аккаунт → Диагностика. Отчёт появится после проверки.";
+            });reportButton.Dock=DockStyle.Top;logsPage.Controls.Add(reportButton);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
             stop=Theme.MakeButton("Остановить",ghost:true,action:async()=>await runner.Stop());stop.Enabled=false;bottom.Controls.Add(stop);
             status=new Label{Text="Выберите аккаунт → проверьте соединение → откройте Telegram",Width=720,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,4);bottom.SizeChanged+=(s,e)=>status.Width=Math.Max(120,bottom.ClientSize.Width-stop.Width-22);
@@ -220,6 +225,10 @@ namespace VideoBatch {
                         string id=Get(ev,"id"),session=Get(ev,"session");
                         if(session!="")store.Change(d=>{var a=d.accounts.FirstOrDefault(x=>x.id==id);if(a!=null)a.session=session;});
                         return; // Authorization data is never written to the log.
+                    }
+                    if(type=="diagnostic_report"){
+                        TelegramDoctor.SaveReport(store.Root,ev["report"]);
+                        status.Text=Get(ev,"text");Log(task,"",type,status.Text);return;
                     }
                     if(type=="imported") {
                         var account=new JavaScriptSerializer().ConvertToType<TelegramAccount>(ev["account"]);

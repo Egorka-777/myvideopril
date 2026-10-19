@@ -120,9 +120,13 @@ class Login(unittest.IsolatedAsyncioTestCase):
             calls.append((host,port));await asyncio.sleep(.02)
             return dict(status='ready' if host=='web.telegram.org' else 'failed',code='timeout',latency_ms=20)
         start=asyncio.get_running_loop().time()
-        with patch.object(w,'probe_proxy',probe),patch.object(w,'emit',lambda e,**d:events.append((e,d))):
+        import wss_transport
+        async def wss(proxy,dc):
+            self.assertEqual(dc,4)
+            return dict(status='failed',code='websocket_upgrade',latency_ms=20)
+        with patch.object(w,'probe_proxy',probe),patch.object(wss_transport,'probe_wss',wss),patch.object(w,'emit',lambda e,**d:events.append((e,d))):
             await w.check_proxies(dict(proxies=[dict(id='p',url=url)],accounts=[dict(proxy=url,session=StringSession.save(memory))]))
-        self.assertEqual(set(calls),{('web.telegram.org',443),('149.154.167.91',443)})
+        self.assertEqual(set(calls),{('web.telegram.org',443)})
         self.assertTrue(any(e=='proxy' and d['status']=='partial' and 'DC4' in d['text'] for e,d in events))
         self.assertNotIn('private-password',str(events))
         self.assertLess(asyncio.get_running_loop().time()-start,.2)
@@ -164,7 +168,8 @@ class EndpointRoutes(unittest.IsolatedAsyncioTestCase):
         for row in seen:
             s=StringSession(row['session']);self.assertEqual(s.dc_id,2);self.assertEqual(s.auth_key.key,session_bytes())
             self.assertEqual(row['proxy'],a['proxy'])
-        self.assertEqual(StringSession(seen[1]['session']).server_address,'149.154.167.50')
+        self.assertEqual(seen[0]['_transport'],'wss');self.assertEqual(seen[1]['_transport'],'tcp')
+        self.assertEqual(StringSession(seen[1]['session']).server_address,'149.154.167.51')
         # The connection event contains a vault update; logs must not echo it.
         self.assertNotIn(a['proxy'],str([(e,d) for e,d in events if e!='connection']))
         await client.disconnect()

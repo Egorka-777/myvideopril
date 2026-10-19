@@ -1,4 +1,4 @@
-param([string]$Root = (Join-Path $env:LOCALAPPDATA 'VideoBatchDesktop\telegram'))
+param([string]$Root = (Join-Path $env:LOCALAPPDATA 'VideoBatchDesktop\telegram'), [switch]$Repair)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $env:PYTHONUTF8 = '1'
@@ -33,6 +33,13 @@ function Resolve-Python {
     return $null
 }
 
+if (Test-Path $runtime) {
+    & $runtime -I -c 'import sys; sys.exit(0 if sys.version_info[:2]==(3,11) and sys.maxsize>2**32 else 1)' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        if (!$Repair) { throw 'Existing runtime must be Python 3.11 x64. Close the app and run doctor.ps1 -Repair.' }
+        Move-Item -LiteralPath $venv -Destination ($venv+'.previous-'+[Guid]::NewGuid().ToString('N'))
+    }
+}
 if (!(Test-Path $runtime)) {
     $python = Resolve-Python
     if (!$python) { throw 'Install Python 3.11 x64 from python.org, then click Prepare again. This runtime uses prebuilt Windows dependencies for Python 3.11.' }
@@ -41,9 +48,12 @@ if (!(Test-Path $runtime)) {
 }
 
 & $runtime -m pip install --disable-pip-version-check --upgrade pip
-& $runtime -m pip install --disable-pip-version-check --only-binary=tgcrypto,PyQt5,PyQt5-Qt5,PyQt5-sip -r (Join-Path $scriptDir 'requirements.txt')
+if ($LASTEXITCODE -ne 0) { throw 'Could not prepare pip. Check internet connection.' }
+$repairArgs = @()
+if ($Repair) { $repairArgs += '--force-reinstall' }
+& $runtime -m pip install --disable-pip-version-check @repairArgs --only-binary=tgcrypto,PyQt5,PyQt5-Qt5,PyQt5-sip -r (Join-Path $scriptDir 'requirements.txt')
 if ($LASTEXITCODE -ne 0) {
-    & $runtime -m pip install --disable-pip-version-check -r (Join-Path $scriptDir 'requirements.txt')
+    & $runtime -m pip install --disable-pip-version-check @repairArgs -r (Join-Path $scriptDir 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Telegram dependencies installation failed. Check internet connection.' }
 }
 & $runtime (Join-Path $scriptDir 'runtime_check.py') $Root

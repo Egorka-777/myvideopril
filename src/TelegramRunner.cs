@@ -8,13 +8,58 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace VideoBatch {
+    public static class TelegramDoctor {
+        public static bool CheckAccount(string root,int index){
+            return Task.Run(async()=>{
+                var store=new TelegramStore(root);var data=store.Load();
+                if(index<1||index>data.accounts.Count)throw new IOException("AccountIndex is outside the saved account list");
+                var runner=new TelegramRunner(store);bool complete=false;int failures=0;
+                int exit=await runner.Run(new Dictionary<string,object>{{"action","doctor"},{"accounts",new List<TelegramAccount>{data.accounts[index-1]}}},ev=>{
+                    string kind=Convert.ToString(ev["event"]);
+                    if(kind=="diagnostic_report")SaveReport(root,ev["report"]);
+                    if(kind=="complete")complete=true;
+                    if(kind=="account")store.Change(d=>TelegramHealth.ApplyAccount(d,ev));
+                    if(kind=="proxy")store.Change(d=>TelegramHealth.ApplyProxy(d,ev));
+                    if(kind=="summary"&&ev.ContainsKey("failures"))failures=Convert.ToInt32(ev["failures"]);
+                    // Never print/serialize raw worker events: connection/import contain keys.
+                });
+                return exit==0&&complete&&failures==0;
+            }).GetAwaiter().GetResult();
+        }
+        public static void SaveReport(string root,object report){
+            var serializer=new JavaScriptSerializer{MaxJsonLength=1024*1024};
+            var input=serializer.ConvertToType<Dictionary<string,object>>(report);
+            var safe=new Dictionary<string,object>();
+            foreach(string key in new[]{"version","utc"})if(input.ContainsKey(key))safe[key]=input[key];
+            var rows=new List<Dictionary<string,object>>();
+            if(input.TryGetValue("accounts",out var accounts))foreach(object item in (System.Collections.IEnumerable)accounts){
+                var row=serializer.ConvertToType<Dictionary<string,object>>(item);var copy=new Dictionary<string,object>();
+                foreach(string key in new[]{"slot","status","code","transport","next_action","repair"})if(row.ContainsKey(key))copy[key]=row[key];
+                if(row.TryGetValue("attempts",out var attempts)){
+                    var list=new List<Dictionary<string,object>>();
+                    foreach(object attempt in (System.Collections.IEnumerable)attempts){
+                        var source=serializer.ConvertToType<Dictionary<string,object>>(attempt);var entry=new Dictionary<string,object>();
+                        foreach(string key in new[]{"transport","code"})if(source.ContainsKey(key))entry[key]=source[key];
+                        list.Add(entry);
+                    }
+                    copy["attempts"]=list;
+                }
+                rows.Add(copy);
+            }
+            safe["accounts"]=rows;
+            string folder=Path.Combine(root,"diagnostics");Directory.CreateDirectory(folder);
+            string path=Path.Combine(folder,"doctor-latest.json"),temp=path+".tmp";
+            File.WriteAllText(temp,serializer.Serialize(safe),new UTF8Encoding(false));
+            if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
+        }
+    }
     public sealed class TelegramRunner {
         readonly TelegramStore store;
         Process active;
         StreamWriter commands;
         bool stopRequested;
         public bool IsRunning => active!=null;
-        public const string ExpectedWorker="2026-10-17-telegram-login-v3";
+        public const string ExpectedWorker="2026-10-19-telegram-proxy-v4";
         public static bool Prepared(TelegramStore store){
             try{return File.Exists(Path.Combine(store.Root,"venv","Scripts","python.exe"))&&File.ReadAllText(Path.Combine(store.Root,"runtime.ready"),Encoding.UTF8).Trim()==ExpectedWorker;}catch(IOException){return false;}
         }

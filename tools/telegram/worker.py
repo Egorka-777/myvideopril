@@ -17,9 +17,10 @@ import tempfile
 import threading
 import time
 import zipfile
+from datetime import datetime, timezone
 from urllib.parse import urlsplit, unquote
 
-VERSION = '2026-10-17-telegram-login-v3'
+VERSION = '2026-10-19-telegram-proxy-v4'
 PROXY_TIMEOUT = 7
 ACCOUNT_TIMEOUT = 22
 CANCEL = threading.Event()
@@ -161,11 +162,25 @@ async def account_route(account):
     # Validate the configured route; a disposable probe must not veto a real login.
     parse_proxy(account.get('proxy', ''))
     cancelled()
+    if account.get('wait_until'):
+        try:
+            until = datetime.fromisoformat(account['wait_until'].replace('Z','+00:00'))
+            seconds = int((until.astimezone(timezone.utc)-datetime.now(timezone.utc)).total_seconds())
+            if seconds > 0:
+                raise AccountCooldown(seconds)
+        except (ValueError, TypeError):
+            raise ValueError('Не удалось прочитать срок паузы Telegram; проверьте карточку аккаунта') from None
     emit('stage', id=account['id'], text='Подключение сессии через назначенный прокси…' if account.get('proxy') else 'Подключение сессии без прокси…')
 
 
 class RouteError(ConnectionError):
     pass
+
+
+class AccountCooldown(Exception):
+    def __init__(self, seconds):
+        self.seconds = seconds
+        super().__init__('Пауза Telegram ещё не закончилась')
 
 
 async def check_proxies(job):
@@ -183,14 +198,16 @@ async def check_proxies(job):
                     targets.append(item)
         targets = targets[:3] or [('149.154.167.51',443,2)]
         # Independent, bounded socket probes; this is not an account authorization.
+        from wss_transport import probe_wss
+        proxy = parse_proxy(value)
         results = await asyncio.gather(probe_proxy(value,'web.telegram.org'),
-                                       *(probe_proxy(value,host,port) for host,port,dc in targets))
+                                       *(probe_wss(proxy,dc) for host,port,dc in targets))
         states = [r['status']=='ready' for r in results]
         state = 'ready' if all(states) else 'partial' if any(states) else 'failed'
-        labels = ['Web'] + [f'DC{dc} {host}:{port}' for host,port,dc in targets]
+        labels = ['Web'] + [f'DC{dc} WSS/TLS' for host,port,dc in targets]
         detail = '; '.join(label+': '+('доступен' if r['status']=='ready' else r.get('code','нет ответа')) for label,r in zip(labels,results))
         emit('proxy', proxy_id=p['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(),
-             status=state, text=detail+'. Проверены туннели; авторизация аккаунта проверяется отдельно.',
+             status=state, text=detail+'. Сессия аккаунта проверяется отдельно.',
              latency_ms=max(r.get('latency_ms',0) for r in results))
         ready += state=='ready'
         failed += state!='ready'
@@ -583,6 +600,10 @@ def client_for(account):
     if proxy is not None:
         import python_socks  # Required: Telethon 1.45 can otherwise ignore configured proxies.
     session = StringSession(account['session'])  # MemorySession, no writes of auth key.
+    transport = {}
+    if account.get('_transport') == 'wss':
+        from wss_transport import ConnectionWss
+        transport['connection'] = ConnectionWss
     return TelegramClient(session, api_id=api_id, api_hash=api_hash, proxy=proxy, use_ipv6=':' in session.server_address, timeout=15,
                           connection_retries=0, request_retries=0, auto_reconnect=False,
                           flood_sleep_threshold=0, receive_updates=False,
@@ -590,11 +611,13 @@ def client_for(account):
                           system_version=account.get('system') or 'Windows',
                           app_version=account.get('app_version') or '1.0',
                           lang_code=account.get('lang') or 'en',
-                          system_lang_code=account.get('system_lang') or 'en')
+                          system_lang_code=account.get('system_lang') or 'en', **transport)
 
 
 def error_info(exc):
     from telethon import errors
+    if isinstance(exc, AccountCooldown):
+        return 'flood_wait', 'Пауза Telegram ещё не закончилась; подключение не выполнялось', exc.seconds
     if isinstance(exc, errors.FloodWaitError):
         return 'flood_wait', 'Telegram требует подождать', int(exc.seconds)
     if isinstance(exc, errors.PeerFloodError):
@@ -636,9 +659,10 @@ async def connect(client, account=None):
 
 
 class SessionConnectionError(ConnectionError):
-    def __init__(self, text, cause):
+    def __init__(self, text, cause, attempts=None):
         super().__init__(text)
-        self.cause_code = type(cause).__name__
+        self.cause_code = getattr(cause, 'diagnostic_code', type(cause).__name__)
+        self.attempts = attempts or []
 
 
 def connection_candidates(account):
@@ -654,19 +678,21 @@ def connection_candidates(account):
         endpoint = dict(host=item.get('host'), port=item.get('port'))
         if valid_endpoint(endpoint['host'], endpoint['port']) and endpoint not in routes:
             routes.append(endpoint)
-    if (account.get('proxy') or '').strip():
+    proxied = bool((account.get('proxy') or '').strip())
+    if proxied:
         routes = [r for r in routes if is_ipv4(r['host'])]
-        if not routes:
-            raise ValueError('Для прокси нужен IPv4-адрес DC; переимпортируйте TData или проверьте SOCKS5.')
     else:
         routes.sort(key=lambda r: (0 if is_ipv4(r['host']) else 1, r['host']))
-    result = []
+    # WSS addresses the original DC by its official hostname. It also works if
+    # an old session contains only IPv6 and the proxy doesn't support IPv6.
+    # The auth key, DC and assigned proxy are identical for every candidate.
+    result = [dict(account, _transport='wss')] if proxied else []
     for endpoint in routes[:3]:
         if not valid_endpoint(endpoint['host'], endpoint['port']):
             raise ValueError('Неизвестный адрес сервера Telegram в сессии')
         session = StringSession(account['session'])
         session.set_dc(original.dc_id, endpoint['host'], int(endpoint['port']))
-        result.append(dict(account, session=StringSession.save(session)))
+        result.append(dict(account, session=StringSession.save(session), _transport='tcp'))
     return result
 
 
@@ -677,6 +703,8 @@ async def open_account(account):
     candidates = connection_candidates(account)
     started = time.monotonic()
     failure = None
+    wss_failure = None
+    attempts = []
     for index, candidate in enumerate(candidates):
         cancelled()
         remaining = ACCOUNT_TIMEOUT - (time.monotonic() - started)
@@ -685,17 +713,23 @@ async def open_account(account):
         client = client_for(candidate)
         endpoint = StringSession(candidate['session']) if candidate.get('session') else None
         address = f'DC{endpoint.dc_id} {endpoint.server_address}:{endpoint.port}' if endpoint else 'DC аккаунта'
+        if candidate.get('_transport') == 'wss':
+            from wss_transport import dc_host
+            address = f'DC{endpoint.dc_id} WSS {dc_host(endpoint.dc_id)}:443'
         emit('stage', id=account['id'], text=f'Подключение {index+1}/{len(candidates)}: {address}…')
         try:
             # All alternatives share the SAME key/DC/proxy. Never switch identities,
             # retry an authorization error, or fall back to a direct connection.
-            budget = remaining if len(candidates) == 1 else min(remaining, max(5, ACCOUNT_TIMEOUT / len(candidates)))
+            budget = (min(12, remaining) if candidate.get('_transport') == 'wss' else
+                      remaining if index == len(candidates)-1 else min(remaining, max(3, remaining / (len(candidates)-index))))
             me = await asyncio.wait_for(connect(client, account), budget)
             value = account.get('proxy', '')
             emit('proxy', id=account['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(),
                  status='ready' if value else 'direct', text='Соединение с Telegram подтверждено' if value else 'Без прокси',
                  latency_ms=int((time.monotonic()-started)*1000))
-            emit('connection', id=account['id'], session=candidate.get('session',''), text='Рабочий адрес сервера сохранён')
+            client._verified_transport = candidate.get('_transport', 'tcp')
+            emit('connection', id=account['id'], session=candidate.get('session',''),
+                 transport=client._verified_transport, text='Рабочий транспорт сохранён')
             return client, me
         except BaseException as exc:
             with contextlib.suppress(Exception):
@@ -703,25 +737,29 @@ async def open_account(account):
             if not isinstance(exc, (TimeoutError, OSError, ConnectionError, ProxyError)):
                 raise
             failure = exc
-            emit('log', id=account['id'], code=type(exc).__name__, text=f'{address}: соединение не подтверждено')
+            code = getattr(exc, 'diagnostic_code', type(exc).__name__)
+            attempts.append(dict(transport=candidate.get('_transport', 'tcp'), code=code))
+            if candidate.get('_transport') == 'wss':
+                wss_failure = exc
+            emit('log', id=account['id'], code=getattr(exc, 'diagnostic_code', type(exc).__name__), text=f'{address}: соединение не подтверждено')
     if failure is None:
         failure = TimeoutError()
     value = account.get('proxy','')
     web = await probe_proxy(value, 'web.telegram.org') if value else dict(status='direct')
     text = ('Сайт Telegram Web доступен, но подключить импортированную сессию не удалось. '
-            'Это не подтверждает блокировку аккаунта. Проверьте прокси в карточке и повторите; '
-            'для TData импортируйте папку заново, чтобы обновить адреса серверов.') if web['status']=='ready' else (
+            'Аккаунт не проверен. Запустите диагностику: отдельно проверяются прокси, WSS и ответ сессии.') if web['status']=='ready' else (
             'Не удалось подключить сессию Telegram. Проверьте адрес, протокол и авторизацию прокси в его карточке.' if value else
             'Не удалось подключить сессию Telegram без прокси. Проверьте доступ к Telegram.')
     emit('proxy', id=account['id'], proxy_key=hashlib.sha256(value.strip().encode()).hexdigest(),
          status='partial' if web['status']=='ready' else 'failed' if value else 'direct',
          text=text, code=type(failure).__name__, latency_ms=int((time.monotonic()-started)*1000))
-    raise SessionConnectionError(text, failure)
+    raise SessionConnectionError(text, wss_failure or failure, attempts)
 
 
 async def check_accounts(job):
     ready = failed = 0
-    for account in job.get('accounts', []):
+    report = []
+    for slot, account in enumerate(job.get('accounts', []), 1):
         cancelled()
         client = None
         try:
@@ -731,6 +769,7 @@ async def check_accounts(job):
             emit('account', id=account['id'], status='ready', name=name,
                  user_id=me.id, username=me.username or '', phone=me.phone or '',
                  text='Telegram подтвердил аккаунт')
+            report.append(diagnostic_row(slot, 'ready', 'get_me', getattr(client, '_verified_transport', 'tcp')))
             if job['action'] == 'warmup':
                 # Read-only session diagnostic, no view counters, fake reactions, marks-read or messages.
                 dialogs = await asyncio.wait_for(client.get_dialogs(limit=20), 35)
@@ -746,13 +785,39 @@ async def check_accounts(job):
                     state, text = 'unauthorized', 'Сессия не авторизована'
                 elif 'user_id' in str(exc):
                     state, text = 'configuration', 'user_id не совпал: проверьте парный JSON'
-            emit('account', id=account['id'], status=state, text=text, seconds=seconds, code=getattr(exc, 'cause_code', type(exc).__name__))
+            code = getattr(exc, 'cause_code', getattr(exc, 'diagnostic_code', type(exc).__name__))
+            emit('account', id=account['id'], status=state, text=text, seconds=seconds, code=code)
+            report.append(diagnostic_row(slot, state, code, attempts=getattr(exc, 'attempts', [])))
         finally:
             if client:
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(client.disconnect(), 3)
 
+    if job['action'] == 'doctor':
+        emit('diagnostic_report', report=dict(version=VERSION, utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), accounts=report),
+             text='Диагностика сохранена: doctor-latest.json')
     emit('summary', text=f'Проверка: доступны {ready}; ошибок {failed}', ready=ready, failures=failed)
+
+
+def diagnostic_row(slot, status, code, transport='', attempts=None):
+    # Deliberate allowlist: no names, phones, IDs, proxy URLs, API or auth keys.
+    if status == 'ready':
+        action, repair = 'Аккаунт ответил. Можно открыть Telegram.', 'none'
+    elif status == 'unauthorized':
+        action, repair = 'Войти в официальный Telegram и импортировать актуальную сессию. Не повторять вход по кругу.', 'manual_login'
+    elif status in ('blocked', 'deactivated'):
+        action, repair = 'Telegram подтвердил состояние аккаунта. Остановить задачи; проверить аккаунт в официальном клиенте.', 'stop'
+    elif status in ('flood_wait', 'restricted'):
+        action, repair = 'Остановить повторные попытки и дождаться срока, указанного Telegram.', 'wait'
+    elif code == 'proxy_tunnel':
+        action, repair = 'Прокси не открыл туннель к Telegram. Сверить тип, адрес и авторизацию с Dolphin, затем проверить доступ провайдера к Telegram.', 'check_proxy'
+    elif code in ('tls_certificate', 'tls_or_websocket', 'websocket_upgrade', 'binary_protocol'):
+        action, repair = 'Проверить дату/время Windows и доступ WSS к *.web.telegram.org:443 через назначенный прокси. Проверку TLS не отключать.', 'check_tls_wss'
+    elif status == 'configuration':
+        action, repair = 'Проверить формат сессии и парный JSON. EXE и tools/telegram обновлять одним комплектом.', 'check_import'
+    else:
+        action, repair = 'Проверить прокси, затем повторить диагностику один раз. Если сеть доступна, а get_me нет — передать doctor-latest.json агенту.', 'check_route'
+    return dict(slot=slot, status=status, code=code, transport=transport, next_action=action, repair=repair, attempts=attempts or [])
 
 
 def usernames(text):
@@ -1030,7 +1095,7 @@ async def run(job):
         action = job.get('action')
         if action == 'import':
             await import_paths(job)
-        elif action in ('check', 'warmup'):
+        elif action in ('check', 'warmup', 'doctor'):
             await check_accounts(job)
         elif action == 'invite':
             await invite(job)
