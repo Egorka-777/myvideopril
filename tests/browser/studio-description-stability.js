@@ -3,6 +3,7 @@ process.env.TZ='Asia/Krasnoyarsk';
 const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path'),cp=require('child_process'),Module=require('module');
 const {chromium}=require('../../tools/uploader/node_modules/playwright-core');
 const S=require('../../tools/uploader/youtube-studio-upload'),C=require('../../tools/uploader/studio-editor-controls');
+const B=require('../../tools/uploader/studio-browser');
 const {setup}=require('./studio-shorts-queue');
 const baseline='47515b90ebf064baa7251e87b25da72d8149f6f1';
 function fromMain(relative){const file=path.resolve(__dirname,'../../'+relative),m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));m._compile(cp.execFileSync('git',['show',baseline+':'+relative],{encoding:'utf8'}),file);return m.exports;}
@@ -39,6 +40,23 @@ const fallback=lang=>Array.from({length:3},(_,n)=>((lang==='ru'?'Разбор с
   assert(policy.maxAttempts===3&&policy.chunkSize===40);assert(newBudget>policy.totalMs);assert(oldBudget<policy.totalMs);
   evidence.checks.push({name:'metadata-deadline-covers-retries',oldBudget,newBudget,policy});save();await page.close();
   console.log('PASS exact mismatch diagnostics, cancellation after 1000 characters, real modal refusal, and outer metadata deadline covers all bounded attempts.');
+  // main's evaluate(fn, {timeout:800}) passes a page-function ARGUMENT, not
+  // Locator.evaluate's third-argument options. If the wizard disappears after
+  // isVisible, it waits the context's 10s and loses the production 5s probe.
+  const race=await browser.newPage();race.setDefaultTimeout(10000);
+  async function disappearing(driver){
+   await race.setContent('<ytcp-uploads-dialog><h2>Saving...</h2></ytcp-uploads-dialog>');
+   const actual=race.locator('ytcp-uploads-dialog');
+   const root={isVisible:async()=>{await actual.evaluate(el=>el.remove());return true;},evaluate:(...args)=>actual.evaluate(...args),locator:(...args)=>actual.locator(...args),getByRole:(...args)=>actual.getByRole(...args)};
+   return driver.publicationState(race,{scope:{all:async()=>[root]}});
+  }
+  const oldB=fromMain('tools/uploader/studio-browser.js'),beforeAt=Date.now(),pending=disappearing(oldB);let priorError;
+  try{await B.bounded(()=>pending,5000,'REPRO v19e: страница не отвечает (5000 ms)');}catch(error){priorError=error.message;}
+  assert(priorError);await pending;const beforeMs=Date.now()-beforeAt;
+  const afterAt=Date.now();await B.bounded(()=>disappearing(B),5000,'Completion probe must tolerate a removed wizard');const afterMs=Date.now()-afterAt;
+  const state=await B.publicationState(race);assert.equal(state.state,'closed');assert(beforeMs>=9000);assert(afterMs<4000);
+  evidence.checks.push({name:'removed-wizard-read-timeout-argument',baselineError:priorError,baselineDurationMs:beforeMs,currentDurationMs:afterMs,currentState:state.state,actionChanges:false});save();await race.close();
+  console.log('REPRO v19e removed wizard exceeds the 5s state probe; PASS corrected read-only evaluate timeout returns in',afterMs,'ms; Publish/ID/Close actions unchanged.');
   const bankPath=process.env.STUDIO_DESCRIPTION_BANKS;
   const banks=bankPath?JSON.parse(fs.readFileSync(bankPath,'utf8').replace(/^\uFEFF/,'')):{ru:fallback('ru'),en:fallback('en')};
   for(const lang of ['ru','en']){

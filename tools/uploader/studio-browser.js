@@ -72,7 +72,7 @@ async function collectVideoIds(root){
 }
 async function findCompletionCopy(root){
   try{
-    const blob=normCompletion(await root.evaluate(el=>(el.innerText||'').slice(0,1200),{timeout:800}));
+    const blob=normCompletion(await root.evaluate(el=>(el.innerText||'').slice(0,1200),null,{timeout:800}));
     if(!blob)return '';
     const line=blob.split('\n').map(normCompletion).find(t=>SUCCESS.test(t)||SUCCESS_LOOSE.test(t));
     if(line)return line;
