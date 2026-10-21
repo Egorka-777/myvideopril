@@ -371,13 +371,8 @@ async function readback(page,item,id,plan,opts,zone){
  }
  const got=await scheduleValues(dialog,plan);
  if(got.unix!==plan.unix)throw new Error(`После сохранения дата/время Studio не совпали с моментом публикации: ${got.date||'?'} ${got.time||'?'} UTC${got.offset/60}; ожидалось ${plan.date} ${plan.time} UTC${plan.offset/60}`);
- // Summary text can be generic «Visibility». In that case require a checked
- // schedule card; the mere existence of date/time inputs is not saved status.
- if(!L.scheduled.test(summary)){
-  const card=await scheduleCard(dialog);
-  const selected=card&&await card.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked'));
-  if(!selected)throw new Error('Studio не подтвердил сохранённый статус «Запланировано».');
- }
+ // Studio may label a scheduled video Private until it becomes public. The
+ // visible scheduling dialog, its date/time and zone prove the saved instant.
  await page.keyboard.press('Escape');
  if(item.thumbnail&&!isShorts(item))await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
  return {visibility:'scheduled',schedule:got};

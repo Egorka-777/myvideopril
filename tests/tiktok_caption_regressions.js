@@ -12,7 +12,10 @@ const core = fs.readFileSync(path.join(root, "src", "Core.cs"), "utf8");
 const tiktok = fs.readFileSync(path.join(root, "src", "TikTok.cs"), "utf8");
 const uploader = fs.readFileSync(path.join(root, "tools", "uploader", "worker-tiktok.js"), "utf8");
 
-assert.match(core, /public const string HashTags="#BinoDex #обучениетрейдингу #pocketoption #трейдинг #aitrading"/);
+// main now shares the configured SEO banks. Keep this compatibility check
+// aligned with that contract instead of requiring a removed legacy constant.
+assert.match(core, /RussianDefaults\(\)\{return new List<string>\(YouTubeDescriptionTemplates\.DefaultsRu\(\)\);\}/);
+assert.match(core, /EnglishDefaults\(\)\{return new List<string>\(YouTubeDescriptionTemplates\.DefaultsEn\(\)\);\}/);
 assert.match(core, /TikTokCaptionTemplates\.RussianDefaults\(\)/);
 assert.match(tiktok, /TikTokCaptionTemplates\.Allocate/);
 assert.doesNotMatch(tiktok, /RemoveRange\(0,count\)/);
