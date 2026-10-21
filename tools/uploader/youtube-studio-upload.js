@@ -233,19 +233,143 @@ async function wizardState(scope){
 }
 const MONTHS=[['january','январ','янв'],['february','феврал','фев'],['march','марта','март','мар'],['april','апрел','апр'],['may','мая','май'],['june','июня','июнь','июн'],['july','июля','июль','июл'],['august','август','авг'],['september','сентябр','сен'],['october','октябр','окт'],['november','ноябр','ноя'],['december','декабр','дек']];
 function parseDate(text){
- text=norm(text).toLowerCase();let m=text.match(/(\d{4})-(\d{2})-(\d{2})/);if(m)return `${m[1]}-${m[2]}-${m[3]}`;
+ text=norm(text).toLowerCase().replace(/\u202f/g,' ');let m=text.match(/(\d{4})-(\d{2})-(\d{2})/);if(m)return `${m[1]}-${m[2]}-${m[3]}`;
  m=text.match(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/);if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
  let month=MONTHS.findIndex(names=>names.some(n=>text.includes(n)||text.includes(n.slice(0,3))));
- const year=text.match(/\b(20\d{2})\b/);const nums=text.replace(/20\d{2}/g,'').match(/\b\d{1,2}\b/g);
- if(month>=0&&year&&nums?.length===1)return `${year[1]}-${String(month+1).padStart(2,'0')}-${nums[0].padStart(2,'0')}`;return null;
+ const year=text.match(/\b(20\d{2})\b/);const nums=text.replace(/20\d{2}/g,'').replace(/г\.?/g,'').match(/\b\d{1,2}\b/g);
+ if(month>=0&&year&&nums?.length>=1)return `${year[1]}-${String(month+1).padStart(2,'0')}-${String(nums[0]).padStart(2,'0')}`;return null;
+}
+function studioDateChipVariants(iso){
+ const [y,m,d]=iso.split('-').map(n=>parseInt(n,10));
+ const dt=new Date(Date.UTC(y,m-1,d,12,0,0));
+ const labels=new Set([iso]);
+ for(const zone of ['UTC',Intl.DateTimeFormat().resolvedOptions().timeZone])try{
+  const ru=norm(dt.toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric',timeZone:zone}));
+  labels.add(ru);labels.add(ru.replace(/\s*$/,'')+' г.');labels.add(ru.replace(/\./g,''));
+  const en=norm(dt.toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric',timeZone:zone}));
+  labels.add(en);
+ }catch{}
+ return [...labels].filter(Boolean);
 }
 function parseTime(text){let m=norm(text).match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i);if(!m)return null;let h=Number(m[1]);if(m[3])h=(h%12)+(m[3].toLowerCase()==='pm'?12:0);if(h>23||Number(m[2])>59)return null;return `${String(h).padStart(2,'0')}:${m[2]}`;}
-async function dateControl(scope){for(const selector of ['ytcp-datepicker-trigger','#datepicker-trigger','input[type=date]','input[aria-label*="date" i],input[aria-label*="дат" i]']){const x=await one(scope.locator(selector),{optional:true});if(x)return x;}throw new Error('Studio: не найден элемент даты');}
+async function dateControl(scope){
+ for(const selector of ['ytcp-dropdown-trigger','ytcp-datepicker-trigger','#datepicker-trigger','input[type=date]','input[aria-label*="date" i],input[aria-label*="дат" i]']){
+  const x=await one(scope.locator(selector).filter({hasText:/\d{1,2}|20\d{2}/}),{optional:true});if(x)return x;
+  const plain=await one(scope.locator(selector),{optional:true});if(plain)return plain;
+ }
+ const chip=await one(scope.locator('ytcp-visibility-scheduler ytcp-dropdown-trigger, ytcp-visibility-scheduler ytcp-datepicker-trigger, ytcp-visibility-scheduler [id*="date"], ytcp-visibility-scheduler button').filter({hasText:/\d{1,2}\s+\S+\.?\s*20\d{2}/}),{optional:true});
+ if(chip)return chip;
+ const byRole=await one(scope.getByRole('button',{name:/\d{1,2}\s+[^\d]{2,20}20\d{2}/i}),{optional:true});
+ if(byRole)return byRole;
+ throw new Error('Studio: не найден элемент даты');
+}
 async function timeControl(scope){return one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input,input[aria-label="Time" i],input[aria-label="Время" i]'));}
 async function controlValue(control){return control.evaluate(e=>e.value||e.querySelector('input')?.value||e.innerText||e.textContent||'');}
+async function pickDateByChip(scope,calendar,date){
+ for(const label of studioDateChipVariants(date)){
+  const esc=label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  for(const root of [calendar,scope]){
+   const chip=await one(root.getByRole('button',{name:new RegExp(esc,'i')}).or(root.locator('button,ytcp-button,[role=button]').filter({hasText:new RegExp(esc,'i')})),{optional:true});
+   if(chip&&await chip.isVisible()){await chip.click();await pause(250);return true;}
+  }
+ }
+ return false;
+}
+async function readCalendarMonthYear(calendar){
+ const header=await one(calendar.locator('#month-label,#month,.month-label,.month-title,[data-calendar-month],ytcp-calendar-header'),{optional:true});
+ if(!header)return null;
+ const text=norm(await header.innerText()).toLowerCase();
+ const year=text.match(/20\d{2}/);const month=MONTHS.findIndex(a=>a.some(x=>text.includes(x)));
+ if(!year||month<0)return null;
+ return {y:Number(year[0]),m:month+1};
+}
+async function alignCalendarMonth(scope,calendar,date){
+ const tgtY=Number(date.slice(0,4)),tgtM=Number(date.slice(5,7));
+ const prev=await one(calendar.locator('#prev-month,#previous-month-button').or(calendar.getByRole('button',{name:/previous month|предыдущ.*месяц/i})),{optional:true});
+ const next=await one(calendar.locator('#next-month,#next-month-button').or(calendar.getByRole('button',{name:/next month|следующ.*месяц/i})),{optional:true});
+ if(!prev||!next)return;
+ for(let step=0;step<24;step++){
+  const view=await readCalendarMonthYear(calendar);
+  if(view&&view.y===tgtY&&view.m===tgtM)return;
+  const trigger=await dateControl(scope);
+  const chip=parseDate(await controlValue(trigger));
+  if(chip===date)return;
+  const curY=view?view.y:(chip?Number(chip.slice(0,4)):0);
+  const curM=view?view.m:(chip?Number(chip.slice(5,7)):0);
+  if(!view&&(!chip||!curY||!curM)){await next.click();await pause(350);continue;}
+  if(curY>tgtY||(curY===tgtY&&curM>tgtM))await prev.click();else await next.click();
+  await pause(350);
+ }
+}
+async function clickCalendarDay(scope,calendar,date){
+ const page=scope.page();
+ const viaEval=await page.evaluate(iso=>{
+  const day=Number(iso.slice(8));
+  const root=document.querySelector('ytcp-uploads-dialog')||document.body;
+  const pick=el=>{if(!el||!el.getClientRects().length)return false;const r=el.getBoundingClientRect();return r.width>=6&&r.height>=6;};
+  for(const el of root.querySelectorAll('[data-date]'))if(el.getAttribute('data-date')===iso&&pick(el)){el.click();return true;}
+  const dayNodes=[];
+  for(const el of root.querySelectorAll('button,ytcp-button,[role=button],td,div')){
+    if(!pick(el))continue;
+    if(el.getAttribute('data-date')===iso){el.click();return true;}
+    const text=(el.innerText||'').trim();
+    if(text===String(day))dayNodes.push(el);
+  }
+  if(dayNodes.length===1){dayNodes[0].click();return true;}
+  if(dayNodes.length>1){dayNodes.sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y)[0].click();return true;}
+  return false;
+ },date).catch(()=>false);
+ if(viaEval)return true;
+ for(const c of await calendar.locator(`[data-date="${date}"]`).all())if(await c.isVisible()&&!await c.isDisabled().catch(()=>false)){await c.click();return true;}
+ for(const c of await calendar.locator('[data-date]').all()){
+  const value=await c.getAttribute('data-date');
+  if(value===date&&await c.isVisible()){await c.click();return true;}
+ }
+ for(const label of studioDateChipVariants(date)){
+  const esc=label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const aria=await one(calendar.locator('[aria-label]').filter({hasText:new RegExp(esc,'i')}),{optional:true});
+  if(aria&&await aria.isVisible()){await aria.click();return true;}
+ }
+ const trigger=await dateControl(scope);
+ const current=parseDate(await controlValue(trigger));
+ if(current&&current.slice(0,7)!==date.slice(0,7))return false;
+ const day=String(Number(date.slice(8)));
+ const cells=[];
+ for(const c of await calendar.locator('button,[role=gridcell],td,div').filter({hasText:new RegExp(`^${day}$`)}).all()){
+  if(!await c.isVisible()||await c.isDisabled().catch(()=>false))continue;
+  const cls=(await c.getAttribute('class')||'')+(await c.getAttribute('aria-disabled')||'');
+  if(/outside|other-month|disabled|hidden/i.test(cls))continue;
+  const box=await c.boundingBox().catch(()=>null);
+  if(!box||box.width<8||box.height<8)continue;
+  cells.push(c);
+ }
+ if(cells.length>=1){
+  let best=cells[0],bestY=Infinity;
+  for(const c of cells){const box=await c.boundingBox().catch(()=>null);if(box&&box.y<bestY){bestY=box.y;best=c;}}
+  await best.click();
+  return true;
+ }
+ return false;
+}
+async function calendarSurface(scope){
+ const page=scope.page();
+ const scoped=scope.locator('ytcp-visibility-scheduler ytcp-date-picker, ytcp-visibility-scheduler ytcp-datepicker, ytcp-date-picker, ytcp-datepicker');
+ const visible=[];for(const node of await scoped.all())if(await node.isVisible())visible.push(node);
+ if(visible.length===1)return visible[0];
+ if(visible.length>1)throw new Error('Studio: несколько календарей даты');
+ const nav=await one(scope.locator('#prev-month,#next-month').or(page.locator('ytcp-uploads-dialog #prev-month, ytcp-uploads-dialog #next-month')).or(page.getByRole('button',{name:/previous month|предыдущ.*месяц/i})),{optional:true});
+ if(nav&&await nav.isVisible()){
+  const inline=page.locator('ytcp-uploads-dialog').filter({has:page.locator('#prev-month, #next-month')});
+  if(await inline.count())return inline.last();
+  return scope.locator('ytcp-visibility-scheduler').first();
+ }
+ return one(page.locator('ytcp-date-picker:visible,ytcp-datepicker:visible,[role=dialog][aria-label*="calendar" i]:visible,[role=dialog][aria-label*="календар" i]:visible'));
+}
 async function fillDate(scope,date){
  const trigger=await dateControl(scope);
  if(parseDate(await controlValue(trigger))===date)return;
+ const expand=await one(scope.locator('#first-container-expand-button').or(scope.getByRole('button',{name:/click to expand|развернуть|раскрыть/i})),{optional:true});
+ if(expand&&await expand.isVisible())await expand.click();
  const input=await trigger.evaluate(e=>e.tagName==='INPUT')?trigger:await one(trigger.locator('input'),{optional:true});
  if(input&&!await input.getAttribute('readonly')){
   const type=await input.getAttribute('type');const current=await read(input);
@@ -253,30 +377,27 @@ async function fillDate(scope,date){
   if(type==='date'){await input.fill(value);await input.press('Tab');}else await typeText(input,value,{delay:35});
   if(parseDate(await controlValue(trigger))===date)return;
  }
- await trigger.click();
- const calendar=await one(scope.page().locator('ytcp-date-picker:visible,ytcp-datepicker:visible,[role=dialog][aria-label*="calendar" i]:visible,[role=dialog][aria-label*="календар" i]:visible'));
- for(let step=0;step<36;step++){
-  // Accessible full dates are independent of the site's language and month layout.
-  const all=calendar.locator('[data-date],button[aria-label],[role=gridcell],td[aria-label]');
-  const cells=[];for(const c of await all.all()){
-   const value=await c.getAttribute('data-date')||await c.getAttribute('aria-label')||'';
-   if(parseDate(value)===date&&await c.isVisible()&&!await c.isDisabled().catch(()=>false))cells.push(c);
+ let calendar=null;
+ const navOpen=await one(scope.locator('#prev-month,#next-month').or(scope.page().locator('ytcp-uploads-dialog #prev-month, ytcp-uploads-dialog #next-month')),{optional:true});
+ if(navOpen&&await navOpen.isVisible())calendar=await calendarSurface(scope);
+ else{
+  await trigger.click();
+  calendar=await calendarSurface(scope);
+  if(!(await calendar.locator('#prev-month,#next-month,[data-date],button[aria-label]').count())){
+   await pause(300);
+   calendar=await calendarSurface(scope);
   }
-  if(cells.length===1){await cells[0].click();break;}
-  const header=await one(calendar.locator('#month-label,#month,.month-label,.month-title,[data-calendar-month]'),{optional:true});
-  if(!header)throw new Error('Studio: календарь не показал однозначные даты или месяц');
-  const text=norm(await header.innerText()).toLowerCase();const year=text.match(/20\d{2}/);const month=MONTHS.findIndex(a=>a.some(x=>text.includes(x)));
-  if(!year||month<0)throw new Error('Studio: не удалось прочитать месяц/год календаря');
-  const target=Number(date.slice(0,4))*12+Number(date.slice(5,7))-1,current=Number(year[0])*12+month;
-  if(target===current){
-   const day=calendar.locator('[role=gridcell],td,button.day,.day').filter({hasText:new RegExp('^'+Number(date.slice(8))+'$')});
-   const candidates=[];for(const c of await day.all())if(await c.isVisible()&&!(await c.getAttribute('class')||'').match(/outside|other.month|disabled/i)&&!await c.isDisabled().catch(()=>false))candidates.push(c);
-   if(candidates.length!==1)throw new Error('Studio: день календаря неоднозначен');await candidates[0].click();break;
-  }
-  const button=await one(calendar.locator(target>current?'#next-month,#next-month-button':'#prev-month,#previous-month-button').or(calendar.getByRole('button',{name:target>current?/next month|следующ.*месяц/i:/previous month|предыдущ.*месяц/i})));
-  await button.click();
  }
- await until(async()=>parseDate(await controlValue(trigger))===date,5000,'Studio не подтвердил выбранную дату');
+ await alignCalendarMonth(scope,calendar,date);
+ let picked=false;
+ for(let step=0;step<8&&!picked;step++){
+  if(await clickCalendarDay(scope,calendar,date)){picked=true;break;}
+  if(await pickDateByChip(scope,calendar,date)){picked=true;break;}
+  await alignCalendarMonth(scope,calendar,date);
+  await pause(200);
+ }
+ if(!picked)throw new Error('Studio: не удалось выбрать дату «'+studioDateChipVariants(date)[1]+'» в календаре');
+ await until(async()=>parseDate(await controlValue(await dateControl(scope)))===date,8000,'Studio не подтвердил выбранную дату');
 }
 function offsetLabel(text){const m=String(text).match(/(?:GMT|UTC)\s*([+−-])\s*(\d{1,2})(?::?(\d{2}))?/i);return m?(m[1]==='+'?1:-1)*(Number(m[2])*60+Number(m[3]||0)):/\b(?:GMT|UTC)\b/.test(text)?0:null;}
 async function zoneValue(element){return element.evaluate(e=>{const value=e.value||e.getAttribute('data-value')||e.getAttribute('data-timezone')||e.getAttribute('value')||'';return typeof value==='string'?value:'';});}
@@ -308,8 +429,14 @@ async function setZone(scope,plan,zone){
  if(value!==zone&&await zoneOffset(selected,plan)!==plan.offset)throw new Error('Studio сохранил другой часовой пояс');
  await page.keyboard.press('Escape');return {label:text,offset:plan.offset};
 }
+function normalizeScheduleTime(raw){
+ const m=String(raw||'').trim().match(/^(\d{1,2}):(\d{2})/);
+ if(!m)return '';
+ return String(m[1]).padStart(2,'0')+':'+m[2];
+}
 function planFor(item,now=Date.now()){
- const date=String(item.scheduleDate||''),time=String(item.scheduleTime||'');
+ const date=String(item.scheduleDate||'').trim();
+ let time=normalizeScheduleTime(item.scheduleTime);
  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/^\d{2}:\d{2}$/.test(time))throw new Error('Нужно расписание из приложения');
  const local=new Date(date+'T'+time+':00');const unix=Number(item.scheduledUnixSeconds);
  if(!Number.isFinite(unix)||unix*1000<now+60000)throw new Error('Время публикации уже прошло или осталось меньше минуты. Пересоздайте расписание.');
@@ -345,6 +472,8 @@ async function schedule(page,scope,plan,zone){
   await expand.click();
  }
  await until(async()=>await one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input'),{optional:true}),10000,'Studio не открыл поля даты/времени после карточки планирования');
+ const expand=await one(scope.locator('#first-container-expand-button').or(scope.getByRole('button',{name:/click to expand|развернуть|раскрыть/i})),{optional:true});
+ if(expand&&await expand.isVisible())await expand.click();
  const privateLater=await one(scope.getByRole('radio',{name:/private.*(?:then|to).*public|сначала закрытый, потом открытый/i}),{optional:true});if(privateLater){await privateLater.click();await until(async()=>await privateLater.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked')),4000,'Studio не подтвердил доступ после публикации');}
  await fillDate(scope,plan.date);await setZone(scope,plan,zone);await fillDate(scope,plan.date);
  const time=await timeControl(scope);if(await time.getAttribute('type')==='time'){await time.fill(plan.time);await time.press('Tab');}else await typeText(time,plan.time,{delay:45});

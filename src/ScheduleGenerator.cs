@@ -43,13 +43,20 @@ namespace VideoBatch {
             return at;
         }
 
-        static bool BatchNeedsRecalculation(IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled) {
+        static bool NeedsScheduleSlot(Preferences prefs, string kind, bool allScheduled, bool studioLongOnly) {
+            if (allScheduled) return true;
+            if (studioLongOnly) return QueueManager.NormKindPublic(kind) == "long";
+            return HttpWorkerSettings.ResolvePublishMode(prefs, kind) == "scheduled";
+        }
+
+        static bool BatchNeedsRecalculation(IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled, bool studioLongOnly=false) {
             if (batches == null) return false;
             DateTime floor = ScheduleFloor(prefs);
             foreach (var batch in batches) {
                 if (batch?.Items == null) continue;
                 foreach (var it in batch.Items) {
-                    if (!allScheduled && HttpWorkerSettings.ResolvePublishMode(prefs, it.Kind ?? batch.Channel?.Kind) != "scheduled") continue;
+                    string kind = it.Kind ?? batch.Channel?.Kind ?? "shorts";
+                    if (!NeedsScheduleSlot(prefs, kind, allScheduled, studioLongOnly)) continue;
                     if (!TryParseSlot(it.ScheduleDate, it.ScheduleTime, out var at)) return true;
                     // Позволяем пройти предпросмотр: его несколько секунд не требуют
                     // нового расписания, если до публикации ещё есть безопасный запас.
@@ -61,10 +68,10 @@ namespace VideoBatch {
         }
 
         /// <summary>Recalculate entire queue when any slot is too soon for YouTube HTTP (+lead buffer).</summary>
-        public static bool EnsureValidYouTubeSchedule(IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled=false) {
+        public static bool EnsureValidYouTubeSchedule(IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled=false, bool studioLongOnly=false) {
             if (batches == null || batches.Count == 0) return false;
-            if (!BatchNeedsRecalculation(batches, prefs, allScheduled)) return false;
-            AssignCrossBatchSchedule(batches, prefs, forceFromFloor: true, allScheduled: allScheduled);
+            if (!BatchNeedsRecalculation(batches, prefs, allScheduled, studioLongOnly)) return false;
+            AssignCrossBatchSchedule(batches, prefs, forceFromFloor: true, allScheduled: allScheduled, studioLongOnly: studioLongOnly);
             return true;
         }
 
@@ -203,17 +210,17 @@ namespace VideoBatch {
             return new ScheduleSlot {
                 At = at,
                 date = at.ToString("yyyy-MM-dd"),
-                time = at.ToString("HH:mm:ss"),
+                time = at.ToString("HH:mm"),
                 MinutesAfterPrevious = prev == DateTime.MinValue ? 0 : (int)Math.Round((at - prev).TotalMinutes)
             };
         }
 
         /// <summary>Общее расписание запланированных роликов (режим network — сеть аккаунтов на период ПК).</summary>
-        public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool forceFromFloor = false, bool allScheduled = false) {
+        public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool forceFromFloor = false, bool allScheduled = false, bool studioLongOnly = false) {
             if (batches == null || batches.Count == 0) return;
             string mode = (prefs?.YouTubeScheduleMode ?? "network").Trim().ToLowerInvariant();
             if (mode == "network") {
-                AssignNetworkSchedule(batches, prefs, allScheduled);
+                AssignNetworkSchedule(batches, prefs, allScheduled, studioLongOnly);
                 return;
             }
 
@@ -229,7 +236,7 @@ namespace VideoBatch {
                 if (batch?.Items == null) continue;
                 foreach (var it in batch.Items) {
                     string kind=it.Kind ?? batch.Channel?.Kind ?? "shorts";
-                    if (!allScheduled && HttpWorkerSettings.ResolvePublishMode(prefs, kind) != "scheduled") {
+                    if (!NeedsScheduleSlot(prefs, kind, allScheduled, studioLongOnly)) {
                         it.ScheduleDate="";it.ScheduleTime="";
                         continue;
                     }
@@ -274,14 +281,14 @@ namespace VideoBatch {
 
         /// <summary>Очередь: раунд 1 — по одному ролику с каждого аккаунта (перемешано), раунд 2…</summary>
         public static List<(PreparedUploadItem item, string profileId)> BuildNetworkInterleavedQueue(
-            IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled) {
+            IList<PreparedProfileBatch> batches, Preferences prefs, bool allScheduled, bool studioLongOnly=false) {
             var profiles = new List<(string profileId, List<PreparedUploadItem> items)>();
             foreach (var batch in batches) {
                 if (batch?.Items == null || batch.Items.Count == 0) continue;
                 var scheduled = new List<PreparedUploadItem>();
                 foreach (var it in batch.Items) {
                     string kind = it.Kind ?? batch.Channel?.Kind ?? "shorts";
-                    if (!allScheduled && HttpWorkerSettings.ResolvePublishMode(prefs, kind) != "scheduled") {
+                    if (!NeedsScheduleSlot(prefs, kind, allScheduled, studioLongOnly)) {
                         it.ScheduleDate = "";
                         it.ScheduleTime = "";
                         continue;
@@ -316,8 +323,8 @@ namespace VideoBatch {
         }
 
         /// <summary>Распределить все отложенные публикации на период активности (время ПК), без двух подряд с одного аккаунта.</summary>
-        public static void AssignNetworkSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool allScheduled = false) {
-            var queue = BuildNetworkInterleavedQueue(batches, prefs, allScheduled);
+        public static void AssignNetworkSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool allScheduled = false, bool studioLongOnly = false) {
+            var queue = BuildNetworkInterleavedQueue(batches, prefs, allScheduled, studioLongOnly);
             if (queue.Count == 0) return;
 
             DateTime floor = ScheduleFloor(prefs);

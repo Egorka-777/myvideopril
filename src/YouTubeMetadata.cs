@@ -90,8 +90,16 @@ namespace VideoBatch {
 
         public static string AppendTagsFooter(string baseDescription, IEnumerable<string> shuffledTags) {
             string body = StripLegacyTagFooter(baseDescription);
+            if (string.IsNullOrWhiteSpace(body)) {
+                string only = TagsFooterPrefix + " " + JoinTags(shuffledTags);
+                return only;
+            }
+            if (body.IndexOf(TagsFooterPrefix, StringComparison.OrdinalIgnoreCase) >= 0) return body;
+            foreach (string line in body.Replace("\r\n", "\n").Split('\n')) {
+                string t = (line ?? "").Trim();
+                if (t.Length > 0 && t.StartsWith("#", StringComparison.Ordinal)) return body;
+            }
             string footer = TagsFooterPrefix + " " + JoinTags(shuffledTags);
-            if (string.IsNullOrWhiteSpace(body)) return footer;
             return body + Environment.NewLine + Environment.NewLine + footer;
         }
 

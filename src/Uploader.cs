@@ -1205,7 +1205,7 @@ namespace VideoBatch {
             var flat=ExpandUploadJobs(rows);
             foreach(var job in flat)job.item.Title=CleanTitle(job.item.Title);
             if(flat.Count==0){MessageBox.Show(this,"Нет готовых роликов для предпросмотра.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return false;}
-            var batches=QueueManager.Prepare(flat,(src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),(ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),(title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),settings,false,workspaceKindView);
+            var batches=QueueManager.Prepare(flat,(src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),(ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),(title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),settings,false,false,workspaceKindView);
             using(var dlg=new SchedulePreviewDialog(batches,settings,true,true))return dlg.ShowDialog(this)==DialogResult.OK;
         }
         public string CurrentLogFile=>logFile;
@@ -2066,7 +2066,7 @@ namespace VideoBatch {
                     (src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),
                     (ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),
                     (title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),
-                    settings,studioSchedule:false,workspaceKindView);
+                    settings,studioSchedule:false,studioLongSchedule:true,workspaceKindView);
                 if(!ShowSchedulePreview(batches))return;
                 batches=QueueManager.ShuffleBatches(batches);
                 Write("Порядок каналов перемешан · пауза между стартами профилей 2–12 сек.");
@@ -2183,7 +2183,7 @@ namespace VideoBatch {
                 lock(uploadLock){free=flat.Where(j=>!busyProfiles.Contains((j.ch.ProfileId??"").Trim())).ToList();}
                 if(free.Count==0){MessageBox.Show(this,"Выбранные каналы уже загружаются.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 foreach(var j in free)Status(j.row,ChannelStatus.Preparing);
-                var batches=QueueManager.Prepare(free,(src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),(ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),(title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),settings,false,workspaceKindView);
+                var batches=QueueManager.Prepare(free,(src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),(ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),(title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),settings,false,false,workspaceKindView);
                 bool hasScheduled=batches.Any(b=>b.Items.Any(it=>HttpWorkerSettings.ResolvePublishMode(settings,it.Kind??b.Channel?.Kind)=="scheduled"));
                 if(hasScheduled){
                     if(ScheduleGenerator.EnsureValidYouTubeSchedule(batches,settings))

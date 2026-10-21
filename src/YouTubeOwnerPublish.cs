@@ -117,19 +117,100 @@ namespace VideoBatch {
             }finally{lock(uploadLock)foreach(var b in batches)busyProfiles.Remove(b.ProfileId);OwnerPublishing=false;UploadBusyEnd();}
         }
     }
+    internal sealed class OwnerCommentTemplatesDialog:Form {
+        readonly ListBox accounts;
+        readonly TextBox template;
+        readonly TextBox preview;
+        readonly Label hint;
+        readonly Preferences settings;
+        readonly List<YouTubeChannel> channels;
+        int selectedIndex=-1;
+        public OwnerCommentTemplatesDialog(Preferences prefs,IEnumerable<YouTubeChannel> visible){
+            settings=prefs??new Preferences();
+            channels=(visible??Enumerable.Empty<YouTubeChannel>()).Where(c=>c!=null).OrderBy(c=>(c.Name??"").Trim(),StringComparer.OrdinalIgnoreCase).ToList();
+            Text="Комментарии под видео · шаблоны";ClientSize=new Size(960,640);MinimumSize=new Size(760,520);StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
+            var root=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),ColumnCount=2,RowCount=3};
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,280));root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(root);
+            var intro=new Label{
+                Text="Шаблон на аккаунт. При «Опубликовать» подставляется дата ПК: {ddMM} (2110), {date}, {dd}, {MM}, {yyyy}. В ссылке бота: start=i{ddMM} → start=i2110. Цифры вне {…} не меняются.",
+                AutoSize=true,MaximumSize=new Size(900,0),Margin=new Padding(0,0,0,12),Dock=DockStyle.Fill};
+            root.Controls.Add(intro,0,0);root.SetColumnSpan(intro,2);
+            var left=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=1,Margin=new Padding(0,0,12,0)};
+            accounts=new ListBox{Dock=DockStyle.Fill,IntegralHeight=false,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,DisplayMember="Name"};
+            foreach(var c in channels)accounts.Items.Add(c);
+            accounts.SelectedIndexChanged+=(s,e)=>CommitSelection();left.Controls.Add(accounts);
+            template=new TextBox{Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,Enabled=false};
+            template.TextChanged+=(s,e)=>RefreshPreview();
+            preview=new TextBox{ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextSecondary,BorderStyle=BorderStyle.FixedSingle,Font=Theme.FontBody};
+            hint=new Label{Text="",Dock=DockStyle.Top,AutoSize=true,ForeColor=Theme.TextSecondary,Padding=new Padding(0,0,0,8),MaximumSize=new Size(620,0)};
+            var right=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4};
+            right.RowStyles.Add(new RowStyle(SizeType.AutoSize));right.RowStyles.Add(new RowStyle(SizeType.Percent,55));right.RowStyles.Add(new RowStyle(SizeType.AutoSize));right.RowStyles.Add(new RowStyle(SizeType.Percent,45));
+            right.Controls.Add(hint,0,0);right.Controls.Add(template,0,1);
+            right.Controls.Add(new Label{Text="Так уйдёт в YouTube сегодня ("+DateTime.Now.ToString("dd.MM.yyyy")+")",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,8,0,4)},0,2);
+            right.Controls.Add(preview,0,3);
+            root.Controls.Add(left,0,1);root.Controls.Add(right,1,1);
+            var buttons=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,Margin=new Padding(0,12,0,0)};
+            var cancel=Theme.MakeButton("Отмена",ghost:true,action:()=>{DialogResult=DialogResult.Cancel;Close();});
+            var save=Theme.MakeButton("Сохранить все",accent:true,action:SaveAll);buttons.Controls.Add(cancel);buttons.Controls.Add(save);
+            root.SetColumnSpan(buttons,2);root.Controls.Add(buttons,0,2);CancelButton=cancel;
+            Shown+=(s,e)=>{if(channels.Count>0){accounts.SelectedIndex=0;LoadSelection(0);}else hint.Text="Нет аккаунтов в текущем списке.";};
+        }
+        void CommitSelection(){
+            if(selectedIndex>=0&&selectedIndex<channels.Count&&template.Enabled)
+                channels[selectedIndex].OwnerCommentTemplate=template.Text;
+            LoadSelection(accounts.SelectedIndex);
+        }
+        void LoadSelection(int index){
+            selectedIndex=index;
+            if(index<0||index>=channels.Count){template.Enabled=false;template.Text="";hint.Text="";return;}
+            var ch=channels[index];template.Enabled=true;
+            hint.Text=ch.Name+(string.IsNullOrWhiteSpace(ch.ProfileId)?"":" · "+ch.ProfileId.Trim());
+            template.Text=(ch.OwnerCommentTemplate??"").Replace("\r\n","\n").Replace("\n",Environment.NewLine);
+            RefreshPreview();
+        }
+        void RefreshPreview(){
+            if(preview==null)return;
+            try{
+                string raw=template?.Text??"";
+                preview.Text=string.IsNullOrWhiteSpace(raw)?"(пустой шаблон — комментарий не отправится)":YouTubeOwnerPublish.RenderComment(raw,DateTime.Now).Replace("\n",Environment.NewLine);
+            }catch(Exception e){preview.Text="(ошибка шаблона: "+e.Message+")";}
+        }
+        void SaveAll(){
+            try{
+                CommitSelection();
+                foreach(var ch in channels){
+                    string t=(ch.OwnerCommentTemplate??"").Trim();
+                    if(t.Length>0)YouTubeOwnerPublish.RenderComment(ch.OwnerCommentTemplate,DateTime.Now);
+                }
+                Store.Save(settings);DialogResult=DialogResult.OK;Close();
+            }catch(Exception e){MessageBox.Show(this,e.Message,"YouTube");}
+        }
+    }
     internal sealed class OwnerCommentTemplateDialog:Form {
         readonly TextBox text;
+        readonly TextBox preview;
         public string Template=>text.Text;
         public OwnerCommentTemplateDialog(YouTubeChannel channel){
-            Text="Комментарий автора · "+channel.Name;ClientSize=new Size(620,400);MinimumSize=new Size(500,360);
+            Text="Комментарий под видео · "+channel.Name;ClientSize=new Size(680,520);MinimumSize=new Size(520,440);
             StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
-            var root=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),ColumnCount=1,RowCount=4};
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.Absolute,62));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(root);
-            root.Controls.Add(new Label{Text="Текст для этого аккаунта",AutoSize=true,Font=Theme.FontCardTitle,Margin=new Padding(0,0,0,12)},0,0);
-            text=new TextBox{Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,Text=(channel.OwnerCommentTemplate??"").Replace("\r\n","\n").Replace("\n",Environment.NewLine)};root.Controls.Add(text,0,1);
-            root.Controls.Add(new Label{Text="Дата ПК: {ddMM} → "+DateTime.Now.ToString("ddMM")+" · {date} → "+DateTime.Now.ToString("yyyy-MM-dd")+"\nТакже: {dd}, {MM}, {yyyy}. Пустой шаблон — без комментария.",Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary,Padding=new Padding(0,10,0,0)},0,2);
+            var root=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),ColumnCount=1,RowCount=6};
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,48));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,52));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(root);
+            root.Controls.Add(new Label{Text="Шаблон (сохраняется). В ссылке бота укажите start=i{ddMM} — дата подставится при каждой публикации.",AutoSize=true,Font=Theme.FontCardTitle,Margin=new Padding(0,0,0,8)},0,0);
+            text=new TextBox{Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,Text=(channel.OwnerCommentTemplate??"").Replace("\r\n","\n").Replace("\n",Environment.NewLine)};
+            text.TextChanged+=(s,e)=>RefreshPreview();root.Controls.Add(text,0,1);
+            root.Controls.Add(new Label{Text="Так уйдёт в YouTube сегодня ("+DateTime.Now.ToString("dd.MM.yyyy")+") · {ddMM}="+DateTime.Now.ToString("ddMM"),AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,8,0,4)},0,2);
+            preview=new TextBox{ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextSecondary,BorderStyle=BorderStyle.FixedSingle};root.Controls.Add(preview,0,3);
+            root.Controls.Add(new Label{Text="Пустой шаблон — без комментария. Тот же текст виден в окне «Опубликовать» перед отправкой.",AutoSize=true,ForeColor=Theme.TextSecondary,Padding=new Padding(0,8,0,0)},0,4);
             var buttons=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft};var cancel=Theme.MakeButton("Отмена",ghost:true,action:()=>{DialogResult=DialogResult.Cancel;Close();});
-            var save=Theme.MakeButton("Сохранить",accent:true,action:()=>{try{YouTubeOwnerPublish.RenderComment(text.Text,DateTime.Now);DialogResult=DialogResult.OK;Close();}catch(Exception e){MessageBox.Show(this,e.Message);}});buttons.Controls.Add(cancel);buttons.Controls.Add(save);root.Controls.Add(buttons,0,3);CancelButton=cancel;Shown+=(s,e)=>{text.Focus();text.SelectionStart=text.TextLength;text.SelectionLength=0;};
+            var save=Theme.MakeButton("Сохранить",accent:true,action:()=>{try{YouTubeOwnerPublish.RenderComment(text.Text,DateTime.Now);DialogResult=DialogResult.OK;Close();}catch(Exception e){MessageBox.Show(this,e.Message);}});buttons.Controls.Add(cancel);buttons.Controls.Add(save);root.Controls.Add(buttons,0,5);CancelButton=cancel;
+            Shown+=(s,e)=>{RefreshPreview();text.Focus();text.SelectionStart=text.TextLength;text.SelectionLength=0;};
+        }
+        void RefreshPreview(){
+            try{
+                string raw=text?.Text??"";
+                preview.Text=string.IsNullOrWhiteSpace(raw)?"(пусто)":YouTubeOwnerPublish.RenderComment(raw,DateTime.Now).Replace("\n",Environment.NewLine);
+            }catch(Exception e){preview.Text="(ошибка: "+e.Message+")";}
         }
     }
     internal sealed class OwnerPublishDialog:Form {
@@ -151,7 +232,7 @@ namespace VideoBatch {
             foreach(var c in candidates){int i=videos.Rows.Add(c.Item.StudioVisibility=="scheduled"&&c.Item.OwnerCommentState!="pending",c.Channel.Name,c.Item.Title,State(c));videos.Rows[i].Tag=c;}
             videos.SelectionChanged+=(s,e)=>ShowPreview();videos.CellMouseDown+=(s,e)=>{if(e.RowIndex>=0&&e.Button==MouseButtons.Right){videos.CurrentCell=videos.Rows[e.RowIndex].Cells["title"];var c=(OwnerPublishSelection)videos.Rows[e.RowIndex].Tag;var menu=Theme.MakeContextMenu();menu.Items.Add("Открыть видео",null,(a,b)=>Ui.Open("https://www.youtube.com/watch?v="+c.VideoId));if(c.Item.OwnerCommentState=="pending"){
                 menu.Items.Add("Проверил: комментарий уже есть",null,(a,b)=>Reconcile(c,e.RowIndex,true));menu.Items.Add("Проверил: комментария нет — разрешить повтор",null,(a,b)=>Reconcile(c,e.RowIndex,false));}menu.Show(Cursor.Position);}};
-            root.Controls.Add(videos,0,1);root.Controls.Add(new Label{Text="Комментарий выбранного видео",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,12,0,6)},0,2);
+            root.Controls.Add(videos,0,1);root.Controls.Add(new Label{Text="Комментарий под выбранным видео (уже с датой ПК)",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,12,0,6)},0,2);
             preview=new TextBox{ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.None,Font=Theme.FontBody};root.Controls.Add(preview,0,3);
             var buttons=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,Margin=new Padding(0,12,0,0)};
             var cancel=Theme.MakeButton("Отмена",ghost:true,action:()=>{DialogResult=DialogResult.Cancel;Close();});
@@ -159,7 +240,7 @@ namespace VideoBatch {
             buttons.Controls.Add(cancel);buttons.Controls.Add(publish);root.Controls.Add(buttons,0,4);CancelButton=cancel;Shown+=(s,e)=>ShowPreview();ShowPreview();
         }
         static string State(OwnerPublishSelection c)=>c.Item.OwnerCommentState=="pending"?"Комментарий: проверить":c.Item.OwnerCommentState=="confirmed_manual"?"Проверено вручную":YouTubeOwnerPublish.CommentComplete(c.Item)?"Комментарий сохранён":c.Item.StudioVisibility=="public"?"Открытый доступ":c.Item.StudioVisibility=="scheduled"?"Запланировано":"Проверить доступ";
-        void ShowPreview(){if(preview==null)return;var c=(videos.CurrentRow?.Tag??(videos.Rows.Count>0?videos.Rows[0].Tag:null)) as OwnerPublishSelection;preview.Text=c==null?"Нет сохранённых видео. Сначала загрузите ролик через Studio.":"https://www.youtube.com/watch?v="+c.VideoId+Environment.NewLine+Environment.NewLine+(string.IsNullOrWhiteSpace(c.CommentText)?"Без комментария. Шаблон: правая кнопка по аккаунту → Комментарий автора.":c.CommentText.Replace("\r\n","\n").Replace("\n",Environment.NewLine));}
+        void ShowPreview(){if(preview==null)return;var c=(videos.CurrentRow?.Tag??(videos.Rows.Count>0?videos.Rows[0].Tag:null)) as OwnerPublishSelection;preview.Text=c==null?"Нет сохранённых видео. Сначала загрузите ролик через Studio.":"https://www.youtube.com/watch?v="+c.VideoId+Environment.NewLine+Environment.NewLine+(string.IsNullOrWhiteSpace(c.CommentText)?"Без комментария. Задайте шаблон: кнопка «Комментарии» или ПКМ по аккаунту → Комментарий автора.":c.CommentText.Replace("\r\n","\n").Replace("\n",Environment.NewLine));}
         void Reconcile(OwnerPublishSelection c,int index,bool exists){
             if(MessageBox.Show(this,exists?"Вы проверили страницу видео, и этот комментарий уже опубликован?":"Вы проверили страницу видео, и комментария точно нет? Следующий запуск сможет отправить его снова.","Проверка комментария",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             string oldState=c.Item.OwnerCommentState,oldText=c.Item.OwnerCommentText,oldId=c.Item.OwnerCommentId,oldPreview=c.CommentText;

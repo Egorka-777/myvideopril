@@ -23,6 +23,14 @@ namespace VideoBatch {
         public string ProfileId;
         public List<PreparedUploadItem> Items=new List<PreparedUploadItem>();
 
+        static string NormalizeScheduleTime(string time){
+            if(string.IsNullOrWhiteSpace(time))return "";
+            time=time.Trim();
+            var m=Regex.Match(time,@"^(\d{1,2}):(\d{2})");
+            if(!m.Success)return time.Length>5?time.Substring(0,5):time;
+            return m.Groups[1].Value.PadLeft(2,'0')+":"+m.Groups[2].Value;
+        }
+
         public UploadJob ToUploadJob(string token,int localPort,Preferences settings=null){
             foreach(var it in Items)if(string.IsNullOrWhiteSpace(it.Source.StudioUploadId))it.Source.StudioUploadId=Guid.NewGuid().ToString("N");
             var first=Items[0];
@@ -50,7 +58,7 @@ namespace VideoBatch {
                     publishMode=shorts?"immediate":"scheduled",
                     thumbnail=shorts?null:YouTubeThumbnailSync.ForItem(Channel,it.Source,it.Index-1),
                     scheduleDate=shorts?null:it.ScheduleDate,
-                    scheduleTime=shorts?null:it.ScheduleTime,
+                    scheduleTime=shorts?null:NormalizeScheduleTime(it.ScheduleTime),
                     publishedVideoId=it.Source.PublishedVideoId??"",
                     publishedUrl=it.Source.PublishedUrl??""
                 };}).ToArray(),
@@ -61,7 +69,7 @@ namespace VideoBatch {
                 title=first.UploadTitle,
                 thumbnail=QueueManager.NormKindPublic(first.Kind??Channel?.Kind)=="shorts"?null:YouTubeThumbnailSync.ForItem(Channel,first.Source,first.Index-1),
                 scheduleDate=first.ScheduleDate,
-                scheduleTime=first.ScheduleTime
+                scheduleTime=NormalizeScheduleTime(first.ScheduleTime)
             };
             if(settings!=null){
                 job.studioPaidPromotion=settings.YouTubeStudioPaidPromotion;job.studioAlteredContent=settings.YouTubeStudioAlteredContent;
@@ -159,7 +167,7 @@ namespace VideoBatch {
             Func<string,string,int,int,string,string,string> stageFile,
             Func<YouTubeChannel,YouTubeItem,int,int,string> plannedFileName,
             Func<string,int,int,string> cleanTitleForUpload,
-            Preferences schedulePrefs=null,bool studioSchedule=false,string effectiveKind=null){
+            Preferences schedulePrefs=null,bool studioSchedule=false,bool studioLongSchedule=false,string effectiveKind=null){
             jobs=DeduplicateJobs(jobs);
             ValidateBeforeStart(jobs,plannedFileName);
             var grouped=new Dictionary<string,List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)>>(StringComparer.OrdinalIgnoreCase);
@@ -202,9 +210,9 @@ namespace VideoBatch {
                 }
                 batches.Add(batch);
             }
-            ScheduleGenerator.AssignCrossBatchSchedule(batches,schedulePrefs,allScheduled:studioSchedule);
-            ScheduleGenerator.EnsureValidYouTubeSchedule(batches,schedulePrefs,allScheduled:studioSchedule);
-            if(studioSchedule)foreach(var batch in batches)foreach(var it in batch.Items)
+            ScheduleGenerator.AssignCrossBatchSchedule(batches,schedulePrefs,allScheduled:studioSchedule,studioLongOnly:studioLongSchedule);
+            ScheduleGenerator.EnsureValidYouTubeSchedule(batches,schedulePrefs,allScheduled:studioSchedule,studioLongOnly:studioLongSchedule);
+            if(studioSchedule||studioLongSchedule)foreach(var batch in batches)foreach(var it in batch.Items)
                 if(!string.IsNullOrEmpty(it.ScheduleTime)&&it.ScheduleTime.Length>5)it.ScheduleTime=it.ScheduleTime.Substring(0,5);
             return batches;
         }

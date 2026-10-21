@@ -310,7 +310,7 @@ namespace VideoBatch {
             if(p.YouTubeDescriptionBankRu.Count==0&&p.TikTokFullCaptionBankRu!=null&&p.TikTokFullCaptionBankRu.Count>0)
                 p.YouTubeDescriptionBankRu=new List<string>(p.TikTokFullCaptionBankRu);
             if(p.YouTubeDescriptionBankRu.Count==0)
-                p.YouTubeDescriptionBankRu=TikTokCaptionTemplates.RussianDefaults();
+                p.YouTubeDescriptionBankRu=YouTubeDescriptionTemplates.DefaultsRu();
             if(p.YouTubeDescriptionBankRu.Count>0)
                 p.YouTubeDescriptionCursorRu=((p.YouTubeDescriptionCursorRu%p.YouTubeDescriptionBankRu.Count)+p.YouTubeDescriptionBankRu.Count)%p.YouTubeDescriptionBankRu.Count;
             if(string.IsNullOrWhiteSpace(p.YouTubeKindView)||(p.YouTubeKindView!="shorts"&&p.YouTubeKindView!="long"))p.YouTubeKindView="shorts";

@@ -15,8 +15,9 @@ function isStudioUpload(job) {
 }
 async function handleUploadDialog(dialog,report){
   if(dialog.type()==='beforeunload'){
-    await dialog.dismiss();
-    report('studio_dialog','Перезагрузка/выход отменены: открыта незавершённая загрузка. Сначала остановите задачу.');
+    try{await dialog.dismiss();}catch{}
+    report('studio_dialog','Перезагрузка/выход отменены: открыта незавершённая загрузка. Страница не перезагружалась.');
+    await new Promise(r=>setTimeout(r,400));
   }else if(dialog.type()==='alert')await dialog.accept();
   else{
     await dialog.dismiss();
@@ -41,9 +42,19 @@ async function visible(locator) {
   for (const item of await locator.all()) if (await item.isVisible()) return item;
   return null;
 }
+async function uploadWizardOpen(page) {
+  return page.locator('ytcp-uploads-dialog, ytcp-upload-dialog, ytcp-video-upload-dialog').evaluateAll(nodes =>
+    nodes.some(e => e && !e.hidden && e.getClientRects().length > 0)
+  ).catch(() => false);
+}
 async function openStudio(page, channelUrl, report) {
   const expected = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
   const url = 'https://studio.youtube.com' + (expected ? '/channel/' + expected : '');
+  const onStudio = /studio\.youtube\.com/i.test(page.url() || '');
+  if (onStudio && await uploadWizardOpen(page)) {
+    report('studio_ready', 'YouTube Studio: продолжаю открытый мастер загрузки (без перезагрузки страницы).');
+    return;
+  }
   report('studio_open', 'Открываю YouTube Studio · без проверки сторонних IP-сервисов.');
   await page.goto(url, { waitUntil: 'commit', timeout: 35000 });
   await waitFor(async () => {
@@ -91,7 +102,7 @@ async function ensureUploadPicker(page, channelUrl) {
     `https://studio.youtube.com/channel/${channelId}/videos/upload`
   ];
   for (const url of urls) {
-    if (!page.url().includes('/videos/upload')) {
+    if (!page.url().includes('/videos/upload') && !(await uploadWizardOpen(page))) {
       await page.goto(url, { waitUntil: 'commit', timeout: 35000 }).catch(() => {});
     }
     input = await waitFor(() => videoInput(page), 8000, 'Studio не ответил при открытии страницы загрузки.').catch(() => null);

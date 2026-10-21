@@ -65,6 +65,7 @@ namespace VideoBatch {
             var headerActions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Theme.Background };
             ownerPublishBtn=Theme.MakeButton("Опубликовать",ghost:true,action:async()=>await RunOwnerPublish());
             headerActions.Controls.Add(ownerPublishBtn);
+            headerActions.Controls.Add(Theme.MakeButton("Комментарии",ghost:true,action:()=>EditAllOwnerComments()));
             headerActions.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: AddVideos));
             liveButton = Theme.MakeButton("Запустить эфир", accent: true, action: async () => await LiveButtonClick());
             headerActions.Controls.Add(liveButton);
@@ -208,6 +209,7 @@ namespace VideoBatch {
                 if(MessageBox.Show(this,"Сначала проверьте Studio: ролик мог уже загрузиться. Сбросить защиту для выбранного аккаунта?","Studio",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
                 foreach(var it in ch.Items??new List<YouTubeItem>()){it.StudioPending=false;it.StudioUploadId=Guid.NewGuid().ToString("N");}Store.Save(settings);RefreshGrid();
             });
+            menu.Items.Add("Подписи комментариев…", null, (s, e) => EditAllOwnerComments());
             menu.Items.Add("Предпросмотр расписания", null, (s, e) => PreviewSchedule());
             menu.Items.Add("Проверить IP (выделенный канал)", null, (s, e) => { _ = RunCheck(); });
             menu.Items.Add("Смотреть ссылки (отмеченные ✓)", null, async (s, e) => await RunLinkWatch());
@@ -536,6 +538,7 @@ namespace VideoBatch {
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Проверить IP", null, (s, e) => { _ = RunCheckChannels(new List<YouTubeChannel> { ch }); });
             menu.Items.Add("Комментарий автора…", null, (s, e) => EditOwnerComment(ch));
+            menu.Items.Add("Подписи комментариев (все аккаунты)…", null, (s, e) => EditAllOwnerComments());
             menu.Items.Add("Опубликовать видео…", null, async (s, e) => await RunOwnerPublish(new List<YouTubeChannel>{ch}));
             menu.Items.Add("Добавить видео", null, (s, e) => AddVideosForChannel(ch));
             menu.Items.Add("Задать превью", null, (s, e) => PickThumbnail(rowIndex));
@@ -904,6 +907,12 @@ namespace VideoBatch {
                 try{channel.OwnerCommentTemplate=dialog.Template;Store.Save(settings);AppendLog("Комментарий автора сохранён: "+channel.Name);}
                 catch(Exception e){channel.OwnerCommentTemplate=previous;MessageBox.Show(this,"Не удалось сохранить шаблон: "+e.Message,"YouTube");}
             }
+        }
+        void EditAllOwnerComments() {
+            if(backend.Window.IsBusy){AppendLog("Дождитесь завершения текущей операции.");return;}
+            var visible=(settings.YouTubeChannels??new List<YouTubeChannel>()).Where(c=>c!=null&&NormMarket(c.Market)==marketView).ToList();
+            using(var dialog=new OwnerCommentTemplatesDialog(settings,visible))
+                if(dialog.ShowDialog(FindForm())==DialogResult.OK)AppendLog("Подписи комментариев сохранены ("+visible.Count+" акк.).");
         }
         async Task RunOwnerPublish(IReadOnlyList<YouTubeChannel> selected=null) {
             if(uploadRuns>0||backend.Window.IsBusy){AppendLog("Дождитесь завершения текущей операции.");return;}

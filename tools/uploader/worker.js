@@ -78,7 +78,7 @@ function assertPageOpen(page) {
 }
 
 function attachPageGuards(page) {
-  page.on("dialog", async (dialog) => {
+  const onDialog = async (dialog) => {
     if(studioBrowser.isStudioUpload(job)){
       await studioBrowser.handleUploadDialog(dialog,send).catch(e=>send('diagnostic','Диалог Studio: '+e.message));
       return;
@@ -86,7 +86,9 @@ function attachPageGuards(page) {
     const msg = (dialog.message() || "").slice(0, 120);
     send("youtube", "Диалог браузера: " + msg, { percent: 50 });
     await dialog.accept().catch(() => dialog.dismiss().catch(() => {}));
-  });
+  };
+  page.on("dialog", onDialog);
+  page.context().on("dialog", onDialog);
 }
 
 
@@ -192,12 +194,12 @@ async function startOrConnectProfile() {
   };
   const studioUpload=studioBrowser.isStudioUpload(job);
   if(studioUpload){
-    const auth=await apiRaw('/v1.0/auth/login-with-token',loginOptions,8000);
+    const auth=await apiRaw('/v1.0/auth/login-with-token',loginOptions,35000);
     if(!auth.ok||auth.data.success===false)throw new Error('Dolphin: не подтверждена авторизация локального API (HTTP '+auth.status+').');
   }else await api('/v1.0/auth/login-with-token',loginOptions);
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
-    { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:20000,maxAttempts:1}:{}) }
+    { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:true}:{}) }
   );
   profileStarted = true;
   return endpoint;
@@ -2881,9 +2883,15 @@ async function uploadDraftsBulk(page, pack) {
   return results;
 }
 
+function hydrateStudioItem(item){
+ const out={...item,title:cleanUploadTitle(item.title)};
+ if(!out.scheduleDate&&job.scheduleDate)out.scheduleDate=job.scheduleDate;
+ if(!out.scheduleTime&&job.scheduleTime)out.scheduleTime=job.scheduleTime;
+ return out;
+}
 async function uploadPackBulk(page,pack){
  await studioBrowser.openStudio(page,job.channelUrl,send);
- const selected=pack.map((item,index)=>({...item,title:cleanUploadTitle(item.title),_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
+ const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  const studio=require('./youtube-studio-upload');
  return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:false},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,
@@ -3154,9 +3162,11 @@ if (require.main === module) {
     if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.shortsWarmup&&!job.openTodayOnly&&taskPage){
       try{const diagnosticFile=await studioBrowser.bounded(()=>require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics')),2000,'Вкладка не ответила на диагностику');send('diagnostic','Диагностика Studio сохранена',{diagnosticFile});}catch{} }
 
-    if (browser) await studioBrowser.bounded(()=>browser.close(),2000,'Таймаут отключения CDP').catch(err => send("diagnostic", "Отключение CDP: " + err.message));
-    browser = null;
-    fail(e, { keptOpen: profileStarted });
+    const keepStudioOpen=job&&studioBrowser.isStudioUpload(job)&&(job.keepProfileOpen===true||profileStarted);
+    if(browser&&!keepStudioOpen)await studioBrowser.bounded(()=>browser.close(),2000,'Таймаут отключения CDP').catch(err=>send('diagnostic','Отключение CDP: '+err.message));
+    else if(keepStudioOpen)send('diagnostic','Профиль оставлен открытым: мастер Studio не закрывался.',{keptOpen:true});
+    browser=keepStudioOpen?browser:null;
+    fail(e,{keptOpen:keepStudioOpen||profileStarted});
     input.close();
   });
 }

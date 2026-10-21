@@ -39,6 +39,11 @@ namespace VideoBatch {
                 Check(TitleCleaner.RunSelfTests(),"clean title regressions");
                 Check(TitleCleaner.CleanForUpload("001. 3 правила 2026 (2).mp4")=="3 правила 2026","strip service indices, keep meaningful numbers");
                 Check(TitleCleaner.CleanForUpload("12.34 стратегия 2026")=="12.34 стратегия 2026","preserve decimal punctuation");
+                var slotWithSeconds=ScheduleGenerator.MakeSlot(DateTime.Now.AddHours(2),DateTime.MinValue);
+                Check(slotWithSeconds.time.Length==5&&slotWithSeconds.time[2]==':',"schedule slots use HH:mm for Studio worker");
+                batch.Items[0].ScheduleTime="11:36:02";
+                var normalizedJob=batch.ToUploadJob("not-saved",3001,prefs);
+                Check(normalizedJob.items[0].scheduleTime=="11:36","ToUploadJob normalizes HH:mm:ss");
                 string sourceVideo=Path.Combine(root,"original-001.mp4");File.WriteAllText(sourceVideo,"source bytes");
                 string occupied=Path.Combine(root,"Новый заголовок.mp4");File.WriteAllText(occupied,"existing bytes");
                 string renamed=UploadWindow.RenameVideoFile(sourceVideo,"Новый заголовок",1,1);

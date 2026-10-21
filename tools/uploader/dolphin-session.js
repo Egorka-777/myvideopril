@@ -140,6 +140,18 @@ async function startOrAttach(job, directory, request, report = () => {}, options
     }
     break;
   }
+  if (alreadyRunning && options.allowStopRestart !== false) {
+    report("dolphin", "Профиль открыт без CDP — останавливаю и запускаю с automation=1.");
+    try { await request(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`, {}, 30000); } catch (_) {}
+    await (options.delay || (ms => new Promise(resolve => setTimeout(resolve, ms))))(8000);
+    const restart = await request(startPath, {}, options.startTimeoutMs || 120000);
+    const restarted = automationEndpoint(restart.data || {});
+    if (restarted) {
+      saveEndpoint(job, directory, restarted, report);
+      report("dolphin", "Профиль перезапущен; адрес автоматизации получен.");
+      return restarted;
+    }
+  }
   if (alreadyRunning) throw new Error("Профиль открыт, но Dolphin не предоставил CDP. Окно сохранено. Для управления нужен профиль, запущенный с automation=1; автоматического перезапуска нет.");
   throw new Error("Dolphin не подтвердил подключение (" + last + "). Профиль не закрывался; проверьте API и прокси. Повторная публикация не выполнялась.");
 }
