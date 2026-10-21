@@ -78,7 +78,7 @@ function fixture(lang,state,editor){
    });
    assert.equal(result.length,2);assert.equal(documentLoads,pack.length+1,'Only fixture startup navigations, no reload while selecting/verifying thumbnail');
    for(const item of saved.values()){assert(item.scheduled&&item.cover);assert.equal(item.nextClicks,3);assert.equal(item.earlyClicks,0);assert.equal(item.zone,'Asia/Krasnoyarsk');}
-   const report=await S.diagnostics(page,new Error('Synthetic fixture report'),dir);const diagnostic=JSON.parse(fs.readFileSync(report));assert.equal(diagnostic.flow.lastStage,'item_confirmed');assert.equal(diagnostic.build,S.BUILD);assert(!fs.readFileSync(report,'utf8').includes('Description 1'));
+   const report=await S.diagnostics(page,new Error('Synthetic fixture report'),dir);const diagnostic=JSON.parse(fs.readFileSync(report));assert.equal(diagnostic.flow.lastStage,'studio_ready');const trace=diagnostic.flow.stageLog;assert.equal(trace.filter(s=>s.stage==='item_confirmed').length,2);assert(trace.findLastIndex(s=>s.stage==='item_confirmed')<trace.findLastIndex(s=>s.stage==='studio_ready'),'Saved result is confirmed before cleanup/next-file readiness');assert.equal(diagnostic.build,S.BUILD);assert(!fs.readFileSync(report,'utf8').includes('Description 1'));
    console.log('PASS',lang,'two sequential uploads + real thumbnail input/verification + async steps + separate Schedule card/submit + saved PC schedule + diagnostics');
    await ctx.close();
   }
