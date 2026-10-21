@@ -23,9 +23,10 @@ namespace VideoBatch {
                 var job=batch.ToUploadJob("not-saved",3001,prefs);
                 Check(job.items.Length==5,"five separate items");
                 Check(!job.studioPaidPromotion&&!job.studioAlteredContent,"explicit No settings");
-                Check(job.items.All(x=>!string.IsNullOrWhiteSpace(x.tags)&&x.description==null),"Studio preserves each account description even when a shared bank exists");
+                Check(job.items.All(x=>!string.IsNullOrWhiteSpace(x.tags)&&!string.IsNullOrWhiteSpace(x.description)),"Configured descriptions reach the Studio worker");
                 for(int i=0;i<5;i++){
                     var item=job.items[i];var slot=ScheduleGenerator.ParseSlot(item.scheduleDate,item.scheduleTime);
+                    Check(item.description==YouTubeMetadata.Build(prefs,channel,i+1).description,"description snapshot for each item");
                     Check(item.video==channel.Items[i].Video,"original video path without copies");
                     Check(item.localJobId==channel.Items[i].StudioUploadId,"stable per-item id");
                     Check(item.scheduledUnixSeconds==new DateTimeOffset(slot).ToUnixTimeSeconds(),"PC instant");
@@ -51,7 +52,7 @@ namespace VideoBatch {
                 Check(Path.GetDirectoryName(renamed)==root,"rename does not create a staging copy");
                 Check(File.ReadAllText(occupied)=="existing bytes"&&File.ReadAllText(renamed)=="source bytes","collision keeps both files intact");
                 Check(UploadWindow.RenameVideoFile(renamed,"Новый заголовок",1,1)==renamed,"reselecting same title is idempotent");
-                foreach(var stage in new[]{"metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_verify"})
+                foreach(var stage in new[]{"studio_date","studio_zone","studio_time","metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_verify"})
                     Check(TaskQueueStore.MapStage(stage)==TaskQueueStatus.Scheduling,"Studio phase remains active: "+stage);
                 Check(TaskQueueStore.MapStage("upload_transfer")==TaskQueueStatus.Uploading,"upload transfer keeps active queue status");
                 Check(YouTubeOwnerPublishTests.RunSelfTests(),"author publication contract");

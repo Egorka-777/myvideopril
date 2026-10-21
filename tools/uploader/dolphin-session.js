@@ -140,7 +140,7 @@ async function startOrAttach(job, directory, request, report = () => {}, options
     }
     break;
   }
-  if (alreadyRunning && options.allowStopRestart !== false) {
+  if (alreadyRunning && options.allowStopRestart === true) {
     report("dolphin", "Профиль открыт без CDP — останавливаю и запускаю с automation=1.");
     try { await request(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`, {}, 30000); } catch (_) {}
     await (options.delay || (ms => new Promise(resolve => setTimeout(resolve, ms))))(8000);

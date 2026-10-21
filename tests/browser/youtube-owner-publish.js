@@ -68,13 +68,13 @@ async function fixture(browser,lang,options={}){
   await assert.rejects(O.runSequential(uncertain.page,[item],{progress:()=>{}}),/неподтверждённая/);assert.equal(uncertain.counts().commentCalls,1);await uncertain.ctx.close();
   const noAck=await fixture(browser,'ru');await assert.rejects(O.runSequential(noAck.page,[{publishedVideoId:IDS[0],commentText:'No ACK'}],{typingDelay:1,progress:()=>{},checkpoint:async()=>{throw Error('storage full');}}),/storage full/);assert.equal(noAck.counts().commentCalls,0);await noAck.ctx.close();
   console.log('PASS persisted Public mismatch / non-owner / lost comment confirmation / failed durable ACK block comments and unsafe retries');
-  // Production option leaves preconfigured Studio description/tags byte-for-byte.
+  // Explicit opt-out remains supported; production upload now writes app descriptions.
   for(const lang of ['ru','en']){
    const page=await browser.newPage();const {html}=require('./youtube-studio-upload');
    await page.setContent(html(lang,{id:IDS[0],title:'Filename',description:'Account default\nDo not replace',paid:true,ai:true,tags:['account-tag'],date:'2030-01-02',time:'10:00',zone:'UTC'},false));
    await page.locator('#video-file').setInputFiles({name:'fixture.mp4',mimeType:'video/mp4',buffer:Buffer.from('fixture')});const scope=await S.uploadScope(page);await S.details(page,scope,{title:'App title',description:'x'.repeat(6000),tags:['wrong']},{writeDescription:false,writeTags:false,titleDelay:1,paidPromotion:false,alteredContent:false});
    assert.equal(await S.read(await S.field(scope,'description')),'Account default\nDo not replace');assert.equal(await S.read(await S.field(scope,'title')),'App title');await page.close();
   }
-  console.log('PASS RU/EN production options preserve per-account Studio descriptions and tags, rewrite title and apply configured disclosures');
+  console.log('PASS RU/EN explicit opt-out preserves Studio descriptions and tags, rewrite title and apply configured disclosures');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-21-studio-publish-v5";
+const WORKER_BUILD = "2026-10-21-studio-chips-v6";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function durableCheckpoint(stage,item,packIndex,extra={}){
@@ -78,17 +78,15 @@ function assertPageOpen(page) {
 }
 
 function attachPageGuards(page) {
-  const onDialog = async (dialog) => {
-    if(studioBrowser.isStudioUpload(job)){
-      await studioBrowser.handleUploadDialog(dialog,send).catch(e=>send('diagnostic','Диалог Studio: '+e.message));
-      return;
-    }
-    const msg = (dialog.message() || "").slice(0, 120);
-    send("youtube", "Диалог браузера: " + msg, { percent: 50 });
-    await dialog.accept().catch(() => dialog.dismiss().catch(() => {}));
-  };
-  page.on("dialog", onDialog);
-  page.context().on("dialog", onDialog);
+  if(studioBrowser.isStudioUpload(job)){
+    studioBrowser.installUploadDialogGuard(page.context(),send);
+    return;
+  }
+  page.on('dialog',async dialog=>{
+    const msg=(dialog.message()||'').slice(0,120);
+    send('youtube','Диалог браузера: '+msg,{percent:50});
+    await dialog.accept().catch(()=>dialog.dismiss().catch(()=>{}));
+  });
 }
 
 
@@ -199,7 +197,7 @@ async function startOrConnectProfile() {
   }else await api('/v1.0/auth/login-with-token',loginOptions);
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
-    { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:true}:{}) }
+    { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:false}:{}) }
   );
   profileStarted = true;
   return endpoint;
@@ -2893,7 +2891,7 @@ async function uploadPackBulk(page,pack){
  await studioBrowser.openStudio(page,job.channelUrl,send);
  const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:false},{
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send),
   thumbnail:setThumbnail,waitUpload:studio.waitUpload,dismiss:dismissAfterPublish
@@ -3148,7 +3146,7 @@ if (require.main === module) {
     stopping = true;
     send("cancel", "Задание остановлено; профиль Dolphin остаётся открытым.");
     try {
-      if (taskPage && !taskPage.isClosed()) await studioBrowser.bounded(()=>releaseTaskPage(taskPage),1000,'Вкладка не ответила на закрытие.');
+      if (taskPage && !taskPage.isClosed() && !(job&&studioBrowser.isStudioUpload(job))) await studioBrowser.bounded(()=>releaseTaskPage(taskPage),1000,'Вкладка не ответила на закрытие.');
     } catch (e) { send("diagnostic", "Не удалось освободить вкладку задания: " + e.message); }
     if(browser)await studioBrowser.bounded(()=>browser.close(),1000,'CDP отключается при завершении worker.').catch(()=>{});
     process.exit(130);
@@ -3162,10 +3160,9 @@ if (require.main === module) {
     if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.shortsWarmup&&!job.openTodayOnly&&taskPage){
       try{const diagnosticFile=await studioBrowser.bounded(()=>require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics')),2000,'Вкладка не ответила на диагностику');send('diagnostic','Диагностика Studio сохранена',{diagnosticFile});}catch{} }
 
-    const keepStudioOpen=job&&studioBrowser.isStudioUpload(job)&&(job.keepProfileOpen===true||profileStarted);
-    if(browser&&!keepStudioOpen)await studioBrowser.bounded(()=>browser.close(),2000,'Таймаут отключения CDP').catch(err=>send('diagnostic','Отключение CDP: '+err.message));
-    else if(keepStudioOpen)send('diagnostic','Профиль оставлен открытым: мастер Studio не закрывался.',{keptOpen:true});
-    browser=keepStudioOpen?browser:null;
+    const keepStudioOpen=job&&studioBrowser.isStudioUpload(job)&&profileStarted;
+    await studioBrowser.disconnect(browser,send);browser=null;
+    if(keepStudioOpen)send('diagnostic','CDP отключён; профиль и незавершённый мастер Studio сохранены без перезагрузки.',{keptOpen:true});
     fail(e,{keptOpen:keepStudioOpen||profileStarted});
     input.close();
   });

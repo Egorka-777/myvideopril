@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-publish-v5';
+const BUILD='2026-10-21-studio-chips-v6';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -199,10 +199,14 @@ async function actionButton(scope,id,label){
  }
  return one(scope.getByRole('button',{name:label}),{optional:true});
 }
-async function enabled(button){return button&&await button.evaluate(e=>{
- for(let p=e;p;p=p.parentElement||p.getRootNode().host){if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true')return false;}
- return true;
-});}
+async function enabled(button){
+ if(!button||!await button.count())return false;
+ try{return await button.evaluate(e=>{
+  for(let p=e;p;p=p.parentElement||p.getRootNode().host){if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true')return false;}
+  return true;
+ },undefined,{timeout:1000});}
+ catch(e){if(!await button.count()||!await button.isVisible())return false;throw e;}
+}
 async function scheduleCard(scope){
  const byId=await one(scope.locator('#schedule-radio-button,[name=SCHEDULE]'),{optional:true});if(byId)return byId;
  const radio=await one(scope.getByRole('radio',{name:L.schedule}),{optional:true});if(radio)return radio;
@@ -222,183 +226,13 @@ async function wizardState(scope){
   for(const panel of await scope.locator(selector).all())if(await scopeAlive(panel)){panels.push(selector);break;}
  const selected=await scope.locator('ytcp-stepper [aria-selected=true],ytcp-stepper [aria-current=step],#stepper [aria-selected=true],#stepper [aria-current=step],[role=tab][aria-selected=true],ytcp-stepper [selected],ytcp-stepper [active]').evaluateAll(nodes=>nodes.filter(e=>e.getAttribute('selected')!=='false'&&e.getAttribute('active')!=='false').map(e=>e.getAttribute('id')||e.getAttribute('data-step')||e.textContent.trim().slice(0,80)).slice(0,8));
  const stepper=await scope.locator('ytcp-stepper,#stepper').evaluateAll(nodes=>nodes.map(e=>Object.fromEntries(['selected','selected-step','active-step','current-step','data-step'].filter(a=>e.hasAttribute(a)).map(a=>[a,e.getAttribute(a)]))));
- const controls=[];
- for(const button of await scope.getByRole('button').all())if(await button.isVisible()&&!await button.evaluate(e=>!!e.closest('#next-button,#done-button,#stepper,ytcp-stepper,footer,ytcp-dialog-footer'))){
-  const label=norm(await button.getAttribute('aria-label')||await button.innerText()).slice(0,80);if(!L.next.test(label))controls.push(label);
- }
+ const controls=await scope.getByRole('button').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length&&!e.closest('#next-button,#done-button,#stepper,ytcp-stepper,footer,ytcp-dialog-footer')).map(e=>(e.getAttribute('aria-label')||e.innerText||'').replace(/\u00a0/g,' ').trim().slice(0,80)).filter(label=>!/^(Next|Далее)$/i.test(label)));
  const visibility=!!(card||publicRadio||publishLabel);
  const next=await pickNextButton(scope);
  const state={stage:visibility?'visibility':panels.includes('#details')||panels.includes('ytcp-video-metadata-editor')?'details':'intermediate',panels,selected,stepper,controls:controls.slice(0,30),next:!!next,nextEnabled:!!await enabled(next)};
  state.key=JSON.stringify({stage:state.stage,panels,selected,stepper,controls:state.controls});return state;
 }
-const MONTHS=[['january','январ','янв'],['february','феврал','фев'],['march','марта','март','мар'],['april','апрел','апр'],['may','мая','май'],['june','июня','июнь','июн'],['july','июля','июль','июл'],['august','август','авг'],['september','сентябр','сен'],['october','октябр','окт'],['november','ноябр','ноя'],['december','декабр','дек']];
-function parseDate(text){
- text=norm(text).toLowerCase().replace(/\u202f/g,' ');let m=text.match(/(\d{4})-(\d{2})-(\d{2})/);if(m)return `${m[1]}-${m[2]}-${m[3]}`;
- m=text.match(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/);if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
- let month=MONTHS.findIndex(names=>names.some(n=>text.includes(n)||text.includes(n.slice(0,3))));
- const year=text.match(/\b(20\d{2})\b/);const nums=text.replace(/20\d{2}/g,'').replace(/г\.?/g,'').match(/\b\d{1,2}\b/g);
- if(month>=0&&year&&nums?.length>=1)return `${year[1]}-${String(month+1).padStart(2,'0')}-${String(nums[0]).padStart(2,'0')}`;return null;
-}
-function studioDateChipVariants(iso){
- const [y,m,d]=iso.split('-').map(n=>parseInt(n,10));
- const dt=new Date(Date.UTC(y,m-1,d,12,0,0));
- const labels=new Set([iso]);
- for(const zone of ['UTC',Intl.DateTimeFormat().resolvedOptions().timeZone])try{
-  const ru=norm(dt.toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric',timeZone:zone}));
-  labels.add(ru);labels.add(ru.replace(/\s*$/,'')+' г.');labels.add(ru.replace(/\./g,''));
-  const en=norm(dt.toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric',timeZone:zone}));
-  labels.add(en);
- }catch{}
- return [...labels].filter(Boolean);
-}
-function parseTime(text){let m=norm(text).match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i);if(!m)return null;let h=Number(m[1]);if(m[3])h=(h%12)+(m[3].toLowerCase()==='pm'?12:0);if(h>23||Number(m[2])>59)return null;return `${String(h).padStart(2,'0')}:${m[2]}`;}
-async function dateControl(scope){
- for(const selector of ['ytcp-dropdown-trigger','ytcp-datepicker-trigger','#datepicker-trigger','input[type=date]','input[aria-label*="date" i],input[aria-label*="дат" i]']){
-  const x=await one(scope.locator(selector).filter({hasText:/\d{1,2}|20\d{2}/}),{optional:true});if(x)return x;
-  const plain=await one(scope.locator(selector),{optional:true});if(plain)return plain;
- }
- const chip=await one(scope.locator('ytcp-visibility-scheduler ytcp-dropdown-trigger, ytcp-visibility-scheduler ytcp-datepicker-trigger, ytcp-visibility-scheduler [id*="date"], ytcp-visibility-scheduler button').filter({hasText:/\d{1,2}\s+\S+\.?\s*20\d{2}/}),{optional:true});
- if(chip)return chip;
- const byRole=await one(scope.getByRole('button',{name:/\d{1,2}\s+[^\d]{2,20}20\d{2}/i}),{optional:true});
- if(byRole)return byRole;
- throw new Error('Studio: не найден элемент даты');
-}
-async function timeControl(scope){return one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input,input[aria-label="Time" i],input[aria-label="Время" i]'));}
-async function controlValue(control){return control.evaluate(e=>e.value||e.querySelector('input')?.value||e.innerText||e.textContent||'');}
-async function pickDateByChip(scope,calendar,date){
- for(const label of studioDateChipVariants(date)){
-  const esc=label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  for(const root of [calendar,scope]){
-   const chip=await one(root.getByRole('button',{name:new RegExp(esc,'i')}).or(root.locator('button,ytcp-button,[role=button]').filter({hasText:new RegExp(esc,'i')})),{optional:true});
-   if(chip&&await chip.isVisible()){await chip.click();await pause(250);return true;}
-  }
- }
- return false;
-}
-async function readCalendarMonthYear(calendar){
- const header=await one(calendar.locator('#month-label,#month,.month-label,.month-title,[data-calendar-month],ytcp-calendar-header'),{optional:true});
- if(!header)return null;
- const text=norm(await header.innerText()).toLowerCase();
- const year=text.match(/20\d{2}/);const month=MONTHS.findIndex(a=>a.some(x=>text.includes(x)));
- if(!year||month<0)return null;
- return {y:Number(year[0]),m:month+1};
-}
-async function alignCalendarMonth(scope,calendar,date){
- const tgtY=Number(date.slice(0,4)),tgtM=Number(date.slice(5,7));
- const prev=await one(calendar.locator('#prev-month,#previous-month-button').or(calendar.getByRole('button',{name:/previous month|предыдущ.*месяц/i})),{optional:true});
- const next=await one(calendar.locator('#next-month,#next-month-button').or(calendar.getByRole('button',{name:/next month|следующ.*месяц/i})),{optional:true});
- if(!prev||!next)return;
- for(let step=0;step<24;step++){
-  const view=await readCalendarMonthYear(calendar);
-  if(view&&view.y===tgtY&&view.m===tgtM)return;
-  const trigger=await dateControl(scope);
-  const chip=parseDate(await controlValue(trigger));
-  if(chip===date)return;
-  const curY=view?view.y:(chip?Number(chip.slice(0,4)):0);
-  const curM=view?view.m:(chip?Number(chip.slice(5,7)):0);
-  if(!view&&(!chip||!curY||!curM)){await next.click();await pause(350);continue;}
-  if(curY>tgtY||(curY===tgtY&&curM>tgtM))await prev.click();else await next.click();
-  await pause(350);
- }
-}
-async function clickCalendarDay(scope,calendar,date){
- const page=scope.page();
- const viaEval=await page.evaluate(iso=>{
-  const day=Number(iso.slice(8));
-  const root=document.querySelector('ytcp-uploads-dialog')||document.body;
-  const pick=el=>{if(!el||!el.getClientRects().length)return false;const r=el.getBoundingClientRect();return r.width>=6&&r.height>=6;};
-  for(const el of root.querySelectorAll('[data-date]'))if(el.getAttribute('data-date')===iso&&pick(el)){el.click();return true;}
-  const dayNodes=[];
-  for(const el of root.querySelectorAll('button,ytcp-button,[role=button],td,div')){
-    if(!pick(el))continue;
-    if(el.getAttribute('data-date')===iso){el.click();return true;}
-    const text=(el.innerText||'').trim();
-    if(text===String(day))dayNodes.push(el);
-  }
-  if(dayNodes.length===1){dayNodes[0].click();return true;}
-  if(dayNodes.length>1){dayNodes.sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y)[0].click();return true;}
-  return false;
- },date).catch(()=>false);
- if(viaEval)return true;
- for(const c of await calendar.locator(`[data-date="${date}"]`).all())if(await c.isVisible()&&!await c.isDisabled().catch(()=>false)){await c.click();return true;}
- for(const c of await calendar.locator('[data-date]').all()){
-  const value=await c.getAttribute('data-date');
-  if(value===date&&await c.isVisible()){await c.click();return true;}
- }
- for(const label of studioDateChipVariants(date)){
-  const esc=label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  const aria=await one(calendar.locator('[aria-label]').filter({hasText:new RegExp(esc,'i')}),{optional:true});
-  if(aria&&await aria.isVisible()){await aria.click();return true;}
- }
- const trigger=await dateControl(scope);
- const current=parseDate(await controlValue(trigger));
- if(current&&current.slice(0,7)!==date.slice(0,7))return false;
- const day=String(Number(date.slice(8)));
- const cells=[];
- for(const c of await calendar.locator('button,[role=gridcell],td,div').filter({hasText:new RegExp(`^${day}$`)}).all()){
-  if(!await c.isVisible()||await c.isDisabled().catch(()=>false))continue;
-  const cls=(await c.getAttribute('class')||'')+(await c.getAttribute('aria-disabled')||'');
-  if(/outside|other-month|disabled|hidden/i.test(cls))continue;
-  const box=await c.boundingBox().catch(()=>null);
-  if(!box||box.width<8||box.height<8)continue;
-  cells.push(c);
- }
- if(cells.length>=1){
-  let best=cells[0],bestY=Infinity;
-  for(const c of cells){const box=await c.boundingBox().catch(()=>null);if(box&&box.y<bestY){bestY=box.y;best=c;}}
-  await best.click();
-  return true;
- }
- return false;
-}
-async function calendarSurface(scope){
- const page=scope.page();
- const scoped=scope.locator('ytcp-visibility-scheduler ytcp-date-picker, ytcp-visibility-scheduler ytcp-datepicker, ytcp-date-picker, ytcp-datepicker');
- const visible=[];for(const node of await scoped.all())if(await node.isVisible())visible.push(node);
- if(visible.length===1)return visible[0];
- if(visible.length>1)throw new Error('Studio: несколько календарей даты');
- const nav=await one(scope.locator('#prev-month,#next-month').or(page.locator('ytcp-uploads-dialog #prev-month, ytcp-uploads-dialog #next-month')).or(page.getByRole('button',{name:/previous month|предыдущ.*месяц/i})),{optional:true});
- if(nav&&await nav.isVisible()){
-  const inline=page.locator('ytcp-uploads-dialog').filter({has:page.locator('#prev-month, #next-month')});
-  if(await inline.count())return inline.last();
-  return scope.locator('ytcp-visibility-scheduler').first();
- }
- return one(page.locator('ytcp-date-picker:visible,ytcp-datepicker:visible,[role=dialog][aria-label*="calendar" i]:visible,[role=dialog][aria-label*="календар" i]:visible'));
-}
-async function fillDate(scope,date){
- const trigger=await dateControl(scope);
- if(parseDate(await controlValue(trigger))===date)return;
- const expand=await one(scope.locator('#first-container-expand-button').or(scope.getByRole('button',{name:/click to expand|развернуть|раскрыть/i})),{optional:true});
- if(expand&&await expand.isVisible())await expand.click();
- const input=await trigger.evaluate(e=>e.tagName==='INPUT')?trigger:await one(trigger.locator('input'),{optional:true});
- if(input&&!await input.getAttribute('readonly')){
-  const type=await input.getAttribute('type');const current=await read(input);
-  const d=new Date(date+'T12:00:00Z');const value=type==='date'?date:/[а-я]/i.test(current)?d.toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}):d.toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
-  if(type==='date'){await input.fill(value);await input.press('Tab');}else await typeText(input,value,{delay:35});
-  if(parseDate(await controlValue(trigger))===date)return;
- }
- let calendar=null;
- const navOpen=await one(scope.locator('#prev-month,#next-month').or(scope.page().locator('ytcp-uploads-dialog #prev-month, ytcp-uploads-dialog #next-month')),{optional:true});
- if(navOpen&&await navOpen.isVisible())calendar=await calendarSurface(scope);
- else{
-  await trigger.click();
-  calendar=await calendarSurface(scope);
-  if(!(await calendar.locator('#prev-month,#next-month,[data-date],button[aria-label]').count())){
-   await pause(300);
-   calendar=await calendarSurface(scope);
-  }
- }
- await alignCalendarMonth(scope,calendar,date);
- let picked=false;
- for(let step=0;step<8&&!picked;step++){
-  if(await clickCalendarDay(scope,calendar,date)){picked=true;break;}
-  if(await pickDateByChip(scope,calendar,date)){picked=true;break;}
-  await alignCalendarMonth(scope,calendar,date);
-  await pause(200);
- }
- if(!picked)throw new Error('Studio: не удалось выбрать дату «'+studioDateChipVariants(date)[1]+'» в календаре');
- await until(async()=>parseDate(await controlValue(await dateControl(scope)))===date,8000,'Studio не подтвердил выбранную дату');
-}
+const {parseDate,parseTime,dateControl,timeControl,controlValue,calendarSurface,fillDate,fillTime}=require('./studio-schedule-controls')({one,until,norm,read});
 function offsetLabel(text){const m=String(text).match(/(?:GMT|UTC)\s*([+−-])\s*(\d{1,2})(?::?(\d{2}))?/i);return m?(m[1]==='+'?1:-1)*(Number(m[2])*60+Number(m[3]||0)):/\b(?:GMT|UTC)\b/.test(text)?0:null;}
 async function zoneValue(element){return element.evaluate(e=>{const value=e.value||e.getAttribute('data-value')||e.getAttribute('data-timezone')||e.getAttribute('value')||'';return typeof value==='string'?value:'';});}
 async function zoneOffset(element,plan){
@@ -407,23 +241,23 @@ async function zoneOffset(element,plan){
  return offsetLabel(await element.innerText());
 }
 async function setZone(scope,plan,zone){
- const button=await one(scope.getByRole('button',{name:L.zone}).or(scope.locator('#timezone-button, #time-zone-button')),{optional:true});
+ const button=await actionButton(scope,'timezone-button',L.zone)||await actionButton(scope,'time-zone-button',L.zone);
  if(!button)throw new Error('Studio: не найден выбор часового пояса, расписание не будет подтверждено');
  await button.click();
  const page=scope.page();const options=page.locator('[role=option],tp-yt-paper-item,ytcp-text-menu [role=menuitem]');
- await until(async()=>(await options.count())>0,5000,'Studio не показал список часовых поясов');
- const choices=[];
- for(const option of await options.all())if(await option.isVisible()){
-  const text=norm(await option.innerText());const value=await zoneValue(option);
-  if(value===zone)choices.unshift({option,text,exact:true});
-  else if(await zoneOffset(option,plan)===plan.offset)choices.push({option,text,exact:false});
- }
- if(!choices.length)throw new Error('Studio не показал пояс ПК UTC'+(plan.offset>=0?'+':'')+plan.offset/60);
- const choice=choices.find(x=>x.exact)||choices[0];await choice.option.click();
- // Read back selection from reopening the menu: a click alone is not confirmation.
- await button.click();
- const selected=await one(page.locator('[role=option][aria-selected=true],tp-yt-paper-item[aria-selected=true],[role=option][selected],tp-yt-paper-item[selected]'),{optional:true});
- if(!selected)throw new Error('Studio не подтвердил выбранный часовой пояс');
+ const choice=await until(async()=>{
+  const choices=[];for(const option of await options.all())if(await option.isVisible()){
+   const text=norm(await option.innerText()),value=await zoneValue(option);
+   if(value===zone)choices.unshift({option,text,exact:true});
+   else if(await zoneOffset(option,plan)===plan.offset)choices.push({option,text,exact:false});
+  }
+  return choices.find(x=>x.exact)||choices[0]||null;
+ },5000,'Studio не показал пояс ПК UTC'+(plan.offset>=0?'+':'')+plan.offset/60);
+ await choice.option.click({timeout:5000});
+ await until(async()=>{for(const o of await options.all())if(await o.isVisible())return false;return true;},5000,'Studio не закрыл меню часовых поясов.');
+ // Read the persisted selection from the menu; a click alone is not proof.
+ await button.click({timeout:5000});
+ const selected=await until(()=>one(page.locator('[role=option][aria-selected=true],tp-yt-paper-item[aria-selected=true],[role=option][selected],tp-yt-paper-item[selected]'),{optional:true}),5000,'Studio не подтвердил выбранный часовой пояс');
  const value=await zoneValue(selected);
  const text=norm(await selected.innerText());
  if(value!==zone&&await zoneOffset(selected,plan)!==plan.offset)throw new Error('Studio сохранил другой часовой пояс');
@@ -466,20 +300,23 @@ async function visibility(page,scope,{progress=()=>{},readyMs=120000,transitionM
  }
  throw new Error('Studio показал больше 10 шагов. Автоматический переход остановлен.');
 }
-async function schedule(page,scope,plan,zone){
- if(!await one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input'),{optional:true})){
+async function schedule(page,scope,plan,zone,{progress=()=>{}}={}){
+ if(!await timeControl(scope,true)){
   const expand=await until(()=>scheduleCard(scope),10000,'Studio не показал карточку «Запланировать публикацию / Schedule».');
-  await expand.click();
+  await expand.click({timeout:5000});
  }
- await until(async()=>await one(scope.locator('input[type=time],ytcp-time-of-day-picker input,#time-of-day-container input,#time-field input'),{optional:true}),10000,'Studio не открыл поля даты/времени после карточки планирования');
- const expand=await one(scope.locator('#first-container-expand-button').or(scope.getByRole('button',{name:/click to expand|развернуть|раскрыть/i})),{optional:true});
- if(expand&&await expand.isVisible())await expand.click();
+ await until(()=>timeControl(scope,true),10000,'Studio не открыл поле или карточку времени после выбора планирования');
  const privateLater=await one(scope.getByRole('radio',{name:/private.*(?:then|to).*public|сначала закрытый, потом открытый/i}),{optional:true});if(privateLater){await privateLater.click();await until(async()=>await privateLater.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked')),4000,'Studio не подтвердил доступ после публикации');}
- await fillDate(scope,plan.date);await setZone(scope,plan,zone);await fillDate(scope,plan.date);
- const time=await timeControl(scope);if(await time.getAttribute('type')==='time'){await time.fill(plan.time);await time.press('Tab');}else await typeText(time,plan.time,{delay:45});
- if(parseTime(await read(time))!==plan.time)throw new Error('Studio не подтвердил время');
- if(parseDate(await controlValue(await dateControl(scope)))!==plan.date)throw new Error('Studio не подтвердил дату');
- const button=await until(async()=>{const x=await actionButton(scope,'done-button',L.schedule);return await enabled(x)&&L.schedule.test(norm(await x.innerText()))?x:null;},120000,'Кнопка Запланировать недоступна');
+ await fillDate(scope,plan.date,{progress});
+ progress('studio_zone','Устанавливаю часовой пояс ПК.');await setZone(scope,plan,zone);progress('studio_zone','Часовой пояс подтверждён: '+zone+'.');
+ await fillDate(scope,plan.date,{progress});await fillTime(scope,plan.time,{progress});
+ const lang=await page.locator('html').getAttribute('lang')||'';
+ if(parseDate(await controlValue(await dateControl(scope)),lang)!==plan.date)throw new Error('Studio не подтвердил дату');
+ let reported=0;
+ const button=await until(async()=>{
+  const x=await actionButton(scope,'done-button',L.schedule);if(await enabled(x)&&L.schedule.test(norm(await x.innerText())))return x;
+  if(Date.now()-reported>5000){progress('studio_schedule','Дата и время проверены. Жду доступную кнопку «Запланировать» (не более 2 минут; Studio может ещё обрабатывать видео).');reported=Date.now();}return null;
+ },120000,'Кнопка Запланировать недоступна; повторная отправка остановлена.');
  const label=norm(await button.innerText());if(!L.schedule.test(label))throw new Error('Studio предлагает «'+label+'» вместо планирования. Публикация остановлена.');
  return button;
 }
@@ -509,10 +346,12 @@ async function readback(page,item,id,plan,opts,zone){
  if(!visible||!L.scheduled.test(norm(await visible.innerText())+' '+(await visible.getAttribute('aria-label'))))throw new Error('Studio не подтвердил статус «Запланировано» после перезагрузки');
  await visible.click();
  const dialog=await one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,[role=dialog]'));
- if(parseDate(await controlValue(await dateControl(dialog)))!==plan.date||parseTime(await read(await timeControl(dialog)))!==plan.time)throw new Error('После сохранения дата/время Studio не совпали с расписанием');
+ const actualDate=parseDate(await controlValue(await dateControl(dialog)),await page.locator('html').getAttribute('lang')||'');
+ const actualTime=parseTime(await controlValue(await timeControl(dialog)));
+ if(actualDate!==plan.date||actualTime!==plan.time)throw new Error(`После сохранения дата/время Studio не совпали с расписанием: ожидалось ${plan.date} ${plan.time}, прочитано ${actualDate||'дата не распознана'} ${actualTime||'время не распознано'}`);
  // Verify zone in the persisted visibility dialog without changing it.
- const zoneButton=await one(dialog.getByRole('button',{name:L.zone}).or(dialog.locator('#timezone-button,#time-zone-button')));await zoneButton.click();
- const selected=await one(page.locator('[role=option][aria-selected=true],tp-yt-paper-item[aria-selected=true],[role=option][selected],tp-yt-paper-item[selected]'));
+ const zoneButton=await actionButton(dialog,'timezone-button',L.zone)||await actionButton(dialog,'time-zone-button',L.zone);if(!zoneButton)throw new Error('Studio не показал сохранённый часовой пояс');await zoneButton.click();
+ const selected=await until(()=>one(page.locator('[role=option][aria-selected=true],tp-yt-paper-item[aria-selected=true],[role=option][selected],tp-yt-paper-item[selected]'),{optional:true}),5000,'Studio не показал сохранённый часовой пояс');
  const value=await zoneValue(selected);
  if(value!==zone&&await zoneOffset(selected,plan)!==plan.offset)throw new Error('После сохранения изменился часовой пояс');
  await page.keyboard.press('Escape');await page.keyboard.press('Escape');
@@ -543,6 +382,7 @@ async function diagnostics(page,error,folder){
  if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url())){
   data.controls=await page.locator('button,ytcp-button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
   data.fields=await page.locator('#title-textarea,#description-textarea,[contenteditable=true]').evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,id:e.id,visible:!!e.getClientRects().length,editable:e.isContentEditable,role:e.getAttribute('role'),length:(e.innerText||'').length,focused:e===document.activeElement||e.contains(document.activeElement)})));
+  data.scheduleControls=await page.locator('#datepicker-trigger,#time-of-day-trigger,ytcp-date-picker input,ytcp-datepicker input,ytcp-time-of-day-picker input,#time-field input').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,label:e.getAttribute('aria-label')||'',value:e.value||e.innerText||'',readOnly:e.readOnly===true})).slice(0,20));
   data.dialogs=await page.locator(UPLOAD_DIALOG).evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,visible:!!e.getClientRects().length,next:e.querySelectorAll('#next-button').length,fields:e.querySelectorAll('[contenteditable=true]').length})));
   const scope=await uploadScope(page);if(scope)data.wizard=await wizardState(scope);
  }
@@ -589,7 +429,7 @@ async function runItems(page,pack,opts,host){
    submit=await publishPublic(page,scope);
   }else{
    progress('studio_schedule','Устанавливаю дату, время и часовой пояс.');
-   submit=await schedule(page,scope,plan,zone);
+   submit=await schedule(page,scope,plan,zone,{progress});
    planFor(item);
   }
   await submit.click();
@@ -604,4 +444,4 @@ async function runItems(page,pack,opts,host){
  }
  return results;
 }
-module.exports={actionButton,enabled,BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};

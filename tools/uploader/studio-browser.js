@@ -17,7 +17,6 @@ async function handleUploadDialog(dialog,report){
   if(dialog.type()==='beforeunload'){
     try{await dialog.dismiss();}catch{}
     report('studio_dialog','Перезагрузка/выход отменены: открыта незавершённая загрузка. Страница не перезагружалась.');
-    await new Promise(r=>setTimeout(r,400));
   }else if(dialog.type()==='alert')await dialog.accept();
   else{
     await dialog.dismiss();
@@ -43,14 +42,32 @@ async function visible(locator) {
   return null;
 }
 async function uploadWizardOpen(page) {
-  return page.locator('ytcp-uploads-dialog, ytcp-upload-dialog, ytcp-video-upload-dialog').evaluateAll(nodes =>
-    nodes.some(e => e && !e.hidden && e.getClientRects().length > 0)
-  ).catch(() => false);
+  // A custom-element host can have zero bounds while its positioned descendants
+  // are visible. A failed inspection is an error, never permission to navigate.
+  for(const root of await page.locator('ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog').all()){
+    if(await root.isVisible())return true;
+    for(const child of await root.locator('[contenteditable=true],#next-button,#done-button,[role=dialog]').all())if(await child.isVisible())return true;
+  }
+  return false;
+}
+const dialogGuards=new WeakMap();
+function installUploadDialogGuard(context,report){
+  if(dialogGuards.has(context))return dialogGuards.get(context).dispose;
+  const seen=new WeakSet();
+  const listener=dialog=>{if(seen.has(dialog))return;seen.add(dialog);handleUploadDialog(dialog,report).catch(e=>report('diagnostic','Диалог Studio: '+e.message));};
+  context.on('dialog',listener);
+  const dispose=()=>{context.off('dialog',listener);dialogGuards.delete(context);};dialogGuards.set(context,{dispose});return dispose;
+}
+async function disconnect(browser,report=()=>{}){
+  if(!browser)return;
+  // connectOverCDP: close() disconnects this client. Do not navigate the page,
+  // close its default context, or call Dolphin /stop on an incomplete wizard.
+  await bounded(()=>browser.close(),2000,'Отключение CDP превысило 2 секунды.').catch(e=>report('diagnostic',e.message));
 }
 async function openStudio(page, channelUrl, report) {
   const expected = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
   const url = 'https://studio.youtube.com' + (expected ? '/channel/' + expected : '');
-  const onStudio = /studio\.youtube\.com/i.test(page.url() || '');
+  const onStudio = /^https:\/\/studio\.youtube\.com(?:\/|$)/i.test(page.url() || '');
   if (onStudio && await uploadWizardOpen(page)) {
     report('studio_ready', 'YouTube Studio: продолжаю открытый мастер загрузки (без перезагрузки страницы).');
     return;
@@ -184,4 +201,4 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
   await transferFile(page, input, file, report, { forceCdp });
   report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
-module.exports = { bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile };
+module.exports = { uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile };
