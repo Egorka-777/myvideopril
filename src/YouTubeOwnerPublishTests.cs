@@ -10,6 +10,7 @@ namespace VideoBatch {
         static void Reject(Action action){bool failed=false;try{action();}catch{failed=true;}Check(failed,"invalid action must fail");}
         public static bool RunSelfTests(){
             Check(YouTubeOwnerPublish.RenderComment("Link?start={ddMM}\n{date} {yyyy} {MM} {dd}",new DateTime(2028,2,29))=="Link?start=2902\n2028-02-29 2028 02 29","PC date, leap day, exact replacement");
+            Check(YouTubeOwnerPublish.RenderComment("A\u00a0B",DateTime.Now)=="A B","copied nonbreaking spaces match browser text verification");
             Check(YouTubeOwnerPublish.RenderComment("Text 1910",new DateTime(2026,10,21))=="Text 1910","literal digits unchanged");Reject(()=>YouTubeOwnerPublish.RenderComment("{unknown}",DateTime.Now));
             var item=new YouTubeItem{Title="Example",PublishedVideoId="video000001",StudioVisibility="scheduled"};
             var channel=new YouTubeChannel{Name="Owner",ProfileId="profile-1",OwnerCommentTemplate="Account one {ddMM}",Items=new List<YouTubeItem>{item}};

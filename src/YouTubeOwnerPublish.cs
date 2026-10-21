@@ -32,7 +32,7 @@ namespace VideoBatch {
                     case "date":return pcDate.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);
                     default:throw new Exception("Неизвестная вставка в комментарии: "+m.Value);
                 }
-            }).Replace("\r\n","\n").Trim();
+            }).Replace("\r\n","\n").Replace('\u00a0',' ').Trim();
             if(result.Length>10000||result.Any(c=>char.IsControl(c)&&c!='\n'&&c!='\t'))throw new Exception("Комментарий: до 10 000 символов, без управляющих символов.");
             return result;
         }
