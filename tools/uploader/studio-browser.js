@@ -142,15 +142,22 @@ async function openStudio(page, channelUrl, report) {
   }
   report('studio_open', 'Открываю YouTube Studio · без проверки сторонних IP-сервисов.');
   if(!completed)await page.goto(url, { waitUntil: 'commit', timeout: 35000 });
-  await waitFor(async () => {
-    const current = page.url();
-    if (/accounts\.google\.com/.test(current)) throw new Error('Требуется вход в Google в выбранном Dolphin-профиле.');
-    if (expected && /studio\.youtube\.com\/channel\/UC/.test(current) && !current.includes('/channel/' + expected))
-      throw new Error('Studio открыл другой канал. Файл не передавался.');
-    if(await isPostPublishScreen(page)){await dismissPublishDialog(page,report);return null;}
-    const button=await visible(page.locator('#create-icon').or(page.getByRole('button',{name:/^(Create|Создать)$/i})));
-    return button&&await controlEnabled(button)?button:null;
-  }, 90000, 'Studio не показал кнопку «Создать» за 90 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
+  // Detection polls are read-only and bounded to five seconds. A legitimate
+  // disabled Close can take much longer, so dismiss runs outside that poll.
+  for(let attempt=0;attempt<2;attempt++){
+    const ready=await waitFor(async()=>{
+      const current=page.url();
+      if(/accounts\.google\.com/.test(current))throw new Error('Требуется вход в Google в выбранном Dolphin-профиле.');
+      if(expected&&/studio\.youtube\.com\/channel\/UC/.test(current)&&!current.includes('/channel/'+expected))
+        throw new Error('Studio открыл другой канал. Файл не передавался.');
+      if(await isPostPublishScreen(page))return {completed:true};
+      const button=await visible(page.locator('#create-icon').or(page.getByRole('button',{name:/^(Create|Создать)$/i})));
+      return button&&await controlEnabled(button)?{button}:null;
+    },90000,'Studio не показал доступную кнопку «Создать» за 90 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
+    if(!ready.completed)break;
+    await dismissPublishDialog(page,report);
+    if(attempt===1)throw new Error('Studio повторно открыл завершённый мастер вместо главной страницы. Файл не передавался.');
+  }
   report('studio_ready', 'YouTube Studio готов.');
 }
 async function videoInput(page) {

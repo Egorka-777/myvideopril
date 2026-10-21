@@ -98,6 +98,10 @@ async function setup(browser,lang,dir,options={}){
   assert.equal(await share.locator('ytcp-video-share-dialog').count(),1);
   await B.dismissPublishDialog(share,()=>{},{expectedId:'video000001',confirmed:true,timeout:1000});assert.equal(await share.locator('ytcp-video-share-dialog').count(),0);assert(!(await share.evaluate(()=>window.wrong)));await share.close();
   console.log('PASS missing success card recovered from persisted ID without another Publish; standalone share dialog closes locally; wrong ID and unrelated Close are never clicked.');
+  const late=await browser.newPage();await late.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html',body:'<button id="create-icon" hidden>Create</button><ytcp-uploads-dialog><h2>Video published</h2><button id="close-button" disabled>Close</button></ytcp-uploads-dialog><script>document.querySelector("#close-button").onclick=()=>{document.querySelector("ytcp-uploads-dialog").remove();document.querySelector("#create-icon").hidden=false;};setTimeout(()=>document.querySelector("#close-button").disabled=false,5500);</script>'}));
+  await B.openStudio(late,'',()=>{});assert.equal(await late.locator('ytcp-uploads-dialog').count(),0);assert(await late.locator('#create-icon').isVisible());await late.close();
+  console.log('PASS completed card appearing during startup may wait beyond the five-second detection poll before Close becomes enabled.');
+
   const lag=await setup(browser,'ru',dir,{staleFirstRead:true});const checked=await S.runSequential(lag.page,lag.pack.slice(0,1),{titleDelay:1,descriptionDelay:1},lag.host);assert.equal(checked.length,1);assert.equal((await lag.page.evaluate(()=>stats)).publishes,1);assert(lag.stages.some(s=>/только чтение/.test(s.text)));await lag.ctx.close();
   console.log('PASS one bounded repeat of saved-ID read handles temporarily stale visibility without retransmission or another Publish.');
   // Persisted success is durable BEFORE cleanup; a disabled Close stops the queue.
