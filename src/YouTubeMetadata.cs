@@ -116,7 +116,8 @@ namespace VideoBatch {
             if (settings == null || channel == null) return "";
             string market = (channel.Market ?? "RU").Trim().ToUpperInvariant();
             var bank = (market=="EN"?settings.YouTubeDescriptionBankEn:settings.YouTubeDescriptionBankRu) ?? new List<string>();
-            if (bank.Count == 0) bank = (market=="EN"?settings.TikTokDescriptionBankEn:settings.TikTokFullCaptionBankRu) ?? new List<string>();
+            if (bank.Count == 0)
+                bank = market=="EN" ? YouTubeDescriptionTemplates.DefaultsEn() : YouTubeDescriptionTemplates.DefaultsRu();
             if (bank.Count == 0) return "";
             int cursor = market=="EN"?settings.YouTubeDescriptionCursorEn:settings.YouTubeDescriptionCursorRu;
             // Stable per-account offset: different accounts use different available descriptions.
@@ -129,7 +130,6 @@ namespace VideoBatch {
         public static void AdvanceDescriptionCursor(Preferences settings, int uploadedCount) {
             if (settings == null || uploadedCount <= 0) return;
             var bank = settings.YouTubeDescriptionBankRu ?? new List<string>();
-            if (bank.Count == 0) bank = settings.TikTokFullCaptionBankRu ?? new List<string>();
             if (bank.Count == 0) return;
             settings.YouTubeDescriptionCursorRu = (settings.YouTubeDescriptionCursorRu + uploadedCount) % bank.Count;
         }

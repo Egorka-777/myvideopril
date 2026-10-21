@@ -608,7 +608,7 @@ namespace VideoBatch {
             };
         }
 
-        /// <summary>Старые TikTok-подписи с «ССЫЛКА» / короткий SEO-текст — не для поля «Описание» YouTube.</summary>
+        /// <summary>Устаревшие тексты описания видео со словом «ССЫЛКА» (не SEO-банк BinoDex / Pocket Option).</summary>
         public static bool IsLegacyLinkStyleBank(IList<string> bank) {
             if (bank == null || bank.Count == 0) return false;
             foreach (string raw in bank) {
