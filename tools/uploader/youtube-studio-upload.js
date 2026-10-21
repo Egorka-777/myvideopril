@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded,dismissPublishDialog,isPostPublishScreen,publicationState,findPublishCloseButton}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-shorts-queue-v19e';
+const BUILD='2026-10-21-studio-shorts-queue-v19f';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -80,7 +80,10 @@ async function field(scope,kind,optional=false){
  if(!target&&!optional)throw new Error(`Studio: не найдено однозначное поле ${kind}`);return target;
 }
 function typingBudget(text,delay){return 10000+Array.from(norm(text)).length*(Math.max(0,delay)+30);}
-function metadataBudget(item,opts){return 60000+typingBudget(item.title,opts.titleDelay??55)+typingBudget(opts.writeDescription===false?null:item.description,opts.descriptionDelay??18)+typingBudget(tags(item.tags).join(','),20);}
+function metadataBudget(item,opts){
+ const {typingTotalBudget}=require('./studio-editor-controls');
+ return 60000+typingTotalBudget(item.title,{delay:opts.titleDelay??55})+(opts.writeDescription===false||item.description==null?0:typingTotalBudget(item.description,{name:'описания',delay:opts.descriptionDelay??18,activationMs:25000,verifyMs:35000}))+typingBudget(tags(item.tags).join(','),20);
+}
 const {editorState,activateEditor,typeText,inspectEditors}=require('./studio-editor-controls')({until,norm,read,typingBudget});
 function tags(raw){const list=(Array.isArray(raw)?raw:String(raw||'').split(/[,;\n\r]/)).map(s=>String(s).trim().replace(/^#+/,'')).filter(Boolean);return [...new Set(list)];}
 function validateTags(list){const length=list.reduce((n,t)=>n+t.length+(t.includes(' ')?2:0),Math.max(0,list.length-1));if(length>500)throw new Error('Теги превышают лимит YouTube 500 символов с разделителями/кавычками. Сократите список в приложении.');}
@@ -166,11 +169,11 @@ async function question(scope,kind,answer,{verify=false}={}){
 }
 async function details(page,scope,item,opts,{verify=false}={}){
  const report=opts.progress||(()=>{});
- if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55,scope,name:'названия',onState:(event,text)=>report('metadata_title',text)});report('metadata_title','Заголовок введён и проверен.');}
+ if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55,scope,name:'названия',signal:opts.signal,onState:(event,text)=>report('metadata_title',text)});report('metadata_title','Заголовок введён и проверен.');}
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
  if(opts.writeDescription!==false&&item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
-  if(!verify){await description.scrollIntoViewIfNeeded().catch(()=>{});report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',activationMs:25000,verifyMs:35000,onState:(event,text)=>report('metadata_description',text),onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
+  if(!verify){await description.scrollIntoViewIfNeeded().catch(()=>{});report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',signal:opts.signal,activationMs:25000,verifyMs:35000,onState:(event,text,diagnostic)=>{report('metadata_description',text);if(diagnostic){const trace=traces.get(page);if(trace){trace.editorAttempts=trace.editorAttempts||[];trace.editorAttempts.push(diagnostic);trace.editorAttempts=trace.editorAttempts.slice(-9);}}},onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});report('metadata_description','Описание проверено целиком: '+norm(item.description).length+' символов; SHA256 '+require('crypto').createHash('sha256').update(norm(item.description)).digest('hex')+'.');}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
@@ -401,7 +404,7 @@ async function waitUpload(page,{stallMs=1200000,unknownMs=30000,progress=()=>{}}
 }
 async function diagnostics(page,error,folder){
  const path=require('path');fs.mkdirSync(folder,{recursive:true});
- const data={build:BUILD,time:new Date().toISOString(),error:String(error.message||error),flow:traces.get(page)||null,url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
+ const data={editorFailure:error.editorDiagnostic||null,build:BUILD,time:new Date().toISOString(),error:String(error.message||error),flow:traces.get(page)||null,url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
  if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url())){
   data.controls=await page.locator('button,ytcp-button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
   try{const terminal=await publicationState(page);const close=terminal.surface?await findPublishCloseButton(page,{scope:terminal.surface}):null;data.publication={state:terminal.state,ids:terminal.ids,closePresent:!!close,closeEnabled:close?await enabled(close):false};}catch(e){data.publication={error:e.message};}
@@ -463,7 +466,9 @@ async function runItems(page,pack,opts,host){
   const scope=await until(()=>uploadScope(page),25000,'Studio принял файл, но не показал окно редактирования за 25 секунд. Проверьте черновик перед повтором.');
   await until(()=>field(scope,'title',true),25000,'Не появилось поле названия');
   host.progress('metadata','Удаляю название файла и печатаю заголовок из приложения.',{packIndex});
-  await bounded(()=>details(page,scope,item,{...opts,progress}),metadataBudget(item,opts),'Studio не завершил ввод метаданных в рассчитанное время');
+  const metadataAbort=new AbortController();
+  try{await bounded(()=>details(page,scope,item,{...opts,progress,signal:metadataAbort.signal}),metadataBudget(item,opts),'Studio не завершил ввод метаданных в рассчитанное время');}
+  finally{metadataAbort.abort();}
   progress('upload_transfer','Проверяю завершение передачи файла.');await host.waitUpload(page,{progress});
   // The video link may appear only after processing starts. Do not block typing on it.
   const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},60000,'YouTube не показал ID ролика');

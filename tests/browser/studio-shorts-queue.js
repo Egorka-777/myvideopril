@@ -61,12 +61,12 @@ async function setup(browser,lang,dir,options={}){
   return route.fulfill({contentType:'text/html; charset=utf-8',body:id?savedEditor(lang,record):app(lang,options)});
  });
  await B.openStudio(page,'',()=>{});
- const pack=Array.from({length:2},(_,n)=>{const video=path.join(dir,lang+'-'+n+'.mp4');fs.writeFileSync(video,'fixture');return {video,title:'Title '+lang+' '+n,description:('Описание '+n+' — текст, ссылка https://example.com и символы 👍.\n\n').repeat(6).trim(),contentKind:'shorts',publishMode:'immediate',thumbnail:'must never open.png',localJobId:'job-'+n};});
+ const pack=Array.from({length:options.count||2},(_,n)=>{const video=path.join(dir,lang+'-'+n+'.mp4');fs.writeFileSync(video,'fixture');return {video,title:'Title '+lang+' '+n,description:options.descriptions?.[n]||('Описание '+n+' — текст, ссылка https://example.com и символы 👍.\n\n').repeat(6).trim(),contentKind:'shorts',publishMode:'immediate',thumbnail:'must never open.png',localJobId:'job-'+n};});
  pack[1].video=pack[0].video; // Deliberately reuse one test file with two fresh upload identities.
  const host={progress:(stage,text,extra={})=>stages.push({stage,text,...extra}),checkpoint:async()=>{},openFile:(p,file,checkpoint)=>B.openFile(p,file,checkpoint,()=>{},{readyMs:2500}),waitUpload:S.waitUpload,thumbnail:async()=>{throw Error('Shorts thumbnail must be skipped');},dismiss:async()=>{throw Error('Legacy unconditional dismiss must not run');}};
  return {ctx,page,saved,pack,host,stages,navigations};
 }
-(async()=>{
+async function run(){
  const browser=await chromium.launch({headless:true}),dir=fs.mkdtempSync(path.join(os.tmpdir(),'vb-shorts-queue-'));
  try{
   const p=await browser.newPage();p.setDefaultTimeout(2000);await p.setContent('<textarea maxlength="4"></textarea>');const box=p.locator('textarea');
@@ -115,4 +115,6 @@ async function setup(browser,lang,dir,options={}){
   await assert.rejects(S.runSequential(retry.page,[{...item,studioPending:true}],{},retry.host),/ID неизвестен/);await retry.ctx.close();
   console.log('PASS durable verified result before cleanup; Close timeout blocks next transfer; private saved status rejected; known pending ID rechecked and unknown ID never reuploaded.');
  }finally{await browser.close();fs.rmSync(dir,{recursive:true,force:true});}
-})().catch(e=>{console.error(e);process.exitCode=1;});
+}
+module.exports={app,setup};
+if(require.main===module)run().catch(e=>{console.error(e);process.exitCode=1;});

@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-21-studio-shorts-queue-v19e";
+const WORKER_BUILD = "2026-10-21-studio-shorts-queue-v19f";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function durableCheckpoint(stage,item,packIndex,extra={}){
