@@ -176,6 +176,7 @@ namespace VideoBatch {
                     All(panel).OfType<Button>().Single(b => b.Text == "Настроить").PerformClick();
                     foreach (var size in new[] { new Size(820, 620), new Size(936, 700), new Size(1200, 800) }) {
                         form.ClientSize = size; Application.DoEvents();
+                        Check(prompt.Width > panel.Width * .35, "form must fill card width rather than shrink to default 200px");
                         foreach (var button in All(panel).OfType<Button>().Where(b => b.Visible)) {
                             Check(button.Height <= 44, "button row unexpectedly stretched: " + button.Text);
                             Check(button.Left >= 0 && button.Top >= 0 && button.Right <= button.Parent.ClientSize.Width + 1 && button.Bottom <= button.Parent.ClientSize.Height + 1, "button clipped in parent: " + button.Text);
@@ -188,7 +189,7 @@ namespace VideoBatch {
                     }
                     All(panel).OfType<Button>().Single(b => b.Text == "Настроить").PerformClick(); Application.DoEvents();
                     // Scroll the inline editor into view, leaving the primary actions visible.
-                    var editor = All(panel).OfType<NumericUpDown>().Single(c => c.Name == "warmup-subtitle-size");
+                    var editor = All(panel).OfType<Button>().Single(c => c.Text == "Цвет плашки");
                     var scroll = All(panel).OfType<Panel>().First(p => p.AutoScroll && p.Contains(editor)); scroll.ScrollControlIntoView(editor); Application.DoEvents();
                     using (var bmp = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(bmp, panel.ClientRectangle); bmp.Save(Path.Combine(folder, "warmup-subtitles.png")); }
                     form.Close();

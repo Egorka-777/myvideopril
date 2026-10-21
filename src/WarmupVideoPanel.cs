@@ -37,10 +37,9 @@ namespace VideoBatch {
             Controls.Add(root);
             var card = Theme.MakeCard(); card.Dock = DockStyle.Fill; card.Margin = new Padding(0, 0, 12, 0); card.Padding = new Padding(16);
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Card };
-            fields = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, BackColor = Theme.Card, Margin = Padding.Empty };
+            fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, BackColor = Theme.Card, Margin = Padding.Empty };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             scroll.Controls.Add(fields); card.Controls.Add(scroll); root.Controls.Add(card, 0, 0);
-            scroll.ClientSizeChanged += (s, e) => { fields.Width = Math.Max(180, scroll.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 2); };
             AddField(Label("Короткий анекдот", Theme.FontCardTitle, Theme.TextPrimary));
             var markets = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 8) };
             ru = Theme.MakeHeroToggle("RU", market == "RU", () => SwitchMarket("RU")); en = Theme.MakeHeroToggle("EN", market == "EN", () => SwitchMarket("EN"));
