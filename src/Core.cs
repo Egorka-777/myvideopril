@@ -375,8 +375,8 @@ namespace VideoBatch {
             if(p.YouTubeWarmupLikePercent>100)p.YouTubeWarmupLikePercent=100;
             if(string.IsNullOrWhiteSpace(p.OpenRouterModel))p.OpenRouterModel="openai/gpt-4o-mini";
             if(string.IsNullOrWhiteSpace(p.WarmupVideoMarketView)||(p.WarmupVideoMarketView!="RU"&&p.WarmupVideoMarketView!="EN"))p.WarmupVideoMarketView="RU";
-            if(p.WarmupVideoCountRu<1)p.WarmupVideoCountRu=10;
-            if(p.WarmupVideoCountEn<1)p.WarmupVideoCountEn=10;
+            if(p.WarmupVideoCountRu<1)p.WarmupVideoCountRu=1;
+            if(p.WarmupVideoCountEn<1)p.WarmupVideoCountEn=1;
             if(p.WarmupVideoMaxSecRu<3)p.WarmupVideoMaxSecRu=8;
             if(p.WarmupVideoMaxSecEn<3)p.WarmupVideoMaxSecEn=8;
             if(p.WarmupVideoPromptRu==null)p.WarmupVideoPromptRu="";

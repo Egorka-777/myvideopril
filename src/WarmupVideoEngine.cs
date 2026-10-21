@@ -31,8 +31,12 @@ namespace VideoBatch {
         public static async Task<IReadOnlyList<string>> GenerateAsync(WarmupVideoJob job, Action<string> log, CancellationToken ct) {
             Validate(job);
             if (!ToolsLocator.TryResolve(out var ffmpeg, out var ffprobe, out var hint)) throw new Exception(hint);
-            using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
-                return await GenerateAsync(job, log, ct, client, ffmpeg, ffprobe).ConfigureAwait(false);
+            try {
+                using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
+                    return await GenerateAsync(job, log, ct, client, ffmpeg, ffprobe).ConfigureAwait(false);
+            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                throw new Exception("Сервис генерации не ответил за 2 минуты. Проверьте подключение и повторите позже.");
+            }
         }
 
         static void Validate(WarmupVideoJob job) {
@@ -110,7 +114,7 @@ namespace VideoBatch {
 
         internal static IEnumerable<string> RenderArguments(string background, string audio, string output, double duration, List<WarmupCaption> captions = null) {
             if (duration <= 0 || duration > MaximumSeconds || double.IsNaN(duration)) throw new Exception("Озвучка должна длиться не больше 10 секунд.");
-            var args = new List<string> { "-v", "error", "-y" };
+            var args = new List<string> { "-v", "error", "-y", "-filter_complex_threads", "1", "-filter_threads", "1" };
             if (IsVideo(background)) args.AddRange(new[] { "-stream_loop", "-1" });
             else args.AddRange(new[] { "-loop", "1", "-framerate", "30" });
             args.AddRange(new[] { "-i", background, "-i", audio });
@@ -124,20 +128,19 @@ namespace VideoBatch {
                 }
                 args.AddRange(new[] { "-filter_complex", filter.ToString(), "-map", "[base" + captions.Count + "]" });
             } else args.AddRange(new[] { "-vf", backgroundFilter, "-map", "0:v:0" });
-            args.AddRange(new[] { "-map", "1:a:0", "-map_metadata", "-1", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-af", "asetpts=PTS-STARTPTS",
+            args.AddRange(new[] { "-map", "1:a:0", "-map_metadata", "-1", "-c:v", "libx264", "-threads", "4", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-af", "asetpts=PTS-STARTPTS",
                 "-t", Number(duration), "-movflags", "+faststart", output });
             return args;
         }
 
         internal static async Task VerifyOutputAsync(string ffprobe, string output, double duration, CancellationToken ct) {
-            var raw = Json().DeserializeObject(await Core.Tool(ffprobe, new[] { "-v", "error", "-show_streams", "-show_format", "-of", "json", output }, ct, null, 15).ConfigureAwait(false)) as Dictionary<string, object>;
-            var streams = (object[])raw["streams"];
-            var video = streams.Cast<Dictionary<string, object>>().SingleOrDefault(s => (string)s["codec_type"] == "video");
-            var audio = streams.Cast<Dictionary<string, object>>().SingleOrDefault(s => (string)s["codec_type"] == "audio");
-            double fileDuration = double.Parse((string)((Dictionary<string, object>)raw["format"])["duration"], CultureInfo.InvariantCulture);
-            double audioDuration = audio == null ? 0 : double.Parse((string)audio["duration"], CultureInfo.InvariantCulture);
+            var raw = await Core.Probe(ffprobe, output, ct).ConfigureAwait(false);
+            var streams = raw.streams ?? new ProbeStream[0];
+            var video = streams.SingleOrDefault(s => s.codec_type == "video");
+            var audio = streams.SingleOrDefault(s => s.codec_type == "audio");
+            double fileDuration = Core.Parse(raw.format?.duration), audioDuration = Core.Parse(audio?.duration);
             // MP4 frame grid is 1/30 s; AAC uses 1024-sample packets. Allow container rounding only.
-            if (video == null || audio == null || Convert.ToInt32(video["width"]) != 1080 || Convert.ToInt32(video["height"]) != 1920 || fileDuration > MaximumSeconds + .001 || Math.Abs(fileDuration - duration) > .04 || Math.Abs(audioDuration - duration) > .025)
+            if (video == null || audio == null || video.width != 1080 || video.height != 1920 || fileDuration > MaximumSeconds + .001 || Math.Abs(fileDuration - duration) > .04 || Math.Abs(audioDuration - duration) > .025)
                 throw new Exception("Проверка готового MP4 не пройдена: длительность или дорожки не совпадают с озвучкой.");
         }
 

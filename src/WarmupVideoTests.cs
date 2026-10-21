@@ -27,7 +27,7 @@ namespace VideoBatch {
                     TextCalls++; string raw = await request.Content.ReadAsStringAsync();
                     Check(request.Headers.Authorization.Parameter == "fixture-router-key", "OpenRouter auth");
                     var data = Json().Deserialize<Dictionary<string, object>>(raw);
-                    var message = (Dictionary<string, object>)((object[])data["messages"])[0];
+                    var message = ((System.Collections.IEnumerable)data["messages"]).Cast<Dictionary<string, object>>().First();
                     string prompt = (string)message["content"];
                     Check(prompt.Contains(Market == "RU" ? "Russian" : "English") && prompt.Contains("6–7") && prompt.Contains("10 seconds"), "language and speech constraint");
                     if (TextCalls > 1 && SpeechCalls <= LongCount) Check(prompt.Contains("Rewrite substantially shorter"), "long speech requests new complete joke");
@@ -60,7 +60,7 @@ namespace VideoBatch {
                 // Deliberately non-frame-aligned narration. The background video has its own unwanted audio.
                 string photo = Path.Combine(temp, "фон с пробелом.png"), video = Path.Combine(temp, "фон-видео.mp4"), shortAudio = Path.Combine(temp, "short.mp3"), longAudio = Path.Combine(temp, "long.mp3");
                 await RunTool(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=red:s=160x90", "-frames:v", "1", photo);
-                await RunTool(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=24:d=1", "-f", "lavfi", "-i", "sine=frequency=2000:duration=1", "-c:v", "libx264", "-c:a", "aac", video);
+                await RunTool(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=blue:s=160x90:r=24:d=1", "-f", "lavfi", "-i", "sine=frequency=2000:duration=1", "-c:v", "libx264", "-c:a", "aac", video);
                 await RunTool(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2.173", "-c:a", "libmp3lame", shortAudio);
                 await RunTool(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=10.17", "-c:a", "libmp3lame", longAudio);
                 Check(WarmupVideoEngine.DefaultOutputFolder.EndsWith(Path.Combine("VideoBatch", "Прогрев")), "named output folder");
@@ -87,7 +87,7 @@ namespace VideoBatch {
                             if (market == "EN") {
                                 string frame = Path.Combine(temp, "caption-frame.png");
                                 await RunTool(ffmpeg, "-v", "error", "-y", "-ss", "0.5", "-i", file, "-frames:v", "1", frame);
-                                using (var image = new Bitmap(frame)) Check(image.GetPixel(540, 1382).GetBrightness() < .3, "caption plate actually burned into final MP4");
+                                using (var image = new Bitmap(frame)) Check(image.GetPixel(540, 1340).GetBrightness() < .3, "caption plate actually burned into final MP4");
                             }
                         }
                     }
