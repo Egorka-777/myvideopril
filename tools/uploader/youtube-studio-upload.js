@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-19-studio-state-v4';
+const BUILD='2026-10-21-studio-publish-v5';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -75,7 +75,7 @@ async function field(scope,kind,optional=false){
  if(!target&&!optional)throw new Error(`Studio: не найдено однозначное поле ${kind}`);return target;
 }
 function typingBudget(text,delay){return 10000+Array.from(norm(text)).length*(Math.max(0,delay)+30);}
-function metadataBudget(item,opts){return 60000+typingBudget(item.title,opts.titleDelay??55)+typingBudget(item.description,opts.descriptionDelay??18)+typingBudget(tags(item.tags).join(','),20);}
+function metadataBudget(item,opts){return 60000+typingBudget(item.title,opts.titleDelay??55)+typingBudget(opts.writeDescription===false?null:item.description,opts.descriptionDelay??18)+typingBudget(tags(item.tags).join(','),20);}
 async function typeText(box,text,{delay=45,onProgress=()=>{}}={}){
  text=norm(text);await box.scrollIntoViewIfNeeded();await box.click();
  await box.focus();
@@ -171,7 +171,7 @@ async function details(page,scope,item,opts,{verify=false}={}){
  const report=opts.progress||(()=>{});
  if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55});report('metadata_title','Заголовок введён и проверен.');}
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
- if(item.description!==null&&item.description!==undefined){
+ if(opts.writeDescription!==false&&item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
   if(!verify){report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
@@ -186,7 +186,7 @@ async function details(page,scope,item,opts,{verify=false}={}){
  await question(scope,'paid',opts.paidPromotion===true,{verify});
  await question(scope,'ai',opts.alteredContent===true,{verify});
  if(opts.writeTags===true&&item.tags!==null&&item.tags!==undefined){report('metadata_tags','Проверяю теги.');await setTags(scope,tags(item.tags),{verify});}
- report('metadata_ready','Название, описание и настройки проверены.');
+ report('metadata_ready','Название и настройки проверены.');
 }
 async function pickNextButton(scope){
  return actionButton(scope,'next-button',L.next);
@@ -429,8 +429,8 @@ async function runItems(page,pack,opts,host){
   if(!fs.existsSync(item.video))throw new Error('Не найден файл '+item.video);
   if(!norm(item.title)||item.title.length>100||/[<>]/.test(item.title))throw new Error('Некорректный заголовок');
   if(opts.writeTags===true&&item.tags!=null)validateTags(tags(item.tags));
-  if(item.description&&/[<>]/.test(item.description))throw new Error('Описание не должно содержать < или >');
-  if(item.description?.length>5000)throw new Error('Описание превышает 5000 символов');
+  if(opts.writeDescription!==false&&item.description&&/[<>]/.test(item.description))throw new Error('Описание не должно содержать < или >');
+  if(opts.writeDescription!==false&&item.description?.length>5000)throw new Error('Описание превышает 5000 символов');
   if(!isImmediatePublish(item))planFor(item);
  });
  const usedIds=new Set();
@@ -469,10 +469,10 @@ async function runItems(page,pack,opts,host){
    progress('studio_verify','Проверяю сохранённые метаданные и расписание в Studio.');
    const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
   }else progress('studio_verify','Shorts опубликованы; проверка расписания не требуется.');
-  const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,schedule:immediate?null:plan};results.push(result);
+  const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,visibility:immediate?'public':'scheduled',schedule:immediate?null:plan};results.push(result);
   host.progress('item_confirmed',immediate?`Studio опубликовал Shorts · ${id}`:`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
   await host.dismiss(page);
  }
  return results;
 }
-module.exports={BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={actionButton,enabled,BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};

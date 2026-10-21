@@ -1,9 +1,9 @@
 name: YouTube Studio RU EN upload
 on:
   push:
-    branches: [feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016, fix/studio-details-chain-20261016, fix/studio-state-flow-20261019, feat/telegram-profile-templates-20261019]
+    branches: [feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016, fix/studio-details-chain-20261016, fix/studio-state-flow-20261019, feat/telegram-profile-templates-20261019, feat/studio-publish-workflow-20261021]
   pull_request:
-    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TaskQueueStore.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','tools/uploader/studio-browser.js','tools/uploader/youtube-studio-upload.js','tools/uploader/youtube-thumbnail.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/studio-details-chain.js','tests/browser/studio-state-flow.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
+    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TaskQueueStore.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','src/YouTubeOwnerPublish.cs','src/YouTubeOwnerPublishTests.cs','tools/uploader/studio-browser.js','tools/uploader/youtube-studio-upload.js','tools/uploader/youtube-owner-publish.js','tools/uploader/youtube-thumbnail.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/studio-details-chain.js','tests/browser/studio-state-flow.js','tests/browser/youtube-owner-publish.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
   workflow_dispatch:
 jobs:
   verify:
@@ -38,10 +38,19 @@ jobs:
         run: |
           npx --prefix tools/uploader playwright-core install chromium
           if ($LASTEXITCODE -ne 0) { throw 'Chromium install' }
-          foreach ($name in @('studio-startup','studio-cdp-stall','studio-details-chain','studio-state-flow','youtube-studio-upload','publishing-ui','native_calendar','dolphin_lifecycle')) {
+          foreach ($name in @('youtube-owner-publish','studio-startup','studio-cdp-stall','studio-details-chain','studio-state-flow','youtube-studio-upload','publishing-ui','native_calendar','dolphin_lifecycle')) {
             node "tests/browser/$name.js"
             if ($LASTEXITCODE -ne 0) { throw $name }
           }
+      - name: Native author publication UI
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          if (!$asm.GetType('VideoBatch.YouTubeOwnerPublishTests').GetMethod('RunUiTests').Invoke($null,@([IO.Path]::GetFullPath('artifacts/studio-owner-ui')))) { throw 'Owner publish UI' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Studio-Owner-UI
+          path: artifacts/studio-owner-ui
       - name: Package desktop update
         shell: pwsh
         run: |
@@ -50,14 +59,17 @@ jobs:
           Copy-Item bin/Release/net48/VideoBatch.exe* $dest
           Copy-Item bin/Release/net48/*.dll $dest
           if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes $dest -Recurse }
+          New-Item -ItemType Directory -Force "$dest/tools/telegram" | Out-Null
+          Copy-Item tools/telegram/* "$dest/tools/telegram" -Recurse -Force
           Copy-Item tools/uploader/*.js "$dest/tools/uploader"
           Copy-Item tools/uploader/package*.json "$dest/tools/uploader"
           Copy-Item docs/AGENT_STUDIO_UPLOAD_20261015_RU.md $dest
           Copy-Item docs/AGENT_STUDIO_STARTUP_20261016_RU.md $dest
           Copy-Item docs/AGENT_STUDIO_DETAILS_20261016_RU.md $dest
           Copy-Item docs/AGENT_STUDIO_STATE_20261019_RU.md $dest
+          Copy-Item docs/AGENT_STUDIO_PUBLISH_20261021_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
       - uses: actions/upload-artifact@v4
         with:
-          name: VideoBatch-Studio-State-Update
+          name: VideoBatch-Studio-Publish-Update
           path: artifacts/VideoBatch-Studio-Upload

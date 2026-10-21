@@ -6,13 +6,14 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-19-studio-state-v4";
+const WORKER_BUILD = "2026-10-21-studio-publish-v5";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
-async function studioCheckpoint(item,packIndex){
+async function durableCheckpoint(stage,item,packIndex,extra={}){
  if(!item.localJobId)throw new Error("Studio: нет постоянного ID задания. Обновите приложение вместе с worker.");
- await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{studioAcks.delete(item.localJobId);reject(new Error("Приложение не подтвердило сохранение защиты от повторной загрузки"));},15000);studioAcks.set(item.localJobId,()=>{clearTimeout(timer);resolve();});send("item_submitting","Сохраняю состояние перед загрузкой",{localJobId:item.localJobId,packIndex});});
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{studioAcks.delete(item.localJobId);reject(new Error("Приложение не подтвердило сохранение состояния перед действием"));},15000);studioAcks.set(item.localJobId,()=>{clearTimeout(timer);resolve();});send(stage,"Сохраняю состояние перед действием",{localJobId:item.localJobId,packIndex,...extra});});
 }
+async function studioCheckpoint(item,packIndex){return durableCheckpoint('item_submitting',item,packIndex);}
 
 const jobPath = process.argv[2];
 let job = null;
@@ -2884,7 +2885,7 @@ async function uploadPackBulk(page,pack){
  await studioBrowser.openStudio(page,job.channelUrl,send);
  const selected=pack.map((item,index)=>({...item,title:cleanUploadTitle(item.title),_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false},{
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:false},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send),
   thumbnail:setThumbnail,waitUpload:studio.waitUpload,dismiss:dismissAfterPublish
@@ -2923,6 +2924,18 @@ async function main() {
     verifiedIp = ip || "";
     if (ip) send("ip", `IP профиля: ${ip}`, { ip, percent: 20 });
   } catch (_) {}
+
+  if (job.studioPublishExisting) {
+    youtubeOpened=true;
+    await studioBrowser.openStudio(page,job.channelUrl,send);
+    const owner=require('./youtube-owner-publish');
+    await owner.runSequential(page,job.items||[],{progress:send,
+      checkpoint:(item,index)=>durableCheckpoint('owner_comment_submitting',item,index,{videoId:item.publishedVideoId,commentText:item.commentText})});
+    await closeProfileSafely(page);
+    finished=true;
+    send('done','Публикация проверена. Комментарии автора обработаны.',{success:true,percent:100});
+    return;
+  }
 
   if (job.shortsWarmup) {
     const { runShortsWarmup } = require("./youtube-shorts-warmup.js");

@@ -23,7 +23,7 @@ namespace VideoBatch {
                 var job=batch.ToUploadJob("not-saved",3001,prefs);
                 Check(job.items.Length==5,"five separate items");
                 Check(!job.studioPaidPromotion&&!job.studioAlteredContent,"explicit No settings");
-                Check(job.items.All(x=>!string.IsNullOrWhiteSpace(x.tags)&&!string.IsNullOrWhiteSpace(x.description)),"metadata reaches Studio payload");
+                Check(job.items.All(x=>!string.IsNullOrWhiteSpace(x.tags)&&x.description==null),"Studio preserves each account description even when a shared bank exists");
                 for(int i=0;i<5;i++){
                     var item=job.items[i];var slot=ScheduleGenerator.ParseSlot(item.scheduleDate,item.scheduleTime);
                     Check(item.video==channel.Items[i].Video,"original video path without copies");
@@ -49,6 +49,7 @@ namespace VideoBatch {
                 foreach(var stage in new[]{"metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_verify"})
                     Check(TaskQueueStore.MapStage(stage)==TaskQueueStatus.Scheduling,"Studio phase remains active: "+stage);
                 Check(TaskQueueStore.MapStage("upload_transfer")==TaskQueueStatus.Uploading,"upload transfer keeps active queue status");
+                Check(YouTubeOwnerPublishTests.RunSelfTests(),"author publication contract");
                 Console.WriteLine("Studio: five-item metadata + PC-time contract, durable pending state, XML and wire roundtrip PASS");return true;
             }finally{Store.Root=oldRoot;try{Directory.Delete(root,true);}catch{}}
         }

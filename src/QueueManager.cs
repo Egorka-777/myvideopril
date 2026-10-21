@@ -67,7 +67,8 @@ namespace VideoBatch {
                 job.studioPaidPromotion=settings.YouTubeStudioPaidPromotion;job.studioAlteredContent=settings.YouTubeStudioAlteredContent;
                 for(int i=0;i<Items.Count;i++){
                     var meta=YouTubeMetadata.Build(settings,Channel,i+1);job.items[i].tags=meta.tags;
-                    job.items[i].description=string.IsNullOrWhiteSpace(meta.description)?null:meta.description;
+                    // Studio owns each account’s saved description. Never replace it from a shared bank.
+                    job.items[i].description=null;
                 }
             }
             return job;

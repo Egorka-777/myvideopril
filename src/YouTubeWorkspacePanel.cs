@@ -26,7 +26,7 @@ namespace VideoBatch {
         string kindView = "shorts";
         string searchQuery = "";
         string statusFilterValue = "Все статусы";
-        Button httpUploadBtn, studioUploadBtn;
+        Button httpUploadBtn, studioUploadBtn, ownerPublishBtn;
         int uploadRuns;
 
         public YouTubeWorkspacePanel(Preferences prefs, YouTubeBackend be, NavigationService nav) {
@@ -63,6 +63,8 @@ namespace VideoBatch {
             headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             var headerActions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Theme.Background };
+            ownerPublishBtn=Theme.MakeButton("Опубликовать",ghost:true,action:async()=>await RunOwnerPublish());
+            headerActions.Controls.Add(ownerPublishBtn);
             headerActions.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: AddVideos));
             liveButton = Theme.MakeButton("Запустить эфир", accent: true, action: async () => await LiveButtonClick());
             headerActions.Controls.Add(liveButton);
@@ -533,6 +535,8 @@ namespace VideoBatch {
             menu.Items.Add("Изменить название", null, (s, e) => RenameChannel(ch, rowIndex));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Проверить IP", null, (s, e) => { _ = RunCheckChannels(new List<YouTubeChannel> { ch }); });
+            menu.Items.Add("Комментарий автора…", null, (s, e) => EditOwnerComment(ch));
+            menu.Items.Add("Опубликовать видео…", null, async (s, e) => await RunOwnerPublish(new List<YouTubeChannel>{ch}));
             menu.Items.Add("Добавить видео", null, (s, e) => AddVideosForChannel(ch));
             menu.Items.Add("Задать превью", null, (s, e) => PickThumbnail(rowIndex));
             menu.Items.Add("Удалить превью", null, (s, e) => ClearThumbnail(rowIndex));
@@ -892,6 +896,25 @@ namespace VideoBatch {
             }catch(Exception ex){ch.ChannelUrl=previous;row.Cells["url"].Value=previous;AppendLog("ОШИБКА: "+ex.Message);}
         }
 
+        void EditOwnerComment(YouTubeChannel channel) {
+            if(backend.Window.IsBusy){AppendLog("Дождитесь завершения текущей операции.");return;}
+            using(var dialog=new OwnerCommentTemplateDialog(channel))if(dialog.ShowDialog(FindForm())==DialogResult.OK){channel.OwnerCommentTemplate=dialog.Template;Store.Save(settings);AppendLog("Комментарий автора сохранён: "+channel.Name);}
+        }
+        async Task RunOwnerPublish(IReadOnlyList<YouTubeChannel> selected=null) {
+            if(uploadRuns>0||backend.Window.IsBusy){AppendLog("Дождитесь завершения текущей операции.");return;}
+            var channels=selected??GetCheckedChannels();
+            if(channels.Count==0){MessageBox.Show(this,"Отметьте нужные аккаунты галочкой ✓.","YouTube");return;}
+            try{
+                SyncWorkspaceToBackend();
+                using(var dialog=new OwnerPublishDialog(settings,channels)){
+                    if(dialog.ShowDialog(FindForm())!=DialogResult.OK)return;
+                    uploadRuns++;SetUploadBusy(true);
+                    try{await backend.RunOwnerPublishAsync(dialog.Choices);AppendLog("Публикация выбранных видео завершена.");}
+                    finally{uploadRuns=Math.Max(0,uploadRuns-1);SetUploadBusy(false);RefreshGrid();}
+                }
+            }catch(Exception ex){AppendLog("ОШИБКА: "+ex.Message);MessageBox.Show(this,ex.Message,"YouTube",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
+        }
+
         void QueueUpload(bool http) {
             if (uploadRuns > 0) { AppendLog("Загрузка уже идёт — можно перейти в другой раздел, прогресс пишется в лог YouTube."); return; }
             _ = RunUpload(http);
@@ -926,6 +949,7 @@ namespace VideoBatch {
         void SetUploadBusy(bool busy) {
             if (httpUploadBtn != null) httpUploadBtn.Enabled = !busy;
             if (studioUploadBtn != null) studioUploadBtn.Enabled = !busy;
+            if (ownerPublishBtn != null) ownerPublishBtn.Enabled = !busy;
         }
 
         async Task RunCheck() {

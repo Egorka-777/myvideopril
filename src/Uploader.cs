@@ -18,6 +18,7 @@ namespace VideoBatch {
         public string Video="",Title="",Thumbnail="",PublishedUrl="",PublishedVideoId="";
         public string StudioUploadId=Guid.NewGuid().ToString("N"),StudioVideoId="";
         public bool StudioPending;
+        public string StudioVisibility="",OwnerCommentState="",OwnerCommentText="",OwnerCommentId="";
     }
     public class YouTubeChannel {
         public bool Enabled=true;
@@ -25,6 +26,7 @@ namespace VideoBatch {
         public string Name="",ProfileId="",ExpectedIp="",Video="",Title="",Thumbnail="",Status="Готов";
         public string Market="RU"; // RU | EN
         public string Kind="long"; // long | shorts
+        public string OwnerCommentTemplate="";
         public string ChannelUrl=""; // страница канала на YouTube (для сетки просмотра)
         public List<YouTubeItem> Items=new List<YouTubeItem>(); // пачка роликов на одном канале
 
@@ -71,7 +73,7 @@ namespace VideoBatch {
         }
     }
     [DataContract] public class UploadItemJob {
-        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,tags,description,caption,publishedVideoId,publishedUrl,localJobId,publishMode,contentKind;
+        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,tags,description,caption,publishedVideoId,publishedUrl,localJobId,publishMode,contentKind,commentText,commentState;
         [DataMember]public long scheduledUnixSeconds;
         [DataMember]public int scheduledUtcOffsetMinutes;
         [DataMember]public bool studioPending;
@@ -87,7 +89,7 @@ namespace VideoBatch {
     [DataContract] public class UploadJob {
         [DataMember]public string token,profileId,expectedIp,video,title,thumbnail,searchUrl,searchFilter,searchKeys,searchFullTitle,scheduleDate,scheduleTime,channelUrl,todayDate;
         [DataMember]public int localPort,pcUtcOffsetMinutes;
-        [DataMember]public bool studioPaidPromotion,studioAlteredContent;
+        [DataMember]public bool studioPaidPromotion,studioAlteredContent,studioPublishExisting;
         [DataMember]public bool recheckOnly,checkOnly,searchOnly,watchMesh,watchDirectLinks,shortsWarmup,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
         [DataMember]public int warmupMinMinutes,warmupMaxMinutes,warmupWatchMinSec,warmupWatchMaxSec,warmupLikePercent;
         [DataMember]public bool warmupLikesEnabled;
@@ -95,7 +97,7 @@ namespace VideoBatch {
         [DataMember]public WatchTargetJob[] watchTargets;
     }
     [DataContract] public class UploadMessage {
-        [DataMember]public string stage,text,ip,url,error,channelUrl,meshOwner,videoId,profileId,localJobId,fileName,diagnosticFile,lastStage;
+        [DataMember]public string stage,text,ip,url,error,channelUrl,meshOwner,videoId,profileId,localJobId,fileName,diagnosticFile,lastStage,visibility,commentText,commentId;
         [DataMember]public double percent;
         [DataMember]public int packIndex,packTotal;
         [DataMember]public bool success,keptOpen;
@@ -155,7 +157,7 @@ namespace VideoBatch {
                         catch(SerializationException){if(update!=null)update(new UploadMessage{stage="log",text="Нечитаемое сообщение worker."});continue;}
                         AppDiagnostics.Write(label,job.profileId,Path.GetFileNameWithoutExtension(file),msg.stage,msg.text??msg.error,AppDiagnostics.Level(msg.stage));
                         if(update!=null)update(msg);
-                        if(msg.stage=="item_submitting"){
+                        if(msg.stage=="item_submitting"||msg.stage=="owner_comment_submitting"){
                             await process.StandardInput.WriteLineAsync("ack:"+msg.localJobId).ConfigureAwait(false);
                             await process.StandardInput.FlushAsync().ConfigureAwait(false);
                         }
@@ -519,7 +521,7 @@ namespace VideoBatch {
         }
     }
 
-    public class UploadWindow:Form {
+    public partial class UploadWindow:Form {
         const int COn=0,CName=1,CLang=2,CKind=3,CProfile=4,CIp=5,CVideo=6,CVideoPick=7,CTitle=8,CThumb=9,CThumbPick=10,CThumbClear=11,CStatus=12,CRemove=13;
         static readonly string[] FilterLabels=new[]{"Загруженные сегодня","За эту неделю","За этот месяц","За этот год","Без фильтра"};
         static readonly string[] FilterKeys=new[]{"today","week","month","year","none"};
@@ -1641,7 +1643,7 @@ namespace VideoBatch {
                     var item=list[m.packIndex-1].Source;
                     if(m.stage=="item_submitting")item.StudioPending=true;
                     if(!string.IsNullOrWhiteSpace(m.videoId))item.StudioVideoId=m.videoId;
-                    if(m.stage=="item_confirmed"){item.StudioPending=false;item.PublishedUrl=m.url??"";item.PublishedVideoId=m.videoId??"";}
+                    if(m.stage=="item_confirmed"){item.StudioPending=false;item.PublishedUrl=m.url??"";item.PublishedVideoId=m.videoId??"";item.StudioVisibility=m.visibility??"";}
                     lock(saveLock)Store.Save(settings); // Must succeed before DolphinRunner sends ack.
                 }
                 if(m.packIndex>0&&!string.IsNullOrWhiteSpace(m.url)){
