@@ -91,7 +91,10 @@ async function run(){
   // A missing success card can be recovered by checking the saved ID. Only the
   // confirmed wizard may then be closed; there is still just one Publish click.
   const fallback=await setup(browser,'en',dir,{badConfirmation:true});
-  const recovered=await S.runSequential(fallback.page,fallback.pack.slice(0,1),{titleDelay:1,descriptionDelay:1,saveTimeout:180,closeTimeout:2500},fallback.host);
+  // A full state probe traverses several locators. 180ms occasionally expires
+  // inside that probe on Windows and tests an unresponsive page, not an absent
+  // success card. Allow a real polling interval before the persisted-ID path.
+  const recovered=await S.runSequential(fallback.page,fallback.pack.slice(0,1),{titleDelay:1,descriptionDelay:1,saveTimeout:4000,closeTimeout:2500},fallback.host);
   assert.equal(recovered.length,1);assert.equal((await fallback.page.evaluate(()=>stats)).publishes,1);assert.equal((await fallback.page.evaluate(()=>stats)).headerCloses,1);await fallback.ctx.close();
   const share=await browser.newPage();await share.setContent('<button id="unrelated" onclick="window.wrong=true">Close</button><ytcp-video-share-dialog><h2>Video published</h2><a href="https://youtu.be/video000001">Video</a><button>Copy link</button><button>Copy link</button><button id="close-button" onclick="this.parentElement.remove()">Close</button></ytcp-video-share-dialog>');
   await assert.rejects(B.dismissPublishDialog(share,()=>{},{expectedId:'video000002',confirmed:true,timeout:350}),/другое видео/);
