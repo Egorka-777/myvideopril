@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-timezone-v9';
+const BUILD='2026-10-21-studio-metadata-v10';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -76,9 +76,29 @@ async function field(scope,kind,optional=false){
 }
 function typingBudget(text,delay){return 10000+Array.from(norm(text)).length*(Math.max(0,delay)+30);}
 function metadataBudget(item,opts){return 60000+typingBudget(item.title,opts.titleDelay??55)+typingBudget(opts.writeDescription===false?null:item.description,opts.descriptionDelay??18)+typingBudget(tags(item.tags).join(','),20);}
-async function typeText(box,text,{delay=45,onProgress=()=>{}}={}){
- text=norm(text);await box.scrollIntoViewIfNeeded();await box.click();
- await box.focus();
+async function dismissMetadataBlockers(scope){
+ const page=scope.page();
+ for(let i=0;i<3;i++){await page.keyboard.press('Escape').catch(()=>{});await pause(120);}
+ await until(async()=>{
+  for(const scrim of await scope.locator('.dialog-scrim').all())if(await scrim.isVisible())return false;
+  for(const tip of await scope.locator('#tooltip, tp-yt-iron-tooltip, ytcp-paper-tooltip-placeholder').all())if(await tip.isVisible())return false;
+  return true;
+ },5000,'Studio: подсказка или затемнение перекрывает поле. Нажмите Escape в мастере и повторите.');
+}
+async function activateEditor(box,scope){
+ if(scope)await dismissMetadataBlockers(scope);
+ await box.scrollIntoViewIfNeeded();
+ let active=await box.evaluate(el=>{el.focus();try{el.click();}catch{}return document.activeElement===el||el.contains(document.activeElement);});
+ if(!active){
+  try{await box.click({timeout:4000});}
+  catch{await box.click({force:true,timeout:4000}).catch(()=>{});}
+  active=await box.evaluate(el=>document.activeElement===el||el.contains(document.activeElement));
+ }
+ if(!active)await box.evaluate(el=>el.focus());
+ await until(async()=>await box.evaluate(el=>document.activeElement===el||el.contains(document.activeElement)),4000,'Studio не активировало поле ввода — возможно, его перекрывает подсказка или затемнение.');
+}
+async function typeText(box,text,{delay=45,onProgress=()=>{},scope=null}={}){
+ text=norm(text);await activateEditor(box,scope);
  await box.press('Control+A');await box.press('Delete');
  await until(async()=>await read(box)==='',3000,'Studio не очистил прежний текст');
  const chars=Array.from(text);
@@ -169,11 +189,11 @@ async function question(scope,kind,answer,{verify=false}={}){
 }
 async function details(page,scope,item,opts,{verify=false}={}){
  const report=opts.progress||(()=>{});
- if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55});report('metadata_title','Заголовок введён и проверен.');}
+ if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55,scope});report('metadata_title','Заголовок введён и проверен.');}
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
  if(opts.writeDescription!==false&&item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
-  if(!verify){report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
+  if(!verify){report('metadata_description','Ввожу описание.');await dismissMetadataBlockers(scope);await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});

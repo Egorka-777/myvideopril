@@ -41,7 +41,12 @@ function fixture(lang,state,editor=false){
    await S.typeText(await S.field(page,'title'),'Accessible title',{delay:1});
    assert.equal(await S.read(await S.field(page,'title')),'Accessible title');
   }
+  await page.setContent(`<ytcp-uploads-dialog><div class="dialog-scrim" id="scrim" style="position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.2)"></div><div id="tooltip" style="position:fixed;inset:0;z-index:60">tooltip</div><div id="description-textarea"><div id="textbox" contenteditable="true" role="textbox">old</div></div><script>addEventListener('keydown',e=>{if(e.key==='Escape'){document.getElementById('scrim')?.remove();document.getElementById('tooltip')?.remove();}});</script></ytcp-uploads-dialog>`);
+  const scope=page.locator('ytcp-uploads-dialog');
+  await S.typeText(scope.locator('#textbox'),'After scrim',{delay:1,scope});
+  assert.equal(await S.read(scope.locator('#textbox')),'After scrim');
   console.log('PASS 959-character description at production speed survives 10s context default, with progress');
+  console.log('PASS description typing dismisses dialog-scrim and tooltip blockers');
   await context.close();
   for(const lang of ['ru','en']){
    const ctx=await browser.newContext({timezoneId:'America/New_York'});ctx.setDefaultTimeout(10000);
