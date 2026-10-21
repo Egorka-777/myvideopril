@@ -429,7 +429,13 @@ async function runItems(page,pack,opts,host){
  async function verifySaved(item,id,plan,zone,progress){
   progress('studio_verify','Проверяю сохранённые название, описание и '+(plan?'расписание':'открытый доступ')+' по ID '+id+'.');
   const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');
-  try{if(plan)await syncClock(verify,plan,host.progress);return await readback(verify,item,id,plan,opts,zone);}
+  try{
+   if(plan)await syncClock(verify,plan,host.progress);
+   for(let attempt=0;attempt<2;attempt++){
+    try{return await readback(verify,item,id,plan,opts,zone);}
+    catch(error){if(attempt||verify.isClosed())throw error;progress('studio_verify','Сохранённые данные ещё не подтверждены. Повторяю только чтение существующего ID (2/2).');await pause(600);}
+   }
+  }
   finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
  }
 

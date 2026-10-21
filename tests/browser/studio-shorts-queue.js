@@ -51,13 +51,14 @@ function savedEditor(lang,record){
  return body;
 }
 async function setup(browser,lang,dir,options={}){
- const ctx=await browser.newContext({timezoneId:'Europe/Moscow'});ctx.setDefaultTimeout(4000);const page=await ctx.newPage(),saved=new Map(),stages=[],navigations=[];
+ const ctx=await browser.newContext({timezoneId:'Europe/Moscow'});ctx.setDefaultTimeout(4000);const page=await ctx.newPage(),saved=new Map(),reads=new Map(),stages=[],navigations=[];
  await ctx.route('https://studio.youtube.com/**',async route=>{
   const u=new URL(route.request().url());
   if(u.pathname==='/fixture/save'){const record=JSON.parse(route.request().postData());saved.set(record.id,record);return route.fulfill({body:'ok'});}
   const id=u.pathname.match(/\/video\/(\w+)\/edit/)?.[1];
   if(route.request().isNavigationRequest()&&route.request().frame()===page.mainFrame())navigations.push(u.pathname);
-  return route.fulfill({contentType:'text/html; charset=utf-8',body:id?savedEditor(lang,saved.get(id)):app(lang,options)});
+  let record=saved.get(id);if(id){reads.set(id,(reads.get(id)||0)+1);if(options.staleFirstRead&&reads.get(id)===1)record={...record,visibility:'private'};}
+  return route.fulfill({contentType:'text/html; charset=utf-8',body:id?savedEditor(lang,record):app(lang,options)});
  });
  await B.openStudio(page,'',()=>{});
  const pack=Array.from({length:2},(_,n)=>{const video=path.join(dir,lang+'-'+n+'.mp4');fs.writeFileSync(video,'fixture');return {video,title:'Title '+lang+' '+n,description:('Описание '+n+' — текст, ссылка https://example.com и символы 👍.\n\n').repeat(6).trim(),contentKind:'shorts',publishMode:'immediate',thumbnail:'must never open.png',localJobId:'job-'+n};});
@@ -87,6 +88,18 @@ async function setup(browser,lang,dir,options={}){
    assert.equal(f.stages.filter(x=>x.stage==='item_confirmed').length,2);assert.equal(f.stages.filter(x=>x.stage==='studio_close'&&/один раз/.test(x.text)).length,2);
    console.log('PASS',lang,'2 real picker cycles → exact multiline descriptions → Public readback → duplicate Copy links → delayed footer Close once → delayed Create → next file, no thumbnails/reloads/header-X/Escape.');await f.ctx.close();
   }
+  // A missing success card can be recovered by checking the saved ID. Only the
+  // confirmed wizard may then be closed; there is still just one Publish click.
+  const fallback=await setup(browser,'en',dir,{badConfirmation:true});
+  const recovered=await S.runSequential(fallback.page,fallback.pack.slice(0,1),{titleDelay:1,descriptionDelay:1,saveTimeout:180,closeTimeout:2500},fallback.host);
+  assert.equal(recovered.length,1);assert.equal((await fallback.page.evaluate(()=>stats)).publishes,1);assert.equal((await fallback.page.evaluate(()=>stats)).headerCloses,1);await fallback.ctx.close();
+  const share=await browser.newPage();await share.setContent('<button id="unrelated" onclick="window.wrong=true">Close</button><ytcp-video-share-dialog><h2>Video published</h2><a href="https://youtu.be/video000001">Video</a><button>Copy link</button><button>Copy link</button><button id="close-button" onclick="this.parentElement.remove()">Close</button></ytcp-video-share-dialog>');
+  await assert.rejects(B.dismissPublishDialog(share,()=>{},{expectedId:'video000002',confirmed:true,timeout:350}),/другое видео/);
+  assert.equal(await share.locator('ytcp-video-share-dialog').count(),1);
+  await B.dismissPublishDialog(share,()=>{},{expectedId:'video000001',confirmed:true,timeout:1000});assert.equal(await share.locator('ytcp-video-share-dialog').count(),0);assert(!(await share.evaluate(()=>window.wrong)));await share.close();
+  console.log('PASS missing success card recovered from persisted ID without another Publish; standalone share dialog closes locally; wrong ID and unrelated Close are never clicked.');
+  const lag=await setup(browser,'ru',dir,{staleFirstRead:true});const checked=await S.runSequential(lag.page,lag.pack.slice(0,1),{titleDelay:1,descriptionDelay:1},lag.host);assert.equal(checked.length,1);assert.equal((await lag.page.evaluate(()=>stats)).publishes,1);assert(lag.stages.some(s=>/только чтение/.test(s.text)));await lag.ctx.close();
+  console.log('PASS one bounded repeat of saved-ID read handles temporarily stale visibility without retransmission or another Publish.');
   // Persisted success is durable BEFORE cleanup; a disabled Close stops the queue.
   const stuck=await setup(browser,'ru',dir,{neverClose:true});await assert.rejects(S.runSequential(stuck.page,stuck.pack,{titleDelay:1,descriptionDelay:1,closeTimeout:350},stuck.host),/Закрыть/);
   assert.equal(stuck.saved.size,1);assert.equal(stuck.stages.filter(s=>s.stage==='item_confirmed').length,1);assert.equal((await stuck.page.evaluate(()=>stats)).selected.length,1);assert.equal((await stuck.page.evaluate(()=>stats)).closes,0);await stuck.ctx.close();
