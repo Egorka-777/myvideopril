@@ -11,7 +11,7 @@ function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false}={}){
  <script>
  const twoStep=${twoStep};let selected=false;
  const commit=async()=>{await fetch('/fixture/public',{method:'POST'});document.querySelector('#visibility').textContent=${JSON.stringify(ru?'Открытый доступ':'Public')};};
- document.querySelector('#visibility').onclick=()=>{const el=document.createElement('ytcp-video-visibility-edit-dialog');el.innerHTML='<label><input type="radio" name="PUBLIC">${ru?'Открытый доступ':'Public'}</label><footer><ytcp-button id="done-button"><button>${ru?'Готово':'Done'}</button></ytcp-button></footer>';document.body.append(el);el.querySelector('#done-button').onclick=async()=>{selected=el.querySelector('input').checked;if(!selected)return;el.remove();if(twoStep)document.querySelector('#save-button button').disabled=false;else await commit();};};
+ document.querySelector('#visibility').onclick=()=>{const el=document.createElement('ytcp-video-visibility-edit-dialog');el.innerHTML='<label><input type="radio" name="PUBLIC">${ru?'Открытый доступ':'Public'}</label><footer><ytcp-button id="done-button"><button>${ru?'Готово':'Done'}</button></ytcp-button></footer>';document.body.append(el);el.querySelector('#done-button').onclick=async()=>{selected=el.querySelector('input').checked;if(!selected)return;el.remove();if(twoStep)setTimeout(()=>document.querySelector('#save-button button').disabled=false,350);else await commit();};};
  document.querySelector('#save-button').onclick=async()=>{if(selected){${wrongSave?'':'await commit();'}document.querySelector('#save-button button').disabled=true;}};
  </script></body></html>`;
 }
@@ -54,6 +54,11 @@ async function fixture(browser,lang,options={}){
    assert.deepEqual(f.counts(),{publishCalls:2,commentCalls:2});await f.ctx.close();
    console.log('PASS',lang,'two existing IDs: dialog Done + editor Save + persisted Public + own comment + durable ACK + repeat without duplicates');
   }
+  const direct=await fixture(browser,'en',{twoStep:false});
+  await O.runSequential(direct.page,[{publishedVideoId:IDS[0],commentText:''}],{progress:()=>{},checkpoint:async()=>{throw Error('empty comment');}});assert.deepEqual(direct.counts(),{publishCalls:1,commentCalls:0});await direct.ctx.close();
+  const sameText=await fixture(browser,'ru');sameText.state.get(IDS[0]).comments.push({text:'Same text',author:'/@stranger',id:'foreign-comment'});
+  await O.runSequential(sameText.page,[{publishedVideoId:IDS[0],commentText:'Same text'}],{typingDelay:1,progress:()=>{},checkpoint:async()=>{}});assert.equal(sameText.counts().commentCalls,1);await sameText.ctx.close();
+  console.log('PASS one-step visibility commit, delayed editor Save, empty template, and exact text from another author is not treated as own comment');
   const wrong=await fixture(browser,'en',{wrongSave:true});
   await assert.rejects(O.runSequential(wrong.page,[{publishedVideoId:IDS[0],commentText:'Not sent'}],{verifyMs:350,progress:()=>{},checkpoint:async()=>{throw Error('must not submit');}}),/не подтвердил открытый доступ/);assert.equal(wrong.counts().commentCalls,0);await wrong.ctx.close();
   const foreign=await fixture(browser,'ru',{owned:false});

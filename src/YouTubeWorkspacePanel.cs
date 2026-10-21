@@ -707,6 +707,7 @@ namespace VideoBatch {
 
         void AddVideosForChannel(YouTubeChannel ch) {
             if (ch == null) return;
+            if(backend.Window.OwnerPublishing){MessageBox.Show(this,"Дождитесь окончания публикации перед заменой списка видео.","YouTube");return;}
             RestoreGridSelection(ch.ChannelId);
             using (var d = new OpenFileDialog { Multiselect = true, Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все|*.*" }) {
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
@@ -898,7 +899,11 @@ namespace VideoBatch {
 
         void EditOwnerComment(YouTubeChannel channel) {
             if(backend.Window.IsBusy){AppendLog("Дождитесь завершения текущей операции.");return;}
-            using(var dialog=new OwnerCommentTemplateDialog(channel))if(dialog.ShowDialog(FindForm())==DialogResult.OK){channel.OwnerCommentTemplate=dialog.Template;Store.Save(settings);AppendLog("Комментарий автора сохранён: "+channel.Name);}
+            using(var dialog=new OwnerCommentTemplateDialog(channel))if(dialog.ShowDialog(FindForm())==DialogResult.OK){
+                string previous=channel.OwnerCommentTemplate;
+                try{channel.OwnerCommentTemplate=dialog.Template;Store.Save(settings);AppendLog("Комментарий автора сохранён: "+channel.Name);}
+                catch(Exception e){channel.OwnerCommentTemplate=previous;MessageBox.Show(this,"Не удалось сохранить шаблон: "+e.Message,"YouTube");}
+            }
         }
         async Task RunOwnerPublish(IReadOnlyList<YouTubeChannel> selected=null) {
             if(uploadRuns>0||backend.Window.IsBusy){AppendLog("Дождитесь завершения текущей операции.");return;}

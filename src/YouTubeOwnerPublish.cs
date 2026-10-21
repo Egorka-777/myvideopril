@@ -47,6 +47,10 @@ namespace VideoBatch {
             }
             return result;
         }
+        public static void EnsureAttached(Preferences settings,OwnerPublishSelection choice){
+            if(!(settings.YouTubeChannels??new List<YouTubeChannel>()).Contains(choice.Channel)||!(choice.Channel.Items??new List<YouTubeItem>()).Contains(choice.Item))
+                throw new Exception("Список аккаунтов или видео изменился во время публикации. Действие остановлено до отправки комментария.");
+        }
         public static UploadItemJob ToJob(OwnerPublishSelection choice){
             if(choice==null||choice.Channel==null||choice.Item==null||choice.VideoId=="")throw new Exception("Нет подтверждённого ID видео.");
             if(choice.Item.StudioPending)throw new Exception("Сначала проверьте незавершённую загрузку в Studio.");
@@ -70,6 +74,7 @@ namespace VideoBatch {
         }
     }
     public partial class UploadWindow {
+        public bool OwnerPublishing{get;private set;}
         public Task RunOwnerPublishAsync(IReadOnlyList<OwnerPublishSelection> choices)=>TrackOperation(()=>PublishOwned(choices));
         async Task PublishOwned(IReadOnlyList<OwnerPublishSelection> choices){
             if(cancellation!=null||uploadsInFlight>0)throw new Exception("Дождитесь текущей операции или нажмите Стоп.");
@@ -82,13 +87,14 @@ namespace VideoBatch {
                 if(group.Key=="")throw new Exception("Не указан профиль Dolphin.");
                 var list=group.ToList();
                 if(list.Select(c=>c.Channel).Distinct().Count()>1)throw new Exception("Для одного профиля выбраны разные каналы. Запустите их по отдельности.");
+                foreach(var choice in list)YouTubeOwnerPublish.EnsureAttached(settings,choice);
                 var items=list.Select(YouTubeOwnerPublish.ToJob).ToArray();
                 if(items.Select(i=>i.publishedVideoId).Distinct().Count()!=items.Length)throw new Exception("Одно видео выбрано дважды.");
                 return new {Choices=list,Items=items,ProfileId=group.Key};
             }).ToList();
             lock(saveLock)Store.Save(settings);
             lock(uploadLock){if(batches.Any(b=>busyProfiles.Contains(b.ProfileId)))throw new Exception("Выбранный профиль занят.");uploadCts=new CancellationTokenSource();foreach(var b in batches)busyProfiles.Add(b.ProfileId);}
-            var ct=uploadCts.Token;UploadBusyStart();
+            var ct=uploadCts.Token;OwnerPublishing=true;UploadBusyStart();
             try{
                 foreach(var batch in batches){
                     ct.ThrowIfCancellationRequested();
@@ -101,14 +107,14 @@ namespace VideoBatch {
                             if(!string.IsNullOrWhiteSpace(message.text))report(message.text);
                             if(message.stage=="owner_video_public"||message.stage=="owner_comment_submitting"||message.stage=="owner_comment_confirmed"){
                                 if(message.packIndex<1||message.packIndex>batch.Choices.Count)throw new Exception("Неверный номер видео в ответе worker.");
-                                lock(saveLock){YouTubeOwnerPublish.Apply(batch.Choices[message.packIndex-1],message);Store.Save(settings);}
+                                lock(saveLock){var choice=batch.Choices[message.packIndex-1];YouTubeOwnerPublish.EnsureAttached(settings,choice);YouTubeOwnerPublish.Apply(choice,message);Store.Save(settings);}
                             }
                         },ct);
                         report("Опубликовано ✓ · "+batch.Items.Length);
                     }catch(OperationCanceledException){report("Остановлено · подтверждённые результаты сохранены");throw;}
                     catch(Exception ex){report("Ошибка: "+ex.Message);throw;}
                 }
-            }finally{lock(uploadLock)foreach(var b in batches)busyProfiles.Remove(b.ProfileId);UploadBusyEnd();}
+            }finally{lock(uploadLock)foreach(var b in batches)busyProfiles.Remove(b.ProfileId);OwnerPublishing=false;UploadBusyEnd();}
         }
     }
     internal sealed class OwnerCommentTemplateDialog:Form {
@@ -151,11 +157,16 @@ namespace VideoBatch {
             var publish=Theme.MakeButton("Опубликовать выбранные",accent:true,action:()=>{try{videos.EndEdit();Choices=videos.Rows.Cast<DataGridViewRow>().Where(r=>Convert.ToBoolean(r.Cells["on"].Value??false)).Select(r=>(OwnerPublishSelection)r.Tag).ToList();if(Choices.Count==0)throw new Exception("Отметьте видео галочкой.");foreach(var c in Choices)YouTubeOwnerPublish.ToJob(c);DialogResult=DialogResult.OK;Close();}catch(Exception e){MessageBox.Show(this,e.Message,"YouTube");}});
             buttons.Controls.Add(cancel);buttons.Controls.Add(publish);root.Controls.Add(buttons,0,4);CancelButton=cancel;ShowPreview();
         }
-        static string State(OwnerPublishSelection c)=>c.Item.OwnerCommentState=="pending"?"Комментарий: проверить":YouTubeOwnerPublish.CommentComplete(c.Item)?"Комментарий сохранён":c.Item.StudioVisibility=="public"?"Открытый доступ":c.Item.StudioVisibility=="scheduled"?"Запланировано":"Проверить доступ";
+        static string State(OwnerPublishSelection c)=>c.Item.OwnerCommentState=="pending"?"Комментарий: проверить":c.Item.OwnerCommentState=="confirmed_manual"?"Проверено вручную":YouTubeOwnerPublish.CommentComplete(c.Item)?"Комментарий сохранён":c.Item.StudioVisibility=="public"?"Открытый доступ":c.Item.StudioVisibility=="scheduled"?"Запланировано":"Проверить доступ";
         void ShowPreview(){if(preview==null)return;var c=videos.CurrentRow?.Tag as OwnerPublishSelection;preview.Text=c==null?"Нет сохранённых видео. Сначала загрузите ролик через Studio.":"https://www.youtube.com/watch?v="+c.VideoId+Environment.NewLine+Environment.NewLine+(string.IsNullOrWhiteSpace(c.CommentText)?"Без комментария. Шаблон: правая кнопка по аккаунту → Комментарий автора.":c.CommentText);}
         void Reconcile(OwnerPublishSelection c,int index,bool exists){
             if(MessageBox.Show(this,exists?"Вы проверили страницу видео, и этот комментарий уже опубликован?":"Вы проверили страницу видео, и комментария точно нет? Следующий запуск сможет отправить его снова.","Проверка комментария",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-            c.Item.OwnerCommentState=exists?"confirmed_manual":"";if(!exists){c.Item.OwnerCommentText="";c.Item.OwnerCommentId="";c.CommentText=YouTubeOwnerPublish.RenderComment(c.Channel.OwnerCommentTemplate,DateTime.Now);}Store.Save(settings);videos.Rows[index].Cells["state"].Value=State(c);ShowPreview();
+            string oldState=c.Item.OwnerCommentState,oldText=c.Item.OwnerCommentText,oldId=c.Item.OwnerCommentId,oldPreview=c.CommentText;
+            try{
+                c.Item.OwnerCommentState=exists?"confirmed_manual":"";
+                if(!exists){c.Item.OwnerCommentText="";c.Item.OwnerCommentId="";c.CommentText=YouTubeOwnerPublish.RenderComment(c.Channel.OwnerCommentTemplate,DateTime.Now);}
+                Store.Save(settings);videos.Rows[index].Cells["state"].Value=State(c);ShowPreview();
+            }catch(Exception e){c.Item.OwnerCommentState=oldState;c.Item.OwnerCommentText=oldText;c.Item.OwnerCommentId=oldId;c.CommentText=oldPreview;MessageBox.Show(this,"Не удалось сохранить проверку: "+e.Message,"YouTube");}
         }
     }
 }
