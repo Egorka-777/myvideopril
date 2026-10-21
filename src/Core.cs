@@ -164,6 +164,9 @@ namespace VideoBatch {
         public int WarmupVideoMaxSecRu=8, WarmupVideoMaxSecEn=8;
         public string WarmupVideoBackgroundsRu="", WarmupVideoBackgroundsEn=""; // Legacy folder selection, preserved.
         public string WarmupVideoBackgroundFileRu="", WarmupVideoBackgroundFileEn="";
+        /// <summary>Тексты анекдотов для связок «фон + озвучка» (поле «Описание» ролика в TikTok/прогреве).</summary>
+        public List<string> WarmupVideoJokesRu=new List<string>(), WarmupVideoJokesEn=new List<string>();
+        public List<string> WarmupVideoBackgroundFilesRu=new List<string>(), WarmupVideoBackgroundFilesEn=new List<string>();
         public string WarmupVideoOutputRu="", WarmupVideoOutputEn="";
         public string WarmupVideoPreviewOverlay="none";
         public WarmupSubtitleStyle WarmupSubtitlesRu=new WarmupSubtitleStyle(), WarmupSubtitlesEn=new WarmupSubtitleStyle();
@@ -388,6 +391,18 @@ namespace VideoBatch {
             if(p.WarmupVideoOutputRu==null)p.WarmupVideoOutputRu="";
             if(p.WarmupVideoOutputEn==null)p.WarmupVideoOutputEn="";
             if(string.IsNullOrWhiteSpace(p.WarmupVideoPreviewOverlay))p.WarmupVideoPreviewOverlay="none";
+            if(p.WarmupVideoJokesRu==null)p.WarmupVideoJokesRu=new List<string>();
+            if(p.WarmupVideoJokesEn==null)p.WarmupVideoJokesEn=new List<string>();
+            if(p.WarmupVideoBackgroundFilesRu==null)p.WarmupVideoBackgroundFilesRu=new List<string>();
+            if(p.WarmupVideoBackgroundFilesEn==null)p.WarmupVideoBackgroundFilesEn=new List<string>();
+            p.WarmupVideoJokesRu=p.WarmupVideoJokesRu.Select(x=>(x??"").Trim()).ToList();
+            p.WarmupVideoJokesEn=p.WarmupVideoJokesEn.Select(x=>(x??"").Trim()).ToList();
+            p.WarmupVideoBackgroundFilesRu=p.WarmupVideoBackgroundFilesRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            p.WarmupVideoBackgroundFilesEn=p.WarmupVideoBackgroundFilesEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            if(p.WarmupVideoBackgroundFilesRu.Count==0&&!string.IsNullOrWhiteSpace(p.WarmupVideoBackgroundFileRu))
+                p.WarmupVideoBackgroundFilesRu.Add(p.WarmupVideoBackgroundFileRu.Trim());
+            if(p.WarmupVideoBackgroundFilesEn.Count==0&&!string.IsNullOrWhiteSpace(p.WarmupVideoBackgroundFileEn))
+                p.WarmupVideoBackgroundFilesEn.Add(p.WarmupVideoBackgroundFileEn.Trim());
             if(p.YouTubeSearchUrlRu==null)p.YouTubeSearchUrlRu="";
             if(string.IsNullOrWhiteSpace(p.YouTubeSearchFilterRu))p.YouTubeSearchFilterRu="today";
             if(p.YouTubeSearchTitleEn==null)p.YouTubeSearchTitleEn="";

@@ -123,7 +123,7 @@ namespace VideoBatch {
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
             y = AddNavGroup(panel, "Аккаунты", y, NavItem("Профили", NavSection.Profiles));
             y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram));
-            y = AddNavGroup(panel, "YouTube", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогревочные ролики", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
+            y = AddNavGroup(panel, "YouTube", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогрев роликами", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
             return panel;
         }

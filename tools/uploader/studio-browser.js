@@ -41,6 +41,72 @@ async function visible(locator) {
   for (const item of await locator.all()) if (await item.isVisible()) return item;
   return null;
 }
+async function anyVisible(locator) {
+  for (const item of await locator.all()) if (await item.isVisible()) return true;
+  return false;
+}
+async function findPublishCloseButton(page) {
+  const locators = [
+    page.locator("ytcp-uploads-dialog #close-button"),
+    page.locator("ytcp-uploads-dialog").getByRole("button", { name: /^(Close|Закрыть)$/i }),
+    page.locator("ytcp-video-share-dialog #close-button"),
+    page.locator("ytcp-uploads-dialog #close-icon-button"),
+    page.locator("#close-icon-button"),
+    page.getByRole("button", { name: /^(Close|Закрыть)$/i })
+  ];
+  for (const locator of locators) {
+    for (const btn of await locator.all()) {
+      if (!(await btn.isVisible().catch(() => false))) continue;
+      return btn;
+    }
+  }
+  return null;
+}
+async function isPostPublishScreen(page) {
+  if (await anyVisible(page.getByText(/Video published|Видео опубликовано|Publish complete|Публикация завершена/i))) return true;
+  if (!(await uploadWizardOpen(page))) return false;
+  const hasShare = await anyVisible(page.locator("yt-share-target-renderer, yt-share-panel-v2, ytcp-social-suggestions, yt-social-target-bar, ytcp-video-share-dialog"));
+  const hasCopyLink = await anyVisible(page.getByRole("button", { name: /копировать ссылку|copy.*link/i }));
+  const hasPromote = await anyVisible(page.getByText(/Включить продвижение|Promote your video|Promotion/i));
+  const footerClose = await anyVisible(page.locator("ytcp-uploads-dialog #close-button"));
+  if (hasShare || hasCopyLink || hasPromote) return true;
+  // Footer «Закрыть» + disabled «Опубликовать» = success step (header X exists during whole upload).
+  if (footerClose) {
+    const publish = page.locator("ytcp-uploads-dialog #done-button button, ytcp-uploads-dialog #done-button");
+    for (const btn of await publish.all()) {
+      if (!(await btn.isVisible().catch(() => false))) continue;
+      const off = await btn.evaluate(el => {
+        for (let n = el; n; n = n.parentElement || n.getRootNode?.().host) {
+          if (n.getAttribute?.("aria-disabled") === "true" || n.hasAttribute?.("disabled")) return true;
+        }
+        return false;
+      }).catch(() => false);
+      if (off) return true;
+    }
+  }
+  return false;
+}
+async function dismissPublishDialog(page, report = () => {}) {
+  for (let i = 0; i < 10; i++) {
+    const close = await findPublishCloseButton(page);
+    if (close) {
+      report("studio_publish", "Нажимаю «Закрыть» после публикации.");
+      await close.click({ timeout: 8000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
+    } else if (await anyVisible(page.getByText(/^(Video published|Видео опубликовано)/i))) {
+      await page.keyboard.press("Escape").catch(() => {});
+      await new Promise(r => setTimeout(r, 350));
+    } else if (!(await uploadWizardOpen(page))) {
+      return;
+    } else {
+      await page.keyboard.press("Escape").catch(() => {});
+      await new Promise(r => setTimeout(r, 350));
+    }
+    if (!(await uploadWizardOpen(page))) return;
+  }
+  if (await uploadWizardOpen(page) && await isPostPublishScreen(page))
+    throw new Error("Studio не закрыл окно «Видео опубликовано». Нажмите «Закрыть» вручную.");
+}
 async function uploadWizardOpen(page) {
   // A custom-element host can have zero bounds while its positioned descendants
   // are visible. A failed inspection is an error, never permission to navigate.
@@ -68,6 +134,9 @@ async function openStudio(page, channelUrl, report) {
   const expected = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
   const url = 'https://studio.youtube.com' + (expected ? '/channel/' + expected : '');
   const onStudio = /^https:\/\/studio\.youtube\.com(?:\/|$)/i.test(page.url() || '');
+  if (onStudio && await isPostPublishScreen(page)) {
+    await dismissPublishDialog(page, report);
+  }
   if (onStudio && await uploadWizardOpen(page)) {
     report('studio_ready', 'YouTube Studio: продолжаю открытый мастер загрузки (без перезагрузки страницы).');
     return;
@@ -80,7 +149,7 @@ async function openStudio(page, channelUrl, report) {
     if (expected && /studio\.youtube\.com\/channel\/UC/.test(current) && !current.includes('/channel/' + expected))
       throw new Error('Studio открыл другой канал. Файл не передавался.');
     return visible(page.locator('#create-icon').or(page.getByRole('button', { name: /^(Create|Создать)$/i })));
-  }, 25000, 'Studio не показал кнопку «Создать» за 25 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
+  }, 90000, 'Studio не показал кнопку «Создать» за 90 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
   report('studio_ready', 'YouTube Studio готов.');
 }
 async function videoInput(page) {
@@ -183,6 +252,7 @@ async function prepareCdpFile(page, input) {
 async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '' } = {}) {
   file = path.resolve(file);
   if (!fs.existsSync(file)) throw new Error('Не найден файл ' + file);
+  if (await isPostPublishScreen(page)) await dismissPublishDialog(page, report);
   let input = await ensureUploadPicker(page, channelUrl);
   if (!input) {
     const create = await bounded(() => visible(page.locator('#create-icon').or(page.getByRole('button', { name: /^(Create|Создать)$/i }))), 8000, 'Studio не ответил при поиске кнопки «Создать». Файл не передавался.');
@@ -201,4 +271,4 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
   await transferFile(page, input, file, report, { forceCdp });
   report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
-module.exports = { uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile };
+module.exports = { uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton };

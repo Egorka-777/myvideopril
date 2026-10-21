@@ -1,9 +1,9 @@
 "use strict";
 // Native Studio UI only. No metadata/publish HTTP endpoints and no clipboard/DOM text writes.
 const fs=require('fs');
-const {bounded}=require('./studio-browser');
+const {bounded,dismissPublishDialog,isPostPublishScreen}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-readback-v12';
+const BUILD='2026-10-21-studio-description-v18';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -58,6 +58,10 @@ async function one(locator,{optional=false}={}){
  const all=[];for(const x of await locator.all())if(await x.isVisible())all.push(x);
  if(all.length===1)return all[0];if(optional&&!all.length)return null;
  throw new Error(`Studio: ожидается один элемент, найдено ${all.length}: ${locator}`);
+}
+async function anyVisible(locator){
+ for(const x of await locator.all())if(await x.isVisible())return true;
+ return false;
 }
 async function until(fn,timeout=30000,message='Studio не подтвердил состояние'){
  const end=Date.now()+timeout;while(Date.now()<end){const value=await bounded(fn,Math.min(5000,Math.max(1,end-Date.now())),message+' · страница не отвечает');if(value)return value;await pause(150);}throw new Error(message);
@@ -165,7 +169,7 @@ async function details(page,scope,item,opts,{verify=false}={}){
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
  if(opts.writeDescription!==false&&item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
-  if(!verify){report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',onState:(event,text)=>report('metadata_description',text),onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
+  if(!verify){await description.scrollIntoViewIfNeeded().catch(()=>{});report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',activationMs:18000,onState:(event,text)=>report('metadata_description',text),onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
@@ -311,6 +315,16 @@ async function schedule(page,scope,plan,zone,{progress=()=>{},readyMs=120000,set
  }
  throw new Error('Studio повторно сбрасывает дату/время после выбора пояса. Подтверждение остановлено, открытый черновик сохранён.');
 }
+async function publishSuccessVisible(page){return isPostPublishScreen(page);}
+async function waitSaveConfirmed(page,scope,{timeout=180000,progress=()=>{}}={}){
+ let reported=0;
+ return until(async()=>{
+  if(await isPostPublishScreen(page))return 'success';
+  if(!await scopeAlive(scope))return 'closed';
+  if(Date.now()-reported>8000){progress('studio_publish','Studio обрабатывает публикацию…');reported=Date.now();}
+  return null;
+ },timeout,'Studio долго обрабатывает публикацию. Попробую нажать «Закрыть».');
+}
 async function publishPublic(page,scope){
  let publicRadio=await one(scope.locator('#public-radio-button,[name=PUBLIC],tp-yt-paper-radio-button[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
  if(!publicRadio){
@@ -391,7 +405,7 @@ async function diagnostics(page,error,folder){
  const file=path.join(folder,'youtube-studio-'+Date.now()+'-'+process.pid+'.json');fs.writeFileSync(file,JSON.stringify(data,null,2));return file;
 }
 async function runSequential(page,pack,opts,host){
- const monitor=tracePage(page);try{return await runItems(page,pack,opts,{...host,progress:(stage,text,extra)=>{monitor.trace.lastStage=stage;host.progress(stage,text,extra);}});}finally{monitor.dispose();}
+ const monitor=tracePage(page);try{return await runItems(page,pack,opts,{...host,progress:(stage,text,extra)=>{monitor.trace.lastStage=stage;if(!monitor.trace.stageLog)monitor.trace.stageLog=[];monitor.trace.stageLog.push({stage,text:String(text||'').slice(0,500),t:new Date().toISOString()});if(monitor.trace.stageLog.length>80)monitor.trace.stageLog.shift();host.progress(stage,text,extra);}});}finally{monitor.dispose();}
 }
 async function runItems(page,pack,opts,host){
  const results=[];
@@ -437,7 +451,13 @@ async function runItems(page,pack,opts,host){
   if(!immediate)await assertSchedule(scope,plan);
   progress(immediate?'studio_publish':'studio_schedule',immediate?'Нажимаю кнопку публикации один раз.':'Нажимаю «Запланировать публикацию» один раз.');
   await submit.click({timeout:10000});
-  await until(async()=>!await scopeAlive(scope)||await one(page.locator('ytcp-video-share-dialog,ytcp-video-upload-success'),{optional:true}),120000,'YouTube не подтвердил сохранение. Проверьте Studio; повторная загрузка заблокирована.');
+  try{await waitSaveConfirmed(page,scope,{progress});}catch(e){progress('studio_publish',String(e.message||e)+' Пробую «Закрыть»…');}
+  await dismissPublishDialog(page,progress);
+  await host.dismiss(page);
+  if(await uploadScope(page)){
+   await dismissPublishDialog(page,progress);
+   await until(async()=>!(await uploadScope(page)),30000,'Studio не закрыл мастер загрузки. Нажмите «Закрыть» вручную перед следующим роликом.');
+  }
   if(!immediate){
    progress('studio_verify','Проверяю сохранённые метаданные и расписание в Studio.');
    const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
@@ -448,4 +468,4 @@ async function runItems(page,pack,opts,host){
  }
  return results;
 }
-module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,visibility,wizardState,visibilityControl,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,publishSuccessVisible,waitSaveConfirmed,visibility,wizardState,visibilityControl,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};

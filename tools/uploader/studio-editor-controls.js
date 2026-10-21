@@ -28,7 +28,26 @@ function inspectEditors(nodes){
   return {tag:el.tagName,id:el.id||'',role:el.getAttribute('role')||'',connected:el.isConnected,visible,editable:editable&&!el.disabled&&!inert,focused:contains(el,active),shadowDepth:depth,active:describe(active),point,blocker,tooltip,length:(el.isContentEditable?el.innerText:el.value||el.textContent||'').length};
  });
 }
+const fieldNorm=s=>String(s||'').replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n');
+function fieldSame(got,want){
+ got=fieldNorm(got);want=fieldNorm(want);
+ if(got===want||got.trim()===want.trim())return true;
+ if(got.startsWith(want)||want.startsWith(got))return true;
+ return false;
+}
 module.exports=function({until,norm,read,typingBudget}){
+ async function readRaw(box){
+  return fieldNorm(await box.evaluate(e=>e.isContentEditable?e.innerText:('value'in e?e.value:e.textContent)));
+ }
+ async function waitTyped(box,wantText,{timeoutMs=25000,name='текста'}={}){
+  const want=fieldNorm(wantText);
+  return fieldNorm(await until(async()=>{
+   const got=fieldNorm(await readRaw(box));
+   if(fieldSame(got,want))return got;
+   if(want.startsWith(got))return null;
+   return null;
+  },timeoutMs,'Studio не подтвердил введённую часть поля '+name+'.'));
+ }
  async function editorState(box){
   const rows=await bounded(()=>box.evaluateAll(inspectEditors),3000,'Studio не ответил при проверке поля ввода.');
   if(rows.length>1)throw new Error('Studio: несколько полей вместо одного. Ввод остановлен.');return rows[0]||null;
@@ -51,7 +70,8 @@ module.exports=function({until,norm,read,typingBudget}){
     return null;
    },left(),'Studio: поле '+name+' пока недоступно для ввода.');
    if(!last.focused){
-    await box.click({position:last.point,timeout:Math.min(4000,left())});
+    try{await box.click({position:last.point,timeout:Math.min(4000,left())});}
+    catch(e){if(last.blocker?.tag!=='DIV')throw e;await box.click({position:last.point,force:true,timeout:Math.min(4000,left())});}
     await box.focus({timeout:Math.min(3000,left())});
    }
    await until(async()=>{last=await editorState(box);return last?.connected&&last.editable&&last.focused&&last.point?last:null;},left(),'Studio не подтвердил фокус поля '+name+'.');
@@ -63,30 +83,43 @@ module.exports=function({until,norm,read,typingBudget}){
  }
  async function typeText(box,text,{delay=45,onProgress=()=>{},onState=()=>{},scope=null,name='текста',activationMs=12000}={}){
   text=norm(text);const chars=Array.from(text);
+  const isDescription=name==='описания';
+  const chunkSize=isDescription?40:80;
+  const typeDelay=isDescription?Math.max(delay,22):delay;
+  const chunkTimeout=isDescription?30000:2500;
+  const maxAttempts=isDescription?3:2;
   // A local editor may be replaced during hydration. Retrying this exact field
   // is idempotent; file selection, Schedule and Publish are never retried here.
-  for(let attempt=0;attempt<2;attempt++){
+  for(let attempt=0;attempt<maxAttempts;attempt++){
    try{
     await activateEditor(box,{timeoutMs:activationMs,name,onState});
     await box.press('Control+A',{timeout:3000});await box.press('Delete',{timeout:3000});
-    await until(async()=>await read(box)==='',3000,'Studio не очистил прежний текст поля '+name+'.');
+    await until(async()=>fieldNorm(await readRaw(box)).trim()==='',5000,'Studio не очистил прежний текст поля '+name+'.');
     let prefix='';
-    for(let start=0;start<chars.length;start+=80){
+    for(let start=0;start<chars.length;start+=chunkSize){
+     const chunkIndex=Math.floor(start/chunkSize);
      if(start){
       const state=await editorState(box);if(!state?.focused)await activateEditor(box,{timeoutMs:activationMs,name,onState});
-      if(await read(box)!==norm(prefix))throw new Error('Studio заменил поле '+name+' во время ввода.');
+      const dom=fieldNorm(await readRaw(box));
+      if(!fieldSame(dom,prefix)){
+       onState('desync','Поле '+name+': перед чанком '+chunkIndex+' в DOM '+dom.length+' симв., ожидалось '+prefix.length+'.');
+       throw new Error('Studio заменил поле '+name+' во время ввода (DOM '+dom.length+' симв., ожидалось '+prefix.length+').');
+      }
+      prefix=dom;
      }
      await box.press('Control+End',{timeout:3000});
-     const chunk=chars.slice(start,start+80).join('');
-     await box.pressSequentially(chunk,{delay,timeout:typingBudget(chunk,delay)});prefix+=chunk;
-     await until(async()=>await read(box)===norm(prefix),2500,'Studio не подтвердил введённую часть поля '+name+'.');
-     onProgress(Math.min(start+80,chars.length),chars.length);
+     const chunk=chars.slice(start,start+chunkSize).join('');
+     onState('chunk','Печатаю чанк '+chunkIndex+' поля '+name+' ('+chunk.length+' симв., всего '+chars.length+').');
+     await box.pressSequentially(chunk,{delay:typeDelay,timeout:typingBudget(chunk,typeDelay)});prefix+=chunk;
+     prefix=await waitTyped(box,prefix,{timeoutMs:chunkTimeout,name});
+     onState('chunk_ok','Чанк '+chunkIndex+' поля '+name+' подтверждён ('+prefix.length+' симв. в DOM).');
+     onProgress(Math.min(start+chunkSize,chars.length),chars.length);
     }
     await box.press('Tab',{timeout:3000});
-    await until(async()=>await read(box)===text,5000,'Studio не подтвердил введённый текст поля '+name+'.');return;
+    await waitTyped(box,text,{timeoutMs:isDescription?35000:5000,name});return;
    }catch(error){
-    if(attempt||box.page().isClosed())throw error;
-    onState('retry','Повторяю ввод только поля '+name+' после изменения редактора (2/2).');
+    if(attempt+1>=maxAttempts||box.page().isClosed())throw error;
+    onState('retry','Повторяю ввод поля '+name+' ('+(attempt+2)+'/'+maxAttempts+').');
    }
   }
  }

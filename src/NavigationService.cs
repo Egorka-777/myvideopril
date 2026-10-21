@@ -46,7 +46,7 @@ namespace VideoBatch {
                 case NavSection.TikTok: return "TikTok";
                 case NavSection.Telegram: return "Telegram";
                 case NavSection.Warmup: return "Автопрогрев";
-                case NavSection.WarmupClips: return "Прогревочные ролики";
+                case NavSection.WarmupClips: return "Прогрев роликами";
                 case NavSection.ViewsSearch: return "Просмотры и поиск";
                 case NavSection.Logs: return "Логи";
                 case NavSection.Settings: return "Настройки";

@@ -13,8 +13,13 @@ namespace VideoBatch {
     public sealed class WarmupVideoJob {
         public string Market = "RU", Prompt = "", BackgroundFile = "", OutputFolder = "";
         public int Count = 1;
+        /// <summary>Связки: один анекдот на один фон (ручной ввод, без OpenRouter).</summary>
+        public List<string> Jokes;
+        public List<string> BackgroundFiles;
         public WarmupSubtitleStyle Subtitles;
         public string OpenRouterKey = "", ElevenLabsKey = "", OpenRouterModel = "openai/gpt-4o-mini";
+
+        internal bool UsesManualBundles => Jokes != null && Jokes.Any(j => !string.IsNullOrWhiteSpace(j));
     }
 
     public static class WarmupVideoEngine {
@@ -41,20 +46,32 @@ namespace VideoBatch {
 
         static void Validate(WarmupVideoJob job) {
             if (job == null) throw new ArgumentNullException(nameof(job));
-            if (string.IsNullOrWhiteSpace(job.OpenRouterKey)) throw new Exception("Укажите API-ключ OpenRouter в «Настройки».");
             if (string.IsNullOrWhiteSpace(job.ElevenLabsKey)) throw new Exception("Укажите API-ключ ElevenLabs в «Настройки».");
+            if (string.IsNullOrWhiteSpace(job.OutputFolder)) throw new Exception("Выберите папку для готовых роликов.");
+            if (job.UsesManualBundles) {
+                var jokes = job.Jokes.Select(j => (j ?? "").Trim()).Where(j => j.Length > 0).ToList();
+                var backgrounds = (job.BackgroundFiles ?? new List<string>()).Where(p => IsBackground(p) && File.Exists(p)).ToList();
+                if (jokes.Count == 0) throw new Exception("Заполните хотя бы один анекдот в связке.");
+                if (backgrounds.Count != jokes.Count)
+                    throw new Exception("Число фонов (" + backgrounds.Count + ") должно совпадать с числом анекдотов (" + jokes.Count + "). Добавьте или удалите файлы фона.");
+                if (jokes.Count > 100) throw new Exception("Не больше 100 связок за один запуск.");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(job.OpenRouterKey)) throw new Exception("Укажите API-ключ OpenRouter в «Настройки».");
             if (string.IsNullOrWhiteSpace(job.Prompt)) throw new Exception("Напишите, о чём придумать анекдот.");
             if (job.Count < 1 || job.Count > 100) throw new Exception("Количество роликов: от 1 до 100.");
             if (!IsBackground(job.BackgroundFile) || !File.Exists(job.BackgroundFile)) throw new Exception("Выберите существующий файл фона: фото или видео.");
-            if (string.IsNullOrWhiteSpace(job.OutputFolder)) throw new Exception("Выберите папку для готовых роликов.");
         }
 
         // Injectable HTTP transport for offline integration tests; production always uses official endpoints.
         internal static async Task<IReadOnlyList<string>> GenerateAsync(WarmupVideoJob job, Action<string> log, CancellationToken ct, HttpClient client, string ffmpeg, string ffprobe) {
             Validate(job); ct.ThrowIfCancellationRequested(); log = log ?? (_ => { });
             Directory.CreateDirectory(job.OutputFolder);
-            // Decode before paid requests: an invalid background must fail without spending API credits.
-            await Core.Tool(ffmpeg, new[] { "-v", "error", "-i", job.BackgroundFile, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-" }, ct, null, 30).ConfigureAwait(false);
+            var manualJokes = job.UsesManualBundles ? job.Jokes.Select(j => (j ?? "").Trim()).Where(j => j.Length > 0).ToList() : null;
+            var manualBackgrounds = job.UsesManualBundles ? job.BackgroundFiles.Where(p => IsBackground(p) && File.Exists(p)).ToList() : null;
+            int total = job.UsesManualBundles ? manualJokes.Count : job.Count;
+            foreach (var bg in job.UsesManualBundles ? (IEnumerable<string>)manualBackgrounds : new[] { job.BackgroundFile })
+                await Core.Tool(ffmpeg, new[] { "-v", "error", "-i", bg, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-" }, ct, null, 30).ConfigureAwait(false);
             var outputs = new List<string>();
             string work = Path.Combine(Path.GetTempPath(), "VideoBatch-warmup-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(work);
@@ -63,16 +80,22 @@ namespace VideoBatch {
                 log("Получаю доступные голоса ElevenLabs…");
                 var voices = await FetchVoicesAsync(client, job.ElevenLabsKey, ct).ConfigureAwait(false);
                 var rnd = new Random(); var previous = new List<string>();
-                for (int i = 0; i < job.Count; i++) {
+                for (int i = 0; i < total; i++) {
                     ct.ThrowIfCancellationRequested();
-                    string prefix = "[" + (i + 1) + "/" + job.Count + "] ";
+                    string prefix = "[" + (i + 1) + "/" + total + "] ";
+                    string backgroundFile = job.UsesManualBundles ? manualBackgrounds[i] : job.BackgroundFile;
                     string voice = voices[rnd.Next(voices.Count)], text = "";
                     string mp3 = Path.Combine(work, "speech.mp3"), wav = Path.Combine(work, "speech.wav");
                     double duration = 0; WarmupAlignment alignment = null;
                     for (int attempt = 0; attempt < SpeechAttempts; attempt++) {
-                        log(prefix + (attempt == 0 ? "Придумываю короткий анекдот…" : "Сокращаю анекдот целиком, без обрезки речи…"));
-                        text = await FetchTextAsync(client, job, previous, text, duration, ct).ConfigureAwait(false);
-                        log(prefix + "Озвучиваю через ElevenLabs…");
+                        if (job.UsesManualBundles) {
+                            text = manualJokes[i];
+                            log(prefix + (attempt == 0 ? "Озвучиваю ваш текст через ElevenLabs…" : "Повторная озвучка (тот же текст)…"));
+                        } else {
+                            log(prefix + (attempt == 0 ? "Придумываю короткий анекдот…" : "Сокращаю анекдот целиком, без обрезки речи…"));
+                            text = await FetchTextAsync(client, job, previous, text, duration, ct).ConfigureAwait(false);
+                            log(prefix + "Озвучиваю через ElevenLabs…");
+                        }
                         alignment = await SynthesizeAsync(client, job.ElevenLabsKey, voice, text, mp3, job.Subtitles?.Enabled == true, ct).ConfigureAwait(false);
                         // Decode MP3 delay/padding once. The PCM sample count, not an estimated text length,
                         // drives the video. No silence padding, speed change or speech trimming.
@@ -81,7 +104,9 @@ namespace VideoBatch {
                         log(prefix + "Длина озвучки: " + duration.ToString("0.00", CultureInfo.CurrentCulture) + " с");
                         if (duration <= MaximumSeconds) break;
                     }
-                    if (duration > MaximumSeconds) throw new Exception("Не удалось получить озвучку до 10 секунд за 3 попытки. Упростите тему анекдота. Речь не обрезана; уже готовые ролики сохранены.");
+                    if (duration > MaximumSeconds) throw new Exception(job.UsesManualBundles
+                        ? "Анекдот " + (i + 1) + " не укладывается в 10 секунд. Сократите текст. Речь не обрезана; уже готовые ролики сохранены."
+                        : "Не удалось получить озвучку до 10 секунд за 3 попытки. Упростите тему анекдота. Речь не обрезана; уже готовые ролики сохранены.");
                     string name = "Прогрев-" + (job.Market == "EN" ? "EN" : "RU") + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4";
                     string output = Path.Combine(job.OutputFolder, name);
                     partial = Path.Combine(job.OutputFolder, ".processing-" + name);
@@ -91,7 +116,7 @@ namespace VideoBatch {
                         log(prefix + "Накладываю субтитры по таймкодам озвучки…");
                         captions = WarmupSubtitles.Rasterize(WarmupSubtitles.Cues(alignment, duration, job.Subtitles.WordsPerCaption), job.Subtitles, work);
                     }
-                    await Core.Tool(ffmpeg, RenderArguments(job.BackgroundFile, wav, partial, duration, captions), ct, null, 180).ConfigureAwait(false);
+                    await Core.Tool(ffmpeg, RenderArguments(backgroundFile, wav, partial, duration, captions), ct, null, 180).ConfigureAwait(false);
                     await VerifyOutputAsync(ffprobe, partial, duration, ct).ConfigureAwait(false);
                     ct.ThrowIfCancellationRequested();
                     File.Move(partial, output); partial = null;

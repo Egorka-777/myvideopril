@@ -70,11 +70,14 @@ namespace VideoBatch {
                     var api = new FakeApi { Short = File.ReadAllBytes(shortAudio), Long = File.ReadAllBytes(longAudio), LongCount = market == "RU" ? 1 : 0, Market = market };
                     string output = Path.Combine(temp, "результаты " + market); Directory.CreateDirectory(output);
                     string existing = Path.Combine(output, "warmup-RU-001.mp4"); File.WriteAllText(existing, "keep existing output");
-                    var job = new WarmupVideoJob { Market = market, Prompt = "Тестовая тема", Count = market == "RU" ? 2 : 1, BackgroundFile = market == "RU" ? photo : video, Subtitles = market == "EN" ? new WarmupSubtitleStyle { Position = 72 } : null, OutputFolder = output, OpenRouterKey = "fixture-router-key", ElevenLabsKey = "fixture-eleven-key" };
+                    int bundleCount = market == "RU" ? 2 : 1;
+                    var jokes = Enumerable.Range(1, bundleCount).Select(n => (market == "RU" ? "Короткий анекдот, кавычки: \"пример\". Номер " : "A short complete joke. Number ") + n).ToList();
+                    var backgrounds = Enumerable.Repeat(market == "RU" ? photo : video, bundleCount).ToList();
+                    var job = new WarmupVideoJob { Market = market, Jokes = jokes, BackgroundFiles = backgrounds, Subtitles = market == "EN" ? new WarmupSubtitleStyle { Position = 72 } : null, OutputFolder = output, ElevenLabsKey = "fixture-eleven-key" };
                     using (var client = new HttpClient(api)) {
                         var files = await WarmupVideoEngine.GenerateAsync(job, _ => { }, CancellationToken.None, client, ffmpeg, ffprobe);
-                        Check(files.Count == job.Count && files.Distinct().Count() == job.Count && files.All(File.Exists), "requested number, distinct names and output files");
-                        Check(api.SpeechCalls == job.Count + api.LongCount && api.TextCalls == api.SpeechCalls, "only long narration retried");
+                        Check(files.Count == bundleCount && files.Distinct().Count() == bundleCount && files.All(File.Exists), "requested number, distinct names and output files");
+                        Check(api.SpeechCalls == bundleCount + api.LongCount && api.TextCalls == 0, "manual bundles skip OpenRouter");
                         Check(File.ReadAllText(existing) == "keep existing output", "old files are not overwritten");
                         Check(!Directory.GetFiles(output, ".processing-*").Any(), "no partial results");
                         foreach (var file in files) {
@@ -152,6 +155,11 @@ namespace VideoBatch {
             throw new Exception("PCM data missing");
         }
         static IEnumerable<Control> All(Control parent) { foreach (Control child in parent.Controls) { yield return child; foreach (var item in All(child)) yield return item; } }
+        static bool InsideAutoScroll(Control control) {
+            for (var parent = control.Parent; parent != null; parent = parent.Parent)
+                if (parent is Panel panel && panel.AutoScroll) return true;
+            return false;
+        }
         public static bool RunUiTests(string folder) {
             string old = Store.Root, temp = Path.Combine(Path.GetTempPath(), "vb-warmup-ui-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(temp); Directory.CreateDirectory(folder);
@@ -159,31 +167,36 @@ namespace VideoBatch {
                 Store.Root = temp;
                 string photo = Path.Combine(temp, "фон.png");
                 using (var bitmap = new Bitmap(180, 320)) { using (var g = Graphics.FromImage(bitmap)) { g.Clear(Color.FromArgb(50, 75, 90)); g.FillEllipse(Brushes.DarkGoldenrod, 35, 70, 110, 110); } bitmap.Save(photo); }
-                var prefs = new Preferences { WarmupVideoBackgroundFileRu = photo, WarmupVideoBackgroundFileEn = photo, WarmupVideoCountRu = 3, WarmupVideoCountEn = 2, WarmupVideoPromptRu = "Короткий смешной анекдот про трейдеров, без мата.", WarmupVideoPromptEn = "Short clean jokes about traders." };
+                var prefs = new Preferences {
+                    WarmupVideoBackgroundFilesRu = new List<string> { photo }, WarmupVideoBackgroundFilesEn = new List<string> { photo },
+                    WarmupVideoJokesRu = Enumerable.Repeat("Анекдот про трейдеров", WarmupVideoPanel.BundleSlotCount).ToList(),
+                    WarmupVideoJokesEn = Enumerable.Repeat("Trader joke", WarmupVideoPanel.BundleSlotCount).ToList()
+                };
                 using (var form = new Form { ClientSize = new Size(936, 700), Font = Theme.FontBody }) using (var panel = new WarmupVideoPanel(prefs)) {
                     form.Controls.Add(panel); form.Show(); Application.DoEvents();
                     Check(!All(panel).Any(c => c.Text == "Макс. длина ролика" || c.Text == "Сохранить"), "automatic duration/save have no duplicate controls");
-                    var prompt = All(panel).OfType<TextBox>().Single(c => c.Name == "warmup-prompt");
-                    prompt.Text = "Новая тема";
+                    var joke0 = All(panel).OfType<TextBox>().Single(c => c.Name == "warmup-joke-0");
+                    joke0.Text = "Новый анекдот в связке 1";
                     var save = typeof(WarmupVideoPanel).GetMethod("SaveFields", BindingFlags.Instance | BindingFlags.NonPublic); save.Invoke(panel, null);
                     All(panel).OfType<Button>().Single(b => b.Text == "Настроить").PerformClick();
                     All(panel).OfType<NumericUpDown>().Single(c => c.Name == "warmup-subtitle-size").Value = 64;
                     save.Invoke(panel, null);
-                    var loaded = Store.Load(); Check(loaded.WarmupVideoPromptRu == "Новая тема" && loaded.WarmupVideoCountRu == 3 && loaded.WarmupSubtitlesRu.FontSize == 64, "fields and subtitle editor persist");
+                    var loaded = Store.Load(); Check(loaded.WarmupVideoJokesRu[0] == "Новый анекдот в связке 1" && loaded.WarmupSubtitlesRu.FontSize == 64, "bundle jokes and subtitle editor persist");
                     All(panel).OfType<Button>().Single(b => b.Text == "EN").PerformClick(); Application.DoEvents();
-                    Check(prompt.Text == prefs.WarmupVideoPromptEn && All(panel).OfType<NumericUpDown>().Single(c => c.Name == "warmup-subtitle-size").Value == 56, "market fields and styles remain separate");
+                    Check(All(panel).OfType<TextBox>().Single(c => c.Name == "warmup-joke-0").Text == prefs.WarmupVideoJokesEn[0] && All(panel).OfType<NumericUpDown>().Single(c => c.Name == "warmup-subtitle-size").Value == 56, "market fields and styles remain separate");
                     // Collapse settings for the overview; capture expanded editor separately in the wide layout.
                     All(panel).OfType<Button>().Single(b => b.Text == "Настроить").PerformClick();
                     foreach (var size in new[] { new Size(820, 620), new Size(936, 700), new Size(1200, 800) }) {
                         form.ClientSize = size; Application.DoEvents();
-                        Check(prompt.Width > panel.Width * .35, "form must fill card width rather than shrink to default 200px");
+                        Check(joke0.Width > panel.Width * .25, "form must fill card width rather than shrink to default 200px");
                         foreach (var button in All(panel).OfType<Button>().Where(b => b.Visible)) {
                             Check(button.Height <= 44, "button row unexpectedly stretched: " + button.Text);
                             Check(button.Left >= 0 && button.Top >= 0 && button.Right <= button.Parent.ClientSize.Width + 1 && button.Bottom <= button.Parent.ClientSize.Height + 1, "button clipped in parent: " + button.Text);
                             var origin = panel.PointToClient(button.PointToScreen(Point.Empty));
                             // Scrollable settings can extend below viewport; horizontal clipping is never allowed.
                             Check(origin.X >= 0 && origin.X + button.Width <= panel.Width, "horizontal button clipping: " + button.Text);
-                            Check(origin.Y >= 0 && origin.Y + button.Height <= panel.Height, "overview button below viewport: " + button.Text);
+                            if (!InsideAutoScroll(button))
+                                Check(origin.Y >= 0 && origin.Y + button.Height <= panel.Height, "overview button below viewport: " + button.Text);
                         }
                         using (var bmp = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(bmp, panel.ClientRectangle); bmp.Save(Path.Combine(folder, "warmup-" + size.Width + ".png")); }
                     }

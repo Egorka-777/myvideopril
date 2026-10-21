@@ -50,6 +50,14 @@ function fixture(lang,state,editor){
   }
   console.log('PASS RU/EN immediate Public path with nested final button');
   for(const lang of ['ru','en']){
+   const page=await browser.newPage();
+   const title=lang==='ru'?'Видео опубликовано':'Video published';
+   await page.setContent(`<ytcp-uploads-dialog><h2>${title}</h2><yt-share-target-renderer></yt-share-target-renderer><button aria-label="${lang==='ru'?'Копировать ссылку на видео':'Copy video link'}">Copy A</button><ytcp-button id="done-button" aria-disabled="true"><button>${lang==='ru'?'Опубликовать':'Publish'}</button></ytcp-button><button id="close-button">${lang==='ru'?'Закрыть':'Close'}</button></ytcp-uploads-dialog>`);
+   assert(await S.publishSuccessVisible(page));
+   await page.close();
+  }
+  console.log('PASS RU/EN Shorts post-publish screen detected inside upload dialog');
+  for(const lang of ['ru','en']){
    const ctx=await browser.newContext({timezoneId:'America/New_York'});ctx.setDefaultTimeout(4000);
    const page=await ctx.newPage(),saved=new Map(),events=[];let sequence=0,documentLoads=0;
    await ctx.route('**/*',async route=>{

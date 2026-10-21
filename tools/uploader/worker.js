@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-21-studio-readback-v12";
+const WORKER_BUILD = "2026-10-21-studio-description-v18";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function durableCheckpoint(stage,item,packIndex,extra={}){
@@ -2098,23 +2098,8 @@ async function publish(page) {
 }
 
 async function dismissAfterPublish(page) {
-  for (let i = 0; i < 6; i++) {
-    const close = await firstVisible([
-      page.locator("ytcp-uploads-dialog #close-button"),
-      page.locator("ytcp-video-share-dialog #close-button"),
-      page.locator("#close-button"),
-      page.getByRole("button", { name: /Close|Закрыть|Done|Готово/i })
-    ], 800);
-    if (close) {
-      await close.click({ timeout: 3000 }).catch(() => {});
-      await page.waitForTimeout(400);
-    } else {
-      await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(300);
-    }
-    const dialog = page.locator("ytcp-uploads-dialog, ytcp-video-share-dialog");
-    if (!(await dialog.first().isVisible().catch(() => false))) break;
-  }
+  const { dismissPublishDialog } = require("./studio-browser");
+  await dismissPublishDialog(page, () => {}).catch(() => {});
 }
 
 function channelIdFromStudioUrl(url) {
