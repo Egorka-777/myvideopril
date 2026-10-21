@@ -48,8 +48,8 @@ const fallback=lang=>Array.from({length:3},(_,n)=>((lang==='ru'?'Разбор с
     const result=await S.runSequential(f.page,f.pack,{titleDelay:1,descriptionDelay:20,saveTimeout:4000,closeTimeout:4000},f.host);
     const stats=await f.page.evaluate(()=>stats);assert.equal(result.length,3);assert.equal(f.saved.size,3);assert.equal(stats.publishes,3);assert.equal(stats.closes,3);assert.equal(stats.creates,3);assert.equal(stats.headerCloses,0);assert.equal(stats.escapes,0);
     assert.equal(stages.filter(s=>s.stage==='item_confirmed').length,3);assert.equal(stages.filter(s=>s.stage==='metadata_description'&&/Описание проверено целиком/.test(s.text)).length,3);assert(!stages.some(s=>/не подтверждена|Повторяю ввод/.test(s.text)));
-    for(let n=0;n<3;n++){const record=f.saved.get('video'+String(n+1).padStart(6,'0'));assert.equal(record.description,descriptions[n].trim());assert.equal(record.visibility,'public');assert(!record.paid&&!record.ai);}
-    evidence.channels.push({source:'isolated-browser-fixture',lang,descriptionLengths:descriptions.map(x=>x.trim().length),stats,confirmed:result.map(r=>r.videoId),stages});save();
+    for(let n=0;n<3;n++){const record=f.saved.get('video'+String(n+1).padStart(6,'0'));assert.equal(record.description,S.norm(descriptions[n]));assert.equal(record.visibility,'public');assert(!record.paid&&!record.ai);}
+    evidence.channels.push({source:'isolated-browser-fixture',lang,descriptionSource:banks.source||'synthetic fallback',descriptionMarket:banks.descriptionMarket||lang,descriptionLengths:descriptions.map(x=>S.norm(x).length),stats,confirmed:result.map(r=>r.videoId),stages});save();
     console.log('PASS',lang,'3 Shorts, SEO lengths',descriptions.map(x=>x.length).join('/'),'at production 20ms keyboard speed: exact description → No/No → Public → Publish once → saved ID verify → Close → Create; item_confirmed ×3.');
    }catch(error){const report=await S.diagnostics(f.page,error,evidenceDir);evidence.failure={message:error.message,diagnostic:path.basename(report)};save();throw error;}
    finally{await f.ctx.close();}

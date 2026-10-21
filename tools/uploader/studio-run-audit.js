@@ -35,6 +35,7 @@ function audit(records,{profiles,since,build,perChannel=3,minLength=1500,maxLeng
   if(!rows.some(r=>r.stage==='done'))issues.push('Missing completed task.');
   channels.push({profile,tasks,counts:{files,fullDescriptions:full,publishClicks:published,itemConfirmed:confirmed.length,closeClicks:closed,ready},confirmed,descriptions,errors:errors.map(r=>({time:r.time,stage:r.stage,message:r.message})),issues,status:issues.length?'FAIL':'PASS_LOG_CONTRACT'});
  }
+ const ids=channels.flatMap(c=>c.confirmed);if(new Set(ids).size!==ids.length)for(const channel of channels){channel.issues.push('Video ID repeated across selected profiles.');channel.status='FAIL';}
  return {kind:'offline-app-log-audit',since,build,liveAccountAccessPerformed:false,status:channels.every(c=>!c.issues.length)?'PASS_LOG_CONTRACT':'FAIL',channels};
 }
 module.exports={audit};
@@ -42,7 +43,7 @@ if(require.main===module){
  try{
   const args={};for(let n=2;n<process.argv.length;n+=2){if(!process.argv[n].startsWith('--')||!process.argv[n+1])throw Error('Use --log file --since ISO-time --profiles id1,id2 [--out file].');args[process.argv[n].slice(2)]=process.argv[n+1];}
   const raw=fs.readFileSync(args.log,'utf8').replace(/^\uFEFF/,''),records=raw.split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
-  const report=audit(records,{profiles:args.profiles?.split(','),since:args.since,build:args.build||require('./youtube-studio-upload').BUILD});
+  const report=audit(records,{profiles:args.profiles?.split(',').map(x=>x.trim()).filter(Boolean),since:args.since,build:args.build||require('./youtube-studio-upload').BUILD});
   report.input={path:path.resolve(args.log),sha256:crypto.createHash('sha256').update(raw).digest('hex')};
   const json=JSON.stringify(report,null,2);if(args.out){fs.writeFileSync(args.out,json,{flag:'wx'});console.log(path.resolve(args.out));}else console.log(json);
   if(report.status!=='PASS_LOG_CONTRACT')process.exitCode=1;

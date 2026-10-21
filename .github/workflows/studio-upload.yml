@@ -53,7 +53,21 @@ jobs:
           New-Item -ItemType Directory -Path $folder -Force | Out-Null
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           $type = $asm.GetType('VideoBatch.YouTubeDescriptionTemplates')
-          $banks = @{ru=@($type.GetMethod('DefaultsRu').Invoke($null,@()));en=@($type.GetMethod('DefaultsEn').Invoke($null,@()))}
+          $prefs = [Activator]::CreateInstance($asm.GetType('VideoBatch.Preferences'))
+          $list = New-Object 'System.Collections.Generic.List[string]'
+          foreach ($value in $type.GetMethod('DefaultsRu').Invoke($null,@())) { $list.Add($value) }
+          $prefs.YouTubeDescriptionBankRu = $list
+          $banks = @{source='compiled YouTubeMetadata.Build';descriptionMarket='RU'}
+          foreach ($locale in @('ru','en')) {
+            $channel = [Activator]::CreateInstance($asm.GetType('VideoBatch.YouTubeChannel'))
+            $channel.Market = 'RU'; $channel.ProfileId = 'description-fixture-' + $locale
+            $descriptions = @()
+            foreach ($index in 1..3) {
+              $record = $asm.GetType('VideoBatch.YouTubeMetadata').GetMethod('Build').Invoke($null,@($prefs,$channel,$index))
+              $descriptions += $record.Item2
+            }
+            $banks[$locale] = $descriptions
+          }
           $banks | ConvertTo-Json -Depth 5 | Set-Content "$folder/input-banks.json" -Encoding UTF8
           $env:STUDIO_DESCRIPTION_BANKS = [IO.Path]::GetFullPath("$folder/input-banks.json")
           $env:STUDIO_EVIDENCE_DIR = [IO.Path]::GetFullPath($folder)

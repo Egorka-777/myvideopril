@@ -85,7 +85,7 @@ node tests/browser/studio-state-flow.js
 
 ### Обязательный CI и доказательства
 
-`tests/browser/studio-shorts-queue.js`, `studio-editor-focus.js`, `studio-state-flow.js` остаются обязательными. Дополнительный `studio-description-stability.js` прогоняет **3 RU + 3 EN Shorts** на изолированных страницах, с SEO-текстами из скомпилированных банков около 1650 символов и настоящим клавиатурным вводом 20 ms/символ. Он также проверяет ложное DIV-перекрытие v19e, настоящий модальный блок, прекращение чанков при отмене после 1000 символов, точную диагностику несовпадения и бюджет всех попыток.
+`tests/browser/studio-shorts-queue.js`, `studio-editor-focus.js`, `studio-state-flow.js` остаются обязательными. Дополнительный `studio-description-stability.js` прогоняет **3 Shorts в RU-интерфейсе + 3 в EN-интерфейсе** на изолированных страницах. У обоих тестовых профилей RU-описания около 1650 символов, сформированные настоящим `YouTubeMetadata.Build` из скомпилированной сборки (включая финальный футер) и настоящим клавиатурным вводом 20 ms/символ. Он также проверяет ложное DIV-перекрытие v19e, настоящий модальный блок, прекращение чанков при отмене после 1000 символов, точную диагностику несовпадения и бюджет всех попыток.
 
 Артефакт **Studio-Description-Evidence** содержит `description-evidence.json`, исходные тестовые банки и при сбое `youtube-studio-*.json`. В JSON явно указано `source: isolated-browser-fixture`, `liveAccountsTested:false`. Это воспроизведение дефекта кода и контракт цепочки; не выдавать его за лог с пользовательского ПК. Полный лог теста доступен в Actions.
 
@@ -110,7 +110,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Sync-StudioUploade
 ```powershell
 $since = (Get-Date).ToString('o') # сохранить ПЕРЕД запуском 3+3
 # после окончания задач, в той же сессии PowerShell:
-& D:\VideoBatch\VideoBatch\tools\uploader\node.exe D:\VideoBatch\VideoBatch\tools\uploader\studio-run-audit.js --log "$env:LOCALAPPDATA\VideoBatchDesktop\diagnostics\app-20261021.jsonl" --since $since --profiles "PROFILE_ID_1,PROFILE_ID_2" --build 2026-10-21-studio-shorts-queue-v19f --out .\studio-live-audit.json
+& D:\VideoBatch\VideoBatch\tools\uploader\node.exe D:\VideoBatch\VideoBatch\tools\uploader\studio-run-audit.js --log "$env:LOCALAPPDATA\VideoBatchDesktop\diagnostics\app-20261021.jsonl" --since $since --profiles "PROFILE_ID_1,PROFILE_ID_2" --build 2026-10-21-studio-shorts-queue-v19f --out ".\studio-live-audit-$(Get-Date -Format yyyyMMdd-HHmmss).json"
 ```
 
 Скрипт ничего не открывает и не публикует. Код выхода **0** означает, что в указанном интервале у каждого из двух профилей один свежий task, BUILD совпадает, есть по 3 полных сверки SEO, 3 одиночных Publish, **item_confirmed ×3 с разными video ID**, 3 Close/ready в правильном порядке и завершение без ошибок. Он отклоняет частичный успех, другой BUILD, повторный Publish, отсутствующее описание/Close и смешанные задачи. Это проверка предоставленного лога, а не самостоятельное обращение к YouTube. На следующий день указывать актуальную дату JSONL.
