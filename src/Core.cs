@@ -91,6 +91,8 @@ namespace VideoBatch {
         public string YouTubeKindView="shorts";
         public bool YouTubeLongScheduled20260923Migrated;
         public bool YouTubeNetworkSchedule20260923Migrated;
+        /// <summary>Заменить устаревшие TikTok-подписи с «ССЫЛКА» на SEO-банк YouTube.</summary>
+        public bool YouTubeDescriptionSeo20261021Migrated;
         public string YouTubeSearchTitleRu="", YouTubeSearchUrlRu="", YouTubeSearchFilterRu="today";
         public string YouTubeSearchTitleEn="", YouTubeSearchUrlEn="", YouTubeSearchFilterEn="today";
         public string YouTubeSearchKeysRu="", YouTubeSearchFullTitleRu="";
@@ -309,16 +311,17 @@ namespace VideoBatch {
             if(p.YouTubeDefaultTagsEn==null)p.YouTubeDefaultTagsEn=YouTubeTagDefaults.En;
             if(p.YouTubeDescriptionBankRu==null)p.YouTubeDescriptionBankRu=new List<string>();
             p.YouTubeDescriptionBankRu=p.YouTubeDescriptionBankRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
-            if(p.YouTubeDescriptionBankRu.Count==0&&p.TikTokFullCaptionBankRu!=null&&p.TikTokFullCaptionBankRu.Count>0)
-                p.YouTubeDescriptionBankRu=new List<string>(p.TikTokFullCaptionBankRu);
-            if(p.YouTubeDescriptionBankRu.Count==0)
-                p.YouTubeDescriptionBankRu=YouTubeDescriptionTemplates.DefaultsRu();
-            if(p.YouTubeDescriptionBankRu.Count>0)
-                p.YouTubeDescriptionCursorRu=((p.YouTubeDescriptionCursorRu%p.YouTubeDescriptionBankRu.Count)+p.YouTubeDescriptionBankRu.Count)%p.YouTubeDescriptionBankRu.Count;
             if(p.YouTubeDescriptionBankEn==null)p.YouTubeDescriptionBankEn=new List<string>();
             p.YouTubeDescriptionBankEn=p.YouTubeDescriptionBankEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
-            if(p.YouTubeDescriptionBankEn.Count==0&&p.TikTokDescriptionBankEn!=null&&p.TikTokDescriptionBankEn.Count>0)
-                p.YouTubeDescriptionBankEn=new List<string>(p.TikTokDescriptionBankEn);
+            if(!p.YouTubeDescriptionSeo20261021Migrated){
+                if(YouTubeDescriptionTemplates.IsLegacyLinkStyleBank(p.YouTubeDescriptionBankRu))
+                    p.YouTubeDescriptionBankRu=YouTubeDescriptionTemplates.DefaultsRu();
+                if(YouTubeDescriptionTemplates.IsLegacyLinkStyleBank(p.YouTubeDescriptionBankEn))
+                    p.YouTubeDescriptionBankEn=YouTubeDescriptionTemplates.DefaultsEn();
+                p.YouTubeDescriptionSeo20261021Migrated=true;
+            }
+            if(p.YouTubeDescriptionBankRu.Count==0)
+                p.YouTubeDescriptionBankRu=YouTubeDescriptionTemplates.DefaultsRu();
             if(p.YouTubeDescriptionBankEn.Count==0)
                 p.YouTubeDescriptionBankEn=YouTubeDescriptionTemplates.DefaultsEn();
             if(p.YouTubeDescriptionBankEn.Count>0)

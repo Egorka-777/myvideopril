@@ -608,9 +608,23 @@ namespace VideoBatch {
             };
         }
 
+        /// <summary>Старые TikTok-подписи с «ССЫЛКА» / короткий SEO-текст — не для поля «Описание» YouTube.</summary>
+        public static bool IsLegacyLinkStyleBank(IList<string> bank) {
+            if (bank == null || bank.Count == 0) return false;
+            foreach (string raw in bank) {
+                string text = raw ?? "";
+                if (text.IndexOf("ССЫЛКА", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (text.IndexOf("LINK TO", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+            return false;
+        }
+
         public static bool RunSelfTests() {
             if (!ValidateRu(DefaultsRu())) return false;
             if (!ValidateEn(DefaultsEn())) return false;
+            var legacy = new List<string> { "👇 ССЫЛКА НА AI БОТ — В ПРОФИЛЕ\n\nКороткий старый текст." };
+            if (!IsLegacyLinkStyleBank(legacy)) return false;
+            if (IsLegacyLinkStyleBank(DefaultsRu())) return false;
             return true;
         }
 

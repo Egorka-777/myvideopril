@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-editor-v11';
+const BUILD='2026-10-21-studio-readback-v12';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -328,20 +328,33 @@ async function publishPublic(page,scope){
 }
 function videoId(value){return String(value||'').match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([A-Za-z0-9_-]{11})(?:\b|\/|$)/)?.[1]||'';}
 async function readVideoId(scope){const ids=await scope.locator('a[href],input[value]').evaluateAll(nodes=>nodes.map(e=>e.getAttribute('href')||e.getAttribute('value')||''));const unique=[...new Set(ids.map(videoId).filter(Boolean))];if(unique.length!==1)throw new Error('Studio не показал однозначный ID загруженного ролика');return unique[0];}
+async function visibilityControl(page){
+ for(const selector of ['#visibility-button','#visibility','ytcp-video-visibility-select']){
+  const control=await one(page.locator(selector),{optional:true});
+  if(control&&await control.isVisible())return control;
+ }
+ for(const button of await page.getByRole('button',{name:/scheduled|запланирован|visibility|доступ/i}).all())
+  if(await button.isVisible())return button;
+ return null;
+}
 async function readback(page,item,id,plan,opts,zone){
  await page.goto(`https://studio.youtube.com/video/${id}/edit`,{waitUntil:'domcontentloaded',timeout:90000});
  const scope=page.locator('ytcp-video-metadata-editor,ytcp-video-details,main').first();
  await until(()=>field(scope,'title',true),30000,'Не открылся редактор загруженного видео');
  await details(page,scope,item,opts,{verify:true});
- const visible=await one(page.locator('#visibility, #visibility-button, ytcp-video-visibility-select').or(page.getByRole('button',{name:/scheduled|запланирован/i})),{optional:true});
- if(!visible||!L.scheduled.test(norm(await visible.innerText())+' '+(await visible.getAttribute('aria-label'))))throw new Error('Studio не подтвердил статус «Запланировано» после перезагрузки');
- await visible.click();
- const dialog=await one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,[role=dialog]'));
- const actualDate=parseDate(await controlValue(await dateControl(dialog)),await page.locator('html').getAttribute('lang')||'');
- const actualTime=parseTime(await controlValue(await timeControl(dialog)));
- const actualZone=await readZone(dialog,plan);
- const actualUnix=wallClockUnix(actualDate,actualTime,actualZone.offset);
- if(actualUnix!==plan.unix)throw new Error(`После сохранения дата/время Studio не совпали с моментом публикации: ${actualDate} ${actualTime} UTC${actualZone.offset/60}; ожидалось ${plan.date} ${plan.time} UTC${plan.offset/60}`);
+ const control=await until(()=>visibilityControl(page),30000,'Studio не показал статус доступа на странице редактирования');
+ const summary=norm(await control.innerText())+' '+(await control.getAttribute('aria-label')||'');
+ await control.click();
+ const dialog=await until(()=>one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,[role=dialog]'),{optional:true}),15000,'Studio не открыл окно расписания при проверке сохранения');
+ let got=null;
+ try{got=await scheduleValues(dialog,plan);}catch(err){
+  if(L.scheduled.test(summary))throw err;
+  throw new Error('Studio не подтвердил сохранённое расписание после перезагрузки');
+ }
+ if(!scheduleMatches(got,plan)){
+  const label=L.scheduled.test(summary)?'«Запланировано», но дата/время не совпали':'расписание в диалоге не совпало с приложением';
+  throw new Error(`Studio показал ${label}: ${got.date||'?'} ${got.time||'?'} UTC${got.offset/60}; ожидалось ${plan.date} ${plan.time} UTC${plan.offset/60}`);
+ }
  await page.keyboard.press('Escape');
  if(item.thumbnail)await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
 }
@@ -435,4 +448,4 @@ async function runItems(page,pack,opts,host){
  }
  return results;
 }
-module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,visibility,wizardState,visibilityControl,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
