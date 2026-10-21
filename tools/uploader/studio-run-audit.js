@@ -42,9 +42,9 @@ module.exports={audit};
 if(require.main===module){
  try{
   const args={};for(let n=2;n<process.argv.length;n+=2){if(!process.argv[n].startsWith('--')||!process.argv[n+1])throw Error('Use --log file --since ISO-time --profiles id1,id2 [--out file].');args[process.argv[n].slice(2)]=process.argv[n+1];}
-  const raw=fs.readFileSync(args.log,'utf8').replace(/^\uFEFF/,''),records=raw.split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
+  const bytes=fs.readFileSync(args.log),raw=bytes.toString('utf8').replace(/^\uFEFF/,''),records=raw.split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
   const report=audit(records,{profiles:args.profiles?.split(',').map(x=>x.trim()).filter(Boolean),since:args.since,build:args.build||require('./youtube-studio-upload').BUILD});
-  report.input={path:path.resolve(args.log),sha256:crypto.createHash('sha256').update(raw).digest('hex')};
+  report.input={path:path.resolve(args.log),sha256:crypto.createHash('sha256').update(bytes).digest('hex')};
   const json=JSON.stringify(report,null,2);if(args.out){fs.writeFileSync(args.out,json,{flag:'wx'});console.log(path.resolve(args.out));}else console.log(json);
   if(report.status!=='PASS_LOG_CONTRACT')process.exitCode=1;
  }catch(error){console.error(error.message);process.exitCode=2;}

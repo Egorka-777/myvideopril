@@ -7,4 +7,17 @@ for(const change of [rows=>rows.filter(r=>r.stage!=='item_confirmed'),rows=>rows
 const shared=fixture().map(row=>row.stage==='item_confirmed'?{...row,message:row.message.replace('bravo','alpha')}:row);assert.equal(audit(shared,options).status,'FAIL');
 assert.throws(()=>audit(fixture(),{...options,since:'2026-10-21T20:00:00'}),/UTC offset/);
 assert.throws(()=>audit(fixture(),{...options,profiles:['same','same']}),/distinct/);
+// Exercise the exact PC command, including .NET JSONL's UTF-8 BOM/CRLF.
+const fs=require('fs'),os=require('os'),path=require('path'),cp=require('child_process'),crypto=require('crypto');
+const temp=fs.mkdtempSync(path.join(os.tmpdir(),'vb-studio-audit-'));
+try{
+ const log=path.join(temp,'app.jsonl'),out=path.join(temp,'audit.json');
+ const raw=Buffer.from('\uFEFF'+fixture().map(x=>JSON.stringify(x)).join('\r\n'),'utf8');fs.writeFileSync(log,raw);
+ const args=[path.resolve(__dirname,'../tools/uploader/studio-run-audit.js'),'--log',log,'--since',options.since,'--profiles','profile-a, profile-b','--build',options.build,'--out',out];
+ let result=cp.spawnSync(process.execPath,args,{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+ const report=JSON.parse(fs.readFileSync(out,'utf8'));assert.equal(report.status,'PASS_LOG_CONTRACT');assert.equal(report.input.sha256,crypto.createHash('sha256').update(raw).digest('hex'),'Evidence hash must match original file bytes, including BOM');
+ result=cp.spawnSync(process.execPath,args,{encoding:'utf8'});assert.equal(result.status,2);assert(/EEXIST/.test(result.stderr));
+ fs.unlinkSync(out);fs.writeFileSync(log,fixture().filter(x=>x.stage!=='studio_close').map(x=>JSON.stringify(x)).join('\n'));
+ result=cp.spawnSync(process.execPath,args,{encoding:'utf8'});assert.equal(result.status,1);assert.equal(JSON.parse(fs.readFileSync(out,'utf8')).status,'FAIL');
+}finally{fs.rmSync(temp,{recursive:true,force:true});}
 console.log('Studio run audit: two channels ×3, exact SEO evidence, version, errors, ordering, missing Close and duplicate Publish checks PASS (fixtures).');
