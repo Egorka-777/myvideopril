@@ -29,7 +29,7 @@ function shadowFixture(lang,state,editor=false){
  </script></body>`);
 }
 async function simpleShadow(page){
- await page.setContent('<ytcp-focus-test></ytcp-focus-test><script>const h=document.querySelector("ytcp-focus-test");const root=h.attachShadow({mode:"open"});const inner=document.createElement("ytcp-focus-inner");root.append(inner);inner.attachShadow({mode:"open"}).innerHTML=\'<div id="textbox" contenteditable="true" role="textbox" style="min-height:40px">old</div>\';window.escapes=0;document.addEventListener("keydown",e=>{if(e.key==="Escape")escapes++;});</script>');
+ await page.setContent('<ytcp-focus-test></ytcp-focus-test><script>(()=>{const h=document.querySelector("ytcp-focus-test");const root=h.attachShadow({mode:"open"});const inner=document.createElement("ytcp-focus-inner");root.append(inner);inner.attachShadow({mode:"open"}).innerHTML=\'<div id="textbox" contenteditable="true" role="textbox" style="min-height:40px">old</div>\';window.escapes=0;document.addEventListener("keydown",e=>{if(e.key==="Escape")escapes++;});})();</script>');
  return page.locator('#textbox');
 }
 (async()=>{
