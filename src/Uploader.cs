@@ -73,7 +73,7 @@ namespace VideoBatch {
         }
     }
     [DataContract] public class UploadItemJob {
-        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,tags,description,caption,publishedVideoId,publishedUrl,localJobId,publishMode,contentKind,commentText,commentState;
+        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,tags,description,caption,studioVideoId,publishedVideoId,publishedUrl,localJobId,publishMode,contentKind,commentText,commentState;
         [DataMember]public long scheduledUnixSeconds;
         [DataMember]public int scheduledUtcOffsetMinutes;
         [DataMember]public bool studioPending;
@@ -2045,7 +2045,7 @@ namespace VideoBatch {
                 var rows=ResolveUploadRows(channelsFilter);
                 if(rows.Count==0){MessageBox.Show(this,"Отметьте галочкой ✓ каналы для загрузки.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 var flat=ExpandUploadJobs(rows);
-                foreach(var job in flat){job.item.StudioPending=false;job.item.Title=CleanTitle(job.item.Title);}
+                foreach(var job in flat){job.item.Title=CleanTitle(job.item.Title);}
                 if(flat.Count==0){
                     MessageBox.Show(this,"Нет роликов для загрузки: все уже опубликованы или нет готовых файлов с заголовками.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);
                     return;

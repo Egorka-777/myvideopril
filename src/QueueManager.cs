@@ -51,7 +51,7 @@ namespace VideoBatch {
                     return new UploadItemJob{
                     video=it.StagedVideo,
                     title=it.UploadTitle,
-                    localJobId=it.Source.StudioUploadId,studioPending=it.Source.StudioPending,
+                    localJobId=it.Source.StudioUploadId,studioPending=it.Source.StudioPending,studioVideoId=it.Source.StudioVideoId,
                     scheduledUnixSeconds=unix,
                     scheduledUtcOffsetMinutes=offsetMin,
                     contentKind=kind,

@@ -37,6 +37,14 @@ namespace VideoBatch {
                 var en=new YouTubeChannel{Market="EN",ProfileId="profile-en"};Check(YouTubeMetadata.Build(prefs,en,1).description.Contains("English"),"English description bank");
                 prefs.YouTubeChannels=new List<YouTubeChannel>{channel};channel.Items[0].StudioPending=true;channel.Items[0].StudioVideoId="abcdefghijk";Store.Save(prefs);
                 var loaded=Store.Load();Check(loaded.YouTubeChannels[0].Items[0].StudioPending,"uncertain upload survives restart");Check(loaded.YouTubeChannels[0].Items[0].StudioUploadId==job.items[0].localJobId,"id survives restart");Check(loaded.YouTubeDescriptionBankEn.Count==2,"English bank survives restart");
+                var retry=batch.ToUploadJob("not-saved",3001,prefs);
+                Check(retry.items[0].studioPending&&retry.items[0].studioVideoId=="abcdefghijk","pending server ID reaches worker without resetting state");
+                using(var memory=new MemoryStream()){serializer.WriteObject(memory,retry);memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.items[0].studioVideoId=="abcdefghijk"&&round.items[0].studioPending,"pending server ID wire roundtrip");}
+                batch.Items[0].Kind="shorts";batch.Items[0].Source.Thumbnail=Path.Combine(root,"missing-thumbnail.png");
+                var shortJob=batch.ToUploadJob("not-saved",3001,prefs);
+                Check(shortJob.items[0].thumbnail==null&&shortJob.thumbnail==null,"Shorts do not send thumbnail images");
+                Check(shortJob.items[0].publishMode=="immediate"&&shortJob.items[0].scheduleDate==null&&shortJob.items[0].scheduleTime==null,"Shorts skip scheduling");
+                batch.Items[0].Kind="long";batch.Items[0].Source.Thumbnail="";
                 Check(TitleCleaner.RunSelfTests(),"clean title regressions");
                 Check(TitleCleaner.CleanForUpload("001. 3 правила 2026 (2).mp4")=="3 правила 2026","strip service indices, keep meaningful numbers");
                 Check(TitleCleaner.CleanForUpload("12.34 стратегия 2026")=="12.34 стратегия 2026","preserve decimal punctuation");
@@ -52,7 +60,7 @@ namespace VideoBatch {
                 Check(Path.GetDirectoryName(renamed)==root,"rename does not create a staging copy");
                 Check(File.ReadAllText(occupied)=="existing bytes"&&File.ReadAllText(renamed)=="source bytes","collision keeps both files intact");
                 Check(UploadWindow.RenameVideoFile(renamed,"Новый заголовок",1,1)==renamed,"reselecting same title is idempotent");
-                foreach(var stage in new[]{"studio_date","studio_zone","studio_time","metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_verify"})
+                foreach(var stage in new[]{"studio_date","studio_zone","studio_time","metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_publish","studio_close","studio_verify"})
                     Check(TaskQueueStore.MapStage(stage)==TaskQueueStatus.Scheduling,"Studio phase remains active: "+stage);
                 Check(TaskQueueStore.MapStage("upload_transfer")==TaskQueueStatus.Uploading,"upload transfer keeps active queue status");
                 Check(YouTubeOwnerPublishTests.RunSelfTests(),"author publication contract");

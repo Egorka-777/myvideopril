@@ -146,6 +146,8 @@ namespace VideoBatch {
                 case "studio_date":
                 case "studio_zone":
                 case "studio_time":
+                case "studio_publish":
+                case "studio_close":
                 case "studio_verify":
                 case "studio_dialog":
                 case "metadata": return TaskQueueStatus.Scheduling;

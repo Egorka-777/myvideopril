@@ -1,9 +1,9 @@
 "use strict";
 // Native Studio UI only. No metadata/publish HTTP endpoints and no clipboard/DOM text writes.
 const fs=require('fs');
-const {bounded,dismissPublishDialog,isPostPublishScreen}=require('./studio-browser');
+const {bounded,dismissPublishDialog,isPostPublishScreen,publicationState,findPublishCloseButton}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-description-v18';
+const BUILD='2026-10-21-studio-shorts-queue-v19';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -48,6 +48,7 @@ const L={
  public:/^(Public|Открытый доступ|Доступно всем|Public access)/i,
  scheduled:/Scheduled|Запланирован|Публикация запланирована/i
 };
+function isShorts(item){return /^(shorts|short)$/.test(String(item.contentKind||'').trim().toLowerCase());}
 function isImmediatePublish(item){
  const kind=String(item.contentKind||'').trim().toLowerCase();
  const mode=String(item.publishMode||'').trim().toLowerCase();
@@ -316,14 +317,15 @@ async function schedule(page,scope,plan,zone,{progress=()=>{},readyMs=120000,set
  throw new Error('Studio повторно сбрасывает дату/время после выбора пояса. Подтверждение остановлено, открытый черновик сохранён.');
 }
 async function publishSuccessVisible(page){return isPostPublishScreen(page);}
-async function waitSaveConfirmed(page,scope,{timeout=180000,progress=()=>{}}={}){
+async function waitSaveConfirmed(page,scope,{timeout=180000,progress=()=>{},expectedId=''}={}){
  let reported=0;
- return until(async()=>{
-  if(await isPostPublishScreen(page))return 'success';
-  if(!await scopeAlive(scope))return 'closed';
-  if(Date.now()-reported>8000){progress('studio_publish','Studio обрабатывает публикацию…');reported=Date.now();}
+ try{return await until(async()=>{
+  const state=await publicationState(page,{scope,expectedId});
+  if(state.state!=='pending')return state.state;
+  if(Date.now()-reported>5000){progress('studio_publish','Ожидаю подтверждение сохранения Studio. Повторное нажатие не выполняется.');reported=Date.now();}
   return null;
- },timeout,'Studio долго обрабатывает публикацию. Попробую нажать «Закрыть».');
+ },timeout,'Studio не показал подтверждение сохранения. Проверяю существующий ID, без повторной публикации.');}
+ catch(error){if(/Studio не показал подтверждение сохранения/.test(error.message)&&!/страница не отвечает/.test(error.message))error.code='STUDIO_SAVE_TIMEOUT';throw error;}
 }
 async function publishPublic(page,scope){
  let publicRadio=await one(scope.locator('#public-radio-button,[name=PUBLIC],tp-yt-paper-radio-button[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
@@ -358,19 +360,27 @@ async function readback(page,item,id,plan,opts,zone){
  await details(page,scope,item,opts,{verify:true});
  const control=await until(()=>visibilityControl(page),30000,'Studio не показал статус доступа на странице редактирования');
  const summary=norm(await control.innerText())+' '+(await control.getAttribute('aria-label')||'');
+ if(!plan&&L.public.test(summary.trim()))return {visibility:'public'};
  await control.click();
- const dialog=await until(()=>one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,[role=dialog]'),{optional:true}),15000,'Studio не открыл окно расписания при проверке сохранения');
- let got=null;
- try{got=await scheduleValues(dialog,plan);}catch(err){
-  if(L.scheduled.test(summary))throw err;
-  throw new Error('Studio не подтвердил сохранённое расписание после перезагрузки');
+ const dialog=await until(()=>one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,[role=dialog]'),{optional:true}),15000,'Studio не открыл окно доступа при проверке сохранения');
+ if(!plan){
+  const radio=await one(dialog.locator('[name=PUBLIC]').or(dialog.getByRole('radio',{name:L.public})),{optional:true});
+  const selected=radio&&await radio.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked'));
+  if(!selected)throw new Error('Studio не подтвердил сохранённый «Открытый доступ» для Shorts. Повторная публикация заблокирована.');
+  await page.keyboard.press('Escape');return {visibility:'public'};
  }
- if(!scheduleMatches(got,plan)){
-  const label=L.scheduled.test(summary)?'«Запланировано», но дата/время не совпали':'расписание в диалоге не совпало с приложением';
-  throw new Error(`Studio показал ${label}: ${got.date||'?'} ${got.time||'?'} UTC${got.offset/60}; ожидалось ${plan.date} ${plan.time} UTC${plan.offset/60}`);
+ const got=await scheduleValues(dialog,plan);
+ if(got.unix!==plan.unix)throw new Error(`После сохранения дата/время Studio не совпали с моментом публикации: ${got.date||'?'} ${got.time||'?'} UTC${got.offset/60}; ожидалось ${plan.date} ${plan.time} UTC${plan.offset/60}`);
+ // Summary text can be generic «Visibility». In that case require a checked
+ // schedule card; the mere existence of date/time inputs is not saved status.
+ if(!L.scheduled.test(summary)){
+  const card=await scheduleCard(dialog);
+  const selected=card&&await card.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked'));
+  if(!selected)throw new Error('Studio не подтвердил сохранённый статус «Запланировано».');
  }
  await page.keyboard.press('Escape');
- if(item.thumbnail)await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
+ if(item.thumbnail&&!isShorts(item))await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
+ return {visibility:'scheduled',schedule:got};
 }
 async function waitUpload(page,{stallMs=1200000,unknownMs=30000,progress=()=>{}}={}){
  const scope=await uploadScope(page);if(!scope)throw new Error('Studio не показал активный диалог загрузки');let last='',moved=Date.now();
@@ -396,6 +406,7 @@ async function diagnostics(page,error,folder){
  const data={build:BUILD,time:new Date().toISOString(),error:String(error.message||error),flow:traces.get(page)||null,url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
  if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url())){
   data.controls=await page.locator('button,ytcp-button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
+  try{const terminal=await publicationState(page);const close=terminal.surface?await findPublishCloseButton(page,{scope:terminal.surface}):null;data.publication={state:terminal.state,ids:terminal.ids,closePresent:!!close,closeEnabled:close?await enabled(close):false};}catch(e){data.publication={error:e.message};}
   data.fields=await page.locator('#title-textarea,#description-textarea,[contenteditable=true],textarea[name=description],input[name=title]').evaluateAll(inspectEditors);
   data.scheduleControls=await page.locator('#datepicker-trigger,#time-of-day-trigger,ytcp-date-picker input,ytcp-datepicker input,ytcp-time-of-day-picker input,#time-field input').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,label:e.getAttribute('aria-label')||'',value:e.value||e.innerText||'',readOnly:e.readOnly===true})).slice(0,20));
   data.timezones=await zoneDiagnostics(await uploadScope(page)||page.locator('body'));
@@ -417,27 +428,44 @@ async function runItems(page,pack,opts,host){
   if(opts.writeDescription!==false&&item.description&&/[<>]/.test(item.description))throw new Error('Описание не должно содержать < или >');
   if(opts.writeDescription!==false&&item.description?.length>5000)throw new Error('Описание превышает 5000 символов');
   if(!isImmediatePublish(item))planFor(item);
+  if(item.studioPending&&!item.studioVideoId)throw new Error('Предыдущая передача этого файла не подтверждена, ID неизвестен. Проверьте черновик в Studio; повторная передача заблокирована.');
  });
  const usedIds=new Set();
+ async function verifySaved(item,id,plan,zone,progress){
+  progress('studio_verify','Проверяю сохранённые название, описание и '+(plan?'расписание':'открытый доступ')+' по ID '+id+'.');
+  const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');
+  try{if(plan)await syncClock(verify,plan,host.progress);return await readback(verify,item,id,plan,opts,zone);}
+  finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
+ }
+
  for(let i=0;i<pack.length;i++){
   const item=pack[i],immediate=isImmediatePublish(item),packIndex=item._packIndex||i+1;
   let plan=null,zone=null;
   if(!immediate){plan=planFor(item);zone=await syncClock(page,plan,host.progress);}
   else host.progress('upload_mode','Shorts: сразу в открытый доступ, без превью и расписания.',{packIndex});
   host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
+  const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex,...extra});
+  if(item.studioPending){
+   const id=item.studioVideoId;if(!/^[A-Za-z0-9_-]{11}$/.test(id))throw new Error('Некорректный сохранённый ID. Повторная передача заблокирована.');
+   await verifySaved(item,id,plan,zone,progress);
+   const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,visibility:immediate?'public':'scheduled',schedule:plan};
+   results.push(result);usedIds.add(id);host.progress('item_confirmed','Подтвердил ранее сохранённое видео без повторной передачи.',result);
+   await dismissPublishDialog(page,progress,{expectedId:id,confirmed:true,timeout:opts.closeTimeout??90000});
+   continue;
+  }
+
   await host.openFile(page,item.video,()=>host.checkpoint(item,packIndex));
   host.progress('studio_editor','Файл передан; ищу активное окно и редактируемое поле названия.',{packIndex});
   const scope=await until(()=>uploadScope(page),25000,'Studio принял файл, но не показал окно редактирования за 25 секунд. Проверьте черновик перед повтором.');
   await until(()=>field(scope,'title',true),25000,'Не появилось поле названия');
   host.progress('metadata','Удаляю название файла и печатаю заголовок из приложения.',{packIndex});
-  const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex,...extra});
   await bounded(()=>details(page,scope,item,{...opts,progress}),metadataBudget(item,opts),'Studio не завершил ввод метаданных в рассчитанное время');
   progress('upload_transfer','Проверяю завершение передачи файла.');await host.waitUpload(page,{progress});
   // The video link may appear only after processing starts. Do not block typing on it.
   const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},60000,'YouTube не показал ID ролика');
   if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
   host.progress('item_accepted','Studio создал видео, сохраняю ID',{packIndex,videoId:id,localJobId:item.localJobId});
-  if(!immediate&&item.thumbnail)await host.thumbnail(page,item.thumbnail,{scope});
+  if(!isShorts(item)&&item.thumbnail)await host.thumbnail(page,item.thumbnail,{scope});
   progress('studio_steps','Перехожу через «Далее / Next» к доступу.');await visibility(page,scope,{progress});
   let submit;
   if(immediate){
@@ -451,21 +479,20 @@ async function runItems(page,pack,opts,host){
   if(!immediate)await assertSchedule(scope,plan);
   progress(immediate?'studio_publish':'studio_schedule',immediate?'Нажимаю кнопку публикации один раз.':'Нажимаю «Запланировать публикацию» один раз.');
   await submit.click({timeout:10000});
-  try{await waitSaveConfirmed(page,scope,{progress});}catch(e){progress('studio_publish',String(e.message||e)+' Пробую «Закрыть»…');}
-  await dismissPublishDialog(page,progress);
-  await host.dismiss(page);
-  if(await uploadScope(page)){
-   await dismissPublishDialog(page,progress);
-   await until(async()=>!(await uploadScope(page)),30000,'Studio не закрыл мастер загрузки. Нажмите «Закрыть» вручную перед следующим роликом.');
-  }
-  if(!immediate){
-   progress('studio_verify','Проверяю сохранённые метаданные и расписание в Studio.');
-   const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');try{await syncClock(verify,plan,host.progress);await readback(verify,item,id,plan,opts,zone);}finally{await bounded(()=>verify.close(),2000,'Не закрылась вкладка проверки').catch(()=>{});}
-  }else progress('studio_verify','Shorts опубликованы; проверка расписания не требуется.');
-  const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,visibility:immediate?'public':'scheduled',schedule:immediate?null:plan};results.push(result);
-  host.progress('item_confirmed',immediate?`Studio опубликовал Shorts · ${id}`:`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
-  await host.dismiss(page);
+  try{await waitSaveConfirmed(page,scope,{progress,expectedId:id,timeout:opts.saveTimeout??180000});}
+  catch(error){if(error.code!=='STUDIO_SAVE_TIMEOUT')throw error;progress('studio_verify',error.message);}
+  // A success card or a vanished modal is not proof of persisted metadata.
+  // Verify both Shorts and long videos by their exact ID before confirming.
+  try{await verifySaved(item,id,plan,zone,progress);}
+  catch(error){throw new Error('Не подтверждено сохранение видео '+id+'. Повторная загрузка заблокирована. '+error.message);}
+  const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,visibility:immediate?'public':'scheduled',schedule:plan};results.push(result);
+  // Store a verified result before cleanup. A disabled Close button must never
+  // make the application forget a video which is already public/scheduled.
+  host.progress('item_confirmed',immediate?`Studio подтвердил открытый доступ · ${id}`:`Studio подтвердил расписание ${plan.date} ${plan.time}`,result);
+  await dismissPublishDialog(page,progress,{scope,expectedId:id,confirmed:true,timeout:opts.closeTimeout??90000});
+  progress('studio_ready','Предыдущий мастер закрыт. Можно переходить к следующему ролику.');
+
  }
  return results;
 }
-module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,publishSuccessVisible,waitSaveConfirmed,visibility,wizardState,visibilityControl,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,publishSuccessVisible,waitSaveConfirmed,visibility,wizardState,visibilityControl,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish,isShorts};

@@ -45,74 +45,74 @@ async function anyVisible(locator) {
   for (const item of await locator.all()) if (await item.isVisible()) return true;
   return false;
 }
-async function findPublishCloseButton(page) {
-  const locators = [
-    page.locator("ytcp-uploads-dialog #close-button"),
-    page.locator("ytcp-uploads-dialog").getByRole("button", { name: /^(Close|Закрыть)$/i }),
-    page.locator("ytcp-video-share-dialog #close-button"),
-    page.locator("ytcp-uploads-dialog #close-icon-button"),
-    page.locator("#close-icon-button"),
-    page.getByRole("button", { name: /^(Close|Закрыть)$/i })
-  ];
-  for (const locator of locators) {
-    for (const btn of await locator.all()) {
-      if (!(await btn.isVisible().catch(() => false))) continue;
-      return btn;
-    }
-  }
-  return null;
+const UPLOADS='ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog';
+const SUCCESS=/^(?:Video published|Video scheduled|Publish complete|Publication scheduled|Видео опубликовано|Видео запланировано|Публикация завершена|Публикация запланирована)[.!]?$/i;
+async function controlEnabled(button){
+  return button.evaluate(el=>{
+    for(let p=el;p;p=p.parentElement||p.getRootNode().host)
+      if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true'||p.inert)return false;
+    return true;
+  });
 }
-async function isPostPublishScreen(page) {
-  if (await anyVisible(page.getByText(/Video published|Видео опубликовано|Publish complete|Публикация завершена/i))) return true;
-  if (!(await uploadWizardOpen(page))) return false;
-  const hasShare = await anyVisible(page.locator("yt-share-target-renderer, yt-share-panel-v2, ytcp-social-suggestions, yt-social-target-bar, ytcp-video-share-dialog"));
-  const hasCopyLink = await anyVisible(page.getByRole("button", { name: /копировать ссылку|copy.*link/i }));
-  const hasPromote = await anyVisible(page.getByText(/Включить продвижение|Promote your video|Promotion/i));
-  const footerClose = await anyVisible(page.locator("ytcp-uploads-dialog #close-button"));
-  if (hasShare || hasCopyLink || hasPromote) return true;
-  // Footer «Закрыть» + disabled «Опубликовать» = success step (header X exists during whole upload).
-  if (footerClose) {
-    const publish = page.locator("ytcp-uploads-dialog #done-button button, ytcp-uploads-dialog #done-button");
-    for (const btn of await publish.all()) {
-      if (!(await btn.isVisible().catch(() => false))) continue;
-      const off = await btn.evaluate(el => {
-        for (let n = el; n; n = n.parentElement || n.getRootNode?.().host) {
-          if (n.getAttribute?.("aria-disabled") === "true" || n.hasAttribute?.("disabled")) return true;
-        }
-        return false;
-      }).catch(() => false);
-      if (off) return true;
-    }
+async function publicationState(page,{scope=null,expectedId=''}={}){
+  const surfaces=[];
+  const candidates=await (scope||page.locator(UPLOADS)).all();
+  for(const root of await page.locator('ytcp-video-share-dialog').all())if(!await root.evaluate(e=>!!e.closest('ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog')))candidates.push(root);
+  for(const root of candidates){
+    let alive=await root.isVisible();
+    if(!alive)alive=await anyVisible(root.locator('h1,h2,h3,[role=heading],#close-button,#done-button,[contenteditable=true],[role=dialog]'));
+    if(alive)surfaces.push(root);
   }
-  return false;
+  for(const root of surfaces){
+    const ids=await root.locator('a[href],input').evaluateAll(nodes=>[...new Set(nodes.map(e=>String(e.value||e.getAttribute('href')||'').match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([A-Za-z0-9_-]{11})(?:\b|\/|$)/)?.[1]).filter(Boolean))]);
+    if(expectedId&&ids.length&&(!ids.includes(expectedId)||ids.some(id=>id!==expectedId)))
+      throw new Error('Studio показывает другое видео в окне завершения. Окно не закрывалось; повторная загрузка остановлена.');
+    const header=await visible(root.getByText(SUCCESS));
+    if(header)return {state:/scheduled|запланир/i.test(await header.innerText())?'scheduled':'published',surface:root,ids};
+    const error=await visible(root.locator('[role=alert],#error-message,.error-message').filter({hasText:/couldn.t (?:save|publish)|failed to (?:save|publish)|не удалось (?:сохранить|опубликовать)|upload failed|ошибка загрузки/i}));
+    if(error)throw new Error('Studio отклонил сохранение: '+(await error.innerText()).slice(0,200));
+  }
+  return {state:surfaces.length?'pending':'closed',surface:surfaces[0]||null,ids:[]};
 }
-async function dismissPublishDialog(page, report = () => {}) {
-  for (let i = 0; i < 10; i++) {
-    const close = await findPublishCloseButton(page);
-    if (close) {
-      report("studio_publish", "Нажимаю «Закрыть» после публикации.");
-      await close.click({ timeout: 8000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 500));
-    } else if (await anyVisible(page.getByText(/^(Video published|Видео опубликовано)/i))) {
-      await page.keyboard.press("Escape").catch(() => {});
-      await new Promise(r => setTimeout(r, 350));
-    } else if (!(await uploadWizardOpen(page))) {
-      return;
-    } else {
-      await page.keyboard.press("Escape").catch(() => {});
-      await new Promise(r => setTimeout(r, 350));
-    }
-    if (!(await uploadWizardOpen(page))) return;
+async function findPublishCloseButton(page,{scope=null}={}){
+  if(!scope){const state=await publicationState(page);if(!/^(published|scheduled)$/.test(state.state))return null;scope=state.surface;}
+  // Prefer the footer. A disabled footer must become ready; the always-present
+  // header X must not short-circuit that wait. Duplicate Copy link buttons do
+  // not participate in either success detection or close-button identity.
+  for(const id of ['close-button','close-icon-button']){
+    const hosts=[];for(const host of await scope.locator('#'+id).all())if(await host.isVisible())hosts.push(host);
+    if(hosts.length>1)throw new Error('Studio: несколько кнопок закрытия в одном окне.');
+    if(hosts.length){const inner=await visible(hosts[0].getByRole('button'));return inner||hosts[0];}
   }
-  if (await uploadWizardOpen(page) && await isPostPublishScreen(page))
-    throw new Error("Studio не закрыл окно «Видео опубликовано». Нажмите «Закрыть» вручную.");
+  const matches=[];for(const btn of await scope.getByRole('button',{name:/^(Close|Закрыть)$/i}).all())if(await btn.isVisible())matches.push(btn);
+  if(matches.length>1)throw new Error('Studio: несколько кнопок «Закрыть» в одном окне.');return matches[0]||null;
+}
+async function isPostPublishScreen(page){return /^(published|scheduled)$/.test((await publicationState(page)).state);}
+async function dismissPublishDialog(page,report=()=>{},{scope=null,expectedId='',confirmed=false,timeout=90000}={}){
+  const initial=await publicationState(page,{scope,expectedId});
+  if(initial.state==='closed')return;
+  if(initial.state==='pending'&&!confirmed)return; // Never close an unfinished upload.
+  scope=initial.surface;
+  const end=Date.now()+timeout;let reported=0;
+  const close=await waitFor(async()=>{
+    const state=await publicationState(page,{scope,expectedId});if(state.state==='closed')return {closed:true};
+    if(state.state==='pending'&&!confirmed)return null;
+    const button=await findPublishCloseButton(page,{scope});
+    if(button&&await controlEnabled(button))return {button};
+    if(Date.now()-reported>5000){report('studio_close','Публикация сохранена. Ожидаю доступную кнопку «Закрыть / Close».');reported=Date.now();}
+    return null;
+  },timeout,'Studio подтвердил видео, но кнопка «Закрыть» не стала доступна. Видео повторно не отправляйте.');
+  if(close.closed)return;
+  report('studio_close','Нажимаю «Закрыть / Close» один раз после сохранения.');
+  await close.button.click({timeout:Math.min(10000,Math.max(1,end-Date.now()))});
+  await waitFor(async()=>!(await publicationState(page,{scope,expectedId})).surface,Math.max(1,end-Date.now()),'Видео сохранено, но Studio не закрыл окно. Следующий файл не передавался.');
 }
 async function uploadWizardOpen(page) {
   // A custom-element host can have zero bounds while its positioned descendants
   // are visible. A failed inspection is an error, never permission to navigate.
   for(const root of await page.locator('ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog').all()){
     if(await root.isVisible())return true;
-    for(const child of await root.locator('[contenteditable=true],#next-button,#done-button,[role=dialog]').all())if(await child.isVisible())return true;
+    for(const child of await root.locator('[contenteditable=true],#next-button,#done-button,#close-button,[role=dialog]').all())if(await child.isVisible())return true;
   }
   return false;
 }
@@ -134,21 +134,22 @@ async function openStudio(page, channelUrl, report) {
   const expected = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
   const url = 'https://studio.youtube.com' + (expected ? '/channel/' + expected : '');
   const onStudio = /^https:\/\/studio\.youtube\.com(?:\/|$)/i.test(page.url() || '');
-  if (onStudio && await isPostPublishScreen(page)) {
-    await dismissPublishDialog(page, report);
-  }
+  const completed=onStudio&&await isPostPublishScreen(page);
+  if(completed)await dismissPublishDialog(page,report);
   if (onStudio && await uploadWizardOpen(page)) {
     report('studio_ready', 'YouTube Studio: продолжаю открытый мастер загрузки (без перезагрузки страницы).');
     return;
   }
   report('studio_open', 'Открываю YouTube Studio · без проверки сторонних IP-сервисов.');
-  await page.goto(url, { waitUntil: 'commit', timeout: 35000 });
+  if(!completed)await page.goto(url, { waitUntil: 'commit', timeout: 35000 });
   await waitFor(async () => {
     const current = page.url();
     if (/accounts\.google\.com/.test(current)) throw new Error('Требуется вход в Google в выбранном Dolphin-профиле.');
     if (expected && /studio\.youtube\.com\/channel\/UC/.test(current) && !current.includes('/channel/' + expected))
       throw new Error('Studio открыл другой канал. Файл не передавался.');
-    return visible(page.locator('#create-icon').or(page.getByRole('button', { name: /^(Create|Создать)$/i })));
+    if(await isPostPublishScreen(page)){await dismissPublishDialog(page,report);return null;}
+    const button=await visible(page.locator('#create-icon').or(page.getByRole('button',{name:/^(Create|Создать)$/i})));
+    return button&&await controlEnabled(button)?button:null;
   }, 90000, 'Studio не показал кнопку «Создать» за 90 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
   report('studio_ready', 'YouTube Studio готов.');
 }
@@ -249,14 +250,18 @@ async function prepareCdpFile(page, input) {
       dispose };
   } catch (e) { await dispose(); throw e; }
 }
-async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '' } = {}) {
+async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '', readyMs=90000 } = {}) {
   file = path.resolve(file);
   if (!fs.existsSync(file)) throw new Error('Не найден файл ' + file);
   if (await isPostPublishScreen(page)) await dismissPublishDialog(page, report);
+  for(const root of await page.locator(UPLOADS).all())if(await anyVisible(root.locator('[contenteditable=true],textarea[name=title]')))
+    throw new Error('Studio: открыт незавершённый редактор. Новый файл не передавался; проверьте существующий ролик.');
   let input = await ensureUploadPicker(page, channelUrl);
   if (!input) {
-    const create = await bounded(() => visible(page.locator('#create-icon').or(page.getByRole('button', { name: /^(Create|Создать)$/i }))), 8000, 'Studio не ответил при поиске кнопки «Создать». Файл не передавался.');
-    if (!create) throw new Error('Studio: нет кнопки «Создать». Файл не передавался.');
+    const create=await waitFor(async()=>{
+      const button=await visible(page.locator('#create-icon').or(page.getByRole('button',{name:/^(Create|Создать)$/i})));
+      return button&&await controlEnabled(button)?button:null;
+    },readyMs,'Studio не показал доступную кнопку «Создать». Предыдущий мастер должен закрыться; Файл не передавался.');
     await create.click({ timeout: 8000 });
     const upload = await waitFor(() => visible(page.getByRole('menuitem', { name: /^(Upload videos?|Загрузить видео|Добавить видео)$/i })
       .or(page.locator('tp-yt-paper-item,ytcp-text-menu ytcp-ve').filter({ hasText: /^(Upload videos?|Загрузить видео|Добавить видео)$/i }))),
@@ -271,4 +276,4 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
   await transferFile(page, input, file, report, { forceCdp });
   report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
-module.exports = { uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton };
+module.exports = { uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };

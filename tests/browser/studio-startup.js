@@ -45,7 +45,7 @@ const S=require('../../tools/uploader/youtube-studio-upload');
   await page.setContent('<ytcp-uploads-dialog hidden></ytcp-uploads-dialog><ytcp-video-upload-dialog><div id="title-textarea"><div contenteditable="true" id="textbox">filename</div></div></ytcp-video-upload-dialog>');
   const scope=await S.uploadScope(page);await S.typeText(await S.field(scope,'title'),'Новый заголовок',{delay:1});assert.equal(await S.read(await S.field(scope,'title')),'Новый заголовок');
   let touched=false;await page.setContent('<main>No picker</main>');
-  await assert.rejects(B.openFile(page,path.join(temp,'selected-ru-false.mp4'),async()=>{touched=true;},()=>{}),/Файл не передавался/);
+  await assert.rejects(B.openFile(page,path.join(temp,'selected-ru-false.mp4'),async()=>{touched=true;},()=>{},{readyMs:350}),/Файл не передавался/);
   assert(!touched,'A failure before file selection must not lock the item as submitted');
   await assert.rejects(B.bounded(()=>new Promise(()=>{}),20,'bounded diagnostic'),/bounded diagnostic/);
   await context.close();
