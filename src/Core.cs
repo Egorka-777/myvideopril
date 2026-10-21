@@ -315,6 +315,14 @@ namespace VideoBatch {
                 p.YouTubeDescriptionBankRu=YouTubeDescriptionTemplates.DefaultsRu();
             if(p.YouTubeDescriptionBankRu.Count>0)
                 p.YouTubeDescriptionCursorRu=((p.YouTubeDescriptionCursorRu%p.YouTubeDescriptionBankRu.Count)+p.YouTubeDescriptionBankRu.Count)%p.YouTubeDescriptionBankRu.Count;
+            if(p.YouTubeDescriptionBankEn==null)p.YouTubeDescriptionBankEn=new List<string>();
+            p.YouTubeDescriptionBankEn=p.YouTubeDescriptionBankEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            if(p.YouTubeDescriptionBankEn.Count==0&&p.TikTokDescriptionBankEn!=null&&p.TikTokDescriptionBankEn.Count>0)
+                p.YouTubeDescriptionBankEn=new List<string>(p.TikTokDescriptionBankEn);
+            if(p.YouTubeDescriptionBankEn.Count==0)
+                p.YouTubeDescriptionBankEn=YouTubeDescriptionTemplates.DefaultsEn();
+            if(p.YouTubeDescriptionBankEn.Count>0)
+                p.YouTubeDescriptionCursorEn=((p.YouTubeDescriptionCursorEn%p.YouTubeDescriptionBankEn.Count)+p.YouTubeDescriptionBankEn.Count)%p.YouTubeDescriptionBankEn.Count;
             if(string.IsNullOrWhiteSpace(p.YouTubeKindView)||(p.YouTubeKindView!="shorts"&&p.YouTubeKindView!="long"))p.YouTubeKindView="shorts";
             if(!p.YouTubeLongScheduled20260923Migrated){
                 if(string.Equals((p.YouTubeHttpLongPublishMode??"").Trim(),"immediate",StringComparison.OrdinalIgnoreCase))
