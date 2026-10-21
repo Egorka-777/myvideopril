@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-metadata-v10';
+const BUILD='2026-10-21-studio-editor-v11';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -76,42 +76,7 @@ async function field(scope,kind,optional=false){
 }
 function typingBudget(text,delay){return 10000+Array.from(norm(text)).length*(Math.max(0,delay)+30);}
 function metadataBudget(item,opts){return 60000+typingBudget(item.title,opts.titleDelay??55)+typingBudget(opts.writeDescription===false?null:item.description,opts.descriptionDelay??18)+typingBudget(tags(item.tags).join(','),20);}
-async function dismissMetadataBlockers(scope){
- const page=scope.page();
- for(let i=0;i<3;i++){await page.keyboard.press('Escape').catch(()=>{});await pause(120);}
- await until(async()=>{
-  for(const scrim of await scope.locator('.dialog-scrim').all())if(await scrim.isVisible())return false;
-  for(const tip of await scope.locator('#tooltip, tp-yt-iron-tooltip, ytcp-paper-tooltip-placeholder').all())if(await tip.isVisible())return false;
-  return true;
- },5000,'Studio: подсказка или затемнение перекрывает поле. Нажмите Escape в мастере и повторите.');
-}
-async function activateEditor(box,scope){
- if(scope)await dismissMetadataBlockers(scope);
- await box.scrollIntoViewIfNeeded();
- let active=await box.evaluate(el=>{el.focus();try{el.click();}catch{}return document.activeElement===el||el.contains(document.activeElement);});
- if(!active){
-  try{await box.click({timeout:4000});}
-  catch{await box.click({force:true,timeout:4000}).catch(()=>{});}
-  active=await box.evaluate(el=>document.activeElement===el||el.contains(document.activeElement));
- }
- if(!active)await box.evaluate(el=>el.focus());
- await until(async()=>await box.evaluate(el=>document.activeElement===el||el.contains(document.activeElement)),4000,'Studio не активировало поле ввода — возможно, его перекрывает подсказка или затемнение.');
-}
-async function typeText(box,text,{delay=45,onProgress=()=>{},scope=null}={}){
- text=norm(text);await activateEditor(box,scope);
- await box.press('Control+A');await box.press('Delete');
- await until(async()=>await read(box)==='',3000,'Studio не очистил прежний текст');
- const chars=Array.from(text);
- // Each keyboard action has its own native, cancellable timeout. A 10-second
- // context default must not truncate a 5000-character description midway.
- for(let start=0;start<chars.length;start+=80){
-  const chunk=chars.slice(start,start+80).join('');
-  await box.pressSequentially(chunk,{delay,timeout:typingBudget(chunk,delay)});
-  onProgress(Math.min(start+80,chars.length),chars.length);
- }
- await box.press('Tab');
- await until(async()=>await read(box)===text,5000,'Studio не подтвердил введённый текст');
-}
+const {editorState,activateEditor,typeText,inspectEditors}=require('./studio-editor-controls')({until,norm,read,typingBudget});
 function tags(raw){const list=(Array.isArray(raw)?raw:String(raw||'').split(/[,;\n\r]/)).map(s=>String(s).trim().replace(/^#+/,'')).filter(Boolean);return [...new Set(list)];}
 function validateTags(list){const length=list.reduce((n,t)=>n+t.length+(t.includes(' ')?2:0),Math.max(0,list.length-1));if(length>500)throw new Error('Теги превышают лимит YouTube 500 символов с разделителями/кавычками. Сократите список в приложении.');}
 async function chips(scope){return scope.locator('#tags-container ytcp-chip, #tags-container [role=listitem],ytcp-free-text-chip-bar#tags-container .chip').evaluateAll(a=>a.map(e=>String(e.getAttribute('label')||e.getAttribute('data-tag')||e.querySelector('#label')?.textContent||e.textContent||'').replace(/\s*[×✕]\s*$/,'').trim()).filter(Boolean));}
@@ -154,17 +119,24 @@ async function question(scope,kind,answer,{verify=false}={}){
   const marked=await scope.evaluate((root,kind)=>{
    const mine=kind==='paid'?/paid promotion|paid product|branded content|прямая реклама|спонсорск|продакт.плейсмент/i:/altered content|synthetic content|synthetic media|AI.generated content|was AI used|use of AI|AI usage|использование ИИ|измен[её]нный контент/i;
    const other=kind!=='paid'?/paid promotion|paid product|branded content|прямая реклама/i:/altered content|was AI used|использование ИИ/i;
+   const parent=e=>e.parentElement||e.getRootNode().host||null;
+   const all=(node,selector)=>{
+    const out=Array.from(node.querySelectorAll(selector));
+    if(node.shadowRoot)out.push(...all(node.shadowRoot,selector));
+    for(const child of node.querySelectorAll('*'))if(child.shadowRoot)out.push(...all(child.shadowRoot,selector));return out;
+   };
+   const textOf=node=>(node.innerText||node.textContent||'')+' '+all(node,'h1,h2,h3,h4,[role=heading],label,span,p').map(x=>x.innerText||x.textContent||'').join(' ');
    const found=[];
-   for(const heading of root.querySelectorAll('h1,h2,h3,h4,[role=heading],label,span,div,p')){
-    const text=(heading.innerText||heading.textContent||'').trim();if(text.length>500||!mine.test(text))continue;
-    for(let p=heading.parentElement;p&&p!==root;p=p.parentElement){
-     const options=p.querySelectorAll('[role=radio],tp-yt-paper-radio-button,input[type=radio],[role=checkbox],tp-yt-paper-checkbox,input[type=checkbox]');
-     if(!options.length)continue;if(other.test(p.innerText||'')||options.length>5)break;
+   for(const heading of all(root,'h1,h2,h3,h4,[role=heading],label,span,div,p')){
+    const text=(heading.innerText||heading.textContent||'').trim();if(!heading.getClientRects().length||text.length>500||!mine.test(text))continue;
+    for(let p=parent(heading);p&&p!==root;p=parent(p)){
+     const options=all(p,'[role=radio],tp-yt-paper-radio-button,input[type=radio],[role=checkbox],tp-yt-paper-checkbox,input[type=checkbox]');
+     if(!options.length)continue;if(other.test(textOf(p))||options.length>5)break;
      if(!found.includes(p))found.push(p);break;
     }
    }
-   if(!found.length)return false;const min=Math.min(...found.map(e=>(e.innerText||'').length));const smallest=found.filter(e=>(e.innerText||'').length===min);if(smallest.length!==1)return false;
-   root.querySelectorAll('[data-vb-question="'+kind+'"]').forEach(e=>e.removeAttribute('data-vb-question'));smallest[0].setAttribute('data-vb-question',kind);return true;
+   if(!found.length)return false;const min=Math.min(...found.map(e=>textOf(e).length));const smallest=found.filter(e=>textOf(e).length===min);if(smallest.length!==1)return false;
+   all(root,'[data-vb-question="'+kind+'"]').forEach(e=>e.removeAttribute('data-vb-question'));smallest[0].setAttribute('data-vb-question',kind);return true;
   },kind);
   if(marked)block=scope.locator('[data-vb-question="'+kind+'"]');
  }
@@ -189,11 +161,11 @@ async function question(scope,kind,answer,{verify=false}={}){
 }
 async function details(page,scope,item,opts,{verify=false}={}){
  const report=opts.progress||(()=>{});
- if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55,scope});report('metadata_title','Заголовок введён и проверен.');}
+ if(!verify){report('metadata_title','Очищаю и печатаю заголовок.');await typeText(await field(scope,'title'),item.title,{delay:opts.titleDelay??55,scope,name:'названия',onState:(event,text)=>report('metadata_title',text)});report('metadata_title','Заголовок введён и проверен.');}
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
  if(opts.writeDescription!==false&&item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
-  if(!verify){report('metadata_description','Ввожу описание.');await dismissMetadataBlockers(scope);await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
+  if(!verify){report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',onState:(event,text)=>report('metadata_description',text),onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
@@ -201,7 +173,8 @@ async function details(page,scope,item,opts,{verify=false}={}){
  report('metadata_options','Открываю настройки рекламы и ИИ.');await showMore(scope);
  // Expansion mounts these controls asynchronously, so a one-shot lookup is too early.
  await until(async()=>{
-  const text=await scope.innerText();return L.paid.test(text)&&L.ai.test(text);
+  const visible=async pattern=>{for(const label of await scope.getByText(pattern).all())if(await label.isVisible())return true;return false;};
+  return await visible(L.paid)&&await visible(L.ai);
  },10000,'Studio не показал настройки рекламы и ИИ после «Развернуть»');
  await question(scope,'paid',opts.paidPromotion===true,{verify});
  await question(scope,'ai',opts.alteredContent===true,{verify});
@@ -396,7 +369,7 @@ async function diagnostics(page,error,folder){
  const data={build:BUILD,time:new Date().toISOString(),error:String(error.message||error),flow:traces.get(page)||null,url:page&&!page.isClosed()?new URL(page.url()).origin+new URL(page.url()).pathname:''};
  if(page&&!page.isClosed()&&/studio\.youtube\.com/.test(page.url())){
   data.controls=await page.locator('button,ytcp-button,[role=button],[role=radio],[role=option][aria-selected=true],input[type=date],input[type=time]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').slice(0,100),checked:e.getAttribute('aria-checked'),disabled:e.getAttribute('aria-disabled')})).slice(0,100));
-  data.fields=await page.locator('#title-textarea,#description-textarea,[contenteditable=true]').evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,id:e.id,visible:!!e.getClientRects().length,editable:e.isContentEditable,role:e.getAttribute('role'),length:(e.innerText||'').length,focused:e===document.activeElement||e.contains(document.activeElement)})));
+  data.fields=await page.locator('#title-textarea,#description-textarea,[contenteditable=true],textarea[name=description],input[name=title]').evaluateAll(inspectEditors);
   data.scheduleControls=await page.locator('#datepicker-trigger,#time-of-day-trigger,ytcp-date-picker input,ytcp-datepicker input,ytcp-time-of-day-picker input,#time-field input').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,label:e.getAttribute('aria-label')||'',value:e.value||e.innerText||'',readOnly:e.readOnly===true})).slice(0,20));
   data.timezones=await zoneDiagnostics(await uploadScope(page)||page.locator('body'));
   data.dialogs=await page.locator(UPLOAD_DIALOG).evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,visible:!!e.getClientRects().length,next:e.querySelectorAll('#next-button').length,fields:e.querySelectorAll('[contenteditable=true]').length})));
@@ -462,4 +435,4 @@ async function runItems(page,pack,opts,host){
  }
  return results;
 }
-module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
