@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded,dismissPublishDialog,isPostPublishScreen,publicationState,findPublishCloseButton}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-shorts-queue-v19';
+const BUILD='2026-10-21-studio-shorts-queue-v19d';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -318,13 +318,16 @@ async function schedule(page,scope,plan,zone,{progress=()=>{},readyMs=120000,set
 }
 async function publishSuccessVisible(page){return isPostPublishScreen(page);}
 async function waitSaveConfirmed(page,scope,{timeout=180000,progress=()=>{},expectedId=''}={}){
- let reported=0;
- try{return await until(async()=>{
-  const state=await publicationState(page,{scope,expectedId});
-  if(state.state!=='pending')return state.state;
-  if(Date.now()-reported>5000){progress('studio_publish','Ожидаю подтверждение сохранения Studio. Повторное нажатие не выполняется.');reported=Date.now();}
-  return null;
- },timeout,'Studio не показал подтверждение сохранения. Проверяю существующий ID, без повторной публикации.');}
+  let reported=0;
+  try{return await until(async()=>{
+   const state=await publicationState(page,{scope,expectedId});
+   if(state.state!=='pending'){
+    if(Date.now()-reported>0||state.state==='published'||state.state==='scheduled')progress('studio_publish',state.state==='scheduled'?'Studio показал экран «Видео запланировано».':'Studio показал экран «Видео опубликовано».');
+    return state.state;
+   }
+   if(Date.now()-reported>5000){progress('studio_publish','Жду экран завершения Studio (без повторного нажатия «Опубликовать»).');reported=Date.now();}
+   return null;
+  },timeout,'Studio не показал подтверждение сохранения. Проверяю существующий ID, без повторной публикации.');}
  catch(error){if(/Studio не показал подтверждение сохранения/.test(error.message)&&!/страница не отвечает/.test(error.message))error.code='STUDIO_SAVE_TIMEOUT';throw error;}
 }
 async function publishPublic(page,scope){

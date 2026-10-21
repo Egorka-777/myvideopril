@@ -47,6 +47,50 @@ async function anyVisible(locator) {
 }
 const UPLOADS='ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog';
 const SUCCESS=/^(?:Video published|Video scheduled|Publish complete|Publication scheduled|Видео опубликовано|Видео запланировано|Публикация завершена|Публикация запланирована)[.!]?$/i;
+const SUCCESS_LOOSE=/(?:Video published|Video scheduled|Publish complete|Publication scheduled|Видео опубликовано|Видео запланировано|Публикация завершена|Публикация запланирована)/i;
+const VIDEO_ID_RE='(?:youtu\\.be\\/|[?&]v=|\\/shorts\\/|\\/video\\/)([A-Za-z0-9_-]{11})(?:\\b|\\/|$)';
+async function collectVideoIds(root){
+  try{return await root.evaluate((el,reSource)=>{
+    const re=new RegExp(reSource);
+    const out=new Set();
+    let steps=0;const stack=[el];const seen=new Set();
+    while(stack.length&&steps++<400){
+      const node=stack.pop();
+      if(!node||seen.has(node))continue;seen.add(node);
+      if(node.nodeType===1){
+        for(const attr of ['href','value']){
+          const v=node.getAttribute&&node.getAttribute(attr);
+          if(v){const m=String(v).match(re);if(m)out.add(m[1]);}
+        }
+        if(node.shadowRoot)stack.push(node.shadowRoot);
+        for(let i=node.childNodes.length-1;i>=0;i--)stack.push(node.childNodes[i]);
+      }
+    }
+    return [...out];
+  },VIDEO_ID_RE,{timeout:1200});}
+  catch{return [];}
+}
+async function findCompletionCopy(root){
+  try{
+    const blob=normCompletion(await root.evaluate(el=>(el.innerText||'').slice(0,1200),{timeout:800}));
+    if(!blob)return '';
+    const line=blob.split('\n').map(normCompletion).find(t=>SUCCESS.test(t)||SUCCESS_LOOSE.test(t));
+    if(line)return line;
+    const m=blob.match(SUCCESS_LOOSE);
+    return m?normCompletion(m[0]):'';
+  }catch{return '';}
+}
+function normCompletion(text){return String(text||'').replace(/\s+/g,' ').trim();}
+function completionState(copy){return /scheduled|запланир/i.test(copy)?'scheduled':'published';}
+async function publishActionStillActive(root){
+  for(const btn of await root.locator('ytcp-button#done-button button,#done-button').all()){
+    if(!await btn.isVisible())continue;
+    const label=normCompletion(await btn.innerText());
+    if(!/publish|опублик|schedule|запланир/i.test(label))continue;
+    if(await controlEnabled(btn))return true;
+  }
+  return false;
+}
 async function controlEnabled(button){
   return button.evaluate(el=>{
     for(let p=el;p;p=p.parentElement||p.getRootNode().host)
@@ -64,13 +108,27 @@ async function publicationState(page,{scope=null,expectedId=''}={}){
     if(alive)surfaces.push(root);
   }
   for(const root of surfaces){
-    const ids=await root.locator('a[href],input').evaluateAll(nodes=>[...new Set(nodes.map(e=>String(e.value||e.getAttribute('href')||'').match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([A-Za-z0-9_-]{11})(?:\b|\/|$)/)?.[1]).filter(Boolean))]);
-    if(expectedId&&ids.length&&(!ids.includes(expectedId)||ids.some(id=>id!==expectedId)))
-      throw new Error('Studio показывает другое видео в окне завершения. Окно не закрывалось; повторная загрузка остановлена.');
-    const header=await visible(root.getByText(SUCCESS));
-    if(header)return {state:/scheduled|запланир/i.test(await header.innerText())?'scheduled':'published',surface:root,ids};
+    const completion=await findCompletionCopy(root);
+    if(completion){
+      const ids=await collectVideoIds(root);
+      if(expectedId&&ids.length&&(!ids.includes(expectedId)||ids.some(id=>id!==expectedId)))
+        throw new Error('Studio показывает другое видео в окне завершения. Окно не закрывалось; повторная загрузка остановлена.');
+      return {state:completionState(completion),surface:root,ids};
+    }
     const error=await visible(root.locator('[role=alert],#error-message,.error-message').filter({hasText:/couldn.t (?:save|publish)|failed to (?:save|publish)|не удалось (?:сохранить|опубликовать)|upload failed|ошибка загрузки/i}));
     if(error)throw new Error('Studio отклонил сохранение: '+(await error.innerText()).slice(0,200));
+    // Экран «Видео опубликовано»: заголовок мог не попасть в getByText, но есть ID и «Закрыть».
+    if(expectedId&&!(await publishActionStillActive(root))){
+      const footerClose=await visible(root.locator('ytcp-button#close-button'));
+      let namedClose=null;
+      if(!footerClose)for(const btn of await root.getByRole('button',{name:/^(Close|Закрыть)$/i}).all())if(await btn.isVisible()){namedClose=btn;break;}
+      if(footerClose||namedClose){
+        const ids=await collectVideoIds(root);
+        if(expectedId&&ids.length&&(!ids.includes(expectedId)||ids.some(id=>id!==expectedId)))
+          throw new Error('Studio показывает другое видео в окне завершения. Окно не закрывалось; повторная загрузка остановлена.');
+        if(ids.includes(expectedId))return {state:'published',surface:root,ids};
+      }
+    }
   }
   return {state:surfaces.length?'pending':'closed',surface:surfaces[0]||null,ids:[]};
 }
