@@ -156,11 +156,13 @@ namespace VideoBatch {
         public string WarmupVideoMarketView="RU";
         public string WarmupVideoPromptRu="Короткие смешные анекдоты про трейдеров и трейдинг, без мата, 1–2 предложения.";
         public string WarmupVideoPromptEn="Short funny jokes about traders and trading, clean, 1–2 sentences.";
-        public int WarmupVideoCountRu=10, WarmupVideoCountEn=10;
+        public int WarmupVideoCountRu=1, WarmupVideoCountEn=1;
         public int WarmupVideoMaxSecRu=8, WarmupVideoMaxSecEn=8;
-        public string WarmupVideoBackgroundsRu="", WarmupVideoBackgroundsEn="";
+        public string WarmupVideoBackgroundsRu="", WarmupVideoBackgroundsEn=""; // Legacy folder selection, preserved.
+        public string WarmupVideoBackgroundFileRu="", WarmupVideoBackgroundFileEn="";
         public string WarmupVideoOutputRu="", WarmupVideoOutputEn="";
         public string WarmupVideoPreviewOverlay="none";
+        public WarmupSubtitleStyle WarmupSubtitlesRu=new WarmupSubtitleStyle(), WarmupSubtitlesEn=new WarmupSubtitleStyle();
     }
 
     public static class YouTubeTagDefaults {

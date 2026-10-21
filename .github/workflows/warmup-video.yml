@@ -1,0 +1,53 @@
+name: Warmup video audio duration
+on:
+  push:
+    branches: [feat/warmup-audio-length-20261021]
+  pull_request:
+    paths: ['src/WarmupVideo*.cs','src/WarmupPreviewControl.cs','src/WarmupSubtitles.cs','.github/workflows/warmup-video.yml']
+  workflow_dispatch:
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install FFmpeg
+        shell: pwsh
+        run: ./scripts/Install-CiFfmpeg.ps1
+      - name: Compile desktop
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Real media pipeline with isolated API responses
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          $ffmpeg = [string](Get-Command ffmpeg.exe).Source
+          $ffprobe = [string](Get-Command ffprobe.exe).Source
+          if (!$asm.GetType('VideoBatch.WarmupVideoTests').GetMethod('RunIntegrationTests').Invoke($null,@($ffmpeg,$ffprobe))) { throw 'Warmup integration' }
+      - name: Native Windows layout and persistence
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          if (!$asm.GetType('VideoBatch.WarmupVideoTests').GetMethod('RunUiTests').Invoke($null,@([IO.Path]::GetFullPath('artifacts/warmup-ui')))) { throw 'Warmup UI' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Warmup-Video-UI
+          path: artifacts/warmup-ui
+          if-no-files-found: ignore
+      - name: Package desktop update
+        shell: pwsh
+        run: |
+          $dest = 'artifacts/VideoBatch-Warmup-Update'
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          Copy-Item bin/Release/net48/VideoBatch.exe* $dest
+          Copy-Item bin/Release/net48/*.dll $dest
+          if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes $dest -Recurse }
+          Copy-Item docs/AGENT_WARMUP_VIDEO_20261021_RU.md $dest
+          git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoBatch-Warmup-Update
+          path: artifacts/VideoBatch-Warmup-Update

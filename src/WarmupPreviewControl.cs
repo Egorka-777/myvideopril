@@ -5,7 +5,7 @@ using System.Windows.Forms;
 namespace VideoBatch {
     public sealed class WarmupPreviewControl : Control {
         string overlay = "none";
-        Image background;
+        Image background, subtitle;
 
         public WarmupPreviewControl() {
             DoubleBuffered = true;
@@ -24,6 +24,11 @@ namespace VideoBatch {
             Invalidate();
         }
 
+        public void SetSubtitles(WarmupSubtitleStyle style, string text) {
+            subtitle?.Dispose(); subtitle = style != null && style.Enabled ? WarmupSubtitles.Paint(text, style) : null;
+            Invalidate();
+        }
+
         protected override void OnPaint(PaintEventArgs e) {
             base.OnPaint(e);
             e.Graphics.Clear(Theme.Background);
@@ -33,10 +38,15 @@ namespace VideoBatch {
             float scale = Math.Min(w / 1080f, h / 1920f);
             var frame = new RectangleF(pad + (w - 1080 * scale) / 2, pad + (h - 1920 * scale) / 2, 1080 * scale, 1920 * scale);
             e.Graphics.FillRectangle(Brushes.Black, frame);
-            if (background != null)
-                e.Graphics.DrawImage(background, frame);
+            if (background != null) {
+                float cropScale = Math.Max(frame.Width / background.Width, frame.Height / background.Height);
+                float sourceWidth = frame.Width / cropScale, sourceHeight = frame.Height / cropScale;
+                var source = new RectangleF((background.Width - sourceWidth) / 2, (background.Height - sourceHeight) / 2, sourceWidth, sourceHeight);
+                e.Graphics.DrawImage(background, frame, source, GraphicsUnit.Pixel);
+            }
             else using (var b = new SolidBrush(Theme.ColorFromHex("#1a2744")))
                 e.Graphics.FillRectangle(b, frame);
+            if (subtitle != null) e.Graphics.DrawImage(subtitle, frame);
             if (overlay == "tiktok") DrawTikTokChrome(e.Graphics, frame);
             else if (overlay == "shorts") DrawShortsChrome(e.Graphics, frame);
             using (var pen = new Pen(Theme.Accent, 2)) e.Graphics.DrawRectangle(pen, frame.X, frame.Y, frame.Width, frame.Height);
@@ -66,7 +76,7 @@ namespace VideoBatch {
         }
 
         protected override void Dispose(bool disposing) {
-            if (disposing) background?.Dispose();
+            if (disposing) { background?.Dispose(); subtitle?.Dispose(); }
             base.Dispose(disposing);
         }
     }
