@@ -43,10 +43,10 @@ async function fixture(browser,lang,options={}){
 (async()=>{
  const browser=await chromium.launch({headless:true});try{
   for(const lang of ['ru','en']){
-   const f=await fixture(browser,lang),events=[];const items=IDS.map((id,i)=>({publishedVideoId:id,title:'Title '+i,localJobId:'job-'+i,commentText:'Account text\nDate 2110',commentState:''}));
+   const f=await fixture(browser,lang),events=[];const items=IDS.map((id,i)=>({publishedVideoId:id,title:'Title '+i,localJobId:'job-'+i,commentText:'📌 Материалы: https://example.com/?date=2110\nSecond line',commentState:''}));
    await O.runSequential(f.page,items,{typingDelay:1,progress:(stage,text,extra)=>events.push({stage,...extra}),checkpoint:async(item,index)=>{assert.equal(f.counts().commentCalls,index-1,'durable ACK before click');f.log.push('ack:'+item.publishedVideoId);}});
    assert.deepEqual(f.counts(),{publishCalls:2,commentCalls:2});assert.deepEqual(f.log,IDS.flatMap(id=>['public:'+id,'ack:'+id,'comment:'+id]));
-   assert(events.filter(e=>e.stage==='owner_comment_confirmed').every(e=>e.commentId&&e.commentText==='Account text\nDate 2110'));
+   assert(events.filter(e=>e.stage==='owner_comment_confirmed').every(e=>e.commentId&&e.commentText==='📌 Материалы: https://example.com/?date=2110\nSecond line'));
    assert.equal(events.filter(e=>e.stage==='owner_video_public').length,2);
    // Repeat is idempotent even when the local confirmation was lost: exact own
    // comment is detected on page, with real ID, before any submit checkpoint.

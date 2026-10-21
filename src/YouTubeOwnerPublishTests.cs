@@ -33,8 +33,8 @@ namespace VideoBatch {
         public static bool RunUiTests(string folder){
             Directory.CreateDirectory(folder);
             var channel=new YouTubeChannel{Name="Пример аккаунта RU",OwnerCommentTemplate="Текст автора\nДата: {ddMM}",ProfileId="fixture",Items=new List<YouTubeItem>{new YouTubeItem{Title="Пример загруженного ролика",PublishedVideoId="video000001",StudioVisibility="scheduled"}}};
-            using(var template=new OwnerCommentTemplateDialog(channel))Capture(template,Path.Combine(folder,"owner-comment-template.png"));
-            using(var publish=new OwnerPublishDialog(new Preferences(),new[]{channel}))Capture(publish,Path.Combine(folder,"owner-publish.png"));
+            using(var template=new OwnerCommentTemplateDialog(channel)){Check(template.Controls.OfType<TableLayoutPanel>().Single().Controls.OfType<TextBox>().Single().Lines.Length==2,"LF-only template displays as two lines");Capture(template,Path.Combine(folder,"owner-comment-template.png"));}
+            using(var publish=new OwnerPublishDialog(new Preferences(),new[]{channel})){Check(publish.PreviewText.Contains("video000001")&&publish.PreviewText.Contains("Текст автора"),"preview contains exact comment before publishing");Capture(publish,Path.Combine(folder,"owner-publish.png"));}
             Console.WriteLine("Owner publish: native dialogs capture and bounds PASS");return true;
         }
         static void Capture(Form form,string file){
