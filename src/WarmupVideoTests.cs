@@ -98,7 +98,12 @@ namespace VideoBatch {
                 foreach (string plate in new[] { "none", "solid", "rounded" }) {
                     using (var bitmap = WarmupSubtitles.Paint("Проверка English", new WarmupSubtitleStyle { Plate = plate, PlateColor = "#FF0000", TextColor = "#00FF00", Opacity = 100 })) {
                         Check(bitmap.GetPixel(0, 0).A == 0, "caption canvas is transparent");
-                        Check(Enumerable.Range(1200, 350).Any(y => bitmap.GetPixel(540, y).A > 0), "subtitle centered in configured position");
+                        bool green = false, red = false;
+                        for (int y = 1200; y < 1550; y += 3) for (int x = 80; x < 1000; x += 3) {
+                            var pixel = bitmap.GetPixel(x, y); if (pixel.A == 0) continue;
+                            green |= pixel.G > 180 && pixel.R < 80; red |= pixel.R > 180 && pixel.G < 80;
+                        }
+                        Check(green && red == (plate != "none"), "actual text/plate colors and transparent no-plate mode");
                     }
                 }
                 // Boundary near 10 s: container rounding is allowed, output is never longer than 10 s.
@@ -172,10 +177,12 @@ namespace VideoBatch {
                     foreach (var size in new[] { new Size(820, 620), new Size(936, 700), new Size(1200, 800) }) {
                         form.ClientSize = size; Application.DoEvents();
                         foreach (var button in All(panel).OfType<Button>().Where(b => b.Visible)) {
+                            Check(button.Height <= 44, "button row unexpectedly stretched: " + button.Text);
                             Check(button.Left >= 0 && button.Top >= 0 && button.Right <= button.Parent.ClientSize.Width + 1 && button.Bottom <= button.Parent.ClientSize.Height + 1, "button clipped in parent: " + button.Text);
                             var origin = panel.PointToClient(button.PointToScreen(Point.Empty));
                             // Scrollable settings can extend below viewport; horizontal clipping is never allowed.
                             Check(origin.X >= 0 && origin.X + button.Width <= panel.Width, "horizontal button clipping: " + button.Text);
+                            Check(origin.Y >= 0 && origin.Y + button.Height <= panel.Height, "overview button below viewport: " + button.Text);
                         }
                         using (var bmp = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(bmp, panel.ClientRectangle); bmp.Save(Path.Combine(folder, "warmup-" + size.Width + ".png")); }
                     }

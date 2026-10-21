@@ -42,36 +42,33 @@ namespace VideoBatch {
             scroll.Controls.Add(fields); card.Controls.Add(scroll); root.Controls.Add(card, 0, 0);
             scroll.ClientSizeChanged += (s, e) => { fields.Width = Math.Max(180, scroll.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 2); };
             AddField(Label("Короткий анекдот", Theme.FontCardTitle, Theme.TextPrimary));
-            AddField(Label("Выберите фон и тему — остальное соберётся автоматически.", Theme.FontBody, Theme.TextSecondary));
-            var markets = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 8, 0, 12) };
+            var markets = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 8) };
             ru = Theme.MakeHeroToggle("RU", market == "RU", () => SwitchMarket("RU")); en = Theme.MakeHeroToggle("EN", market == "EN", () => SwitchMarket("EN"));
             markets.Controls.Add(ru); markets.Controls.Add(en); AddField(markets);
-            AddField(Label("Фон", Theme.FontBody, Theme.TextPrimary));
+            AddField(Label("Фон · фото или видео", Theme.FontBody, Theme.TextPrimary));
             background = PathBox("warmup-background");
             chooseBackground = Theme.MakeButton("Выбрать", ghost: true, action: PickBackground); chooseBackground.Name = "warmup-pick-background";
             AddField(PickerRow(background, chooseBackground));
-            AddField(Label("Фото или видео · вертикальный кадр 9:16", Theme.FontBody, Theme.TextMuted));
-            AddField(Label("О чём анекдот", Theme.FontBody, Theme.TextPrimary, 14));
-            prompt = Theme.MakeSearchBox(); prompt.Name = "warmup-prompt"; prompt.Multiline = true; prompt.Height = 90; prompt.Dock = DockStyle.Fill; prompt.Margin = new Padding(0, 4, 0, 0); prompt.ScrollBars = ScrollBars.Vertical;
+            AddField(Label("О чём анекдот", Theme.FontBody, Theme.TextPrimary, 8));
+            prompt = Theme.MakeSearchBox(); prompt.Name = "warmup-prompt"; prompt.Multiline = true; prompt.Height = 76; prompt.Dock = DockStyle.Fill; prompt.Margin = new Padding(0, 4, 0, 0); prompt.ScrollBars = ScrollBars.Vertical;
             AddField(prompt);
-            var quantity = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 14, 0, 0) };
+            var quantity = new TableLayoutPanel { ColumnCount = 2, RowCount = 1, Height = 30, AutoSize = false, Dock = DockStyle.Top, Margin = new Padding(0, 8, 0, 0) };
             quantity.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); quantity.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
             quantity.Controls.Add(Label("Количество роликов", Theme.FontBody, Theme.TextPrimary), 0, 0);
             count = new NumericUpDown { Name = "warmup-count", Minimum = 1, Maximum = 100, Value = 1, Dock = DockStyle.Fill, BackColor = Theme.Elevated, ForeColor = Theme.TextPrimary, Font = Theme.FontBody, Margin = new Padding(0, 0, 0, 2) };
             quantity.Controls.Add(count, 1, 0); AddField(quantity);
-            AddField(Label("Длина — по озвучке, до 10 секунд. Без пауз в начале и конце.", Theme.FontBody, Theme.TextSecondary, 8));
-            AddField(Label("Папка с роликами", Theme.FontBody, Theme.TextPrimary, 14));
+            AddField(Label("По озвучке · до 10 секунд · без пауз", Theme.FontBody, Theme.TextSecondary, 8));
+            AddField(Label("Папка с роликами", Theme.FontBody, Theme.TextPrimary, 8));
             output = PathBox("warmup-output");
             chooseOutput = Theme.MakeButton("Изменить", ghost: true, action: PickOutput); chooseOutput.Name = "warmup-pick-output";
             AddField(PickerRow(output, chooseOutput));
-            AddField(Label("Используются ключи OpenRouter и ElevenLabs из настроек.", Theme.FontBody, Theme.TextMuted, 12));
 
-            var captionHead = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 14, 0, 0) };
+            var captionHead = new TableLayoutPanel { ColumnCount = 2, RowCount = 1, Height = 38, Dock = DockStyle.Top, AutoSize = false, Margin = new Padding(0, 8, 0, 0) };
             captionHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); captionHead.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
             captionsEnabled = new CheckBox { Name = "warmup-subtitles-enabled", Text = "Субтитры", AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 8, 0, 0) };
-            editCaptions = Theme.MakeButton("Настроить", ghost: true, action: () => { captionEditor.Visible = !captionEditor.Visible; }); editCaptions.Dock = DockStyle.Fill; editCaptions.Margin = Padding.Empty;
+            editCaptions = Theme.MakeButton("Настроить", ghost: true, action: () => { captionEditor.Visible = !captionEditor.Visible; }); editCaptions.AutoSize = false; editCaptions.Dock = DockStyle.Fill; editCaptions.Margin = Padding.Empty;
             captionHead.Controls.Add(captionsEnabled, 0, 0); captionHead.Controls.Add(editCaptions, 1, 0); AddField(captionHead);
-            captionEditor = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true, Visible = false, Margin = new Padding(0, 6, 0, 0) };
+            captionEditor = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Visible = false, Margin = new Padding(0, 6, 0, 0) };
             captionEditor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             captionFont = Theme.MakeCombo(new[] { "Segoe UI", "Arial", "Tahoma" });
             captionPlate = Theme.MakeCombo(new[] { "Скруглённая", "Прямая", "Без плашки" });
@@ -80,10 +77,10 @@ namespace VideoBatch {
             captionEditor.Controls.Add(SettingRow("Шрифт", captionFont)); captionEditor.Controls.Add(SettingRow("Размер текста", captionSize));
             captionEditor.Controls.Add(SettingRow("Положение сверху, %", captionPosition)); captionEditor.Controls.Add(SettingRow("Слов за раз", captionWords));
             captionEditor.Controls.Add(SettingRow("Плашка", captionPlate)); captionEditor.Controls.Add(SettingRow("Плотность плашки, %", captionOpacity));
-            var colors = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 6, 0, 0) };
+            var colors = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = false, Height = 38, RowCount = 1, ColumnCount = 2, Margin = new Padding(0, 6, 0, 0) };
             colors.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); colors.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            captionTextColor = Theme.MakeButton("Цвет текста", action: () => PickCaptionColor(false)); captionTextColor.Dock = DockStyle.Fill;
-            captionPlateColor = Theme.MakeButton("Цвет плашки", action: () => PickCaptionColor(true)); captionPlateColor.Dock = DockStyle.Fill; captionPlateColor.Margin = Padding.Empty;
+            captionTextColor = Theme.MakeButton("Цвет текста", action: () => PickCaptionColor(false)); captionTextColor.AutoSize = false; captionTextColor.Dock = DockStyle.Fill;
+            captionPlateColor = Theme.MakeButton("Цвет плашки", action: () => PickCaptionColor(true)); captionPlateColor.AutoSize = false; captionPlateColor.Dock = DockStyle.Fill; captionPlateColor.Margin = Padding.Empty;
             colors.Controls.Add(captionTextColor, 0, 0); colors.Controls.Add(captionPlateColor, 1, 0); captionEditor.Controls.Add(colors);
             AddField(captionEditor);
             var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty };
@@ -111,13 +108,13 @@ namespace VideoBatch {
         static Label Label(string text, Font font, Color color, int top = 0) => new Label { Text = text, Font = font, ForeColor = color, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, top, 0, 4) };
         static TextBox PathBox(string name) { var box = Theme.MakeSearchBox(); box.Name = name; box.ReadOnly = true; box.Dock = DockStyle.Fill; box.Margin = new Padding(0, 7, 8, 0); return box; }
         static Control PickerRow(Control box, Button button) {
-            var row = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 0, 0, 4) };
+            var row = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = false, Height = 40, RowCount = 1, ColumnCount = 2, Margin = new Padding(0, 0, 0, 4) };
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
-            button.Dock = DockStyle.Fill; button.Margin = Padding.Empty; row.Controls.Add(box, 0, 0); row.Controls.Add(button, 1, 0); return row;
+            button.AutoSize = false; button.Dock = DockStyle.Fill; button.Margin = Padding.Empty; row.Controls.Add(box, 0, 0); row.Controls.Add(button, 1, 0); return row;
         }
         static NumericUpDown StyleNumber(string name, int min, int max) => new NumericUpDown { Name = name, Minimum = min, Maximum = max, BackColor = Theme.Elevated, ForeColor = Theme.TextPrimary, Font = Theme.FontBody };
         static Control SettingRow(string title, Control field) {
-            var row = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 4, 0, 0) };
+            var row = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = false, Height = 40, RowCount = 1, ColumnCount = 2, Margin = new Padding(0, 4, 0, 0) };
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145));
             row.Controls.Add(Label(title, Theme.FontBody, Theme.TextSecondary), 0, 0); field.Dock = DockStyle.Fill; row.Controls.Add(field, 1, 0); return row;
         }
@@ -159,7 +156,7 @@ namespace VideoBatch {
                     string legacy = market == "EN" ? settings.WarmupVideoBackgroundsEn : settings.WarmupVideoBackgroundsRu;
                     if (File.Exists(legacy)) backgroundPath = legacy;
                 }
-                background.Text = string.IsNullOrWhiteSpace(backgroundPath) ? "Выберите фото или видео" : backgroundPath;
+                background.Text = string.IsNullOrWhiteSpace(backgroundPath) ? "Выберите фото или видео" : Path.GetFileName(backgroundPath);
                 string savedOutput = market == "EN" ? settings.WarmupVideoOutputEn : settings.WarmupVideoOutputRu;
                 string oldDefault = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "VideoBatch", "Warmup-" + market);
                 output.Text = string.IsNullOrWhiteSpace(savedOutput) || string.Equals(savedOutput, oldDefault, StringComparison.OrdinalIgnoreCase) ? WarmupVideoEngine.DefaultOutputFolder : savedOutput;
@@ -180,7 +177,7 @@ namespace VideoBatch {
         void PickBackground() {
             using (var dialog = new OpenFileDialog { Title = "Фон: фото или видео", Filter = "Фото и видео|*.jpg;*.jpeg;*.png;*.webp;*.bmp;*.mp4;*.mov;*.mkv;*.webm;*.avi;*.m4v", CheckFileExists = true }) {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                backgroundPath = dialog.FileName; background.Text = backgroundPath; SaveFields(); _ = UpdatePreviewAsync(backgroundPath);
+                backgroundPath = dialog.FileName; background.Text = Path.GetFileName(backgroundPath); SaveFields(); _ = UpdatePreviewAsync(backgroundPath);
             }
         }
         void PickOutput() { string path = Ui.PickFolder(FindForm(), output.Text, "Папка с готовыми роликами"); if (path == null) return; output.Text = path; SaveFields(); }
