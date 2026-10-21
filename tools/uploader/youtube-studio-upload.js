@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-chips-v6';
+const BUILD='2026-10-21-studio-chips-v8';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -240,10 +240,37 @@ async function zoneOffset(element,plan){
  if(value)try{const part=new Intl.DateTimeFormat('en',{timeZone:value,timeZoneName:'longOffset'}).formatToParts(new Date(plan.unix*1000)).find(x=>x.type==='timeZoneName');return offsetLabel(part.value);}catch{}
  return offsetLabel(await element.innerText());
 }
-async function setZone(scope,plan,zone){
- const button=await actionButton(scope,'timezone-button',L.zone)||await actionButton(scope,'time-zone-button',L.zone);
- if(!button)throw new Error('Studio: не найден выбор часового пояса, расписание не будет подтверждено');
- await button.click();
+async function zoneControl(scope,{optional=false}={}){
+ const byId=await actionButton(scope,'timezone-button',L.zone)||await actionButton(scope,'time-zone-button',L.zone);
+ if(byId)return byId;
+ const lang=await scope.page().locator('html').getAttribute('lang')||'';
+ const choices=[];
+ for(const candidate of await scope.locator('ytcp-dropdown-trigger,button,[role=button]').all()){
+  if(!await candidate.isVisible())continue;
+  if(await candidate.evaluate(e=>e.getAttribute('role')==='option'||!!e.closest('[role=listbox],[role=menu],ytcp-text-menu')))continue;
+  const text=norm(await candidate.innerText()),aria=norm(await candidate.getAttribute('aria-label')||'');
+  if(parseDate(text,lang)||parseTime(text))continue;
+  if(L.zone.test(text)||L.zone.test(aria)||offsetLabel(text)!==null)choices.push(candidate);
+ }
+ const leaves=[];
+ for(const candidate of choices){
+  let nested=false;
+  for(const other of choices)if(candidate!==other&&await candidate.evaluate((e,o)=>e!==o&&e.contains(o),await other.elementHandle().catch(()=>null))){nested=true;break;}
+  if(!nested)leaves.push(candidate);
+ }
+ if(leaves.length>1)throw new Error('Studio: неоднозначный выбор часового пояса.');
+ if(leaves.length===1)return leaves[0];
+ if(optional)return null;
+ throw new Error('Studio: не найден выбор часового пояса, расписание не будет подтверждено');
+}
+async function setZone(scope,plan,zone,{progress=()=>{}}={}){
+ const button=await zoneControl(scope);
+ const label=norm(await button.innerText());
+ if(await zoneOffset(button,plan)===plan.offset){
+  progress('studio_zone','Часовой пояс уже верный: '+label+'.');
+  return {label,offset:plan.offset};
+ }
+ await button.click({timeout:5000});
  const page=scope.page();const options=page.locator('[role=option],tp-yt-paper-item,ytcp-text-menu [role=menuitem]');
  const choice=await until(async()=>{
   const choices=[];for(const option of await options.all())if(await option.isVisible()){
@@ -261,7 +288,8 @@ async function setZone(scope,plan,zone){
  const value=await zoneValue(selected);
  const text=norm(await selected.innerText());
  if(value!==zone&&await zoneOffset(selected,plan)!==plan.offset)throw new Error('Studio сохранил другой часовой пояс');
- await page.keyboard.press('Escape');return {label:text,offset:plan.offset};
+ await page.keyboard.press('Escape');
+ return {label:text||label,offset:plan.offset};
 }
 function normalizeScheduleTime(raw){
  const m=String(raw||'').trim().match(/^(\d{1,2}):(\d{2})/);
@@ -308,10 +336,17 @@ async function schedule(page,scope,plan,zone,{progress=()=>{}}={}){
  await until(()=>timeControl(scope,true),10000,'Studio не открыл поле или карточку времени после выбора планирования');
  const privateLater=await one(scope.getByRole('radio',{name:/private.*(?:then|to).*public|сначала закрытый, потом открытый/i}),{optional:true});if(privateLater){await privateLater.click();await until(async()=>await privateLater.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked')),4000,'Studio не подтвердил доступ после публикации');}
  await fillDate(scope,plan.date,{progress});
- progress('studio_zone','Устанавливаю часовой пояс ПК.');await setZone(scope,plan,zone);progress('studio_zone','Часовой пояс подтверждён: '+zone+'.');
- await fillDate(scope,plan.date,{progress});await fillTime(scope,plan.time,{progress});
+ await fillTime(scope,plan.time,{progress});
+ progress('studio_zone','Устанавливаю часовой пояс ПК (после даты и времени).');await setZone(scope,plan,zone,{progress});progress('studio_zone','Часовой пояс подтверждён: '+zone+'.');
+ await fillDate(scope,plan.date,{progress});
+ await fillTime(scope,plan.time,{progress});
  const lang=await page.locator('html').getAttribute('lang')||'';
- if(parseDate(await controlValue(await dateControl(scope)),lang)!==plan.date)throw new Error('Studio не подтвердил дату');
+ const shownDate=parseDate(await controlValue(await dateControl(scope)),lang);
+ const shownTime=parseTime(await controlValue(await timeControl(scope)));
+ if(shownDate!==plan.date)throw new Error('Studio не подтвердил дату: ожидалось '+plan.date+', на экране '+(shownDate||'(пусто)'));
+ if(shownTime!==plan.time)throw new Error('Studio не подтвердил время: ожидалось '+plan.time+', на экране '+(shownTime||'(пусто)')+'. Порядок: дата → время → пояс.');
+ const past=await one(scope.getByText(/указать время в прошлом|time in the past|cannot specify a time in the past/i),{optional:true});
+ if(past&&await past.isVisible())throw new Error('YouTube отклоняет время как прошедшее при '+shownDate+' '+shownTime+'. Пересоздайте расписание в приложении.');
  let reported=0;
  const button=await until(async()=>{
   const x=await actionButton(scope,'done-button',L.schedule);if(await enabled(x)&&L.schedule.test(norm(await x.innerText())))return x;
@@ -350,7 +385,7 @@ async function readback(page,item,id,plan,opts,zone){
  const actualTime=parseTime(await controlValue(await timeControl(dialog)));
  if(actualDate!==plan.date||actualTime!==plan.time)throw new Error(`После сохранения дата/время Studio не совпали с расписанием: ожидалось ${plan.date} ${plan.time}, прочитано ${actualDate||'дата не распознана'} ${actualTime||'время не распознано'}`);
  // Verify zone in the persisted visibility dialog without changing it.
- const zoneButton=await actionButton(dialog,'timezone-button',L.zone)||await actionButton(dialog,'time-zone-button',L.zone);if(!zoneButton)throw new Error('Studio не показал сохранённый часовой пояс');await zoneButton.click();
+ const zoneButton=await zoneControl(dialog);await zoneButton.click();
  const selected=await until(()=>one(page.locator('[role=option][aria-selected=true],tp-yt-paper-item[aria-selected=true],[role=option][selected],tp-yt-paper-item[selected]'),{optional:true}),5000,'Studio не показал сохранённый часовой пояс');
  const value=await zoneValue(selected);
  if(value!==zone&&await zoneOffset(selected,plan)!==plan.offset)throw new Error('После сохранения изменился часовой пояс');
@@ -444,4 +479,4 @@ async function runItems(page,pack,opts,host){
  }
  return results;
 }
-module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,setZone,planFor,syncClock,schedule,publishPublic,visibility,wizardState,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish};
