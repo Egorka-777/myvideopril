@@ -67,35 +67,40 @@ module.exports=function({until,norm,read,typingBudget}){
   }
  }
  async function typeText(box,text,{delay=45,onProgress=()=>{},onState=()=>{},scope=null,name='текста',activationMs=12000,verifyMs=5000}={}){
-  text=norm(text);const chars=Array.from(text),chunkSize=80;
-  for(let attempt=0;attempt<2;attempt++){
+  text=norm(text);const chars=Array.from(text);
+  const isDescription=name==='описания';
+  const chunkSize=isDescription?40:80;
+  const chunkVerify=isDescription?Math.max(verifyMs,35000):verifyMs;
+  const finalVerify=isDescription?Math.max(verifyMs,45000):verifyMs;
+  const maxAttempts=isDescription?3:2;
+  for(let attempt=0;attempt<maxAttempts;attempt++){
    try{
+    if(attempt)await new Promise(r=>setTimeout(r,800));
     await activateEditor(box,{timeoutMs:activationMs,name,onState});
     await box.press('Control+A',{timeout:3000});await box.press('Delete',{timeout:3000});
-    await until(async()=>await read(box)==='',3000,'Studio не очистил прежний текст поля '+name+'.');
+    await until(async()=>!norm(await read(box)),5000,'Studio не очистил прежний текст поля '+name+'.');
     let prefix='';
     for(let start=0;start<chars.length;start+=chunkSize){
      if(start){
       const state=await editorState(box);if(!state?.focused)await activateEditor(box,{timeoutMs:activationMs,name,onState});
-      await waitTyped(box,prefix,{timeoutMs:verifyMs,name});
+      await waitTyped(box,prefix,{timeoutMs:chunkVerify,name});
      }
      await box.press('Control+End',{timeout:3000});
      const chunk=chars.slice(start,start+chunkSize).join('');
-     // A real line-break key keeps rich contenteditable editors consistent.
-     // insertText("\n") can be normalized differently by Studio's editor.
+     const typeDelay=isDescription?Math.max(delay,20):delay;
      const lines=chunk.split('\n');
      for(let line=0;line<lines.length;line++){
       if(line)await box.press('Shift+Enter',{timeout:3000});
-      if(lines[line])await box.pressSequentially(lines[line],{delay,timeout:typingBudget(lines[line],delay)});
+      if(lines[line])await box.pressSequentially(lines[line],{delay:typeDelay,timeout:typingBudget(lines[line],typeDelay)});
      }
-     prefix+=chunk;await waitTyped(box,prefix,{timeoutMs:verifyMs,name});
+     prefix+=chunk;await waitTyped(box,prefix,{timeoutMs:chunkVerify,name});
      onProgress(Math.min(start+chunkSize,chars.length),chars.length);
     }
     await box.press('Tab',{timeout:3000});
-    await waitTyped(box,text,{timeoutMs:verifyMs,name});return;
+    await waitTyped(box,text,{timeoutMs:finalVerify,name});return;
    }catch(error){
-    if(attempt||box.page().isClosed())throw error;
-    onState('retry','Повторяю ввод только поля '+name+' после изменения редактора (2/2).');
+    if(attempt+1>=maxAttempts||box.page().isClosed())throw error;
+    onState('retry','Повторяю ввод поля '+name+' ('+(attempt+2)+'/'+maxAttempts+').');
    }
   }
  }

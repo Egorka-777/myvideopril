@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded,dismissPublishDialog,isPostPublishScreen,publicationState,findPublishCloseButton}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-shorts-queue-v19d';
+const BUILD='2026-10-21-studio-shorts-queue-v19e';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -170,7 +170,7 @@ async function details(page,scope,item,opts,{verify=false}={}){
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
  if(opts.writeDescription!==false&&item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
-  if(!verify){await description.scrollIntoViewIfNeeded().catch(()=>{});report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',activationMs:18000,onState:(event,text)=>report('metadata_description',text),onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
+  if(!verify){await description.scrollIntoViewIfNeeded().catch(()=>{});report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',activationMs:25000,verifyMs:35000,onState:(event,text)=>report('metadata_description',text),onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
