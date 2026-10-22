@@ -80,7 +80,7 @@ namespace VideoBatch {
         }
         public void Trace(string line) {string safe=LiveDiagnostics.Append("ЭФИР · "+line);LogLine?.Invoke(safe);}
         void Log(string line) => Trace(line);
-        public void Start(IReadOnlyList<YouTubeChannel> channels, LiveOptions options) {
+        public void Start(IReadOnlyList<YouTubeChannel> channels, LiveOptions options, LivePlaylist preparedPlaylist = null) {
             options.Validate();
             if (channels == null || channels.Count == 0) throw new InvalidOperationException("Отметьте каналы галочками.");
             string ffmpeg = "", ffprobe = "", hint = "";
@@ -108,11 +108,11 @@ namespace VideoBatch {
                     batch.Add(new Session { Channel = channel, Account = account, Journal = new LiveJournalEntry {
                         LocalId = channel.ChannelId, RemoteId = account.RemoteId, Transport = account.Transport, ProfileId = account.ProfileId, LocalPort = account.LocalPort, OperationId = Guid.NewGuid().ToString("N") } });
                 }
-                foreach (var s in batch) { sessions.Add(s.Channel.ChannelId, s); State(s, LivePhase.Preparing); }
-                // The playlist is prepared once, shared by all channels; no encoding per channel while live.
-                var prep = Task.Run(() => prepareOverride != null ? prepareOverride(options, prepCancel.Token)
+                foreach (var s in batch) { sessions.Add(s.Channel.ChannelId, s); State(s, preparedPlaylist == null ? LivePhase.Preparing : LivePhase.Starting); }
+                // The dialog transfers ownership of already prepared media to this batch.
+                var prep = preparedPlaylist != null ? Task.FromResult(preparedPlaylist) : Task.Run(() => prepareOverride != null ? prepareOverride(options, prepCancel.Token)
                     : YouTubeLiveMedia.Prepare(options, ffmpeg, ffprobe, Log, prepCancel.Token));
-                foreach (var s in batch) s.Work = Run(s, options, ffmpeg, prep);
+                foreach (var s in batch) s.Work = Run(s, options, ffmpeg, prep, preparedPlaylist != null);
                 batches.RemoveAll(t => t.IsCompleted);
                 batches.Add(ReleaseBatch(batch, prep, prepCancel));
             }
@@ -138,14 +138,18 @@ namespace VideoBatch {
                 ct.ThrowIfCancellationRequested(); return await work.ConfigureAwait(false);
             }
         }
-        async Task Run(Session s, LiveOptions options, string ffmpeg, Task<LivePlaylist> prepared) {
+        async Task Run(Session s, LiveOptions options, string ffmpeg, Task<LivePlaylist> prepared, bool verifiedAfterPreparation) {
             string failure = null;
             bool journaled = false;
             IYouTubeLiveApi api = null;
             try {
-                api = apiFactory(s.Account);
-                await api.VerifyChannel(s.Account.RemoteId, s.Channel.ChannelUrl, s.Cancel.Token).ConfigureAwait(false);
                 var playlist = await AwaitCancelable(prepared, s.Cancel.Token).ConfigureAwait(false);
+                s.Cancel.Token.ThrowIfCancellationRequested();
+                api = apiFactory(s.Account);
+                if (!verifiedAfterPreparation) {
+                    State(s, LivePhase.Starting, "Видео готово. Проверяю канал Dolphin…");
+                    await api.VerifyChannel(s.Account.RemoteId, s.Channel.ChannelUrl, s.Cancel.Token).ConfigureAwait(false);
+                }
                 State(s, LivePhase.Starting,"Проверяю готовность YouTube Studio к видеокодеру…");
                 if(api is YouTubeLiveSessionApi studio)await studio.PrepareChannel(s.Cancel.Token).ConfigureAwait(false);
                 s.Journal.BroadcastAttempted = true; s.Journal.CreationPending=true;
@@ -168,7 +172,9 @@ namespace VideoBatch {
                     || !(url.Host.EndsWith(".youtube.com", StringComparison.OrdinalIgnoreCase) || url.Host == "youtube.com"))
                     throw new InvalidOperationException("YouTube не вернул корректный RTMPS-адрес видеопотока.");
                 string ingestion = address.TrimEnd('/') + "/" + key;
+                State(s, LivePhase.Starting, "Настройка названия, описания и значка в Studio…");
                 await api.Configure(s.Journal.BroadcastId, s.Journal.StreamId, options, s.Cancel.Token).ConfigureAwait(false);
+                State(s, LivePhase.Starting, "Видео готово, Studio настроена. Ожидаю сигнал YouTube…");
                 double offset = 0;
                 int restarts = 0;
                 while (true) {

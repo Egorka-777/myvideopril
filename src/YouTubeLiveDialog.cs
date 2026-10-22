@@ -19,8 +19,11 @@ namespace VideoBatch {
         readonly Button connect = new Button(), launch = new Button();
         readonly Label oauth = new Label();
         readonly Label progressLabel=new Label{Dock=DockStyle.Fill,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Theme.TextPrimary};
-        bool connecting;
+        bool connecting, launching;
+        LivePlaylist prepared;
+        readonly ProgressBar preparationProgress = new ProgressBar { Dock = DockStyle.Bottom, Height = 20, Visible = false };
         public LiveOptions Options { get; private set; }
+        public LivePlaylist TakePreparedPlaylist() { var value = prepared; prepared = null; return value; }
         public YouTubeLiveDialog(YouTubeLiveManager manager, IReadOnlyList<YouTubeChannel> channels) {
             this.manager = manager; this.channels = channels;
             Text = "Эфир · " + (channels.Count==1 ? channels[0].Name : channels.Count+" каналов");
@@ -28,7 +31,7 @@ namespace VideoBatch {
             BackColor = Theme.Background; ForeColor = Theme.TextPrimary; Font = Theme.FontBody;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(18), BackColor = Theme.Background };
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 192)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-            Controls.Add(root);
+            Controls.Add(root); Controls.Add(preparationProgress);
             var fields = new TableLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, ColumnCount = 3, BackColor = Theme.Card, Padding = new Padding(12) };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125)); fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
             folder.ReadOnly = true; thumbnail.ReadOnly = true;
@@ -119,21 +122,47 @@ namespace VideoBatch {
                 manager.Store.SaveAccount(account); UpdateAccounts();
             } catch (OperationCanceledException) { if(automatic) throw; if (!IsDisposed) MessageBox.Show(this, "Подключение отменено или истекло время ожидания.", "Сессия YouTube"); }
             catch (Exception e) {manager.Trace(channel.Name+" · ошибка проверки: "+e.Message);if(automatic) throw; if (!IsDisposed) MessageBox.Show(this, e.Message, "Сессия YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
-            finally { connecting = false; if (!IsDisposed) { connect.Enabled = launch.Enabled = true; UpdateAccounts(); } }
+            finally { connecting = false; if (!IsDisposed) { connect.Enabled = launch.Enabled = !launching; UpdateAccounts(); } }
         }
         async Task ValidateLaunch() {
+            if (launching) return;
+            launching = true; launch.Enabled = connect.Enabled = false;
+            if (launching) return;
+            launching = true; launch.Enabled = connect.Enabled = false;
             manager.Trace("Нажат запуск: проверяю видеофайл, превью и параметры");
             try {
                 Options = new LiveOptions { VideoFile = folder.Text, Title = title.Text, Description = description.Text, Thumbnail = thumbnail.Text,
                     Tags = tags.Text.Split(','), Privacy = new[] { "public", "unlisted", "private" }[privacy.SelectedIndex], MadeForKids = kids.Checked };
                 Options.Validate();
-                for(int i=0;i<channels.Count;i++) { var a=manager.Store.Account(channels[i].ChannelId); if(a==null || a.Transport!="studio" || a.ProfileId!=channels[i].ProfileId || a.LocalPort!=(manager.Preferences?.DolphinPort ?? 3001)) {accounts.SelectedIndex=i; await Connect(true);} }
+                string ffmpeg, ffprobe, hint;
+                if (!ToolsLocator.TryResolve(out ffmpeg, out ffprobe, out hint)) throw new InvalidOperationException(hint);
+                Text = "Подготовка видео · " + channels[0].Name;
+                preparationProgress.Visible = true; preparationProgress.Value = 0;
+                progressLabel.Text = "Подготовка видео. Dolphin откроется после завершения.";
+                var progress = new Progress<double>(value => {
+                    if (IsDisposed || lifetime.IsCancellationRequested) return;
+                    int percent = Math.Max(0, Math.Min(100, (int)value));
+                    preparationProgress.Value = percent; progressLabel.Text = "Подготовка видео · " + percent + "% · Dolphin пока не открывается";
+                });
+                prepared = await YouTubeLiveMedia.Prepare(Options, ffmpeg, ffprobe, manager.Trace, lifetime.Token, progress);
+                lifetime.Token.ThrowIfCancellationRequested();
+                manager.Trace("Подготовка видео завершена · 100%. Открываю профиль и проверяю канал.");
+                Text = "Проверка канала · " + channels[0].Name;
+                preparationProgress.Visible = false;
+                for(int i=0;i<channels.Count;i++) { accounts.SelectedIndex=i; await Connect(true); }
                 if(IsDisposed || lifetime.IsCancellationRequested)return;
                 if (channels.Any(c => manager.Store.Account(c.ChannelId)?.Transport != "studio" || manager.Store.Account(c.ChannelId)?.ProfileId != c.ProfileId))
                     throw new InvalidOperationException("Проверьте сессию Dolphin каждого выбранного канала.");
                 DialogResult = DialogResult.OK; Close();
-            } catch (Exception e) {manager.Trace("Запуск остановлен: "+e.Message);if(!IsDisposed && !lifetime.IsCancellationRequested)MessageBox.Show(this, e.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            } catch (Exception e) {
+                if (prepared != null) { prepared.Dispose(); prepared = null; }
+                manager.Trace(lifetime.IsCancellationRequested ? "Подготовка/запуск отменены." : "Запуск остановлен: " + e.Message);
+                if(!IsDisposed && !lifetime.IsCancellationRequested)MessageBox.Show(this, e.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            } finally {
+                launching = false;
+                if (!IsDisposed) { launch.Enabled = connect.Enabled = true; preparationProgress.Visible = false; }
+            }
         }
-        protected override void Dispose(bool disposing) { if (disposing) {manager.LogLine-=ShowProgress;lifetime.Cancel();} base.Dispose(disposing); }
+        protected override void Dispose(bool disposing) { if (disposing) {manager.LogLine-=ShowProgress;lifetime.Cancel();if(prepared!=null){prepared.Dispose();prepared=null;}} base.Dispose(disposing); }
     }
 }

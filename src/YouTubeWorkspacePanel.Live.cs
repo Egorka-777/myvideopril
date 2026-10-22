@@ -62,7 +62,7 @@ namespace VideoBatch {
             if (channels.Count == 0) { live.Trace("Запуск отменён: не выделена строка канала");MessageBox.Show(this, "Выдели строку канала для эфира.", "YouTube"); return; }
             try {
                 EnsureChannelIds();live.Trace("Выбран канал: "+selected.Name+" · Dolphin "+selected.ProfileId);
-                using (var dialog = new YouTubeLiveDialog(live, channels)) if (dialog.ShowDialog(FindForm()) == DialogResult.OK) live.Start(channels, dialog.Options);
+                using (var dialog = new YouTubeLiveDialog(live, channels)) if (dialog.ShowDialog(FindForm()) == DialogResult.OK) StartPreparedLive(channels, dialog);
             } catch (Exception e) { live.Trace("Ошибка запуска: "+e.Message);MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
         void ConfigureLive(YouTubeChannel channel = null) {
@@ -71,8 +71,13 @@ namespace VideoBatch {
             var channels=channel==null ? new List<YouTubeChannel>() : new List<YouTubeChannel>{channel};
             if (channels.Count == 0) { MessageBox.Show(this, "Отметьте каналы, сессии которых нужно проверить.", "YouTube"); return; }
             try { using (var dialog = new YouTubeLiveDialog(live, channels)) {
-                if (dialog.ShowDialog(FindForm()) == DialogResult.OK) live.Start(channels, dialog.Options);
+                if (dialog.ShowDialog(FindForm()) == DialogResult.OK) StartPreparedLive(channels, dialog);
             } } catch (Exception e) { live.Trace("Ошибка запуска: "+e.Message);MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+        void StartPreparedLive(IReadOnlyList<YouTubeChannel> channels, YouTubeLiveDialog dialog) {
+            var playlist = dialog.TakePreparedPlaylist();
+            try { live.Start(channels, dialog.Options, playlist); }
+            catch { playlist?.Dispose(); throw; }
         }
         async Task StopLive(string id) {
             if (live == null || stoppingLive) return;

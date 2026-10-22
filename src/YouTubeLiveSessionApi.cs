@@ -63,7 +63,7 @@ namespace VideoBatch {
                 ["tags"] = options.Tags, ["privacy"] = options.Privacy, ["madeForKids"] = options.MadeForKids
             };
             var watch=Stopwatch.StartNew();Report("Studio · "+command+" · начало");
-            try { var result=await runner(job,ct).ConfigureAwait(false);Report("Studio · "+command+" · завершено за "+Core.N(watch.Elapsed.TotalSeconds)+" с");return result; }
+            try { var result=await runner(job,ct).ConfigureAwait(false);Report("Studio · "+command+" · "+(command=="verify" ? "канал проверен" : "этап завершён")+" за "+watch.Elapsed.TotalSeconds.ToString("0.0",Core.Inv)+" с");return result; }
             catch(Exception e){Report("Studio · "+command+" · ошибка: "+e.Message);throw;}
 
         }

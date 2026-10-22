@@ -52,10 +52,14 @@ namespace VideoBatch {
             var deadline = DateTime.UtcNow.AddSeconds(10);
             while (!condition()) { if (DateTime.UtcNow > deadline) throw new TimeoutException("Live self-test timeout"); await Task.Delay(20).ConfigureAwait(false); }
         }
+        sealed class InlineProgress : IProgress<double> {
+            public readonly List<double> Values = new List<double>();
+            public void Report(double value) { Values.Add(value); }
+        }
         sealed class FakeApi : IYouTubeLiveApi {
-            public int Creates, Completes;
+            public int Creates, Completes, Verifies;
             public bool FailCreate, FailComplete;
-            public Task VerifyChannel(string id, string url, CancellationToken ct) => Task.CompletedTask;
+            public Task VerifyChannel(string id, string url, CancellationToken ct) { Verifies++; return Task.CompletedTask; }
             public Task<string> CreateBroadcast(LiveOptions options, string marker, CancellationToken ct) {
                 Creates++; if (FailCreate) throw new HttpRequestException("Response lost after creation"); return Task.FromResult("broadcast");
             }
@@ -149,6 +153,18 @@ namespace VideoBatch {
                     string media = Path.Combine(root, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(media);
                     return Task.FromResult(new LivePlaylist { DirectoryPath = media, Path = Path.Combine(media, "list"), Duration = 10 });
                 };
+                var blockedPreparation = new TaskCompletionSource<LivePlaylist>(TaskCreationOptions.RunContinuationsAsynchronously);
+                int browserConnections = 0;
+                var orderedManager = new YouTubeLiveManager(store, account => { Interlocked.Increment(ref browserConnections); return new FakeApi(); },
+                    (o, ct) => blockedPreparation.Task, (p, offset, ingest) => new FakeEncoder());
+                var orderedChannel = new YouTubeChannel { ChannelId = "a", Name = "A" };
+                orderedManager.Start(new[] { orderedChannel }, options);
+                await Task.Delay(100).ConfigureAwait(false);
+                Check(browserConnections == 0 && orderedManager.View("a").Phase == LivePhase.Preparing, "browser opened before video preparation");
+                await orderedManager.Stop("a").ConfigureAwait(false);
+                Check(browserConnections == 0, "cancelled preparation opened browser");
+                blockedPreparation.SetCanceled(); await orderedManager.StopAll().ConfigureAwait(false);
+                Console.WriteLine("LIVE TEST: preparation precedes browser; cancellation never connects passed");
                 var manager = new YouTubeLiveManager(store, account => apis[account.LocalId], prepare, (p, offset, ingest) => new FakeEncoder());
                 var ca = new YouTubeChannel { ChannelId = "a", Name = "A" }; var cb = new YouTubeChannel { ChannelId = "b", Name = "B" };
                 manager.Start(new[] { ca, cb }, options);
@@ -167,11 +183,19 @@ namespace VideoBatch {
                 store.Journal(new LiveJournalEntry { LocalId = "a", RemoteId = "UCtest", OperationId = "abandoned", BroadcastAttempted = true }, false);
                 store.PruneAbandonedPending();
                 Check(store.PendingSnapshot().Length == 0 && !manager.CanStop("a"), "cancelled startup journal must not block UI");
+                int preparedBefore = prepares, verifiedBefore = apis["a"].Verifies;
+                var readyPlaylist = await prepare(options, CancellationToken.None).ConfigureAwait(false);
+                manager.Start(new[] { ca }, options, readyPlaylist);
+                await Until(() => manager.View("a")?.Phase == LivePhase.Live).ConfigureAwait(false);
+                Check(prepares == preparedBefore + 1 && apis["a"].Verifies == verifiedBefore, "prepared handoff repeated encoding or channel check");
+                await manager.StopAll().ConfigureAwait(false);
+                Check(!Directory.Exists(readyPlaylist.DirectoryPath), "prepared playlist ownership leaked");
+                Console.WriteLine("LIVE TEST: prepared handoff avoids duplicate preparation/verification; cleanup passed");
                 Console.WriteLine("LIVE TEST: point stop and stop all passed");
                 apis["a"].FailCreate = true; apis["a"].FailComplete = true;
                 manager.Start(new[] { ca }, options);
                 await Until(() => manager.View("a")?.Phase == LivePhase.NeedsCleanup).ConfigureAwait(false);
-                Check(store.PendingSnapshot().Length == 1 && store.PendingSnapshot()[0].CreationPending && apis["a"].Creates == 2, "uncertain creation retried or journal lost");
+                Check(store.PendingSnapshot().Length == 1 && store.PendingSnapshot()[0].CreationPending && apis["a"].Creates == 3, "uncertain creation retried or journal lost");
                 try { await manager.Stop("a").ConfigureAwait(false); } catch (HttpRequestException) { /* Expected while cleanup is deliberately unavailable. */ }
                 await Until(() => apis["a"].Completes >= 2).ConfigureAwait(false);
                 var recovered = new YouTubeLiveManager(new LiveStore(root), account => apis[account.LocalId]);
@@ -268,7 +292,9 @@ namespace VideoBatch {
                 }
                 string portrait=Path.Combine(root,"portrait");Directory.CreateDirectory(portrait);
                 await Core.Tool(ffmpeg,new[]{"-y","-f","lavfi","-i","testsrc2=size=360x640:rate=60000/1001","-t","1","-c:v","libx264",Path.Combine(portrait,"01.mp4")},ct).ConfigureAwait(false);
-                using(var playlist=await YouTubeLiveMedia.Prepare(new LiveOptions{VideoFile=Path.Combine(portrait,"01.mp4"),Title="portrait"},ffmpeg,ffprobe,_=>{},ct).ConfigureAwait(false)) {
+                var preparationProgress = new InlineProgress();
+                using(var playlist=await YouTubeLiveMedia.Prepare(new LiveOptions{VideoFile=Path.Combine(portrait,"01.mp4"),Title="portrait"},ffmpeg,ffprobe,_=>{},ct,preparationProgress).ConfigureAwait(false)) {
+                    Check(preparationProgress.Values.First() == 0 && preparationProgress.Values.Last() == 100 && preparationProgress.Values.Count > 2, "FFmpeg preparation progress missing");
                     var probe=Core.VideoInfo(await Core.Probe(ffprobe,Path.Combine(playlist.DirectoryPath,"00000.ts"),ct).ConfigureAwait(false));
                     Check(probe.Width==360 && probe.Height==640 && probe.HasAudio && Math.Abs(YouTubeLiveMedia.FrameRate(probe.Fps)-60000d/1001)<.01,"portrait fractional FPS changed");
                     string output=Path.Combine(root,"single-loop.flv");

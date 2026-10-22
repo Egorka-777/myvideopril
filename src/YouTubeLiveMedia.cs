@@ -31,7 +31,7 @@ namespace VideoBatch {
                 "-af","aresample=async=1:first_pts=0,apad","-shortest","-map_metadata","-1","-f","mpegts",output});
             return args;
         }
-        public static async Task<LivePlaylist> Prepare(LiveOptions options, string ffmpeg, string ffprobe, Action<string> log, CancellationToken ct) {
+        public static async Task<LivePlaylist> Prepare(LiveOptions options, string ffmpeg, string ffprobe, Action<string> log, CancellationToken ct, IProgress<double> progress = null) {
             var result = new LivePlaylist { DirectoryPath = System.IO.Path.Combine(Store.Root, "live-media", Guid.NewGuid().ToString("N")) };
             Directory.CreateDirectory(result.DirectoryPath);
             try {
@@ -52,7 +52,18 @@ namespace VideoBatch {
                     var info = sources[i];
                     log("Подготовка " + (i + 1) + "/" + files.Length + ": " + System.IO.Path.GetFileName(files[i]));
                     string output = System.IO.Path.Combine(result.DirectoryPath, i.ToString("D5") + ".ts");
-                    await Core.Tool(ffmpeg, SourceArguments(readyFiles[i], output, info), ct).ConfigureAwait(false);
+                    int index = i, lastPercent = -1;
+                    progress?.Report(100.0 * i / files.Length);
+                    var arguments = SourceArguments(readyFiles[i], output, info).ToList();
+                    arguments.InsertRange(0, new[] { "-progress", "pipe:1", "-stats_period", "0.5" });
+                    await Core.Tool(ffmpeg, arguments, ct, line => {
+                        if (!line.StartsWith("out_time_us=")) return;
+                        double fraction = Math.Max(0, Math.Min(.99, Core.Parse(line.Substring(12)) / 1000000 / info.VideoDuration));
+                        double percent = 100.0 * (index + fraction) / files.Length;
+                        progress?.Report(percent);
+                        int step = (int)percent / 10;
+                        if (step != lastPercent) { lastPercent = step; log("Перекодирование видео · " + (int)percent + "%"); }
+                    }).ConfigureAwait(false);
                     var prepared = Core.VideoInfo(await Core.Probe(ffprobe, output, ct).ConfigureAwait(false));
                     if(prepared.Width!=first.Width || prepared.Height!=first.Height || Math.Abs(FrameRate(prepared.Fps)-FrameRate(first.Fps))>.01) throw new InvalidOperationException("Подготовка изменила размер или FPS видео.");
                     // Container duration may include AAC padding. Use video duration to keep file/loop boundaries on the frame timeline.
@@ -62,6 +73,7 @@ namespace VideoBatch {
                 }
                 result.Path = System.IO.Path.Combine(result.DirectoryPath, "playlist.ffconcat");
                 File.WriteAllLines(result.Path, entries, new UTF8Encoding(false));
+                progress?.Report(100);
                 return result;
             } catch { result.Dispose(); throw; }
         }
