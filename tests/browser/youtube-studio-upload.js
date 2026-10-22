@@ -39,7 +39,7 @@ async function run(){
    if(variant==='ru'){
     saved.clear();opened.length=0;progress.length=0;index=0;
     await context.route('**/fixture/submit',async route=>{const r=JSON.parse(route.request().postData());saved.set(r.id,{...r,time:'00:01'});await route.fulfill({body:'ok'});});
-    await assert.rejects(S.runSequential(page,pack.slice(0,2),{titleDelay:1,descriptionDelay:1,writeTags:true},host),/дата\/время/);
+    await assert.rejects(S.runSequential(page,pack.slice(0,2).map(x=>({...x,studioVideoId:'',studioPending:false,studioPhase:''})),{titleDelay:1,descriptionDelay:1,writeTags:true},host),/дата\/время/);
     assert.equal(opened.length,1,'Wrong saved schedule must stop before next upload');
     assert.equal(progress.filter(e=>e.stage==='item_confirmed').length,0);
    }

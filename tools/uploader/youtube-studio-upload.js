@@ -547,7 +547,7 @@ async function runItems(page,pack,opts,host){
   try{
    if(plan)await syncClock(verify,plan,host.progress);
    for(let attempt=0;attempt<2;attempt++){
-    try{return await readback(verify,item,id,plan,{...opts,reuseReadback:attempt>0},zone);}
+    try{return await readback(verify,item,id,plan,opts,zone);}
     catch(error){if(attempt||verify.isClosed())throw error;progress('studio_verify','Сохранённые данные ещё не подтверждены. Повторяю только чтение существующего ID (2/2).');await pause(600);}
    }
   }
