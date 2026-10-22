@@ -40,6 +40,11 @@ function baseline(){const file=path.resolve(__dirname,'../../tools/uploader/yout
   const recovered=await S.runSequential(p.page,[pending],{titleDelay:1,descriptionDelay:1,newTabPerVideo:true,diagnosticsDir:out},p.host);
   assert.equal(recovered.length,1);assert.equal(p.telemetry.filter(x=>x.type==='publish').length,1);assert.equal(p.telemetry.filter(x=>x.type==='confirmation').length,1);
   evidence.checks.push({name:'restart-after-primary-publish-confirms-warning-once',telemetry:p.telemetry});save();await p.ctx.close();
+  const draft=await setup(browser,'en',temp,{count:1,editableDraft:true}),draftItem={...draft.pack[0],studioPending:true,studioVideoId:'video000001',studioPhase:'editing'};
+  draft.saved.set(draftItem.studioVideoId,{id:draftItem.studioVideoId,title:'Old title',description:'Old description',tags:[],paid:true,ai:true,visibility:'private',scheduled:false,date:'2030-01-02',time:'14:45',zone:'Asia/Krasnoyarsk'});
+  const editorResult=await S.runSequential(draft.page,[draftItem],{titleDelay:1,descriptionDelay:1,newTabPerVideo:true,diagnosticsDir:out},draft.host);
+  assert.equal(editorResult.length,1);assert.equal(draft.telemetry.filter(x=>x.type==='file').length,0);assert.equal(draft.telemetry.filter(x=>x.type==='publish-edit').length,1);assert.equal(draft.saved.size,1);assert.equal(draft.saved.get(draftItem.studioVideoId).description,draftItem.description);assert.equal(draft.saved.get(draftItem.studioVideoId).visibility,'public');
+  evidence.checks.push({name:'closed-wizard-reopens-saved-draft-editor-without-upload',telemetry:draft.telemetry,id:draftItem.studioVideoId});save();await draft.ctx.close();
   // Complete logs survive >80 events, with a screenshot and useful partial JSON.
   const d=await setup(browser,'ru',temp,{count:1});
   const diagHost={...d.host,waitUpload:async(_,{progress})=>{for(let i=0;i<120;i++)progress('upload_transfer','fixture '+i);await d.page.evaluate(()=>console.error('token=top-secret cookie=secret-cookie'));throw Error('fixture diagnostic error');}};

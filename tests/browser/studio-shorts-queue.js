@@ -55,8 +55,18 @@ function app(lang,options={}){
  })();
  </script></body></html>`;
 }
-function savedEditor(lang,record){
+function savedEditor(lang,record,options={}){
  let body=html(lang,record,true).replace('>Private</button>','>'+(record.visibility==='public'?(lang==='ru'?'Открытый доступ':'Public'):'Private')+'</button>');
+ if(options.editableDraft)body=body.replace('</body>',`<button id="save-button" disabled>${lang==='ru'?'Сохранить':'Save'}</button><script>
+ (()=>{
+  const record=${JSON.stringify(record)},q=s=>document.querySelector(s),save=q('#save-button'),dialog=q('ytcp-video-visibility-edit-dialog');
+  dialog.insertAdjacentHTML('beforeend','<label><input type="radio" name="PUBLIC">${lang==='ru'?'Открытый доступ':'Public'}</label><button id="done-button">${lang==='ru'?'Опубликовать':'Publish'}</button>');
+  const value=()=>({...record,title:q('#title-textarea #textbox').innerText,description:q('#description-textarea #textbox').innerText,paid:q('#paid-yes').checked,ai:q('#ai-yes').checked});
+  document.addEventListener('input',()=>save.disabled=false);
+  save.onclick=async()=>{await fetch('/fixture/save',{method:'POST',body:JSON.stringify(value())});save.disabled=true;window.fixtureEvent?.('save-edit');};
+  dialog.querySelector('#done-button').onclick=async()=>{window.fixtureEvent?.('publish-edit');record.visibility='public';await fetch('/fixture/save',{method:'POST',body:JSON.stringify({...value(),visibility:'public'})});dialog.hidden=true;};
+ })();
+ </script></body>`);
  // Also support generic visibility chips and explicit checked Public in a dialog.
  return body;
 }
@@ -69,7 +79,7 @@ async function setup(browser,lang,dir,options={}){
   const id=u.pathname.match(/\/video\/(\w+)\/edit/)?.[1];
   if(route.request().isNavigationRequest()&&route.request().frame()===page.mainFrame())navigations.push(u.pathname);
   let record=saved.get(id);if(id){reads.set(id,(reads.get(id)||0)+1);if(options.staleFirstRead&&reads.get(id)===1)record={...record,visibility:'private'};}
-  return route.fulfill({contentType:'text/html; charset=utf-8',body:id?savedEditor(lang,record):app(lang,{...options,startIndex:saved.size})});
+  return route.fulfill({contentType:'text/html; charset=utf-8',body:id?savedEditor(lang,record,options):app(lang,{...options,startIndex:saved.size})});
  });
  await B.openStudio(page,'',()=>{});
  const pack=Array.from({length:options.count||2},(_,n)=>{const video=path.join(dir,lang+'-'+n+'.mp4');fs.writeFileSync(video,'fixture');return {video,title:'Title '+lang+' '+n,description:options.descriptions?.[n]||('Описание '+n+' — текст, ссылка https://example.com и символы 👍.\n\n').repeat(6).trim(),contentKind:'shorts',publishMode:'immediate',thumbnail:'must never open.png',localJobId:'job-'+n};});

@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, fix/studio-upload-recovery-20261022, feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016, fix/studio-details-chain-20261016, fix/studio-state-flow-20261019, feat/telegram-profile-templates-20261019, feat/studio-publish-workflow-20261021, fix/studio-schedule-chips-20261021, fix/studio-timezone-finish-20261021, fix/studio-editor-focus-20261021, fix/studio-shorts-queue-20261021, fix/studio-description-stability-20261021]
   pull_request:
-    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TaskQueueStore.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','src/YouTubeOwnerPublish.cs','src/YouTubeOwnerPublishTests.cs','tools/uploader/studio-browser.js','tools/uploader/studio-schedule-controls.js','tools/uploader/studio-timezone-controls.js','tools/uploader/studio-editor-controls.js','tools/uploader/youtube-studio-upload.js','tools/uploader/youtube-owner-publish.js','tools/uploader/youtube-thumbnail.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/studio-details-chain.js','tests/browser/studio-state-flow.js','tests/browser/studio-schedule-chips.js','tests/browser/studio-timezone-finish.js','tests/browser/studio-editor-focus.js','tests/browser/studio-shorts-queue.js','tests/browser/studio-description-stability.js','tests/browser/studio-upload-recovery.js','scripts/Collect-StudioDiagnostics.ps1','tools/uploader/studio-run-audit.js','scripts/Sync-StudioUploader.ps1','tests/browser/youtube-owner-publish.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
+    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TaskQueueStore.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','src/YouTubeOwnerPublish.cs','src/YouTubeOwnerPublishTests.cs','tools/uploader/studio-browser.js','tools/uploader/studio-schedule-controls.js','tools/uploader/studio-timezone-controls.js','tools/uploader/studio-editor-controls.js','tools/uploader/youtube-studio-upload.js','tools/uploader/youtube-owner-publish.js','tools/uploader/youtube-thumbnail.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/studio-details-chain.js','tests/browser/studio-state-flow.js','tests/browser/studio-schedule-chips.js','tests/browser/studio-timezone-finish.js','tests/browser/studio-editor-focus.js','tests/browser/studio-shorts-queue.js','tests/browser/studio-description-stability.js','tests/browser/studio-upload-recovery.js','tests/studio_transfer_checkpoint.js','tests/studio_description_contract.js','tests/studio_run_audit.js','tests/Sync-StudioUploader.Tests.ps1','scripts/Collect-StudioDiagnostics.ps1','tools/uploader/studio-run-audit.js','scripts/Sync-StudioUploader.ps1','tests/browser/youtube-owner-publish.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
   workflow_dispatch:
 jobs:
   verify:
@@ -33,8 +33,11 @@ jobs:
           node tests/browser/studio-shorts-queue.js
           if ($LASTEXITCODE -ne 0) { throw 'Shorts queue' }
       - name: Compile desktop
+        id: desktop_build
+        if: ${{ !cancelled() }}
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
       - name: Desktop payload, storage and scheduler regressions
+        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
@@ -43,9 +46,11 @@ jobs:
           }
           if (!$asm.GetType('VideoBatch.HttpRegressionSelfTests').GetMethod('RunThumbnailFallbackSelfTest').Invoke($null,@())) { throw 'Thumbnail fallback' }
       - name: Sync installed uploader self-test
+        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
         shell: powershell
         run: ./tests/Sync-StudioUploader.Tests.ps1
       - name: Studio recovery evidence
+        if: ${{ !cancelled() }}
         timeout-minutes: 6
         shell: pwsh
         run: |
@@ -58,6 +63,7 @@ jobs:
           path: artifacts/studio-recovery
           if-no-files-found: ignore
       - name: Description 3 plus 3 evidence
+        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
         timeout-minutes: 8
         shell: powershell
         run: |
@@ -92,6 +98,7 @@ jobs:
           path: artifacts/studio-description
           if-no-files-found: ignore
       - name: Native browser upload flow fixtures
+        if: ${{ !cancelled() }}
         timeout-minutes: 10
         shell: pwsh
         run: |
@@ -102,6 +109,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw $name }
           }
       - name: Native author publication UI
+        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
