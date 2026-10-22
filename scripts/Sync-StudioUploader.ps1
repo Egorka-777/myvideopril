@@ -2,7 +2,7 @@
 param(
     [string]$KitRoot='D:\VideoBatch\VideoBatch',
     [string]$NodePath='',
-    [string]$ExpectedBuild='2026-10-21-studio-shorts-queue-v19f'
+    [string]$ExpectedBuild='2026-10-22-studio-shorts-queue-v19g'
 )
 $ErrorActionPreference='Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Run this script on the Windows PC containing the installed kit.' }
