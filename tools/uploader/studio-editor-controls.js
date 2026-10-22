@@ -49,16 +49,23 @@ function mismatch(expected,actual){
  const a=Array.from(expected),b=Array.from(actual);let at=0;while(at<Math.min(a.length,b.length)&&a[at]===b[at])at++;
  const kind=c=>c===undefined?'end':c==='\n'?'newline':/\s/.test(c)?'whitespace':'non-whitespace';
  const sha=s=>createHash('sha256').update(s).digest('hex');
- return {expectedLength:expected.length,actualLength:actual.length,expectedCodePoints:a.length,actualCodePoints:b.length,firstDifference:at,expectedKind:kind(a[at]),actualKind:kind(b[at]),relation:expected===actual?'exact':expected.startsWith(actual)?'missing-suffix':actual.startsWith(expected)?'extra-suffix':'different',expectedSha256:sha(expected),actualSha256:sha(actual),expectedNewlines:(expected.match(/\n/g)||[]).length,actualNewlines:(actual.match(/\n/g)||[]).length};
+ return {expectedLength:expected.length,actualLength:actual.length,expectedCodePoints:a.length,actualCodePoints:b.length,firstDifference:at,expectedKind:kind(a[at]),actualKind:kind(b[at]),expectedCodePoint:a[at]?.codePointAt(0).toString(16)||null,actualCodePoint:b[at]?.codePointAt(0).toString(16)||null,relation:expected===actual?'exact':expected.startsWith(actual)?'missing-suffix':actual.startsWith(expected)?'extra-suffix':'different',expectedSha256:sha(expected),actualSha256:sha(actual),expectedNewlines:(expected.match(/\n/g)||[]).length,actualNewlines:(actual.match(/\n/g)||[]).length};
 }
 module.exports=function({until,norm,read,typingBudget}){
  function check(signal,deadline){
   if(signal?.aborted){const e=new Error('Studio: ввод остановлен вместе с этапом метаданных.');e.code='STUDIO_EDITOR_CANCELLED';throw e;}
   if(deadline&&Date.now()>=deadline){const e=new Error('Studio: исчерпан общий срок попытки ввода.');e.code='STUDIO_EDITOR_ATTEMPT_TIMEOUT';throw e;}
  }
- async function waitTyped(box,want,{timeoutMs=5000,name='текста',signal,deadline}={}){
-  const expected=norm(want);let actual=null;
-  try{return await until(async()=>{check(signal,deadline);actual=await read(box);return actual===expected;},timeoutMs,'Studio не подтвердил точный текст поля '+name+'.');}
+ async function waitTyped(box,want,{timeoutMs=5000,name='текста',signal,deadline,detectStall=false}={}){
+  const expected=norm(want);let actual=null,last=null,stableAt=Date.now();
+  try{return await until(async()=>{
+   check(signal,deadline);actual=await read(box);if(actual===expected)return true;
+   if(actual!==last){last=actual;stableAt=Date.now();}
+   // A settled missing/different suffix will not heal by polling the same DOM
+   // for 35s. Repair the keyboard input; exact equality remains mandatory.
+   if(detectStall&&Date.now()-stableAt>=1500){const e=new Error('Studio не подтвердил точный текст поля '+name+'. Текст перестал изменяться.');e.code='STUDIO_EDITOR_STALLED';throw e;}
+   return false;
+  },timeoutMs,'Studio не подтвердил точный текст поля '+name+'.');}
   catch(error){if(actual!==null)error.editorMismatch=mismatch(expected,actual);throw error;}
  }
  async function editorState(box){
@@ -95,18 +102,22 @@ module.exports=function({until,norm,read,typingBudget}){
  }
  async function typeText(box,text,{delay=45,onProgress=()=>{},onState=()=>{},scope=null,name='текста',activationMs=12000,verifyMs=5000,signal}={}){
   text=norm(text);const chars=Array.from(text),policy=typingPolicy(text,{name,delay,activationMs,verifyMs});
+  let resume='';
   for(let attempt=0;attempt<policy.maxAttempts;attempt++){
    const deadline=Date.now()+policy.attemptMs;
    const remaining=max=>{check(signal,deadline);return Math.max(1,Math.min(max,deadline-Date.now()));};
    const press=async key=>{await box.press(key,{timeout:remaining(3000)});check(signal,deadline);};
-   const verify=want=>waitTyped(box,want,{timeoutMs:remaining(policy.chunkVerify),name,signal,deadline});
+   const verify=want=>waitTyped(box,want,{timeoutMs:remaining(policy.chunkVerify),name,signal,deadline,detectStall:name==='описания'});
    try{
     if(attempt)await new Promise(r=>setTimeout(r,800));check(signal,deadline);
     await activateEditor(box,{timeoutMs:remaining(activationMs),name,onState,signal});
-    await press('Control+A');await press('Delete');
-    await until(async()=>{check(signal,deadline);return !norm(await read(box));},remaining(5000),'Studio не очистил прежний текст поля '+name+'.');
-    let prefix='';
-    for(let start=0;start<chars.length;start+=policy.chunkSize){
+    const raw=resume?await box.evaluate(e=>e.isContentEditable?e.innerText:('value'in e?e.value:e.textContent)):'';
+    if(!resume||raw!==resume){
+     resume='';await press('Control+A');await press('Delete');
+     await until(async()=>{check(signal,deadline);return !norm(await read(box));},remaining(5000),'Studio не очистил прежний текст поля '+name+'.');
+    }else onState('resume','Продолжаю описание с '+Array.from(resume).length+' символов; уже введённый точный текст сохранён.');
+    let prefix=resume;
+    for(let start=Array.from(prefix).length;start<chars.length;start+=policy.chunkSize){
      check(signal,deadline);
      if(start){
       const state=await editorState(box);if(!state?.focused)await activateEditor(box,{timeoutMs:remaining(activationMs),name,onState,signal});
@@ -119,7 +130,7 @@ module.exports=function({until,norm,read,typingBudget}){
       if(lines[line]){await box.pressSequentially(lines[line],{delay:policy.typeDelay,timeout:remaining(typingBudget(lines[line],policy.typeDelay))});check(signal,deadline);}
      }
      prefix+=chunk;await verify(prefix);
-     onProgress(Math.min(start+policy.chunkSize,chars.length),chars.length);
+     await onProgress(Math.min(start+policy.chunkSize,chars.length),chars.length);
     }
     await press('Tab');
     await waitTyped(box,text,{timeoutMs:remaining(policy.finalVerify),name,signal,deadline});return;
@@ -129,6 +140,13 @@ module.exports=function({until,norm,read,typingBudget}){
     error.editorDiagnostic=diagnostic;
     onState('attempt_failed','Поле '+name+': попытка '+(attempt+1)+'/'+policy.maxAttempts+' не подтверждена'+(diagnostic.comparison?' (ожидалось '+diagnostic.comparison.expectedLength+', прочитано '+diagnostic.comparison.actualLength+' символов)':'')+'.',diagnostic);
     if(signal?.aborted||attempt+1>=policy.maxAttempts||box.page().isClosed())throw error;
+    resume='';
+    if(name==='описания'){
+     const raw=await box.evaluate(e=>e.isContentEditable?e.innerText:('value'in e?e.value:e.textContent)).catch(()=>null);
+     // Only an exact raw prefix can be continued. Do not trim whitespace or
+     // discard Unicode characters to make a damaged description look correct.
+     if(typeof raw==='string'&&raw.length&&raw!==text&&text.startsWith(raw))resume=raw;
+    }
     onState('retry','Повторяю ввод только поля '+name+' ('+(attempt+2)+'/'+policy.maxAttempts+').',diagnostic);
    }
   }

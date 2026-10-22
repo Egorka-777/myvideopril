@@ -1,14 +1,14 @@
 name: YouTube Studio RU EN upload
 on:
   push:
-    branches: [feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016, fix/studio-details-chain-20261016, fix/studio-state-flow-20261019, feat/telegram-profile-templates-20261019, feat/studio-publish-workflow-20261021, fix/studio-schedule-chips-20261021, fix/studio-timezone-finish-20261021, fix/studio-editor-focus-20261021, fix/studio-shorts-queue-20261021, fix/studio-description-stability-20261021]
+    branches: [main, fix/studio-upload-recovery-20261022, feat/studio-upload-ru-en-20261015, fix/youtube-studio-startup-20261016, fix/studio-details-chain-20261016, fix/studio-state-flow-20261019, feat/telegram-profile-templates-20261019, feat/studio-publish-workflow-20261021, fix/studio-schedule-chips-20261021, fix/studio-timezone-finish-20261021, fix/studio-editor-focus-20261021, fix/studio-shorts-queue-20261021, fix/studio-description-stability-20261021]
   pull_request:
-    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TaskQueueStore.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','src/YouTubeOwnerPublish.cs','src/YouTubeOwnerPublishTests.cs','tools/uploader/studio-browser.js','tools/uploader/studio-schedule-controls.js','tools/uploader/studio-timezone-controls.js','tools/uploader/studio-editor-controls.js','tools/uploader/youtube-studio-upload.js','tools/uploader/youtube-owner-publish.js','tools/uploader/youtube-thumbnail.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/studio-details-chain.js','tests/browser/studio-state-flow.js','tests/browser/studio-schedule-chips.js','tests/browser/studio-timezone-finish.js','tests/browser/studio-editor-focus.js','tests/browser/studio-shorts-queue.js','tests/browser/studio-description-stability.js','tools/uploader/studio-run-audit.js','scripts/Sync-StudioUploader.ps1','tests/browser/youtube-owner-publish.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
+    paths: ['src/Uploader.cs','src/QueueManager.cs','src/TaskQueueStore.cs','src/TitleCleaner.cs','src/YouTubeMetadata.cs','src/StudioUploadTests.cs','src/YouTubeOwnerPublish.cs','src/YouTubeOwnerPublishTests.cs','tools/uploader/studio-browser.js','tools/uploader/studio-schedule-controls.js','tools/uploader/studio-timezone-controls.js','tools/uploader/studio-editor-controls.js','tools/uploader/youtube-studio-upload.js','tools/uploader/youtube-owner-publish.js','tools/uploader/youtube-thumbnail.js','tools/uploader/worker.js','tests/browser/studio-startup.js','tests/browser/studio-details-chain.js','tests/browser/studio-state-flow.js','tests/browser/studio-schedule-chips.js','tests/browser/studio-timezone-finish.js','tests/browser/studio-editor-focus.js','tests/browser/studio-shorts-queue.js','tests/browser/studio-description-stability.js','tests/browser/studio-upload-recovery.js','scripts/Collect-StudioDiagnostics.ps1','tools/uploader/studio-run-audit.js','scripts/Sync-StudioUploader.ps1','tests/browser/youtube-owner-publish.js','tests/browser/youtube-studio-upload.js','.github/workflows/studio-upload.yml']
   workflow_dispatch:
 jobs:
   verify:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +45,18 @@ jobs:
       - name: Sync installed uploader self-test
         shell: powershell
         run: ./tests/Sync-StudioUploader.Tests.ps1
+      - name: Studio recovery evidence
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          node tests/browser/studio-upload-recovery.js
+          if ($LASTEXITCODE -ne 0) { throw 'Studio recovery' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Studio-Recovery-Evidence
+          path: artifacts/studio-recovery
+          if-no-files-found: ignore
       - name: Description 3 plus 3 evidence
         timeout-minutes: 8
         shell: powershell
@@ -121,10 +133,11 @@ jobs:
           Copy-Item docs/AGENT_STUDIO_SHORTS_20261021_RU.md $dest
           Copy-Item docs/AGENT_STUDIO_HANDOFF_20261021_RU.md $dest
           New-Item -ItemType Directory -Path "$dest/scripts" -Force | Out-Null
-          Copy-Item scripts/Sync-StudioUploader.ps1 "$dest/scripts"
+          Copy-Item scripts/Sync-StudioUploader.ps1,scripts/Collect-StudioDiagnostics.ps1 "$dest/scripts"
+          Copy-Item docs/AGENT_STUDIO_RECOVERY_20261022_RU.md $dest
           Copy-Item docs/AGENT_WARMUP_VIDEO_20261021_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
       - uses: actions/upload-artifact@v4
         with:
-          name: VideoBatch-Studio-Description-Update
+          name: VideoBatch-Studio-v20-Update
           path: artifacts/VideoBatch-Studio-Upload

@@ -16,13 +16,14 @@ function app(lang,options={}){
  <script>
  (()=>{
  const ru=${ru},options=${JSON.stringify(options)},q=s=>document.querySelector(s),label=(a,b)=>ru?a:b;
- window.stats={creates:0,selected:[],publishes:0,closes:0,headerCloses:0,escapes:0};
+ const event=(type,detail)=>window.fixtureEvent?.(type,detail);
+ window.stats={creates:0,selected:[],publishes:0,closes:0,headerCloses:0,escapes:0,confirmations:0};
  document.addEventListener('keydown',e=>{if(e.key==='Escape')stats.escapes++;});
- q('#create-icon').onclick=()=>{if(document.querySelector('ytcp-uploads-dialog'))throw Error('Create before close');stats.creates++;q('#menu').hidden=false;};
+ q('#create-icon').onclick=()=>{if(document.querySelector('ytcp-uploads-dialog'))throw Error('Create before close');stats.creates++;event('create');q('#menu').hidden=false;};
  q('#menu button').onclick=()=>{
   q('#menu').hidden=true;const dialog=document.createElement('ytcp-uploads-dialog');dialog.innerHTML='<div id="dialog" role="dialog"><input id="video-file" type="file" accept="video/mp4"></div>';document.body.append(dialog);
   dialog.querySelector('input').onchange=async e=>{
-   stats.selected.push(e.target.files[0].name);const index=stats.selected.length,id='video'+String(index).padStart(6,'0');let step=0,draft={title:'Filename',description:'Old default'};
+   stats.selected.push(e.target.files[0].name);event('file',e.target.files[0].name);const index=(options.startIndex||0)+stats.selected.length,id='video'+String(index).padStart(6,'0');let step=0,draft={title:'Filename',description:'Old default'};
    dialog.innerHTML='<div id="dialog" role="dialog"><button id="close-icon-button">X</button><div id="stepper"><button role="tab" aria-selected="true">Details</button><button role="tab" aria-selected="false">Elements</button><button role="tab" aria-selected="false">Checks</button><button role="tab" aria-selected="false">Visibility</button></div><div id="details"><div id="title-textarea"><div id="textbox" role="textbox" contenteditable="true">Filename</div></div><div id="description-textarea"><div id="textbox" role="textbox" contenteditable="true">Old default</div></div><label><input type="radio" name="VIDEO_MADE_FOR_KIDS_NOT_MFK">'+label('Нет, это видео не для детей',"No, it is not made for kids")+'</label><button id="toggle-button">'+label('Развернуть','Show more')+'</button><div id="advanced" hidden><section id="paid-promotion"><h3>'+label('Прямая реклама','Paid promotion')+'</h3><label><input type="radio" name="paid" value="yes" checked>'+label('Да','Yes')+'</label><label><input type="radio" name="paid" value="no">'+label('Нет','No')+'</label></section><section id="altered-content"><h3>'+label('Использование ИИ','Altered content')+'</h3><label><input type="radio" name="ai" value="yes" checked>'+label('Да','Yes')+'</label><label><input type="radio" name="ai" value="no">'+label('Нет','No')+'</label></section></div><a href="https://youtu.be/'+id+'">Video</a><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy before publish</button><span>'+label('Включить продвижение','Promote your video')+'</span></div><ytcp-video-upload-progress>Uploading: 10%</ytcp-video-upload-progress><ytcp-visibility-scheduler hidden><h3>'+label('Сохранить или опубликовать','Save or publish')+'</h3><label><input type="radio" name="PUBLIC">'+label('Открытый доступ','Public')+'</label><label><input type="radio" name="SCHEDULE">'+label('Запланировать публикацию','Schedule')+'</label></ytcp-visibility-scheduler><button id="next-button">'+label('Далее','Next')+'</button><ytcp-button id="done-button" aria-disabled="true"><button disabled>'+label('Опубликовать','Publish')+'</button></ytcp-button></div>';
    const root=dialog.querySelector('#dialog'),title=dialog.querySelector('#title-textarea #textbox'),desc=dialog.querySelector('#description-textarea #textbox');
    const header=dialog.querySelector('#close-icon-button');header.onclick=()=>{stats.headerCloses++;dialog.remove();};
@@ -33,17 +34,19 @@ function app(lang,options={}){
    const finishPublish=()=>{
     root.innerHTML='<h2>'+label('Видео опубликовано','Video published')+'</h2><a href="https://youtu.be/'+id+'">Video</a><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy A</button><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy B</button><button id="close-icon-button">X</button><ytcp-button id="close-button" aria-disabled="true"><button disabled>'+label('Закрыть','Close')+'</button></ytcp-button>';
     const close=dialog.querySelector('#close-button');dialog.querySelector('#close-icon-button').onclick=()=>{stats.headerCloses++;dialog.remove();};
-    close.querySelector('button').onclick=()=>{stats.closes++;close.setAttribute('aria-disabled','true');close.querySelector('button').disabled=true;setTimeout(()=>{dialog.remove();q('#create-icon').disabled=true;setTimeout(()=>q('#create-icon').disabled=false,options.createDelay||200);},options.removeDelay||250);};
+    close.querySelector('button').onclick=()=>{stats.closes++;event('close');close.setAttribute('aria-disabled','true');close.querySelector('button').disabled=true;setTimeout(()=>{dialog.remove();q('#create-icon').disabled=true;setTimeout(()=>q('#create-icon').disabled=false,options.createDelay||200);},options.removeDelay||250);};
     setTimeout(()=>{if(close.isConnected&&!options.neverClose){close.setAttribute('aria-disabled','false');close.querySelector('button').disabled=false;}},options.closeDelay||450);
    };
    dialog.querySelector('#done-button button').onclick=async()=>{
-    stats.publishes++;dialog.querySelector('#done-button button').disabled=true;
+    stats.publishes++;event('publish');dialog.querySelector('#done-button button').disabled=true;
     const record={id,title:draft.title,description:draft.description,tags:[],paid:dialog.querySelector('[name=paid][value=yes]').checked,ai:dialog.querySelector('[name=ai][value=yes]').checked,date:'2030-01-02',time:'14:45',zone:'Asia/Krasnoyarsk',scheduled:false,visibility:options.privateSave?'private':'public'};
-    await fetch('/fixture/save',{method:'POST',body:JSON.stringify(record)});
+    if(!options.checksWarning)await fetch('/fixture/save',{method:'POST',body:JSON.stringify(record)});
     if(options.badConfirmation)return; // Persisted check must not trust a missing card.
     if(options.checksWarning){
-     const warn=document.createElement('div');warn.setAttribute('role','dialog');warn.innerHTML='<h2>'+label('Проверка видео ещё продолжается','Video check is still in progress')+'</h2><p>'+label('Рекомендуем пока оставить ограниченный доступ.','We recommend limited access for now.')+'</p><button type="button">'+label('Опубликовать','Publish')+'</button><button type="button">'+label('Исправить','Fix')+'</button>';
-     root.appendChild(warn);warn.querySelectorAll('button')[0].onclick=()=>{warn.remove();finishPublish();};return;
+     const wrapper=document.createElement('ytcp-dialog');wrapper.style.display='block';const warn=document.createElement('div');warn.setAttribute('role','dialog');warn.innerHTML='<h2>'+label('Проверка видео ещё продолжается','Video check is still in progress')+'</h2><p>'+label('Рекомендуем пока оставить ограниченный доступ.','We recommend limited access for now.')+'</p><button type="button">'+label('Опубликовать','Publish')+'</button><button type="button">'+label('Исправить','Fix')+'</button>';
+     wrapper.appendChild(warn);root.appendChild(wrapper);const approve=warn.querySelector('button');approve.disabled=!!options.warningEnableDelay;
+     if(options.warningEnableDelay)setTimeout(()=>approve.disabled=false,options.warningEnableDelay);
+     approve.onclick=async()=>{stats.confirmations++;event('confirmation');approve.disabled=true;await fetch('/fixture/save',{method:'POST',body:JSON.stringify(record)});setTimeout(()=>{wrapper.remove();finishPublish();},options.warningCloseDelay||1);};return;
     }
     finishPublish();
    };
@@ -58,20 +61,21 @@ function savedEditor(lang,record){
  return body;
 }
 async function setup(browser,lang,dir,options={}){
- const ctx=await browser.newContext({timezoneId:'Europe/Moscow'});ctx.setDefaultTimeout(4000);const page=await ctx.newPage(),saved=new Map(),reads=new Map(),stages=[],navigations=[];
+ const ctx=await browser.newContext({timezoneId:'Europe/Moscow'});ctx.setDefaultTimeout(4000);const page=await ctx.newPage(),saved=new Map(),reads=new Map(),stages=[],navigations=[],telemetry=[];
+ await ctx.exposeBinding('fixtureEvent',(_,type,detail)=>telemetry.push({type,detail}));
  await ctx.route('https://studio.youtube.com/**',async route=>{
   const u=new URL(route.request().url());
   if(u.pathname==='/fixture/save'){const record=JSON.parse(route.request().postData());saved.set(record.id,record);return route.fulfill({body:'ok'});}
   const id=u.pathname.match(/\/video\/(\w+)\/edit/)?.[1];
   if(route.request().isNavigationRequest()&&route.request().frame()===page.mainFrame())navigations.push(u.pathname);
   let record=saved.get(id);if(id){reads.set(id,(reads.get(id)||0)+1);if(options.staleFirstRead&&reads.get(id)===1)record={...record,visibility:'private'};}
-  return route.fulfill({contentType:'text/html; charset=utf-8',body:id?savedEditor(lang,record):app(lang,options)});
+  return route.fulfill({contentType:'text/html; charset=utf-8',body:id?savedEditor(lang,record):app(lang,{...options,startIndex:saved.size})});
  });
  await B.openStudio(page,'',()=>{});
  const pack=Array.from({length:options.count||2},(_,n)=>{const video=path.join(dir,lang+'-'+n+'.mp4');fs.writeFileSync(video,'fixture');return {video,title:'Title '+lang+' '+n,description:options.descriptions?.[n]||('Описание '+n+' — текст, ссылка https://example.com и символы 👍.\n\n').repeat(6).trim(),contentKind:'shorts',publishMode:'immediate',thumbnail:'must never open.png',localJobId:'job-'+n};});
  if(pack.length>1)pack[1].video=pack[0].video; // Deliberately reuse one test file with two fresh upload identities.
  const host={progress:(stage,text,extra={})=>stages.push({stage,text,...extra}),checkpoint:async()=>{},clearPending:async()=>{},openFile:(p,file,checkpoint)=>B.openFile(p,file,checkpoint,()=>{},{readyMs:2500}),waitUpload:S.waitUpload,thumbnail:async()=>{throw Error('Shorts thumbnail must be skipped');},dismiss:async()=>{throw Error('Legacy unconditional dismiss must not run');}};
- return {ctx,page,saved,pack,host,stages,navigations};
+ return {ctx,page,saved,pack,host,stages,navigations,telemetry};
 }
 async function run(){
  const browser=await chromium.launch({headless:true}),dir=fs.mkdtempSync(path.join(os.tmpdir(),'vb-shorts-queue-'));
@@ -112,23 +116,23 @@ async function run(){
   await B.openStudio(late,'',()=>{});assert.equal(await late.locator('ytcp-uploads-dialog').count(),0);assert(await late.locator('#create-icon').isVisible());await late.close();
   console.log('PASS completed card appearing during startup may wait beyond the five-second detection poll before Close becomes enabled.');
 
-  const lag=await setup(browser,'ru',dir,{staleFirstRead:true});const checked=await S.runSequential(lag.page,lag.pack.slice(0,1),{titleDelay:1,descriptionDelay:1},lag.host);assert.equal(checked.length,1);assert.equal((await lag.page.evaluate(()=>stats)).publishes,1);assert(lag.stages.some(s=>/только чтение/.test(s.text)));await lag.ctx.close();
+  const lag=await setup(browser,'ru',dir,{staleFirstRead:true});const checked=await S.runSequential(lag.page,lag.pack.slice(0,1),{titleDelay:1,descriptionDelay:1,verifyPersisted:true},lag.host);assert.equal(checked.length,1);assert.equal((await lag.page.evaluate(()=>stats)).publishes,1);assert(lag.stages.some(s=>/только чтение/.test(s.text)));await lag.ctx.close();
   console.log('PASS one bounded repeat of saved-ID read handles temporarily stale visibility without retransmission or another Publish.');
   // Persisted success is durable BEFORE cleanup; a disabled Close stops the queue.
   const stuck=await setup(browser,'ru',dir,{neverClose:true});await assert.rejects(S.runSequential(stuck.page,stuck.pack,{titleDelay:1,descriptionDelay:1,closeTimeout:350},stuck.host),/Закрыть/);
   assert.equal(stuck.saved.size,1);assert.equal(stuck.stages.filter(s=>s.stage==='item_confirmed').length,1);assert.equal((await stuck.page.evaluate(()=>stats)).selected.length,1);assert.equal((await stuck.page.evaluate(()=>stats)).closes,0);await stuck.ctx.close();
   // A forged/optimistic success card with a private persisted record is rejected.
-  const wrong=await setup(browser,'en',dir,{privateSave:true});await assert.rejects(S.runSequential(wrong.page,wrong.pack,{titleDelay:1,descriptionDelay:1},wrong.host),/Открытый доступ/);assert.equal(wrong.stages.filter(s=>s.stage==='item_confirmed').length,0);assert.equal((await wrong.page.evaluate(()=>stats)).closes,0);await wrong.ctx.close();
+  const wrong=await setup(browser,'en',dir,{privateSave:true});await assert.rejects(S.runSequential(wrong.page,wrong.pack,{titleDelay:1,descriptionDelay:1,verifyPersisted:true},wrong.host),/Открытый доступ/);assert.equal(wrong.stages.filter(s=>s.stage==='item_confirmed').length,0);assert.equal((await wrong.page.evaluate(()=>stats)).closes,0);await wrong.ctx.close();
   // Known pending server IDs are rechecked, without transferring the file again.
   const retry=await setup(browser,'ru',dir);const item=retry.pack[0],id='video000001';retry.saved.set(id,{...item,id,tags:[],paid:false,ai:false,scheduled:false,visibility:'public',date:'2030-01-02',time:'14:45',zone:'Asia/Krasnoyarsk'});
   const out=await S.runSequential(retry.page,[{...item,studioPending:true,studioVideoId:id}],{titleDelay:1,descriptionDelay:1},retry.host);assert.equal(out.length,1);assert.equal((await retry.page.evaluate(()=>stats)).selected.length,0);
   const stale=await setup(browser,'ru',dir);
-  const cleared=await S.runSequential(stale.page,[{...stale.pack[0],studioPending:true}],{titleDelay:1,descriptionDelay:1},stale.host);
-  assert.equal(cleared.length,1);assert(stale.stages.some(s=>s.stage==='studio_recovery'&&/устаревшую блокировку/.test(s.text)));await stale.ctx.close();
-  const checks=await setup(browser,'ru',dir,{checksWarning:true});
+  await assert.rejects(S.runSequential(stale.page,[{...stale.pack[0],studioPending:true}],{titleDelay:1,descriptionDelay:1},stale.host),/Контент нужный черновик/);
+  assert.equal(stale.saved.size,0);await stale.ctx.close();
+  const checks=await setup(browser,'ru',dir,{checksWarning:true,warningCloseDelay:900,warningEnableDelay:300});
   const warned=await S.runSequential(checks.page,checks.pack.slice(0,1),{titleDelay:1,descriptionDelay:1},checks.host);
-  assert.equal(warned.length,1);assert(checks.stages.some(s=>s.stage==='studio_publish'&&/проверка видео/i.test(s.text)));await checks.ctx.close();
-  console.log('PASS durable verified result before cleanup; Close timeout blocks next transfer; private saved status rejected; known pending ID rechecked; stale pending clears; in-progress check warning confirms Publish once.');
+  assert.equal(warned.length,1);assert.equal((await checks.page.evaluate(()=>stats)).confirmations,1);assert(checks.stages.some(s=>s.stage==='studio_publish_confirm'));await checks.ctx.close();
+  console.log('PASS durable result before cleanup; diagnostic persisted-state check; known ID recovery; unknown pending never silently resubmitted; nested check warning confirms once.');
  }finally{await browser.close();fs.rmSync(dir,{recursive:true,force:true});}
 }
 module.exports={app,setup};

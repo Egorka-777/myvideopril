@@ -10,11 +10,11 @@ function audit(records,{profiles,since,build,perChannel=3,minLength=1500,maxLeng
   if(tasks.length!==1)issues.push('Expected one fresh task, found '+tasks.length+'; narrow the --since window.');
   const starts=rows.filter(r=>r.stage==='start');if(starts.length!==1||!starts[0].message?.includes('Worker '+build))issues.push('Missing or different worker BUILD.');
   const errors=rows.filter(r=>r.level==='error'||r.stage==='error');if(errors.length)issues.push('Task contains '+errors.length+' error records.');
-  const confirmed=[],descriptions=[];let published=0,closed=0,ready=0,files=0,full=0;
+  const confirmed=[],descriptions=[];let published=0,closed=0,ready=0,files=0,full=0,newTabs=0,screens=0;
   for(const row of rows){
    const text=row.message||'';
    if(row.stage==='file_select'){
-    if(files&&ready<files)issues.push('Next file was selected before prior Close/ready.');files++;
+    if(files&&ready<files)issues.push('Next file was selected before prior confirmation/ready.');if(files&&newTabs<files)issues.push('Next file was not opened in a new tab.');files++;
    }
    if(row.stage==='metadata_description'&&text.startsWith('Описание проверено целиком:')){
     const match=text.match(/целиком: (\d+) символов; SHA256 ([a-f0-9]{64})\./);
@@ -27,13 +27,16 @@ function audit(records,{profiles,since,build,perChannel=3,minLength=1500,maxLeng
     if(!id)issues.push('Confirmation has no video ID.');else confirmed.push(id);
     if(full<confirmed.length||published<confirmed.length)issues.push('Confirmation before full description verification or Publish.');
    }
+   if(row.stage==='studio_publish_confirmed')screens++;
+   if(row.stage==='studio_new_tab'){newTabs++;if(newTabs>confirmed.length)issues.push('New tab before confirmation.');}
    if(row.stage==='studio_close'&&/Нажимаю.*один раз/.test(text)){closed++;if(closed>confirmed.length)issues.push('Close before saved-ID confirmation.');}
-   if(row.stage==='studio_ready'&&text.startsWith('Предыдущий мастер закрыт.')){ready++;if(ready>closed)issues.push('Ready before Close.');}
+   if(row.stage==='studio_ready'&&text.startsWith('Видео подтверждено.')){ready++;if(ready>confirmed.length)issues.push('Ready before confirmation.');}
   }
-  for(const [name,count] of Object.entries({files,fullDescriptions:full,publishClicks:published,itemConfirmed:confirmed.length,closeClicks:closed,ready}))if(count!==perChannel)issues.push(name+': '+count+', expected '+perChannel+'.');
+  for(const [name,count] of Object.entries({files,fullDescriptions:full,publishClicks:published,itemConfirmed:confirmed.length,completionScreens:screens,ready}))if(count!==perChannel)issues.push(name+': '+count+', expected '+perChannel+'.');
+  if(newTabs!==perChannel-1)issues.push('newTabs: '+newTabs+', expected '+(perChannel-1)+'.');
   if(new Set(confirmed).size!==confirmed.length)issues.push('Repeated confirmed video ID.');
   if(!rows.some(r=>r.stage==='done'))issues.push('Missing completed task.');
-  channels.push({profile,tasks,counts:{files,fullDescriptions:full,publishClicks:published,itemConfirmed:confirmed.length,closeClicks:closed,ready},confirmed,descriptions,errors:errors.map(r=>({time:r.time,stage:r.stage,message:r.message})),issues,status:issues.length?'FAIL':'PASS_LOG_CONTRACT'});
+  channels.push({profile,tasks,counts:{files,fullDescriptions:full,publishClicks:published,itemConfirmed:confirmed.length,closeClicks:closed,newTabs,completionScreens:screens,ready},confirmed,descriptions,errors:errors.map(r=>({time:r.time,stage:r.stage,message:r.message})),issues,status:issues.length?'FAIL':'PASS_LOG_CONTRACT'});
  }
  const ids=channels.flatMap(c=>c.confirmed);if(new Set(ids).size!==ids.length)for(const channel of channels){channel.issues.push('Video ID repeated across selected profiles.');channel.status='FAIL';}
  return {kind:'offline-app-log-audit',since,build,liveAccountAccessPerformed:false,status:channels.every(c=>!c.issues.length)?'PASS_LOG_CONTRACT':'FAIL',channels};

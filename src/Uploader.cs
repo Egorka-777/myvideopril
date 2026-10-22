@@ -16,9 +16,38 @@ using System.Net.Http;
 namespace VideoBatch {
     public class YouTubeItem {
         public string Video="",Title="",Thumbnail="",PublishedUrl="",PublishedVideoId="";
-        public string StudioUploadId=Guid.NewGuid().ToString("N"),StudioVideoId="";
+        public string StudioUploadId=Guid.NewGuid().ToString("N"),StudioVideoId="",StudioPhase="";
         public bool StudioPending;
         public string StudioVisibility="",OwnerCommentState="",OwnerCommentText="",OwnerCommentId="";
+    }
+    public static class StudioUploadState {
+        public const int ProtocolVersion=2;
+        public static bool RequiresAck(string stage){return stage=="item_submitting"||stage=="item_accepted"||stage=="item_publishing"||stage=="item_confirmed"||stage=="item_pending_cleared"||stage=="owner_comment_submitting";}
+        public static bool Apply(YouTubeItem item,UploadMessage message){
+            string stage=message.stage;
+            if(stage!="item_submitting"&&stage!="item_accepted"&&stage!="item_publishing"&&stage!="item_confirmed"&&stage!="item_pending_cleared")return false;
+            if(!string.IsNullOrWhiteSpace(message.localJobId)&&message.localJobId!=item.StudioUploadId)throw new Exception("Studio: ответ относится к другому заданию.");
+            if(!string.IsNullOrWhiteSpace(message.videoId)){
+                if(!System.Text.RegularExpressions.Regex.IsMatch(message.videoId,@"^[A-Za-z0-9_-]{11}$"))throw new Exception("Studio: некорректный ID видео.");
+                if(!string.IsNullOrWhiteSpace(item.StudioVideoId)&&item.StudioVideoId!=message.videoId)throw new Exception("Studio: ID изменился внутри одного задания. Действие остановлено.");
+                item.StudioVideoId=message.videoId;
+            }
+            if(stage=="item_submitting"){item.StudioPending=true;item.StudioPhase="transferring";}
+            if(stage=="item_accepted"){item.StudioPending=true;if(item.StudioPhase!="publishing")item.StudioPhase="editing";}
+            if(stage=="item_publishing"){
+                if(string.IsNullOrWhiteSpace(item.StudioVideoId))throw new Exception("Studio: публикация без сохранённого ID запрещена.");
+                item.StudioPending=true;item.StudioPhase="publishing";
+            }
+            if(stage=="item_pending_cleared"){
+                if(item.StudioPending||!string.IsNullOrWhiteSpace(item.StudioVideoId))throw new Exception("Studio: нельзя сбросить неподтверждённую передачу по отсутствию окна.");
+                item.StudioPhase="";
+            }
+            if(stage=="item_confirmed"){
+                if(string.IsNullOrWhiteSpace(item.StudioVideoId))throw new Exception("Studio: подтверждение без ID запрещено.");
+                item.StudioPending=false;item.StudioPhase="confirmed";item.PublishedUrl=message.url??"";item.PublishedVideoId=item.StudioVideoId;item.StudioVisibility=message.visibility??"";
+            }
+            return true;
+        }
     }
     public class YouTubeChannel {
         public bool Enabled=true;
@@ -73,7 +102,7 @@ namespace VideoBatch {
         }
     }
     [DataContract] public class UploadItemJob {
-        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,tags,description,caption,studioVideoId,publishedVideoId,publishedUrl,localJobId,publishMode,contentKind,commentText,commentState;
+        [DataMember]public string video,title,thumbnail,scheduleDate,scheduleTime,tags,description,caption,studioVideoId,studioPhase,publishedVideoId,publishedUrl,localJobId,publishMode,contentKind,commentText,commentState;
         [DataMember]public long scheduledUnixSeconds;
         [DataMember]public int scheduledUtcOffsetMinutes;
         [DataMember]public bool studioPending;
@@ -87,6 +116,7 @@ namespace VideoBatch {
         [DataMember]public bool meshSingleLong;
     }
     [DataContract] public class UploadJob {
+        [DataMember]public int studioProtocolVersion;
         [DataMember]public string token,profileId,expectedIp,video,title,thumbnail,searchUrl,searchFilter,searchKeys,searchFullTitle,scheduleDate,scheduleTime,channelUrl,todayDate;
         [DataMember]public int localPort,pcUtcOffsetMinutes;
         [DataMember]public bool studioPaidPromotion,studioAlteredContent,studioPublishExisting;
@@ -157,7 +187,7 @@ namespace VideoBatch {
                         catch(SerializationException){if(update!=null)update(new UploadMessage{stage="log",text="Нечитаемое сообщение worker."});continue;}
                         AppDiagnostics.Write(label,job.profileId,Path.GetFileNameWithoutExtension(file),msg.stage,msg.text??msg.error,AppDiagnostics.Level(msg.stage));
                         if(update!=null)update(msg);
-                        if(msg.stage=="item_submitting"||msg.stage=="owner_comment_submitting"||msg.stage=="item_pending_cleared"){
+                        if(msg.stage=="item_submitting"||msg.stage=="owner_comment_submitting"||(string.Equals(workerPath,Worker,StringComparison.OrdinalIgnoreCase)&&StudioUploadState.RequiresAck(msg.stage))){
                             await process.StandardInput.WriteLineAsync("ack:"+msg.localJobId).ConfigureAwait(false);
                             await process.StandardInput.FlushAsync().ConfigureAwait(false);
                         }
@@ -1639,12 +1669,9 @@ namespace VideoBatch {
                 if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
                 if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl))
                     PropagateChannelUrl(ch.ProfileId,m.channelUrl.Trim());
-                if((m.stage=="item_submitting"||m.stage=="item_accepted"||m.stage=="item_confirmed"||m.stage=="item_pending_cleared")&&m.packIndex>0&&m.packIndex<=list.Count){
+                if(StudioUploadState.RequiresAck(m.stage)&&m.stage!="owner_comment_submitting"&&m.packIndex>0&&m.packIndex<=list.Count){
                     var item=list[m.packIndex-1].Source;
-                    if(m.stage=="item_submitting")item.StudioPending=true;
-                    if(m.stage=="item_pending_cleared")item.StudioPending=false;
-                    if(!string.IsNullOrWhiteSpace(m.videoId))item.StudioVideoId=m.videoId;
-                    if(m.stage=="item_confirmed"){item.StudioPending=false;item.PublishedUrl=m.url??"";item.PublishedVideoId=m.videoId??"";item.StudioVisibility=m.visibility??"";}
+                    StudioUploadState.Apply(item,m);
                     lock(saveLock)Store.Save(settings); // Must succeed before DolphinRunner sends ack.
                 }
                 if(m.packIndex>0&&!string.IsNullOrWhiteSpace(m.url)){

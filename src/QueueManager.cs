@@ -35,6 +35,7 @@ namespace VideoBatch {
             foreach(var it in Items)if(string.IsNullOrWhiteSpace(it.Source.StudioUploadId))it.Source.StudioUploadId=Guid.NewGuid().ToString("N");
             var first=Items[0];
             var job=new UploadJob{
+                studioProtocolVersion=StudioUploadState.ProtocolVersion,
                 token=token,
                 localPort=localPort,
                 profileId=Channel.ProfileId,channelUrl=Channel.ChannelUrl,
@@ -51,7 +52,7 @@ namespace VideoBatch {
                     return new UploadItemJob{
                     video=it.StagedVideo,
                     title=it.UploadTitle,
-                    localJobId=it.Source.StudioUploadId,studioPending=it.Source.StudioPending,studioVideoId=it.Source.StudioVideoId,
+                    localJobId=it.Source.StudioUploadId,studioPending=it.Source.StudioPending,studioVideoId=it.Source.StudioVideoId,studioPhase=it.Source.StudioPhase,
                     scheduledUnixSeconds=unix,
                     scheduledUtcOffsetMinutes=offsetMin,
                     contentKind=kind,

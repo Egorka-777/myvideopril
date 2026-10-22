@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-22-studio-shorts-queue-v19h";
+const WORKER_BUILD = "2026-10-22-studio-upload-recovery-v20";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function durableCheckpoint(stage,item,packIndex,extra={}){
@@ -15,6 +15,9 @@ async function durableCheckpoint(stage,item,packIndex,extra={}){
 }
 async function studioCheckpoint(item,packIndex){return durableCheckpoint('item_submitting',item,packIndex);}
 async function studioClearPending(item,packIndex){return durableCheckpoint('item_pending_cleared',item,packIndex);}
+async function studioAccepted(item,packIndex,videoId){return durableCheckpoint('item_accepted',item,packIndex,{videoId});}
+async function studioPublishing(item,packIndex,videoId){return durableCheckpoint('item_publishing',item,packIndex,{videoId});}
+async function studioConfirmed(item,packIndex,result,text){return durableCheckpoint('item_confirmed',item,packIndex,{...result,text});}
 
 const jobPath = process.argv[2];
 let job = null;
@@ -2874,12 +2877,13 @@ function hydrateStudioItem(item){
  return out;
 }
 async function uploadPackBulk(page,pack){
- await studioBrowser.openStudio(page,job.channelUrl,send);
  const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
+ await studioBrowser.openStudio(page,job.channelUrl,send,{preserveCompleted:selected.some(item=>item.studioPending||item.studioVideoId)});
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true},{
-  progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,clearPending:studioClearPending,
-  openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send),
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true,newTabPerVideo:true,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
+  progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,accepted:studioAccepted,publishing:studioPublishing,confirmed:studioConfirmed,
+  openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send,{channelUrl:job.channelUrl}),
+  usePage:page=>{taskPage=page;attachPageGuards(page);},
   thumbnail:setThumbnail,waitUpload:studio.waitUpload,dismiss:dismissAfterPublish
  });
 }
@@ -2891,6 +2895,9 @@ async function main() {
   if (!job.token || !job.profileId) throw new Error("Укажите токен Dolphin и ID профиля.");
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
   send("start", "Worker " + WORKER_BUILD, { profileId: job.profileId });
+  send('studio_runtime','uploader='+__dirname+'; node='+process.execPath+'; EXE protocol='+(job.studioProtocolVersion||0));
+  if(studioBrowser.isStudioUpload(job)&&!job.studioPublishExisting&&!job.draftOnly&&job.studioProtocolVersion!==2)throw new Error('Studio v20: требуется обновить VideoBatch.exe и uploader одним комплектом. Текущий EXE не поддерживает сохранение черновиков; профиль и файл не открывались.');
+  if(studioBrowser.isStudioUpload(job)){studioBrowser.assertRuntimePackage(WORKER_BUILD);if(require('./youtube-studio-upload').BUILD!==WORKER_BUILD)throw new Error('Studio: версии worker и сборщика различаются. Установите полный комплект.');}
 
   if (!job.searchOnly && !job.watchMesh && !job.watchDirectLinks && !job.shortsWarmup && !job.skipQueueDelay) await waitBetweenProfiles();
   let endpoint = await startOrConnectProfile();
@@ -2902,10 +2909,10 @@ async function main() {
     context.setDefaultNavigationTimeout(35000);
   }
   let page = studioBrowser.isStudioUpload(job)
-    ? await studioBrowser.bounded(()=>context.newPage(),15000,'Dolphin не открыл вкладку задания за 15 секунд.')
+    ? await require('./youtube-studio-upload').selectTaskPage(context,(job.items||[]).filter(item=>!item.publishedVideoId&&!item.publishedUrl),send)
     : await context.newPage();
   taskPage = page;
-  send("start", "Worker " + WORKER_BUILD, { profileId: job.profileId });
+  send("studio_session", "Dolphin подключён · " + WORKER_BUILD, { profileId: job.profileId });
   attachPageGuards(page);
   await studioBrowser.bounded(()=>page.bringToFront(),3000,'Dolphin не активировал вкладку.').catch(() => {});
   const playback = require("./youtube-playback.js");
@@ -3144,7 +3151,7 @@ if (require.main === module) {
     else if(line.startsWith("ack:")){const id=line.trim().slice(4);const ack=studioAcks.get(id);if(ack){studioAcks.delete(id);ack();}} });
   main().then(() => { input.close(); }).catch(async e => {
     if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.shortsWarmup&&!job.openTodayOnly&&taskPage){
-      try{const diagnosticFile=await studioBrowser.bounded(()=>require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics')),2000,'Вкладка не ответила на диагностику');send('diagnostic','Диагностика Studio сохранена',{diagnosticFile});}catch{} }
+      try{const diagnosticFile=await studioBrowser.bounded(()=>require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics')),12000,'Вкладка не ответила на диагностику');send('diagnostic','Диагностика Studio сохранена: '+diagnosticFile,{diagnosticFile});}catch(error){send('diagnostic','Часть диагностики не получена: '+error.message);} }
 
     const keepStudioOpen=job&&studioBrowser.isStudioUpload(job)&&profileStarted;
     await studioBrowser.disconnect(browser,send);browser=null;

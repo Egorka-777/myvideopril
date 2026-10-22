@@ -21,6 +21,7 @@ namespace VideoBatch {
                     batch.Items.Add(new PreparedUploadItem{Source=source,Index=i+1,Total=5,StagedVideo=source.Video,UploadTitle=source.Title,ScheduleDate=at.ToString("yyyy-MM-dd"),ScheduleTime=at.ToString("HH:mm")});
                 }
                 var job=batch.ToUploadJob("not-saved",3001,prefs);
+                Check(job.studioProtocolVersion==2,"durable Studio protocol advertised by EXE");
                 Check(job.items.Length==5,"five separate items");
                 Check(!job.studioPaidPromotion&&!job.studioAlteredContent,"explicit No settings");
                 Check(job.items.All(x=>!string.IsNullOrWhiteSpace(x.tags)&&!string.IsNullOrWhiteSpace(x.description)),"Configured descriptions reach the Studio worker");
@@ -35,11 +36,25 @@ namespace VideoBatch {
                 var serializer=new DataContractJsonSerializer(typeof(UploadJob));
                 using(var memory=new MemoryStream()){serializer.WriteObject(memory,job);string raw=Encoding.UTF8.GetString(memory.ToArray());Check(raw.Contains("\"scheduledUtcOffsetMinutes\"")&&raw.Contains("\"tags\""),"wire field names");memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.items[4].description==job.items[4].description,"metadata serializer roundtrip");}
                 var en=new YouTubeChannel{Market="EN",ProfileId="profile-en"};Check(YouTubeMetadata.Build(prefs,en,1).description.Contains("English"),"English description bank");
-                prefs.YouTubeChannels=new List<YouTubeChannel>{channel};channel.Items[0].StudioPending=true;channel.Items[0].StudioVideoId="abcdefghijk";Store.Save(prefs);
+                prefs.YouTubeChannels=new List<YouTubeChannel>{channel};channel.Items[0].StudioPending=true;channel.Items[0].StudioVideoId="abcdefghijk";channel.Items[0].StudioPhase="editing";Store.Save(prefs);
                 var loaded=Store.Load();Check(loaded.YouTubeChannels[0].Items[0].StudioPending,"uncertain upload survives restart");Check(loaded.YouTubeChannels[0].Items[0].StudioUploadId==job.items[0].localJobId,"id survives restart");Check(loaded.YouTubeDescriptionBankEn.Count==2,"English bank survives restart");
                 var retry=batch.ToUploadJob("not-saved",3001,prefs);
-                Check(retry.items[0].studioPending&&retry.items[0].studioVideoId=="abcdefghijk","pending server ID reaches worker without resetting state");
-                using(var memory=new MemoryStream()){serializer.WriteObject(memory,retry);memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.items[0].studioVideoId=="abcdefghijk"&&round.items[0].studioPending,"pending server ID wire roundtrip");}
+                Check(retry.items[0].studioPending&&retry.items[0].studioVideoId=="abcdefghijk"&&retry.items[0].studioPhase=="editing","pending server ID reaches worker without resetting state");
+                using(var memory=new MemoryStream()){serializer.WriteObject(memory,retry);memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.items[0].studioVideoId=="abcdefghijk"&&round.items[0].studioPending&&round.items[0].studioPhase=="editing"&&round.studioProtocolVersion==2,"pending server ID wire roundtrip");}
+                var durable=channel.Items[1];
+                foreach(var stage in new[]{"item_submitting","item_accepted","item_publishing","item_confirmed"}){
+                    Check(StudioUploadState.RequiresAck(stage),"durable stage waits for host ack: "+stage);
+                    var msg=new UploadMessage{stage=stage,localJobId=durable.StudioUploadId,videoId=stage=="item_submitting"?null:"safevideo01",url=stage=="item_confirmed"?"https://www.youtube.com/watch?v=safevideo01":null,visibility="public"};
+                    Check(StudioUploadState.Apply(durable,msg),"applied "+stage);Store.Save(prefs);
+                    var disk=Store.Load().YouTubeChannels[0].Items[1];
+                    string phase=stage=="item_submitting"?"transferring":stage=="item_accepted"?"editing":stage=="item_publishing"?"publishing":"confirmed";
+                    Check(disk.StudioPhase==phase&&disk.StudioPending==(stage!="item_confirmed"),"state is on disk before ack: "+stage);
+                    if(stage!="item_submitting")Check(disk.StudioVideoId=="safevideo01","ID persists before ack");
+                    if(stage=="item_confirmed")Check(disk.PublishedVideoId=="safevideo01"&&disk.StudioVisibility=="public","confirmed result persists");
+                }
+                foreach(var msg in new[]{new UploadMessage{stage="item_accepted",localJobId="other-job",videoId="safevideo01"},new UploadMessage{stage="item_accepted",localJobId=durable.StudioUploadId,videoId="othervideo1"},new UploadMessage{stage="item_pending_cleared",localJobId=durable.StudioUploadId}}){
+                    bool rejected=false;try{StudioUploadState.Apply(durable,msg);}catch{rejected=true;}Check(rejected,"reject wrong job, changed ID or blind clear");
+                }
                 batch.Items[0].Kind="shorts";batch.Items[0].Source.Thumbnail=Path.Combine(root,"missing-thumbnail.png");
                 var shortJob=batch.ToUploadJob("not-saved",3001,prefs);
                 Check(shortJob.items[0].thumbnail==null&&shortJob.thumbnail==null,"Shorts do not send thumbnail images");

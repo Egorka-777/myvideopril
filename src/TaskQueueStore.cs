@@ -147,6 +147,13 @@ namespace VideoBatch {
                 case "studio_zone":
                 case "studio_time":
                 case "studio_publish":
+                case "studio_publish_confirm":
+                case "studio_publish_confirmed":
+                case "studio_recovery":
+                case "studio_draft_save":
+                case "item_submitting":
+                case "item_accepted":
+                case "item_publishing":
                 case "studio_close":
                 case "studio_verify":
                 case "studio_dialog":

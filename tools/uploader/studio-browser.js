@@ -3,6 +3,19 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+function assertRuntimePackage(build,root=__dirname){
+ const manifestPath=path.join(root,'STUDIO_UPLOADER_VERSION.json');
+ if(!fs.existsSync(manifestPath))return; // repo/test environment; installed kit writes a manifest.
+ const manifest=JSON.parse(fs.readFileSync(manifestPath,'utf8').replace(/^\uFEFF/,''));
+ if(manifest.build!==build||manifest.protocolVersion!==2)throw new Error('Studio: EXE и uploader установлены разными комплектами. Запустите scripts/Sync-StudioUploader.ps1 из распакованного обновления.');
+ const required=['VideoBatch.exe','tools/uploader/worker.js','tools/uploader/youtube-studio-upload.js','tools/uploader/studio-editor-controls.js','tools/uploader/studio-browser.js'];
+ if(!Array.isArray(manifest.files)||required.some(file=>!manifest.files.some(e=>e.file===file)))throw new Error('Studio: неполный манифест установки. Установите полный комплект.');
+ const kit=path.resolve(root,'../..');
+ for(const entry of manifest.files||[]){
+  const file=path.resolve(kit,entry.file);
+  if(!file.startsWith(kit+path.sep)||!fs.existsSync(file)||crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==entry.sha256)throw new Error('Studio: файл комплекта отличается от проверенной сборки: '+entry.file+'. Повторите установку целого комплекта.');
+ }
+}
 
 async function bounded(work, timeout, message) {
   let timer;
@@ -188,11 +201,12 @@ async function disconnect(browser,report=()=>{}){
   // close its default context, or call Dolphin /stop on an incomplete wizard.
   await bounded(()=>browser.close(),2000,'Отключение CDP превысило 2 секунды.').catch(e=>report('diagnostic',e.message));
 }
-async function openStudio(page, channelUrl, report) {
+async function openStudio(page, channelUrl, report, {preserveCompleted=false}={}) {
   const expected = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
   const url = 'https://studio.youtube.com' + (expected ? '/channel/' + expected : '');
   const onStudio = /^https:\/\/studio\.youtube\.com(?:\/|$)/i.test(page.url() || '');
   const completed=onStudio&&await isPostPublishScreen(page);
+  if(completed&&preserveCompleted){report('studio_recovery','Сохраняю экран завершения для проверки ID предыдущего задания.');return;}
   if(completed)await dismissPublishDialog(page,report);
   if (onStudio && await uploadWizardOpen(page)) {
     report('studio_ready', 'YouTube Studio: продолжаю открытый мастер загрузки (без перезагрузки страницы).');
@@ -262,13 +276,14 @@ async function ensureUploadPicker(page, channelUrl) {
   }
   return null;
 }
-async function transferFile(page, input, file, report, { forceCdp = false } = {}) {
+async function transferFile(page, input, file, report, { forceCdp = false, beforeTransfer=async()=>{} } = {}) {
   const size = fs.statSync(file).size;
   const hidden = await input.evaluate(e => e.getAttribute('aria-hidden') === 'true' || Number(e.tabIndex) < 0).catch(() => true);
   const useCdpFirst = forceCdp || size > 49 * 1024 * 1024 || hidden;
   const viaCdp = async () => {
     const cdp = await prepareCdpFile(page, input);
     try {
+      await beforeTransfer();
       await bounded(() => cdp.send(file), 45000, 'Studio не подтвердил приём файла. Повторная передача заблокирована.');
     } finally {
       await cdp.dispose();
@@ -278,14 +293,10 @@ async function transferFile(page, input, file, report, { forceCdp = false } = {}
     await viaCdp();
     return;
   }
-  try {
-    await input.setInputFiles(file, { timeout: 30000 });
-  } catch (e) {
-    const msg = String(e && e.message || e);
-    if (!/Timeout|not attached|not visible|exceeded|Target closed/i.test(msg)) throw e;
-    report('file_select', 'Playwright не передал файл — повтор через CDP…');
-    await viaCdp();
-  }
+  await beforeTransfer();
+  // A timeout after onchange is ambiguous. Never send the same file a second
+  // time through another transport; resume the existing wizard by its ID.
+  await input.setInputFiles(file, { timeout: 30000 });
 }
 function findMarkedNode(node, marker) {
   const attrs = node.attributes || [];
@@ -335,10 +346,7 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
     input = await waitFor(() => videoInput(page), filePickerMs, 'Studio не открыл выбор видео за отведённое время. Файл не передавался.');
   }
   report('file_select', 'Передаю видео в Studio: ' + path.basename(file));
-  await transferFile(page, input, file, report, { forceCdp });
-  // Checkpoint only after the file is handed to Studio. A slow proxy or a closed
-  // app before transfer must not leave a false "pending" block on the next run.
-  await beforeSelection();
+  await transferFile(page, input, file, report, { forceCdp, beforeTransfer:beforeSelection });
   report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
-module.exports = { uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };
+module.exports = { assertRuntimePackage,uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };

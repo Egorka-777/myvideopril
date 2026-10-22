@@ -1,3 +1,5 @@
+> **Новая инструкция v20 от 22.10:** [AGENT_STUDIO_RECOVERY_20261022_RU.md](AGENT_STUDIO_RECOVERY_20261022_RU.md). Следующая загрузка в новой вкладке; без обязательной сверки ID/Close на обычном успехе. Нужен полный EXE + JS protocol 2. Ниже — история v19.
+
 # Handoff: Studio Shorts + SEO-описание (октябрь 2026)
 
 **Репозиторий:** https://github.com/Egorka-777/myvideopril — ветка **`main`**  
