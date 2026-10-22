@@ -30,15 +30,22 @@ function app(lang,options={}){
    dialog.querySelector('#toggle-button').onclick=()=>{dialog.querySelector('#advanced').hidden=false;dialog.querySelector('#toggle-button').textContent=label('Свернуть','Show less');};
    setTimeout(()=>{if(dialog.isConnected)dialog.querySelector('ytcp-video-upload-progress').textContent='Uploaded: 100%';},options.transferDelay||300);
    dialog.querySelector('#next-button').onclick=()=>{step++;dialog.querySelectorAll('#stepper [role=tab]').forEach((tab,n)=>tab.setAttribute('aria-selected',String(n===step)));if(step===3){dialog.querySelector('#details').hidden=true;dialog.querySelector('#next-button').hidden=true;dialog.querySelector('ytcp-visibility-scheduler').hidden=false;setTimeout(()=>{dialog.querySelector('#done-button').setAttribute('aria-disabled','false');dialog.querySelector('#done-button button').disabled=false;},150);}};
+   const finishPublish=()=>{
+    root.innerHTML='<h2>'+label('Видео опубликовано','Video published')+'</h2><a href="https://youtu.be/'+id+'">Video</a><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy A</button><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy B</button><button id="close-icon-button">X</button><ytcp-button id="close-button" aria-disabled="true"><button disabled>'+label('Закрыть','Close')+'</button></ytcp-button>';
+    const close=dialog.querySelector('#close-button');dialog.querySelector('#close-icon-button').onclick=()=>{stats.headerCloses++;dialog.remove();};
+    close.querySelector('button').onclick=()=>{stats.closes++;close.setAttribute('aria-disabled','true');close.querySelector('button').disabled=true;setTimeout(()=>{dialog.remove();q('#create-icon').disabled=true;setTimeout(()=>q('#create-icon').disabled=false,options.createDelay||200);},options.removeDelay||250);};
+    setTimeout(()=>{if(close.isConnected&&!options.neverClose){close.setAttribute('aria-disabled','false');close.querySelector('button').disabled=false;}},options.closeDelay||450);
+   };
    dialog.querySelector('#done-button button').onclick=async()=>{
     stats.publishes++;dialog.querySelector('#done-button button').disabled=true;
     const record={id,title:draft.title,description:draft.description,tags:[],paid:dialog.querySelector('[name=paid][value=yes]').checked,ai:dialog.querySelector('[name=ai][value=yes]').checked,date:'2030-01-02',time:'14:45',zone:'Asia/Krasnoyarsk',scheduled:false,visibility:options.privateSave?'private':'public'};
     await fetch('/fixture/save',{method:'POST',body:JSON.stringify(record)});
     if(options.badConfirmation)return; // Persisted check must not trust a missing card.
-    root.innerHTML='<h2>'+label('Видео опубликовано','Video published')+'</h2><a href="https://youtu.be/'+id+'">Video</a><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy A</button><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy B</button><button id="close-icon-button">X</button><ytcp-button id="close-button" aria-disabled="true"><button disabled>'+label('Закрыть','Close')+'</button></ytcp-button>';
-    const close=dialog.querySelector('#close-button');dialog.querySelector('#close-icon-button').onclick=()=>{stats.headerCloses++;dialog.remove();};
-    close.querySelector('button').onclick=()=>{stats.closes++;close.setAttribute('aria-disabled','true');close.querySelector('button').disabled=true;setTimeout(()=>{dialog.remove();q('#create-icon').disabled=true;setTimeout(()=>q('#create-icon').disabled=false,options.createDelay||200);},options.removeDelay||250);};
-    setTimeout(()=>{if(close.isConnected&&!options.neverClose){close.setAttribute('aria-disabled','false');close.querySelector('button').disabled=false;}},options.closeDelay||450);
+    if(options.checksWarning){
+     const warn=document.createElement('div');warn.setAttribute('role','dialog');warn.innerHTML='<h2>'+label('Проверка видео ещё продолжается','Video check is still in progress')+'</h2><p>'+label('Рекомендуем пока оставить ограниченный доступ.','We recommend limited access for now.')+'</p><button type="button">'+label('Опубликовать','Publish')+'</button><button type="button">'+label('Исправить','Fix')+'</button>';
+     root.appendChild(warn);warn.querySelectorAll('button')[0].onclick=()=>{warn.remove();finishPublish();};return;
+    }
+    finishPublish();
    };
   };
  };
@@ -62,7 +69,7 @@ async function setup(browser,lang,dir,options={}){
  });
  await B.openStudio(page,'',()=>{});
  const pack=Array.from({length:options.count||2},(_,n)=>{const video=path.join(dir,lang+'-'+n+'.mp4');fs.writeFileSync(video,'fixture');return {video,title:'Title '+lang+' '+n,description:options.descriptions?.[n]||('Описание '+n+' — текст, ссылка https://example.com и символы 👍.\n\n').repeat(6).trim(),contentKind:'shorts',publishMode:'immediate',thumbnail:'must never open.png',localJobId:'job-'+n};});
- pack[1].video=pack[0].video; // Deliberately reuse one test file with two fresh upload identities.
+ if(pack.length>1)pack[1].video=pack[0].video; // Deliberately reuse one test file with two fresh upload identities.
  const host={progress:(stage,text,extra={})=>stages.push({stage,text,...extra}),checkpoint:async()=>{},clearPending:async()=>{},openFile:(p,file,checkpoint)=>B.openFile(p,file,checkpoint,()=>{},{readyMs:2500}),waitUpload:S.waitUpload,thumbnail:async()=>{throw Error('Shorts thumbnail must be skipped');},dismiss:async()=>{throw Error('Legacy unconditional dismiss must not run');}};
  return {ctx,page,saved,pack,host,stages,navigations};
 }
@@ -118,7 +125,10 @@ async function run(){
   const stale=await setup(browser,'ru',dir);
   const cleared=await S.runSequential(stale.page,[{...stale.pack[0],studioPending:true}],{titleDelay:1,descriptionDelay:1},stale.host);
   assert.equal(cleared.length,1);assert(stale.stages.some(s=>s.stage==='studio_recovery'&&/устаревшую блокировку/.test(s.text)));await stale.ctx.close();
-  console.log('PASS durable verified result before cleanup; Close timeout blocks next transfer; private saved status rejected; known pending ID rechecked; stale pending without wizard clears and uploads.');
+  const checks=await setup(browser,'ru',dir,{checksWarning:true});
+  const warned=await S.runSequential(checks.page,checks.pack.slice(0,1),{titleDelay:1,descriptionDelay:1},checks.host);
+  assert.equal(warned.length,1);assert(checks.stages.some(s=>s.stage==='studio_publish'&&/проверка видео/i.test(s.text)));await checks.ctx.close();
+  console.log('PASS durable verified result before cleanup; Close timeout blocks next transfer; private saved status rejected; known pending ID rechecked; stale pending clears; in-progress check warning confirms Publish once.');
  }finally{await browser.close();fs.rmSync(dir,{recursive:true,force:true});}
 }
 module.exports={app,setup};

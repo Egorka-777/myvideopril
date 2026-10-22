@@ -3,7 +3,7 @@
 const fs=require('fs');
 const {bounded,dismissPublishDialog,isPostPublishScreen,publicationState,findPublishCloseButton,uploadWizardOpen}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-22-studio-shorts-queue-v19g';
+const BUILD='2026-10-22-studio-shorts-queue-v19h';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -320,9 +320,31 @@ async function schedule(page,scope,plan,zone,{progress=()=>{},readyMs=120000,set
  throw new Error('Studio повторно сбрасывает дату/время после выбора пояса. Подтверждение остановлено, открытый черновик сохранён.');
 }
 async function publishSuccessVisible(page){return isPostPublishScreen(page);}
+const CHECKS_STILL_RUNNING=/проверк(?:а|и) (?:видео )?(?:ещё )?продолжается|video (?:check|review) (?:is )?still (?:in progress|running)|checks? (?:are )?still (?:in progress|running)/i;
+async function confirmPublishDespiteRunningChecks(page,progress=()=>{}){
+ const matches=[];
+ for(const root of await page.locator('ytcp-dialog,ytcp-prompt-dialog,ytcp-confirm-dialog,tp-yt-paper-dialog,[role=dialog]').all()){
+  if(!await root.isVisible())continue;
+  const text=await root.innerText().catch(()=>'');
+  if(CHECKS_STILL_RUNNING.test(text))matches.push(root);
+ }
+ if(!matches.length)return false;
+ if(matches.length>1)throw new Error('Studio: несколько окон «проверка видео продолжается».');
+ const dialog=matches[0];
+ let publish=null;
+ for(const btn of await dialog.getByRole('button',{name:/^(Publish|Опубликовать|Schedule|Запланировать)$/i}).all()){
+  if(!await btn.isVisible()||!/^(Publish|Опубликовать|Schedule|Запланировать)$/i.test(norm(await btn.innerText())))continue;
+  if(await enabled(btn)){publish=btn;break;}
+ }
+ if(!publish)throw new Error('Studio показал предупреждение о незавершённой проверке, но кнопка подтверждения публикации недоступна.');
+ progress('studio_publish','Studio: проверка видео ещё идёт — нажимаю «Опубликовать» в предупреждении.');
+ await publish.click({timeout:10000});
+ return true;
+}
 async function waitSaveConfirmed(page,scope,{timeout=180000,progress=()=>{},expectedId=''}={}){
   let reported=0;
   try{return await until(async()=>{
+   await confirmPublishDespiteRunningChecks(page,progress);
    const state=await publicationState(page,{scope,expectedId});
    if(state.state!=='pending'){
     if(Date.now()-reported>0||state.state==='published'||state.state==='scheduled')progress('studio_publish',state.state==='scheduled'?'Studio показал экран «Видео запланировано».':'Studio показал экран «Видео опубликовано».');
@@ -538,4 +560,4 @@ async function runItems(page,pack,opts,host){
  }
  return results;
 }
-module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,publishSuccessVisible,waitSaveConfirmed,visibility,wizardState,visibilityControl,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish,isShorts};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,publishSuccessVisible,confirmPublishDespiteRunningChecks,waitSaveConfirmed,visibility,wizardState,visibilityControl,readback,runSequential,videoId,waitUpload,diagnostics,isImmediatePublish,isShorts};
