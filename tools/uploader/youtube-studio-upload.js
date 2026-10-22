@@ -184,7 +184,7 @@ async function details(page,scope,item,opts,{verify=false}={}){
  else if(await read(await field(scope,'title'))!==norm(item.title))throw new Error('После перезагрузки изменился заголовок');
  if(opts.writeDescription!==false&&item.description!==null&&item.description!==undefined){
   const description=await field(scope,'description');
-  if(!verify){await description.scrollIntoViewIfNeeded().catch(()=>{});report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',signal:opts.signal,activationMs:25000,verifyMs:35000,onState:(event,text,diagnostic)=>{report('metadata_description',text);if(diagnostic){const trace=traces.get(page);if(trace){trace.editorAttempts=trace.editorAttempts||[];trace.editorAttempts.push(diagnostic);trace.editorAttempts=trace.editorAttempts.slice(-9);}}},onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});report('metadata_description','Описание проверено целиком: '+norm(item.description).length+' символов; SHA256 '+require('crypto').createHash('sha256').update(norm(item.description)).digest('hex')+'.');}
+  if(!verify){await description.scrollIntoViewIfNeeded().catch(()=>{});report('metadata_description','Ввожу описание.');await typeText(description,item.description,{delay:opts.descriptionDelay??18,scope,name:'описания',signal:opts.signal,activationMs:25000,verifyMs:35000,onState:(event,text,diagnostic)=>{report('metadata_description',text,diagnostic?{editorDiagnostic:diagnostic}:{});if(diagnostic){const trace=traces.get(page);if(trace){trace.editorAttempts=trace.editorAttempts||[];trace.editorAttempts.push(diagnostic);}}},onProgress:(done,total)=>report('metadata_description',`Описание: ${done}/${total} символов.`)});report('metadata_description','Описание проверено целиком: '+norm(item.description).length+' символов; SHA256 '+require('crypto').createHash('sha256').update(norm(item.description)).digest('hex')+'.');}
   else if(await read(description)!==norm(item.description))throw new Error('После перезагрузки изменилось описание');
  }
  const kids=await one(scope.locator('[name=VIDEO_MADE_FOR_KIDS_NOT_MFK]').or(scope.getByRole('radio',{name:/not made for kids|не для детей/i})),{optional:true});
@@ -537,6 +537,7 @@ async function runItems(page,pack,opts,host){
   if(opts.writeDescription!==false&&item.description?.length>5000)throw new Error('Описание превышает 5000 символов');
   if(!isImmediatePublish(item))planFor(item);
  });
+ const known=pack.map(item=>item.studioVideoId).filter(Boolean);if(new Set(known).size!==known.length)throw new Error('Studio: один сохранённый ID указан у нескольких заданий. Проверьте очередь, новые файлы не передавались.');
  const usedIds=new Set();
  const editorReadyMs=opts.editorReadyMs??90000;
  async function verifySaved(item,id,plan,zone,progress){
@@ -573,6 +574,7 @@ async function runItems(page,pack,opts,host){
     if(i+1<pack.length){
      const previous=page;page=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка следующего ролика.');taskOwnedPages.add(page);if(host.usePage)host.usePage(page);
      progress('studio_new_tab','Открыта новая вкладка загрузки следующего ролика.');
+     await require('./studio-browser').openStudio(page,opts.channelUrl||'',progress);
      if(taskOwnedPages.has(previous)&&screenConfirmed)await bounded(()=>previous.close(),2000,'Не закрылась завершённая вкладка.').catch(error=>progress('diagnostic',error.message));
     }
     return;
@@ -644,7 +646,7 @@ async function runItems(page,pack,opts,host){
   // Normal path ends on Studio's completion screen. Open a read-only editor
   // only after an uncertain result, or when explicitly requested for diagnostics.
   try{await finish(id,scope,savedState==='published'||savedState==='scheduled');}
-  catch(error){throw new Error((item.studioPhase==='confirmed'?'Видео '+id+' уже подтверждено; не удалось закрыть окно. ':'Не подтверждено завершение видео '+id+'. Сохранённый ID остаётся в приложении. ')+error.message);}
+  catch(error){throw new Error((item.studioPhase==='confirmed'?'Видео '+id+' уже подтверждено; не удалось подготовить следующую загрузку. ':'Не подтверждено завершение видео '+id+'. Сохранённый ID остаётся в приложении. ')+error.message);}
 
  }
  return results;

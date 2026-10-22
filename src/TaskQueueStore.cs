@@ -123,11 +123,15 @@ namespace VideoBatch {
         public static string MapStage(string workerStage) {
             switch ((workerStage ?? "").ToLowerInvariant()) {
                 case "start":
+                case "studio_runtime":
+                case "studio_diagnostics":
                 case "diagnostic": return TaskQueueStatus.Preparing;
+                case "studio_session":
                 case "dolphin": return TaskQueueStatus.ProfileStart;
                 case "ip": return TaskQueueStatus.IpCheck;
                 case "youtube": return TaskQueueStatus.YoutubeConfirm;
                 case "studio_open":
+                case "studio_new_tab":
                 case "studio_ready": return TaskQueueStatus.YoutubeConfirm;
                 case "file_select":
                 case "file_selected":
@@ -149,6 +153,7 @@ namespace VideoBatch {
                 case "studio_publish":
                 case "studio_publish_confirm":
                 case "studio_publish_confirmed":
+                case "studio_timing":
                 case "studio_recovery":
                 case "studio_draft_save":
                 case "item_submitting":

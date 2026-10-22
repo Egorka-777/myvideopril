@@ -14,7 +14,6 @@ async function durableCheckpoint(stage,item,packIndex,extra={}){
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{studioAcks.delete(item.localJobId);reject(new Error("Приложение не подтвердило сохранение состояния перед действием"));},15000);studioAcks.set(item.localJobId,()=>{clearTimeout(timer);resolve();});send(stage,"Сохраняю состояние перед действием",{localJobId:item.localJobId,packIndex,...extra});});
 }
 async function studioCheckpoint(item,packIndex){return durableCheckpoint('item_submitting',item,packIndex);}
-async function studioClearPending(item,packIndex){return durableCheckpoint('item_pending_cleared',item,packIndex);}
 async function studioAccepted(item,packIndex,videoId){return durableCheckpoint('item_accepted',item,packIndex,{videoId});}
 async function studioPublishing(item,packIndex,videoId){return durableCheckpoint('item_publishing',item,packIndex,{videoId});}
 async function studioConfirmed(item,packIndex,result,text){return durableCheckpoint('item_confirmed',item,packIndex,{...result,text});}
@@ -2880,7 +2879,7 @@ async function uploadPackBulk(page,pack){
  const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  await studioBrowser.openStudio(page,job.channelUrl,send,{preserveCompleted:selected.some(item=>item.studioPending||item.studioVideoId)});
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true,newTabPerVideo:true,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true,newTabPerVideo:true,channelUrl:job.channelUrl,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,accepted:studioAccepted,publishing:studioPublishing,confirmed:studioConfirmed,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send,{channelUrl:job.channelUrl}),
   usePage:page=>{taskPage=page;attachPageGuards(page);},
