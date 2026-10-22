@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-21-studio-shorts-queue-v19f";
+const WORKER_BUILD = "2026-10-22-studio-shorts-queue-v19g";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function durableCheckpoint(stage,item,packIndex,extra={}){
@@ -14,6 +14,7 @@ async function durableCheckpoint(stage,item,packIndex,extra={}){
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{studioAcks.delete(item.localJobId);reject(new Error("Приложение не подтвердило сохранение состояния перед действием"));},15000);studioAcks.set(item.localJobId,()=>{clearTimeout(timer);resolve();});send(stage,"Сохраняю состояние перед действием",{localJobId:item.localJobId,packIndex,...extra});});
 }
 async function studioCheckpoint(item,packIndex){return durableCheckpoint('item_submitting',item,packIndex);}
+async function studioClearPending(item,packIndex){return durableCheckpoint('item_pending_cleared',item,packIndex);}
 
 const jobPath = process.argv[2];
 let job = null;
@@ -2877,7 +2878,7 @@ async function uploadPackBulk(page,pack){
  const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  const studio=require('./youtube-studio-upload');
  return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true},{
-  progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,
+  progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,clearPending:studioClearPending,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send),
   thumbnail:setThumbnail,waitUpload:studio.waitUpload,dismiss:dismissAfterPublish
  });

@@ -157,7 +157,7 @@ namespace VideoBatch {
                         catch(SerializationException){if(update!=null)update(new UploadMessage{stage="log",text="Нечитаемое сообщение worker."});continue;}
                         AppDiagnostics.Write(label,job.profileId,Path.GetFileNameWithoutExtension(file),msg.stage,msg.text??msg.error,AppDiagnostics.Level(msg.stage));
                         if(update!=null)update(msg);
-                        if(msg.stage=="item_submitting"||msg.stage=="owner_comment_submitting"){
+                        if(msg.stage=="item_submitting"||msg.stage=="owner_comment_submitting"||msg.stage=="item_pending_cleared"){
                             await process.StandardInput.WriteLineAsync("ack:"+msg.localJobId).ConfigureAwait(false);
                             await process.StandardInput.FlushAsync().ConfigureAwait(false);
                         }
@@ -1639,9 +1639,10 @@ namespace VideoBatch {
                 if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
                 if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl))
                     PropagateChannelUrl(ch.ProfileId,m.channelUrl.Trim());
-                if((m.stage=="item_submitting"||m.stage=="item_accepted"||m.stage=="item_confirmed")&&m.packIndex>0&&m.packIndex<=list.Count){
+                if((m.stage=="item_submitting"||m.stage=="item_accepted"||m.stage=="item_confirmed"||m.stage=="item_pending_cleared")&&m.packIndex>0&&m.packIndex<=list.Count){
                     var item=list[m.packIndex-1].Source;
                     if(m.stage=="item_submitting")item.StudioPending=true;
+                    if(m.stage=="item_pending_cleared")item.StudioPending=false;
                     if(!string.IsNullOrWhiteSpace(m.videoId))item.StudioVideoId=m.videoId;
                     if(m.stage=="item_confirmed"){item.StudioPending=false;item.PublishedUrl=m.url??"";item.PublishedVideoId=m.videoId??"";item.StudioVisibility=m.visibility??"";}
                     lock(saveLock)Store.Save(settings); // Must succeed before DolphinRunner sends ack.

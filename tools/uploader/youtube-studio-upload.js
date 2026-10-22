@@ -1,9 +1,9 @@
 "use strict";
 // Native Studio UI only. No metadata/publish HTTP endpoints and no clipboard/DOM text writes.
 const fs=require('fs');
-const {bounded,dismissPublishDialog,isPostPublishScreen,publicationState,findPublishCloseButton}=require('./studio-browser');
+const {bounded,dismissPublishDialog,isPostPublishScreen,publicationState,findPublishCloseButton,uploadWizardOpen}=require('./studio-browser');
 const UPLOAD_DIALOG='ytcp-video-upload-dialog,ytcp-uploads-dialog,ytcp-upload-dialog';
-const BUILD='2026-10-21-studio-shorts-queue-v19f';
+const BUILD='2026-10-22-studio-shorts-queue-v19g';
 const traces=new WeakMap();
 function tracePage(page){
  const trace={build:BUILD,lastStage:'preflight',navigations:[],networkErrors:[]};traces.set(page,trace);
@@ -416,6 +416,36 @@ async function diagnostics(page,error,folder){
  }
  const file=path.join(folder,'youtube-studio-'+Date.now()+'-'+process.pid+'.json');fs.writeFileSync(file,JSON.stringify(data,null,2));return file;
 }
+async function recoverUncertainPending(page,item,host,progress){
+ if(!item.studioPending||item.studioVideoId)return {resumeScope:null};
+ const open=await uploadWizardOpen(page);
+ let scope=null;
+ if(open){
+  scope=await uploadScope(page).catch(()=>null);
+  if(scope){
+   progress('studio_recovery','В Studio открыт черновик от прошлой попытки — жду ID ролика.');
+   const id=await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},120000,'YouTube не показал ID в открытом черновике. Закройте окно в Studio или дождитесь окончания загрузки файла.');
+   item.studioVideoId=id;
+   host.progress('item_accepted','Восстановлен ID открытого черновика',{packIndex:item._packIndex,videoId:id,localJobId:item.localJobId});
+   return {resumeScope:scope};
+  }
+ }
+ try{
+  const terminal=await publicationState(page);
+  if(terminal.ids?.length===1){
+   item.studioVideoId=terminal.ids[0];
+   progress('studio_recovery','Нашёл ID на экране завершения · '+item.studioVideoId);
+   return {resumeScope:null};
+  }
+ }catch(error){if(open)throw error;}
+ if(!open){
+  progress('studio_recovery','Открытого мастера нет — снимаю устаревшую блокировку повторной передачи.');
+  item.studioPending=false;
+  await host.clearPending(item,item._packIndex||0);
+  return {resumeScope:null};
+ }
+ throw new Error('Studio: незавершённое окно без ID. Закройте черновик вручную или дождитесь ссылки на видео.');
+}
 async function runSequential(page,pack,opts,host){
  const monitor=tracePage(page);try{return await runItems(page,pack,opts,{...host,progress:(stage,text,extra)=>{monitor.trace.lastStage=stage;if(!monitor.trace.stageLog)monitor.trace.stageLog=[];monitor.trace.stageLog.push({stage,text:String(text||'').slice(0,500),t:new Date().toISOString()});if(monitor.trace.stageLog.length>80)monitor.trace.stageLog.shift();host.progress(stage,text,extra);}});}finally{monitor.dispose();}
 }
@@ -429,9 +459,9 @@ async function runItems(page,pack,opts,host){
   if(opts.writeDescription!==false&&item.description&&/[<>]/.test(item.description))throw new Error('Описание не должно содержать < или >');
   if(opts.writeDescription!==false&&item.description?.length>5000)throw new Error('Описание превышает 5000 символов');
   if(!isImmediatePublish(item))planFor(item);
-  if(item.studioPending&&!item.studioVideoId)throw new Error('Предыдущая передача этого файла не подтверждена, ID неизвестен. Проверьте черновик в Studio; повторная передача заблокирована.');
  });
  const usedIds=new Set();
+ const editorReadyMs=opts.editorReadyMs??90000;
  async function verifySaved(item,id,plan,zone,progress){
   progress('studio_verify','Проверяю сохранённые название, описание и '+(plan?'расписание':'открытый доступ')+' по ID '+id+'.');
   const verify=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка проверки Studio');
@@ -452,6 +482,7 @@ async function runItems(page,pack,opts,host){
   else host.progress('upload_mode','Shorts: сразу в открытый доступ, без превью и расписания.',{packIndex});
   host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
   const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex,...extra});
+  const recovery=await recoverUncertainPending(page,item,host,progress);
   if(item.studioPending){
    const id=item.studioVideoId;if(!/^[A-Za-z0-9_-]{11}$/.test(id))throw new Error('Некорректный сохранённый ID. Повторная передача заблокирована.');
    await verifySaved(item,id,plan,zone,progress);
@@ -461,10 +492,13 @@ async function runItems(page,pack,opts,host){
    continue;
   }
 
-  await host.openFile(page,item.video,()=>host.checkpoint(item,packIndex));
-  host.progress('studio_editor','Файл передан; ищу активное окно и редактируемое поле названия.',{packIndex});
-  const scope=await until(()=>uploadScope(page),25000,'Studio принял файл, но не показал окно редактирования за 25 секунд. Проверьте черновик перед повтором.');
-  await until(()=>field(scope,'title',true),25000,'Не появилось поле названия');
+  let scope=recovery.resumeScope;
+  if(!scope){
+   await host.openFile(page,item.video,()=>host.checkpoint(item,packIndex));
+   host.progress('studio_editor','Файл передан; ищу активное окно и редактируемое поле названия.',{packIndex});
+   scope=await until(()=>uploadScope(page),editorReadyMs,'Studio принял файл, но не показал окно редактирования. Проверьте черновик или подождите на медленном прокси.');
+  }else host.progress('studio_editor','Продолжаю с уже открытого окна редактирования.',{packIndex});
+  await until(()=>field(scope,'title',true),editorReadyMs,'Не появилось поле названия');
   host.progress('metadata','Удаляю название файла и печатаю заголовок из приложения.',{packIndex});
   const metadataAbort=new AbortController();
   try{await bounded(()=>details(page,scope,item,{...opts,progress,signal:metadataAbort.signal}),metadataBudget(item,opts),'Studio не завершил ввод метаданных в рассчитанное время');}

@@ -315,7 +315,7 @@ async function prepareCdpFile(page, input) {
       dispose };
   } catch (e) { await dispose(); throw e; }
 }
-async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '', readyMs=90000 } = {}) {
+async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '', readyMs=90000, filePickerMs=60000 } = {}) {
   file = path.resolve(file);
   if (!fs.existsSync(file)) throw new Error('Не найден файл ' + file);
   if (await isPostPublishScreen(page)) await dismissPublishDialog(page, report);
@@ -332,13 +332,13 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
       .or(page.locator('tp-yt-paper-item,ytcp-text-menu ytcp-ve').filter({ hasText: /^(Upload videos?|Загрузить видео|Добавить видео)$/i }))),
     12000, 'Studio не открыл пункт «Загрузить видео». Файл не передавался.');
     await upload.click({ timeout: 8000 });
-    input = await waitFor(() => videoInput(page), 25000, 'Studio не открыл выбор видео за 25 секунд. Файл не передавался.');
+    input = await waitFor(() => videoInput(page), filePickerMs, 'Studio не открыл выбор видео за отведённое время. Файл не передавался.');
   }
-  // Resolve the input BEFORE marking the durable checkpoint. Never retry a possibly
-  // accepted file: an uncertain response remains pending for manual inspection.
-  await beforeSelection();
   report('file_select', 'Передаю видео в Studio: ' + path.basename(file));
   await transferFile(page, input, file, report, { forceCdp });
+  // Checkpoint only after the file is handed to Studio. A slow proxy or a closed
+  // app before transfer must not leave a false "pending" block on the next run.
+  await beforeSelection();
   report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
 module.exports = { uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };

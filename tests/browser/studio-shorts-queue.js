@@ -63,7 +63,7 @@ async function setup(browser,lang,dir,options={}){
  await B.openStudio(page,'',()=>{});
  const pack=Array.from({length:options.count||2},(_,n)=>{const video=path.join(dir,lang+'-'+n+'.mp4');fs.writeFileSync(video,'fixture');return {video,title:'Title '+lang+' '+n,description:options.descriptions?.[n]||('Описание '+n+' — текст, ссылка https://example.com и символы 👍.\n\n').repeat(6).trim(),contentKind:'shorts',publishMode:'immediate',thumbnail:'must never open.png',localJobId:'job-'+n};});
  pack[1].video=pack[0].video; // Deliberately reuse one test file with two fresh upload identities.
- const host={progress:(stage,text,extra={})=>stages.push({stage,text,...extra}),checkpoint:async()=>{},openFile:(p,file,checkpoint)=>B.openFile(p,file,checkpoint,()=>{},{readyMs:2500}),waitUpload:S.waitUpload,thumbnail:async()=>{throw Error('Shorts thumbnail must be skipped');},dismiss:async()=>{throw Error('Legacy unconditional dismiss must not run');}};
+ const host={progress:(stage,text,extra={})=>stages.push({stage,text,...extra}),checkpoint:async()=>{},clearPending:async()=>{},openFile:(p,file,checkpoint)=>B.openFile(p,file,checkpoint,()=>{},{readyMs:2500}),waitUpload:S.waitUpload,thumbnail:async()=>{throw Error('Shorts thumbnail must be skipped');},dismiss:async()=>{throw Error('Legacy unconditional dismiss must not run');}};
  return {ctx,page,saved,pack,host,stages,navigations};
 }
 async function run(){
@@ -115,8 +115,10 @@ async function run(){
   // Known pending server IDs are rechecked, without transferring the file again.
   const retry=await setup(browser,'ru',dir);const item=retry.pack[0],id='video000001';retry.saved.set(id,{...item,id,tags:[],paid:false,ai:false,scheduled:false,visibility:'public',date:'2030-01-02',time:'14:45',zone:'Asia/Krasnoyarsk'});
   const out=await S.runSequential(retry.page,[{...item,studioPending:true,studioVideoId:id}],{titleDelay:1,descriptionDelay:1},retry.host);assert.equal(out.length,1);assert.equal((await retry.page.evaluate(()=>stats)).selected.length,0);
-  await assert.rejects(S.runSequential(retry.page,[{...item,studioPending:true}],{},retry.host),/ID неизвестен/);await retry.ctx.close();
-  console.log('PASS durable verified result before cleanup; Close timeout blocks next transfer; private saved status rejected; known pending ID rechecked and unknown ID never reuploaded.');
+  const stale=await setup(browser,'ru',dir);
+  const cleared=await S.runSequential(stale.page,[{...stale.pack[0],studioPending:true}],{titleDelay:1,descriptionDelay:1},stale.host);
+  assert.equal(cleared.length,1);assert(stale.stages.some(s=>s.stage==='studio_recovery'&&/устаревшую блокировку/.test(s.text)));await stale.ctx.close();
+  console.log('PASS durable verified result before cleanup; Close timeout blocks next transfer; private saved status rejected; known pending ID rechecked; stale pending without wizard clears and uploads.');
  }finally{await browser.close();fs.rmSync(dir,{recursive:true,force:true});}
 }
 module.exports={app,setup};
