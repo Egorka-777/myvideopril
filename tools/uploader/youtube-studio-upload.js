@@ -463,6 +463,7 @@ async function diagnostics(page,error,folder){
    capture('scheduleControls',()=>page.locator('#datepicker-trigger,#time-of-day-trigger,ytcp-date-picker input,ytcp-datepicker input,ytcp-time-of-day-picker input,#time-field input').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,label:e.getAttribute('aria-label')||'',value:e.value||e.innerText||'',readOnly:e.readOnly===true})))),
    capture('timezones',async()=>zoneDiagnostics(await uploadScope(page)||page.locator('body'))),
    capture('dialogs',()=>page.locator(UPLOAD_DIALOG).evaluateAll(nodes=>nodes.map(e=>({tag:e.tagName,visible:!!e.getClientRects().length,next:e.querySelectorAll('#next-button').length,fields:e.querySelectorAll('[contenteditable=true]').length})))),
+   capture('videoReference',async()=>{const scope=await uploadScope(page);return scope?await readVideoId(scope):null;}),
    capture('wizard',async()=>{const scope=await uploadScope(page);return scope?wizardState(scope):null;})
   ]);
   if(typeof page.screenshot==='function')try{const png=file.replace(/\.json$/,'.png');await page.screenshot({path:png,timeout:3000});data.screenshot=png;}catch(error){data.screenshotError=safeLog(error.message);}write();
@@ -520,7 +521,7 @@ async function runSequential(page,pack,opts,host){
  const monitor=tracePage(page,{...opts,itemCount:pack.length}),timing={};let current='',began=Date.now();
  const closeTiming=()=>{if(current)timing[current]=(timing[current]||0)+Date.now()-began;began=Date.now();};
  const wrapped={...host,tracePage:monitor.watch,usePage:p=>{monitor.watch(p);if(host.usePage)host.usePage(p);},progress:(stage,text,extra)=>{if(stage!==current){closeTiming();current=stage;}monitor.trace.lastStage=stage;monitor.trace.stageLog.push(monitor.record('stage',{stage,text:safeLog(text),...extra}));host.progress(stage,text,extra);}};
- for(const [name,stage] of [['accepted','item_accepted'],['publishing','item_publishing'],['confirmed','item_confirmed']])if(host[name])wrapped[name]=async(...args)=>{monitor.record('durable_begin',{stage,packIndex:args[1],localJobId:args[0].localJobId});const result=await host[name](...args);monitor.record('durable_ack',{stage,packIndex:args[1],videoId:args[0].studioVideoId||''});return result;};
+ for(const [name,stage] of [['accepted','item_accepted'],['publishing','item_publishing'],['confirmed','item_confirmed']])if(host[name])wrapped[name]=async(...args)=>{const videoId=typeof args[2]==='string'?args[2]:args[2]?.videoId||args[0].studioVideoId||'';monitor.record('durable_begin',{stage,packIndex:args[1],localJobId:args[0].localJobId,videoId});const result=await host[name](...args);monitor.record('durable_ack',{stage,packIndex:args[1],videoId});return result;};
  if(monitor.trace.logFile)host.progress('studio_diagnostics','Полный журнал запуска: '+monitor.trace.logFile);
  try{const result=await runItems(page,pack,opts,wrapped);monitor.record('run_success',{items:result.length});return result;}
  catch(error){monitor.record('run_error',{error:safeLog(error.message),editorFailure:error.editorDiagnostic||null,lastStage:monitor.trace.lastStage});throw error;}

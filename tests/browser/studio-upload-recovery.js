@@ -27,6 +27,7 @@ function baseline(){const file=path.resolve(__dirname,'../../tools/uploader/yout
   const f=await setup(browser,'ru',temp,{count:1,neverClose:true}),item=f.pack[0],durable=[];
   const failHost={...f.host,checkpoint:async it=>{it.studioPending=true;it.studioPhase='transferring';durable.push('transferring');},accepted:async(it,ix,id)=>durable.push('accepted:'+id),waitUpload:async()=>{throw Error('fixture transfer indicator interrupted');}};
   await assert.rejects(S.runSequential(f.page,[item],{titleDelay:1,descriptionDelay:1,newTabPerVideo:true,diagnosticsDir:out},failHost),/fixture transfer/);
+  const partial=JSON.parse(fs.readFileSync(await S.diagnostics(f.page,Error('fixture partial state'),out),'utf8'));assert.equal(partial.videoReference,'video000001');const partialLog=fs.readFileSync(partial.flow.logFile,'utf8').trim().split('\n').map(x=>JSON.parse(x));assert(partialLog.some(x=>x.type==='durable_ack'&&x.stage==='item_accepted'&&x.videoId==='video000001'));
   assert.equal(item.studioVideoId,'video000001');assert.equal(item.studioPhase,'editing');assert(item.studioPending);assert(durable.includes('accepted:video000001'));
   const unrelated=await f.ctx.newPage();await B.openStudio(unrelated,'',()=>{});
   assert.equal(await S.selectTaskPage(f.ctx,[item]),f.page,'Find the existing draft rather than the newly created blank Studio tab');

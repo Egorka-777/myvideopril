@@ -14,8 +14,8 @@ async function durableCheckpoint(stage,item,packIndex,extra={}){
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{studioAcks.delete(item.localJobId);reject(new Error("Приложение не подтвердило сохранение состояния перед действием"));},15000);studioAcks.set(item.localJobId,()=>{clearTimeout(timer);resolve();});send(stage,"Сохраняю состояние перед действием",{localJobId:item.localJobId,packIndex,...extra});});
 }
 async function studioCheckpoint(item,packIndex){return durableCheckpoint('item_submitting',item,packIndex);}
-async function studioAccepted(item,packIndex,videoId){return durableCheckpoint('item_accepted',item,packIndex,{videoId});}
-async function studioPublishing(item,packIndex,videoId){return durableCheckpoint('item_publishing',item,packIndex,{videoId});}
+async function studioAccepted(item,packIndex,videoId){return durableCheckpoint('item_accepted',item,packIndex,{videoId,text:'Сохраняю ссылку черновика · '+videoId});}
+async function studioPublishing(item,packIndex,videoId){return durableCheckpoint('item_publishing',item,packIndex,{videoId,text:'Сохраняю этап перед публикацией · '+videoId});}
 async function studioConfirmed(item,packIndex,result,text){return durableCheckpoint('item_confirmed',item,packIndex,{...result,text});}
 
 const jobPath = process.argv[2];
