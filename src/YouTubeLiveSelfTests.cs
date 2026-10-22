@@ -122,6 +122,10 @@ namespace VideoBatch {
                 File.WriteAllText(Path.Combine(folder, "02.mp4"), "dummy"); File.WriteAllText(Path.Combine(folder, "01.mp4"), "dummy");
                 var options = new LiveOptions { Folder = folder, Title = "Test", Tags = new[] { "a", "b" } };
                 options.Validate(); Check(Path.GetFileName(options.Files()[0]) == "01.mp4", "playlist order");
+                options.VideoFile = Path.Combine(folder, "02.mp4"); options.Validate();
+                Check(options.Files().Length == 1 && options.Files()[0] == options.VideoFile, "single selected file replaced by folder playlist");
+                options.VideoFile = Path.Combine(folder, "missing.mp4"); Rejected(options.Validate, "missing selected video accepted");
+                options.VideoFile = "";
                 Check(LiveOptions.TagLength(new[]{"a b"})==5,"multiword tag quotes not counted");
                 options.Tags=Enumerable.Range(0,5).Select(i=>new string((char)('a'+i),i==4?100:99)).ToArray();options.Validate();
                 Check(LiveOptions.TagLength(options.Tags)==500,"500-character tag boundary");
@@ -264,9 +268,15 @@ namespace VideoBatch {
                 }
                 string portrait=Path.Combine(root,"portrait");Directory.CreateDirectory(portrait);
                 await Core.Tool(ffmpeg,new[]{"-y","-f","lavfi","-i","testsrc2=size=360x640:rate=60000/1001","-t","1","-c:v","libx264",Path.Combine(portrait,"01.mp4")},ct).ConfigureAwait(false);
-                using(var playlist=await YouTubeLiveMedia.Prepare(new LiveOptions{Folder=portrait,Title="portrait"},ffmpeg,ffprobe,_=>{},ct).ConfigureAwait(false)) {
+                using(var playlist=await YouTubeLiveMedia.Prepare(new LiveOptions{VideoFile=Path.Combine(portrait,"01.mp4"),Title="portrait"},ffmpeg,ffprobe,_=>{},ct).ConfigureAwait(false)) {
                     var probe=Core.VideoInfo(await Core.Probe(ffprobe,Path.Combine(playlist.DirectoryPath,"00000.ts"),ct).ConfigureAwait(false));
                     Check(probe.Width==360 && probe.Height==640 && probe.HasAudio && Math.Abs(YouTubeLiveMedia.FrameRate(probe.Fps)-60000d/1001)<.01,"portrait fractional FPS changed");
+                    string output=Path.Combine(root,"single-loop.flv");
+                    var args=YouTubeLiveMedia.StreamArguments(playlist,true,0,output).ToList();args.Remove("-re");
+                    args.InsertRange(args.Count-3,new[]{"-t","5","-y"});
+                    await Core.Tool(ffmpeg,args,ct,null,60).ConfigureAwait(false);
+                    var looped=Core.VideoInfo(await Core.Probe(ffprobe,output,ct).ConfigureAwait(false));
+                    Check(looped.Duration>4.8 && looped.HasAudio && looped.Width==360 && looped.Height==640,"single video did not repeat continuously");
                 }
             } finally { Store.Root = previousRoot; Directory.Delete(root, true); }
         }

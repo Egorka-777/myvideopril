@@ -30,13 +30,18 @@ namespace VideoBatch {
         public List<LiveJournalEntry> Pending = new List<LiveJournalEntry>();
     }
     public sealed class LiveOptions {
-        public string Folder = "", Title = "", Description = "", Thumbnail = "", Privacy = "public";
+        public string Folder = "", VideoFile = "", Title = "", Description = "", Thumbnail = "", Privacy = "public";
         public string[] Tags = new string[0];
         public bool MadeForKids;
         public int Height; // Legacy field retained for saved/test callers; new streams use source geometry.
         public string[] Files() {
-            if (!Directory.Exists(Folder)) throw new InvalidOperationException("Выберите существующую папку с видео.");
             var extensions = new[] { ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi" };
+            if (!string.IsNullOrWhiteSpace(VideoFile)) {
+                if (!File.Exists(VideoFile) || !extensions.Contains(Path.GetExtension(VideoFile).ToLowerInvariant()))
+                    throw new InvalidOperationException("Выберите существующий видеофайл для эфира.");
+                return new[] { VideoFile };
+            }
+            if (!Directory.Exists(Folder)) throw new InvalidOperationException("Выберите видеофайл для эфира.");
             var files = Directory.GetFiles(Folder).Where(f => extensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
                 .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase).ToArray();
             if (files.Length == 0) throw new InvalidOperationException("В выбранной папке нет видео. Подпапки не включаются.");

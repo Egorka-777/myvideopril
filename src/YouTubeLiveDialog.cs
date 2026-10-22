@@ -34,7 +34,7 @@ namespace VideoBatch {
             folder.ReadOnly = true; thumbnail.ReadOnly = true;
             title.MaxLength = 100; description.Multiline = true; description.MaxLength = 5000; description.ScrollBars = ScrollBars.Vertical;
             title.Text = "Прямой эфир";
-            AddRow(fields, "Папка с видео", folder, Button("Выбрать папку", PickFolder), 42);
+            AddRow(fields, "Видеофайл", folder, Button("Выбрать видео", PickFile), 42);
             AddRow(fields, "Название", title, null, 42);
             AddRow(fields, "Описание", description, null, 74);
             var thumbButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -45,7 +45,7 @@ namespace VideoBatch {
             privacy.DropDownStyle = ComboBoxStyle.DropDownList; privacy.Items.AddRange(new object[] { "Открытый", "По ссылке", "Приватный" }); privacy.SelectedIndex = 0;
             AddRow(fields, "Доступ", privacy, null, 42);
             kids.Text = "Контент для детей"; kids.AutoSize = true; AddRow(fields, "Аудитория", kids, null, 34);
-            var note = new Label { Dock = DockStyle.Fill, Text = "Все видео из папки идут по имени файла, бесконечно по кругу до остановки.\nРазрешение и FPS берутся из видео. Для одного эфира они должны совпадать у всех файлов.", ForeColor = Theme.TextMuted, AutoSize = true };
+            var note = new Label { Dock = DockStyle.Fill, Text = "Выбранное видео повторяется по кругу до остановки эфира или закрытия приложения.\nРазрешение и FPS сохраняются. Стык конца и начала зависит от самого видео.", ForeColor = Theme.TextMuted, AutoSize = true };
             AddRow(fields, "Воспроизведение", note, null, 50);
             root.Controls.Add(fields, 0, 0);
             var auth = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Padding = new Padding(0, 10, 0, 0) };
@@ -80,9 +80,9 @@ namespace VideoBatch {
             input.Dock = DockStyle.Fill; input.Margin = new Padding(4, 6, 6, 6); panel.Controls.Add(input, 1, row);
             if (action != null) { action.Margin = new Padding(4, 6, 0, 6); panel.Controls.Add(action, 2, row); }
         }
-        void PickFolder() {
-            using (var dialog = new FolderBrowserDialog { Description = "Папка с видео для бесконечного эфира", SelectedPath = folder.Text })
-                if (dialog.ShowDialog(this) == DialogResult.OK) folder.Text = dialog.SelectedPath;
+        void PickFile() {
+            using (var dialog = new OpenFileDialog { Title = "Видео для бесконечного эфира", Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi", CheckFileExists = true, Multiselect = false })
+                if (dialog.ShowDialog(this) == DialogResult.OK) folder.Text = dialog.FileName;
         }
         void PickThumbnail() {
             using (var dialog = new OpenFileDialog { Filter = "Превью JPG/PNG|*.jpg;*.jpeg;*.png" })
@@ -122,9 +122,9 @@ namespace VideoBatch {
             finally { connecting = false; if (!IsDisposed) { connect.Enabled = launch.Enabled = true; UpdateAccounts(); } }
         }
         async Task ValidateLaunch() {
-            manager.Trace("Нажат запуск: проверяю папку, превью и параметры");
+            manager.Trace("Нажат запуск: проверяю видеофайл, превью и параметры");
             try {
-                Options = new LiveOptions { Folder = folder.Text, Title = title.Text, Description = description.Text, Thumbnail = thumbnail.Text,
+                Options = new LiveOptions { VideoFile = folder.Text, Title = title.Text, Description = description.Text, Thumbnail = thumbnail.Text,
                     Tags = tags.Text.Split(','), Privacy = new[] { "public", "unlisted", "private" }[privacy.SelectedIndex], MadeForKids = kids.Checked };
                 Options.Validate();
                 for(int i=0;i<channels.Count;i++) { var a=manager.Store.Account(channels[i].ChannelId); if(a==null || a.Transport!="studio" || a.ProfileId!=channels[i].ProfileId || a.LocalPort!=(manager.Preferences?.DolphinPort ?? 3001)) {accounts.SelectedIndex=i; await Connect(true);} }

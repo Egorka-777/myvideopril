@@ -6,7 +6,7 @@ const fs = require("fs"), path = require("path"), readline = require("readline")
 const dolphin = require("./dolphin-session");
 const existing = require("./worker-http");
 const ORIGIN = "https://studio.youtube.com";
-const WORKER_BUILD="20261014-live-setup-v1";
+const WORKER_BUILD="20261022-live-setup-v2";
 function emitProgress(text) { process.stdout.write(JSON.stringify({type:"progress",text:sanitize(text)})+"\n"); }
 const VIDEO = /^[A-Za-z0-9_-]{11}$/;
 const CHANNEL = /^UC[A-Za-z0-9_-]+$/;
@@ -22,7 +22,7 @@ const labels = {
   finished: /stream (?:has )?(?:ended|finished)|трансляция завершена|эфир заверш[её]н/i,
   kidsYes: /^Yes, it.s made for kids|^Да, это видео для детей/i,
   kidsNo: /^No, it.s not made for kids|^Нет, это видео не для детей/i,
-  software: /^(Streaming software|Encoder|Видеокодер|Программа для трансляций)$/i,
+  software: /^(Streaming software|Encoder|Видеокодер|С помощью видеокодера|Программа для трансляций)$/i,
   public: /^(Public|Открытый доступ|Для всех)$/i,
   unlisted: /^(Unlisted|Доступ по ссылке|По ссылке)$/i,
   private: /^(Private|Ограниченный доступ|Только я)$/i
@@ -215,17 +215,17 @@ class NativeStudio {
       const question=await uniqueVisible(this.page.getByRole("heading").filter({hasText:when}),false)
         || await uniqueVisible(this.page.getByText(when).filter({hasNot:this.page.locator("button")}),false);
       if(question) {
-        const later=/^(Later date|At a later date|Later|Позже|В другое время|В другой день)(?:\s|$)/i;
-        const choice=await uniqueVisible(this.page.getByRole("button",{name:later}),false);
-        if(!choice)throw new Error("YouTube показывает первый выбор времени эфира. Выбери «Позже» в профиле Dolphin; автоматическое создание ещё не выполнялось.");
-        this.progress("Первый запуск Studio: выбираю время «Позже» для управления эфирами");await choice.click();changed=true;await this.page.waitForTimeout(500);continue;
+        const now=/^(Right now|Now|Сейчас)(?:\s|$)/i;
+        const choice=await waitUntil(()=>uniqueVisible(this.page.getByRole("button",{name:now}),false));
+        this.progress("Первый запуск Studio: выбираю «Сейчас»");await choice.click();changed=true;
+        await waitUntil(async()=>!await question.isVisible());continue;
       }
       const method=await uniqueVisible(this.page.getByRole("heading").filter({hasText:how}),false)
         || await uniqueVisible(this.page.getByText(how).filter({hasNot:this.page.locator("button")}),false);
       if(method) {
-        const choice=await uniqueVisible(this.page.getByRole("button",{name:/^(Streaming software|Encoder|Видеокодер|Программа для трансляций)(?:\s|$)/i}),false);
-        if(!choice)throw new Error("YouTube показывает выбор способа трансляции. Выбери «Видеокодер» в профиле Dolphin; эфир ещё не создавался.");
-        this.progress("Первый запуск Studio: выбираю «Видеокодер»");await choice.click();changed=true;await this.page.waitForTimeout(500);continue;
+        const choice=await waitUntil(()=>uniqueVisible(this.page.getByRole("button",{name:/^(Streaming software|Encoder|Видеокодер|С помощью видеокодера|Программа для трансляций)(?:\s|$)/i}),false));
+        this.progress("Первый запуск Studio: выбираю «С помощью видеокодера»");await choice.click();changed=true;
+        await waitUntil(async()=>!await method.isVisible());continue;
       }
       break;
     }
