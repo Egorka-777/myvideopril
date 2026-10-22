@@ -6,6 +6,7 @@ const { NativeStudio } = require("../../tools/uploader/worker-youtube-live-sessi
 const video = "abcdefghijk", channel = "UCfixture";
 const state = { title: "", description: "", tags: [], privacy: "private", kids: false, exists: false, live: false, signal: false, ended: false, keyName: "", thumbnail: "https://i.ytimg.com/default.jpg" };
 function html(url) {
+  if(url===`/channel/${channel}`)return `<meta charset="utf-8"><button>Создать</button><script>document.querySelector('button').onclick=()=>{const a=document.createElement('a');a.setAttribute('role','menuitem');a.href='/channel/${channel}/livestreaming/manage';a.textContent='Начать трансляцию';document.body.append(a);};</script>`;
   const mode = url.includes("/manage") ? "manage" : url.endsWith("/edit") ? "edit" : "room";
   return `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="channel-name">Fixture channel</div><main></main><script>
   const state=${JSON.stringify(state)}, mode=${JSON.stringify(mode)};

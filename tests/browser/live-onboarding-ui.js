@@ -10,6 +10,7 @@ const {NativeStudio}=require('../../tools/uploader/worker-youtube-live-session')
    const context=await browser.newContext();let step=0,now=0,encoder=0;
    await context.route('**/*',async route=>{
     const u=new URL(route.request().url());
+    if(u.pathname==='/channel/UCfixture')return route.fulfill({contentType:'text/html; charset=utf-8',body:`<button>Создать</button><script>document.querySelector('button').onclick=()=>{const b=document.createElement('button');b.textContent='Начать трансляцию';b.onclick=()=>location.href='/channel/UCfixture/livestreaming';document.body.append(b);};</script>`});
     if(u.pathname==='/setup/now'){now++;step=1;return route.fulfill({body:'ok'});}
     if(u.pathname==='/setup/encoder'){encoder++;step=2;return route.fulfill({body:'ok'});}
     const question=step===0?(lang==='ru'?'Когда вы хотите выйти в эфир?':'When do you want to go live?'):(lang==='ru'?'Как вы хотите проводить трансляцию?':'How would you like to go live?');
@@ -32,7 +33,18 @@ const {NativeStudio}=require('../../tools/uploader/worker-youtube-live-session')
    }
    await context.close();
   }
-  const context=await browser.newContext();await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<h1>Activate live streaming</h1><p>24 hours</p>'}));
+  // Verification must use the loaded document's channel URL, not page.content()
+  // (which failed during the real Studio redirect). No Data API bootstrap is needed.
+  const identityContext=await browser.newContext();
+  await identityContext.route('**/*',route=>route.fulfill({contentType:'text/html',body:
+    new URL(route.request().url()).pathname==='/' ? '<script>location.replace("/channel/UCfixture");</script>' : '<div id="channel-name">Fixture channel</div>'}));
+  const identityPage=await identityContext.newPage();
+  identityPage.content=async()=>{throw new Error('page.content: Unable to retrieve content because the page is navigating and changing the content.');};
+  const identity=await new NativeStudio(identityPage).verify('https://www.youtube.com/channel/UCfixture');
+  assert.equal(identity.channelId,'UCfixture');assert.equal(identity.channelName,'Fixture channel');
+  await assert.rejects(new NativeStudio(identityPage).verify('https://www.youtube.com/channel/UCother'),/другой YouTube-канал/);
+  await identityContext.close();
+  const context=await browser.newContext();await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:new URL(route.request().url()).pathname==='/channel/UCfixture' ? `<button>Create</button><script>document.querySelector('button').onclick=()=>{const b=document.createElement('button');b.textContent='Go live';b.onclick=()=>location.href='/channel/UCfixture/livestreaming';document.body.append(b);};</script>` : '<h1>Activate live streaming</h1><p>24 hours</p>'}));
   const page=await context.newPage();await assert.rejects(new NativeStudio(page,'UCfixture').prepare(),/активации/);await context.close();
   console.log('PASS: RU/EN first-time Now→Encoder setup, readiness before creation, activation error, native writeText/write/execCommand capture without system clipboard or retained secrets');
  }finally{await browser.close();}

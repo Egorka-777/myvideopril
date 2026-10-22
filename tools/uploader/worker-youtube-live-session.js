@@ -6,7 +6,7 @@ const fs = require("fs"), path = require("path"), readline = require("readline")
 const dolphin = require("./dolphin-session");
 const existing = require("./worker-http");
 const ORIGIN = "https://studio.youtube.com";
-const WORKER_BUILD="20261022-live-setup-v2";
+const WORKER_BUILD="20261022-live-setup-v3";
 function emitProgress(text) { process.stdout.write(JSON.stringify({type:"progress",text:sanitize(text)})+"\n"); }
 const VIDEO = /^[A-Za-z0-9_-]{11}$/;
 const CHANNEL = /^UC[A-Za-z0-9_-]+$/;
@@ -165,7 +165,22 @@ class NativeStudio {
     this.progress("Открываю YouTube Studio и проверяю канал");
     await this.page.goto(ORIGIN, { waitUntil: "domcontentloaded", timeout: 90000 });
     await existing.waitForStudioChannel(this.page, 90000);
-    const data = existing.parseStudioBootstrap(await this.page.content(), this.page.url());
+    // Read identity and URL in one document context. Serializing HTML after the
+    // channel redirect races Studio's navigation and is not needed for UI control.
+    const data = await waitUntil(async () => {
+      let snapshot;
+      try {
+        snapshot = await this.page.evaluate(() => ({ url: location.href, ready: document.readyState,
+          text: (document.body?.innerText || "").slice(0, 20000) }));
+      } catch (error) {
+        if (/Execution context was destroyed|Cannot find context with specified id/i.test(error.message)) return null;
+        throw error;
+      }
+      const state = existing.studioPageState(snapshot.url, snapshot.text);
+      if (state.blocker) throw new Error(state.blocker);
+      const match = snapshot.url.match(/^https:\/\/studio\.youtube\.com\/channel\/(UC[A-Za-z0-9_-]+)(?:\/|$)/);
+      return match && snapshot.ready !== "loading" ? { channelId: match[1] } : null;
+    }, 90000);
     if(expectedUrl) {
       const u=new URL(expectedUrl);
       if(!/^(www\.)?youtube\.com$/.test(u.hostname) || !/^\/(?:@[^/]+|channel\/UC[A-Za-z0-9_-]+)(?:\/|$)/.test(u.pathname))throw new Error("Нужна ссылка на YouTube-канал, а не видео.");
@@ -234,13 +249,25 @@ class NativeStudio {
   async manage() {
     const target=`${ORIGIN}/channel/${this.channelId}/livestreaming/manage`;
     this.progress("Открываю управление трансляциями нужного канала");
-    await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});
+    await this.page.goto(`${ORIGIN}/channel/${this.channelId}`,{waitUntil:"domcontentloaded",timeout:60000});
+    await this.click(/^(Create|Создать)$/i);
+    await waitUntil(async()=>{
+      const name=/^(Go live|Начать трансляцию)$/i;
+      const entry=await uniqueVisible(this.page.getByRole("menuitem",{name}),false)
+        || await this.button(name,this.page,false)
+        || await uniqueVisible(this.page.getByText(name,{exact:true}),false);
+      if(!entry)return false;
+      this.progress("Создать → Начать трансляцию");await entry.click({timeout:10000});return true;
+    });
     await waitUntil(async()=>{
       const text=await this.page.locator("body").innerText();
       const blocker=existing.studioPageState(this.page.url(),text).blocker;if(blocker)throw new Error(blocker);
       if(/24\s*(?:hours|час)|activate live streaming|включить.*прям.*трансляц|live streaming isn.t available|трансляции недоступны/i.test(text))
         throw new Error("YouTube требует активации/проверки доступа к эфирам. Заверши этот шаг в Dolphin; первая активация может занять до 24 часов.");
       if(await this.liveSetup()){await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});return false;}
+      if(this.page.url()!==target && await this.roomReady()) {
+        await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});return false;
+      }
       return await this.button(labels.schedule,this.page,false);
     },45000);
     const url=new URL(this.page.url());
