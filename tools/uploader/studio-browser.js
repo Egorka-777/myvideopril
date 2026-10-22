@@ -96,20 +96,22 @@ async function findCompletionCopy(root){
 function normCompletion(text){return String(text||'').replace(/\s+/g,' ').trim();}
 function completionState(copy){return /scheduled|запланир/i.test(copy)?'scheduled':'published';}
 async function publishActionStillActive(root){
-  for(const btn of await root.locator('ytcp-button#done-button button,#done-button').all()){
-    if(!await btn.isVisible())continue;
-    const label=normCompletion(await btn.innerText());
-    if(!/publish|опублик|schedule|запланир/i.test(label))continue;
-    if(await controlEnabled(btn))return true;
-  }
-  return false;
+  // The footer is replaced by the completion card during this read. Query all
+  // matches in one browser evaluation: a removed button is an empty snapshot,
+  // never an auto-wait for the old Publish control to reappear.
+  return root.locator('ytcp-button#done-button button,#done-button').evaluateAll(nodes=>nodes.some(el=>{
+    if(!el.isConnected||!el.getClientRects().length||getComputedStyle(el).visibility==='hidden')return false;
+    if(!/publish|опублик|schedule|запланир/i.test(el.innerText||''))return false;
+    for(let p=el;p;p=p.parentElement||p.getRootNode().host)if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true'||p.inert)return false;
+    return true;
+  }));
 }
 async function controlEnabled(button){
-  return button.evaluate(el=>{
-    for(let p=el;p;p=p.parentElement||p.getRootNode().host)
-      if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true'||p.inert)return false;
+  return button.evaluateAll(nodes=>nodes.some(el=>{
+    if(!el.isConnected||!el.getClientRects().length||getComputedStyle(el).visibility==='hidden')return false;
+    for(let p=el;p;p=p.parentElement||p.getRootNode().host)if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true'||p.inert)return false;
     return true;
-  });
+  }));
 }
 async function publicationState(page,{scope=null,expectedId=''}={}){
   const surfaces=[];

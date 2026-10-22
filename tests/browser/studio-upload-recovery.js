@@ -4,7 +4,7 @@ const {chromium}=require('../../tools/uploader/node_modules/playwright-core');
 const S=require('../../tools/uploader/youtube-studio-upload'),B=require('../../tools/uploader/studio-browser');
 const {setup}=require('./studio-shorts-queue');
 const base='2207c946c7f85b7b9363f5641be84a223a6aba47';
-function baseline(){const file=path.resolve(__dirname,'../../tools/uploader/youtube-studio-upload.js'),m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));m._compile(cp.execFileSync('git',['show',base+':tools/uploader/youtube-studio-upload.js'],{encoding:'utf8'}),file);return m.exports;}
+function baseline(relative='tools/uploader/youtube-studio-upload.js'){const file=path.resolve(__dirname,'../../'+relative),m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));m._compile(cp.execFileSync('git',['show',base+':'+relative],{encoding:'utf8'}),file);return m.exports;}
 (async()=>{
  const browser=await chromium.launch({headless:true}),temp=fs.mkdtempSync(path.join(os.tmpdir(),'vb-studio-recovery-'));
  const out=path.resolve(process.env.STUDIO_RECOVERY_EVIDENCE_DIR||'artifacts/studio-recovery');fs.mkdirSync(out,{recursive:true});
@@ -15,6 +15,19 @@ function baseline(){const file=path.resolve(__dirname,'../../tools/uploader/yout
   await page.setContent('<div role="dialog"><ytcp-dialog style="display:block"><div role="dialog"><h2>Проверка видео ещё продолжается</h2><button>Опубликовать</button><button>Исправить</button></div></ytcp-dialog></div>');
   await assert.rejects(baseline().confirmPublishDespiteRunningChecks(page),/несколько окон/);
   assert(await S.runningChecksDialog(page));
+  page.setDefaultTimeout(1500);
+  async function footerReplaced(driver){
+   await page.setContent('<ytcp-uploads-dialog><h2>Processing</h2><a href="https://youtu.be/video000001">Video</a><button id="done-button">Publish</button></ytcp-uploads-dialog>');
+   const actual=page.locator('ytcp-uploads-dialog'),button=actual.locator('#done-button');
+   const root={isVisible:()=>actual.isVisible(),evaluate:(...args)=>actual.evaluate(...args),getByRole:(...args)=>actual.getByRole(...args),locator:selector=>{
+    const target=actual.locator(selector);if(!selector.includes('done-button'))return target;
+    return {all:async()=>[{isVisible:()=>button.isVisible(),innerText:async()=>{const text=await button.innerText();await button.evaluate(e=>e.remove());return text;},evaluate:(...args)=>button.evaluate(...args)}],evaluateAll:async(...args)=>{await button.evaluate(e=>e.remove());return target.evaluateAll(...args);}};
+   }};
+   return driver.publicationState(page,{scope:{all:async()=>[root]},expectedId:'video000001'});
+  }
+  await assert.rejects(footerReplaced(baseline('tools/uploader/studio-browser.js')),/Timeout/);
+  const raceAt=Date.now(),race=await footerReplaced(B);assert.equal(race.state,'pending');assert(Date.now()-raceAt<1200);
+  evidence.checks.push({name:'footer-replaced-between-visibility-and-enabled-read',baseline:'locator timeout reproduced',currentState:race.state,durationMs:Date.now()-raceAt});save();
   await page.setContent('<div role="dialog"><h2>Something else</h2><button>Publish</button></div>');assert.equal(await S.runningChecksDialog(page),false);
   evidence.checks.push({name:'nested-check-warning-v19h-reproduced-and-corrected'});save();
   // A real prefix is lost at the same approximate size as the supplied screenshot.
