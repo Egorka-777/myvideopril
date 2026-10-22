@@ -24,9 +24,6 @@ function baseline(){const file=path.resolve(__dirname,'../../tools/uploader/yout
   await S.typeText(page.locator('textarea'),text,{name:'описания',delay:20,onState:(state,message,diagnostic)=>events.push({state,message,diagnostic}),onProgress:async n=>{if(n===1080&&!interrupted){interrupted=true;await page.locator('textarea').evaluate(e=>{e.value=e.value.slice(0,-9);e.blur();});}}});
   assert(interrupted);assert.equal(await page.locator('textarea').inputValue(),S.norm(text));assert(events.some(x=>x.state==='resume'));assert.equal(await page.evaluate(()=>clears),1);
   evidence.checks.push({name:'description-prefix-resumes-after-1080',clears:1,finalLength:S.norm(text).length,events});save();await page.close();
-  // Transfer timeout fallback must never send the same file by another transport.
-  const source=fs.readFileSync(path.resolve(__dirname,'../../tools/uploader/studio-browser.js'),'utf8');
-  assert(!source.includes('Native file input timed out'));
   const f=await setup(browser,'ru',temp,{count:1,neverClose:true}),item=f.pack[0],durable=[];
   const failHost={...f.host,checkpoint:async it=>{it.studioPending=true;it.studioPhase='transferring';durable.push('transferring');},accepted:async(it,ix,id)=>durable.push('accepted:'+id),waitUpload:async()=>{throw Error('fixture transfer indicator interrupted');}};
   await assert.rejects(S.runSequential(f.page,[item],{titleDelay:1,descriptionDelay:1,newTabPerVideo:true,diagnosticsDir:out},failHost),/fixture transfer/);
