@@ -575,7 +575,7 @@ async function runItems(page,pack,opts,host){
      const previous=page;page=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка следующего ролика.');taskOwnedPages.add(page);if(host.usePage)host.usePage(page);
      progress('studio_new_tab','Открыта новая вкладка загрузки следующего ролика.');
      await require('./studio-browser').openStudio(page,opts.channelUrl||'',progress);
-     if(taskOwnedPages.has(previous)&&screenConfirmed)await bounded(()=>previous.close(),2000,'Не закрылась завершённая вкладка.').catch(error=>progress('diagnostic',error.message));
+     if(taskOwnedPages.has(previous))await bounded(()=>previous.close(),2000,'Не закрылась завершённая вкладка.').catch(error=>progress('diagnostic',error.message));
     }
     return;
    }

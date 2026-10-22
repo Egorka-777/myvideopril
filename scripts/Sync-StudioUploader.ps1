@@ -16,7 +16,8 @@ foreach ($name in @('worker.js','youtube-studio-upload.js')) {
     if (![IO.File]::ReadAllText((Join-Path $source $name)).Contains($ExpectedBuild)) { throw "BUILD mismatch in source $name" }
 }
 $binaryRoot=$sourceRoot
-if (!(Test-Path -LiteralPath (Join-Path $binaryRoot 'VideoBatch.exe'))) { $binaryRoot=Join-Path $sourceRoot 'bin/Release/net48' }
+# The repository also tracks a historical root EXE. Never prefer it to the build.
+if (Test-Path -LiteralPath (Join-Path $sourceRoot 'VideoBatch.csproj')) { $binaryRoot=Join-Path $sourceRoot 'bin/Release/net48' }
 $exe=Join-Path $binaryRoot 'VideoBatch.exe'
 if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Full update requires the compiled VideoBatch.exe. Build Release or download the CI update ZIP.' }
 $assembly=[Reflection.Assembly]::LoadFrom($exe)
