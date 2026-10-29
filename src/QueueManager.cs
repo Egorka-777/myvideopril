@@ -76,8 +76,8 @@ namespace VideoBatch {
                 job.studioPaidPromotion=settings.YouTubeStudioPaidPromotion;job.studioAlteredContent=settings.YouTubeStudioAlteredContent;
                 for(int i=0;i<Items.Count;i++){
                     var meta=YouTubeMetadata.Build(settings,Channel,i+1);job.items[i].tags=meta.tags;
-                    // Description is selected from the configured RU/EN bank for this account/item.
-                    job.items[i].description=string.IsNullOrWhiteSpace(meta.description)?null:meta.description;
+                    // Studio uploads leave the channel's existing/default description untouched.
+                    job.items[i].description=null;
                 }
             }
             return job;

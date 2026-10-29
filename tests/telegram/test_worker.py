@@ -43,6 +43,9 @@ class FakeClient:
     async def disconnect(self): self.connected=False
     async def is_user_authorized(self): return True
     async def get_me(self): return self.me
+    async def get_permissions(self,entity,user):
+        rights=getattr(self.target,'admin_rights',None)
+        return SimpleNamespace(is_creator=getattr(self.target,'creator',False),invite_users=bool(rights and getattr(rights,'invite_users',False)))
     async def get_entity(self,value):
         if str(value) in ('@group','https://t.me/group', '10'):return self.target
         return types.User(id={'userone':101,'usertwo':102,'userthree':103}.get(value,101),first_name=str(value))

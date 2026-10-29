@@ -166,7 +166,16 @@ async function captureNavigationFailure(page, target, error, directory, report) 
     richGrids: document.querySelectorAll("ytd-rich-grid-renderer").length,
     ordinaryCards: document.querySelectorAll("ytd-rich-grid-media, ytd-grid-video-renderer").length,
     shortsPlayer: !!document.querySelector("ytd-reel-video-renderer"),
-    videos: [...document.querySelectorAll("video")].map(v => ({ paused: v.paused, autoplay: v.autoplay })),
+    videos: [...document.querySelectorAll("video")].map(v => ({ paused: v.paused, autoplay: v.autoplay,
+      currentTime: v.currentTime, duration: Number.isFinite(v.duration) ? v.duration : null,
+      ended: v.ended, readyState: v.readyState })),
+    actionButtons: [...document.querySelectorAll("#actions button, #actions [role='button'], #actions-inner button, #actions-inner [role='button']")].slice(0, 40).map(btn => ({
+      tag: btn.tagName.toLowerCase(), id: btn.id || "", className: btn.getAttribute("class") || "",
+      ariaLabel: btn.getAttribute("aria-label") || "", title: btn.getAttribute("title") || "",
+      ariaPressed: btn.getAttribute("aria-pressed"), disabled: btn.hasAttribute("disabled"),
+      visible: !!(btn.getClientRects().length && getComputedStyle(btn).visibility !== "hidden"),
+      parentTag: btn.parentElement ? btn.parentElement.tagName.toLowerCase() : ""
+    })),
     candidateIds: [...new Set([...document.querySelectorAll("ytd-rich-grid-media a[href*='/watch?v='],ytd-grid-video-renderer a[href*='/watch?v=']")].map(a => new URL(a.href).searchParams.get("v")))].slice(0, 20)
   })).catch(() => ({ unavailable: true }));
   const url = new URL(page.url());

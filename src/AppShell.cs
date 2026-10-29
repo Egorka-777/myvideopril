@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -21,6 +22,7 @@ namespace VideoBatch {
         Button menuToggleBtn;
         Button settingsBtn;
         Button dolphinRefreshBtn;
+        int dolphinCheckRunning;
         bool sidebarExpanded = true;
         string dolphinState = "unknown";
 
@@ -169,7 +171,7 @@ namespace VideoBatch {
             tasksLabel=new Label { Text="Задач: 0",ForeColor=Theme.TextSecondary,Width=72,Height=34,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,0,8,0) };
             var statusWrap=new FlowLayoutPanel { AutoSize=true,WrapContents=false,Anchor=AnchorStyles.Right,Margin=Padding.Empty,Padding=Padding.Empty };
             statusWrap.Controls.Add(dolphinDot);statusWrap.Controls.Add(dolphinLabel);statusWrap.Controls.Add(tasksLabel);bar.Controls.Add(statusWrap,2,0);
-            dolphinRefreshBtn=Theme.MakeIconButton("↻",async()=>await CheckDolphinAsync(true));
+            dolphinRefreshBtn=Theme.MakeIconButton("↻",()=>{ _=CheckDolphinAsync(true); });
             settingsBtn=Theme.MakeIconButton("⚙",()=>navigation.Navigate(NavSection.Settings));
             menuToggleBtn=Theme.MakeIconButton("☰",ToggleSidebar);
             platformBackBtn=Theme.MakeButton("← К разделам",ghost:true,action:ShowPlatformHub);platformBackBtn.Visible=false;
@@ -419,22 +421,32 @@ namespace VideoBatch {
         }
 
         async Task CheckDolphinAsync(bool manual) {
-            dolphinRefreshBtn.Enabled = false;
+            if (Interlocked.CompareExchange(ref dolphinCheckRunning, 1, 0) != 0) {
+                if (manual) MessageBox.Show(this, "Проверка Dolphin уже выполняется. Подождите несколько секунд.", "Dolphin API", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (manual) dolphinRefreshBtn.Enabled = false;
             try {
-                var live = Store.Load();
-                settings.ProtectedDolphinToken = live.ProtectedDolphinToken;
-                settings.DolphinPort = live.DolphinPort;
-                string token = WindowsSupport.Unprotect(live.ProtectedDolphinToken);
-                if (string.IsNullOrWhiteSpace(token)) { SetDolphinState("fail", "Dolphin · нет токена"); return; }
-                using (var handler = new HttpClientHandler { UseProxy = false })
-                using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) }) {
-                    var body = new StringContent("{\"token\":\"" + JsonEscape(token) + "\"}", System.Text.Encoding.UTF8, "application/json");
-                    var resp = await client.PostAsync("http://127.0.0.1:" + live.DolphinPort + "/v1.0/auth/login-with-token", body).ConfigureAwait(true);
-                    SetDolphinState(resp.IsSuccessStatusCode ? "ok" : "fail", resp.IsSuccessStatusCode ? "Dolphin · доступен" : "Dolphin · HTTP " + (int)resp.StatusCode);
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20))) {
+                    var live = Store.Load();
+                    settings.ProtectedDolphinToken = live.ProtectedDolphinToken;
+                    settings.DolphinPort = live.DolphinPort;
+                    string token = WindowsSupport.Unprotect(live.ProtectedDolphinToken);
+                    if (string.IsNullOrWhiteSpace(token)) { SetDolphinState("fail", "Dolphin · нет токена"); return; }
+                    int port = await DolphinLocalApi.ResolvePortAsync(token, live.DolphinPort, timeout.Token).ConfigureAwait(true);
+                    if (port != live.DolphinPort) {
+                        settings.DolphinPort = port;
+                        SaveSettings();
+                    }
+                    SetDolphinState("ok", "Dolphin · порт " + port);
                 }
-            } catch { SetDolphinState("fail", "Dolphin · недоступен"); }
-            finally {
-                dolphinRefreshBtn.Enabled = true;
+            } catch (Exception ex) {
+                string msg = ex.Message ?? "недоступен";
+                if (msg.Length > 72) msg = msg.Substring(0, 69) + "…";
+                SetDolphinState("fail", "Dolphin · " + msg);
+            } finally {
+                Interlocked.Exchange(ref dolphinCheckRunning, 0);
+                if (manual) dolphinRefreshBtn.Enabled = true;
                 if (manual) MessageBox.Show(this, dolphinLabel.Text, "Dolphin API", MessageBoxButtons.OK, dolphinState == "ok" ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
             }
         }

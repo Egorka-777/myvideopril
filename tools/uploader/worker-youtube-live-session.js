@@ -6,7 +6,7 @@ const fs = require("fs"), path = require("path"), readline = require("readline")
 const dolphin = require("./dolphin-session");
 const existing = require("./worker-http");
 const ORIGIN = "https://studio.youtube.com";
-const WORKER_BUILD="20261022-live-setup-v3";
+const WORKER_BUILD="20261023-live-setup-v4";
 function emitProgress(text) { process.stdout.write(JSON.stringify({type:"progress",text:sanitize(text)})+"\n"); }
 const VIDEO = /^[A-Za-z0-9_-]{11}$/;
 const CHANNEL = /^UC[A-Za-z0-9_-]+$/;
@@ -224,7 +224,7 @@ class NativeStudio {
   }
   async liveSetup() {
     const when=/when do you want to go live|when would you like to go live|когда вы (?:хотите|планируете) (?:начать|выйти)|когда (?:начать|выйти).*?(?:эфир|трансляц)/i;
-    const how=/how (?:would you like|do you want) to go live|how do you want to stream|как вы (?:хотите|планируете).*?(?:эфир|трансляц)|способ (?:ведения|проведения) трансляции/i;
+    const how=/how (?:would you like|do you want) to go live|how do you want to stream|как вы (?:хотите|планируете).*?(?:эфир|трансляц)|способ (?:ведения|проведения) трансляции|выберите способ выхода в эфир/i;
     let changed=false;
     for(let i=0;i<4;i++) {
       const question=await uniqueVisible(this.page.getByRole("heading").filter({hasText:when}),false)
@@ -264,7 +264,10 @@ class NativeStudio {
       const blocker=existing.studioPageState(this.page.url(),text).blocker;if(blocker)throw new Error(blocker);
       if(/24\s*(?:hours|час)|activate live streaming|включить.*прям.*трансляц|live streaming isn.t available|трансляции недоступны/i.test(text))
         throw new Error("YouTube требует активации/проверки доступа к эфирам. Заверши этот шаг в Dolphin; первая активация может занять до 24 часов.");
-      if(await this.liveSetup()){await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});return false;}
+      if(await this.liveSetup())return false;
+      // A visible first-run dialog can cover an otherwise visible Schedule
+      // button. Never treat the management page behind that dialog as ready.
+      if(await uniqueVisible(this.page.getByRole("dialog"),false))return false;
       if(this.page.url()!==target && await this.roomReady()) {
         await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});return false;
       }

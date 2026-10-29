@@ -56,6 +56,7 @@ namespace VideoBatch {
         static async Task RunTool(string ffmpeg, params string[] args) => await Core.Tool(ffmpeg, args, CancellationToken.None, null, 45);
         static async Task<bool> RunIntegrationAsync(string ffmpeg, string ffprobe) {
             string temp = Path.Combine(Path.GetTempPath(), "vb-warmup-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(temp);
+            string previousRoot = Store.Root; Store.Root = temp;
             try {
                 // Deliberately non-frame-aligned narration. The background video has its own unwanted audio.
                 string photo = Path.Combine(temp, "фон с пробелом.png"), video = Path.Combine(temp, "фон-видео.mp4"), shortAudio = Path.Combine(temp, "short.mp3"), longAudio = Path.Combine(temp, "long.mp3");
@@ -72,12 +73,19 @@ namespace VideoBatch {
                     string existing = Path.Combine(output, "warmup-RU-001.mp4"); File.WriteAllText(existing, "keep existing output");
                     int bundleCount = market == "RU" ? 2 : 1;
                     var jokes = Enumerable.Range(1, bundleCount).Select(n => (market == "RU" ? "Короткий анекдот, кавычки: \"пример\". Номер " : "A short complete joke. Number ") + n).ToList();
-                    var backgrounds = Enumerable.Repeat(market == "RU" ? photo : video, bundleCount).ToList();
+                    var backgrounds = new List<string> { market == "RU" ? photo : video };
                     var job = new WarmupVideoJob { Market = market, Jokes = jokes, BackgroundFiles = backgrounds, Subtitles = market == "EN" ? new WarmupSubtitleStyle { Position = 72 } : null, OutputFolder = output, ElevenLabsKey = "fixture-eleven-key" };
                     using (var client = new HttpClient(api)) {
-                        var files = await WarmupVideoEngine.GenerateAsync(job, _ => { }, CancellationToken.None, client, ffmpeg, ffprobe);
+                        var files = await WarmupVideoEngine.GenerateAsync(job, _ => { }, CancellationToken.None, client, client, ffmpeg, ffprobe);
                         Check(files.Count == bundleCount && files.Distinct().Count() == bundleCount && files.All(File.Exists), "requested number, distinct names and output files");
                         Check(api.SpeechCalls == bundleCount + api.LongCount && api.TextCalls == 0, "manual bundles skip OpenRouter");
+                        var inventory = WarmupBundleHistory.Inventory(market, jokes, backgrounds);
+                        Check(inventory.Used == bundleCount && inventory.Remaining == 0, "successful pairs persist across history reload");
+                        int paidCalls = api.SpeechCalls;
+                        bool exhausted = false;
+                        try { await WarmupVideoEngine.GenerateAsync(job, _ => { }, CancellationToken.None, client, client, ffmpeg, ffprobe); }
+                        catch (InvalidOperationException e) { exhausted = e.Message.Contains("уже использованы"); }
+                        Check(exhausted && api.SpeechCalls == paidCalls, "exhausted bundles must stop before paid TTS");
                         Check(File.ReadAllText(existing) == "keep existing output", "old files are not overwritten");
                         Check(!Directory.GetFiles(output, ".processing-*").Any(), "no partial results");
                         foreach (var file in files) {
@@ -94,6 +102,25 @@ namespace VideoBatch {
                             }
                         }
                     }
+                }
+                string copyPhoto = Path.Combine(temp, "renamed.png"); File.Copy(photo, copyPhoto);
+                var ten = Enumerable.Range(0, 10).Select(n => "Pair joke " + n).ToList();
+                var firstBatch = WarmupBundleHistory.Inventory("RU", ten, new[] { photo, video, copyPhoto });
+                Check(firstBatch.Total == 20 && firstBatch.Next.Count == 10 && firstBatch.Next.Count(p => p.Background == photo) == 5, "10 jokes / 2 unique backgrounds distribute into 10 outputs");
+                foreach (var plan in firstBatch.Next) WarmupBundleHistory.Complete("RU", plan, "completed.mp4");
+                var secondBatch = WarmupBundleHistory.Inventory("RU", ten, new[] { photo, video });
+                Check(secondBatch.Used == 10 && secondBatch.Remaining == 10 && !secondBatch.Next.Any(p => firstBatch.Next.Any(old => old.Signature == p.Signature)), "second batch contains only new pairs");
+                Check(WarmupBundleHistory.Inventory("EN", ten, new[] { photo, video }).Used == 0, "history markets isolated");
+                foreach (var plan in secondBatch.Next) WarmupBundleHistory.Complete("RU", plan, "completed.mp4");
+                Check(WarmupBundleHistory.Inventory("RU", ten, new[] { copyPhoto, video }).Remaining == 0, "renaming background cannot bypass duplicate prevention");
+                var cancelledJob = new WarmupVideoJob { Market = "RU", Jokes = new List<string> { "Неудачная связка Номер 1" }, BackgroundFiles = new List<string> { photo }, OutputFolder = Path.Combine(temp, "manual-cancel"), ElevenLabsKey = "fixture-eleven-key" };
+                using (var cancel = new CancellationTokenSource()) {
+                    var api = new FakeApi { Short = File.ReadAllBytes(shortAudio), CancelTts = true, Cancel = cancel };
+                    using (var client = new HttpClient(api)) {
+                        try { await WarmupVideoEngine.GenerateAsync(cancelledJob, _ => { }, cancel.Token, client, client, ffmpeg, ffprobe); throw new Exception("cancellation ignored"); }
+                        catch (OperationCanceledException) { }
+                    }
+                    Check(WarmupBundleHistory.Inventory("RU", cancelledJob.Jokes, cancelledJob.BackgroundFiles).Used == 0, "cancelled assembly consumed a pair");
                 }
                 var timed = WarmupSubtitles.Cues(Alignment("One two three four.", .3, 1.2), 2, 2);
                 Check(timed.Count == 2 && timed[0].Text == "One two" && timed[1].Text == "three four." && timed[0].Start == .3 && timed[0].End <= timed[1].Start, "word grouping uses provider timing without overlap");
@@ -123,7 +150,7 @@ namespace VideoBatch {
                             string bad = Path.Combine(temp, "broken.png"); File.WriteAllText(bad, "not an image");
                             var job = new WarmupVideoJob { Prompt = "Тема", BackgroundFile = failure == "bad-background" ? bad : photo, OutputFolder = output, OpenRouterKey = "fixture-router-key", ElevenLabsKey = "fixture-eleven-key" };
                             bool failed = false;
-                            try { await WarmupVideoEngine.GenerateAsync(job, lines.Add, cancel.Token, client, ffmpeg, ffprobe); }
+                            try { await WarmupVideoEngine.GenerateAsync(job, lines.Add, cancel.Token, client, client, ffmpeg, ffprobe); }
                             catch (OperationCanceledException) { Check(failure == "cancel", "only explicit cancellation"); failed = true; }
                             catch (Exception e) { Check(failure != "cancel", "cancellation remains cancellation"); Check(!e.Message.Contains("SECRET") && !e.Message.Contains("fixture-eleven-key"), "provider credentials/bodies not logged"); failed = true; }
                             Check(failed && !Directory.GetFiles(output, "*.mp4").Any(), "failed job has no misleading finished file");
@@ -132,7 +159,7 @@ namespace VideoBatch {
                     }
                 }
                 Console.WriteLine("Warmup integration PASS: real photo/video render, audio clock, near-10s boundary, RU/EN payloads, shorten retry, no overwrite, invalid source, API errors and cancellation. No paid/live APIs called."); return true;
-            } finally { try { Directory.Delete(temp, true); } catch { } }
+            } finally { Store.Root = previousRoot; try { Directory.Delete(temp, true); } catch { } }
         }
         static WarmupAlignment Alignment(string text, double start, double length) => new WarmupAlignment {
             characters = text.Select(c => c.ToString()).ToArray(),
@@ -177,6 +204,7 @@ namespace VideoBatch {
                     Check(!All(panel).Any(c => c.Text == "Макс. длина ролика" || c.Text == "Сохранить"), "automatic duration/save have no duplicate controls");
                     var joke0 = All(panel).OfType<TextBox>().Single(c => c.Name == "warmup-joke-0");
                     joke0.Text = "Новый анекдот в связке 1";
+                    Check(prefs.WarmupVideoJokesRu[0] == joke0.Text, "shared preferences stale before debounce");
                     var save = typeof(WarmupVideoPanel).GetMethod("SaveFields", BindingFlags.Instance | BindingFlags.NonPublic); save.Invoke(panel, null);
                     All(panel).OfType<Button>().Single(b => b.Text == "Настроить").PerformClick();
                     All(panel).OfType<NumericUpDown>().Single(c => c.Name == "warmup-subtitle-size").Value = 64;
@@ -188,7 +216,9 @@ namespace VideoBatch {
                     All(panel).OfType<Button>().Single(b => b.Text == "Настроить").PerformClick();
                     foreach (var size in new[] { new Size(820, 620), new Size(936, 700), new Size(1200, 800) }) {
                         form.ClientSize = size; Application.DoEvents();
-                        Check(joke0.Width > panel.Width * .25, "form must fill card width rather than shrink to default 200px");
+                        foreach (var container in All(panel).OfType<TableLayoutPanel>().Reverse()) container.PerformLayout();
+                        Application.DoEvents();
+                        Check(joke0.Width > panel.Width * .25, "form must fill card width rather than shrink to default 200px: box=" + joke0.Width + ", panel=" + panel.Width + ", fields=" + joke0.Parent.Parent.Width);
                         foreach (var button in All(panel).OfType<Button>().Where(b => b.Visible)) {
                             Check(button.Height <= 44, "button row unexpectedly stretched: " + button.Text);
                             Check(button.Left >= 0 && button.Top >= 0 && button.Right <= button.Parent.ClientSize.Width + 1 && button.Bottom <= button.Parent.ClientSize.Height + 1, "button clipped in parent: " + button.Text);
@@ -207,6 +237,15 @@ namespace VideoBatch {
                     using (var bmp = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(bmp, panel.ClientRectangle); bmp.Save(Path.Combine(folder, "warmup-subtitles.png")); }
                     form.Close();
                 }
+                var restored = Store.Load();
+                using (var panel = new WarmupVideoPanel(restored)) {
+                    var boxes = All(panel).OfType<TextBox>().Where(c => c.Name.StartsWith("warmup-joke-")).OrderBy(c => c.Name).ToArray();
+                    boxes[0].Text = "EN saved just before closing"; boxes[3].Text = ""; boxes[9].Text = "EN last slot";
+                }
+                var reopened = Store.Load();
+                Check(reopened.WarmupVideoJokesEn[0] == "EN saved just before closing" && reopened.WarmupVideoJokesEn[3] == "" && reopened.WarmupVideoJokesEn[9] == "EN last slot", "close before debounce loses slots");
+                Check(reopened.WarmupVideoJokesRu[0] == "Новый анекдот в связке 1", "EN closing overwrote RU");
+                Check(reopened.WarmupVideoBackgroundFilesEn.SequenceEqual(new[] { photo }) && reopened.WarmupSubtitlesRu.FontSize == 64, "reopen lost backgrounds or subtitle style");
                 Console.WriteLine("Warmup UI PASS: compact/wide layouts, button bounds, independent markets, settings persistence."); return true;
             } finally { Store.Root = old; try { Directory.Delete(temp, true); } catch { } }
         }

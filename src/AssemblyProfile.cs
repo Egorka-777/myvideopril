@@ -11,6 +11,7 @@ namespace VideoBatch {
         public const string EnTikTok = "EN-TikTok";
 
         public static readonly string[] All = { Ru, En, RuInst, EnInst, RuTikTok, EnTikTok };
+        public static readonly string[] Visible = { Ru, En, RuInst, EnInst };
 
         public static string Normalize(string profile) {
             if (string.IsNullOrWhiteSpace(profile)) return Ru;
@@ -43,11 +44,11 @@ namespace VideoBatch {
 
         public static string ShortLabel(string profile) {
             profile = Normalize(profile);
-            if (profile == RuInst) return "RU Inst";
-            if (profile == EnInst) return "EN Inst";
+            if (profile == RuInst) return "RU INS";
+            if (profile == EnInst) return "EN INS";
             if (profile == RuTikTok) return "RU TikTok";
             if (profile == EnTikTok) return "EN TikTok";
-            return profile;
+            return profile == En ? "EN YT" : "RU YT";
         }
     }
 }

@@ -13,13 +13,70 @@ namespace VideoBatch {
     public sealed class WarmupVideoJob {
         public string Market = "RU", Prompt = "", BackgroundFile = "", OutputFolder = "";
         public int Count = 1;
-        /// <summary>Связки: один анекдот на один фон (ручной ввод, без OpenRouter).</summary>
+        /// <summary>Ручные тексты и пул фонов; использованные пары сохраняются отдельно по рынкам.</summary>
         public List<string> Jokes;
         public List<string> BackgroundFiles;
         public WarmupSubtitleStyle Subtitles;
-        public string OpenRouterKey = "", ElevenLabsKey = "", OpenRouterModel = "openai/gpt-4o-mini";
+        public string OpenRouterKey = "", ElevenLabsKey = "", OpenRouterModel = "openai/gpt-4o-mini", HttpProxy = "";
 
         internal bool UsesManualBundles => Jokes != null && Jokes.Any(j => !string.IsNullOrWhiteSpace(j));
+    }
+
+    public sealed class WarmupBundleRecord {
+        public string Signature = "", Output = "";
+    }
+    public sealed class WarmupBundleHistoryData {
+        public List<WarmupBundleRecord> Records = new List<WarmupBundleRecord>();
+    }
+    public sealed class WarmupBundlePlan {
+        public string Joke, Background, Signature;
+    }
+    public sealed class WarmupBundleInventory {
+        public int Total, Used;
+        public int Remaining => Total - Used;
+        public List<WarmupBundlePlan> Next = new List<WarmupBundlePlan>();
+    }
+    public static class WarmupBundleHistory {
+        static readonly object gate = new object();
+        static string HistoryPath(string market) => Path.Combine(Store.Root, "warmup-history-" + (market == "EN" ? "en" : "ru") + ".xml");
+        static WarmupBundleHistoryData Load(string market) {
+            string file = HistoryPath(market);
+            if (!File.Exists(file)) return new WarmupBundleHistoryData();
+            using (var stream = File.OpenRead(file)) return (WarmupBundleHistoryData)new System.Xml.Serialization.XmlSerializer(typeof(WarmupBundleHistoryData)).Deserialize(stream);
+        }
+        public static WarmupBundleInventory Inventory(string market, IEnumerable<string> jokes, IEnumerable<string> backgrounds) {
+            lock (gate) {
+                var texts = jokes.Select(j => (j ?? "").Trim()).Where(j => j.Length > 0).Distinct().ToList();
+                var assets = backgrounds.Where(File.Exists).Select(p => new { Path = p, Hash = AssemblyFiles.Hash(p) }).GroupBy(a => a.Hash).Select(g => g.First()).ToList();
+                var used = new HashSet<string>(Load(market).Records.Select(r => r.Signature));
+                var result = new WarmupBundleInventory { Total = texts.Count * assets.Count };
+                var selected = new Dictionary<string, int>();
+                for (int i = 0; i < texts.Count; i++) {
+                    var candidates = assets.Select((a, n) => new { Asset = a, Index = n, Signature = AssemblyFiles.HashText(texts[i] + "|" + a.Hash) }).ToList();
+                    result.Used += candidates.Count(c => used.Contains(c.Signature));
+                    var next = candidates.Where(c => !used.Contains(c.Signature))
+                        .OrderBy(c => selected.ContainsKey(c.Asset.Hash) ? selected[c.Asset.Hash] : 0)
+                        .ThenBy(c => (c.Index - i % Math.Max(1, assets.Count) + assets.Count) % Math.Max(1, assets.Count)).FirstOrDefault();
+                    if (next == null) continue;
+                    result.Next.Add(new WarmupBundlePlan { Joke = texts[i], Background = next.Asset.Path, Signature = next.Signature });
+                    selected[next.Asset.Hash] = (selected.ContainsKey(next.Asset.Hash) ? selected[next.Asset.Hash] : 0) + 1;
+                }
+                return result;
+            }
+        }
+        public static void Complete(string market, WarmupBundlePlan plan, string output) {
+            lock (gate) {
+                var data = Load(market);
+                if (data.Records.Any(r => r.Signature == plan.Signature)) throw new InvalidOperationException("Эта связка уже создана; повтор не записан.");
+                data.Records.Add(new WarmupBundleRecord { Signature = plan.Signature, Output = output });
+                string file = HistoryPath(market), temp = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                Directory.CreateDirectory(Store.Root);
+                try {
+                    using (var stream = File.Create(temp)) new System.Xml.Serialization.XmlSerializer(typeof(WarmupBundleHistoryData)).Serialize(stream, data);
+                    if (File.Exists(file)) File.Replace(temp, file, null); else File.Move(temp, file);
+                } finally { if (File.Exists(temp)) File.Delete(temp); }
+            }
+        }
     }
 
     public static class WarmupVideoEngine {
@@ -37,8 +94,9 @@ namespace VideoBatch {
             Validate(job);
             if (!ToolsLocator.TryResolve(out var ffmpeg, out var ffprobe, out var hint)) throw new Exception(hint);
             try {
-                using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
-                    return await GenerateAsync(job, log, ct, client, ffmpeg, ffprobe).ConfigureAwait(false);
+                using (var router = OutboundHttp.Create(job.HttpProxy, TimeSpan.FromMinutes(2), allowAutoRedirect: true))
+                using (var eleven = OutboundHttp.Create(job.HttpProxy, TimeSpan.FromMinutes(2), allowAutoRedirect: false))
+                    return await GenerateAsync(job, log, ct, router, eleven, ffmpeg, ffprobe).ConfigureAwait(false);
             } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
                 throw new Exception("Сервис генерации не ответил за 2 минуты. Проверьте подключение и повторите позже.");
             }
@@ -52,8 +110,8 @@ namespace VideoBatch {
                 var jokes = job.Jokes.Select(j => (j ?? "").Trim()).Where(j => j.Length > 0).ToList();
                 var backgrounds = (job.BackgroundFiles ?? new List<string>()).Where(p => IsBackground(p) && File.Exists(p)).ToList();
                 if (jokes.Count == 0) throw new Exception("Заполните хотя бы один анекдот в связке.");
-                if (backgrounds.Count != jokes.Count)
-                    throw new Exception("Число фонов (" + backgrounds.Count + ") должно совпадать с числом анекдотов (" + jokes.Count + "). Добавьте или удалите файлы фона.");
+                if (backgrounds.Count == 0) throw new Exception("Добавьте хотя бы один существующий фон.");
+                if (backgrounds.Count != (job.BackgroundFiles ?? new List<string>()).Count) throw new Exception("Один из файлов фона не найден или имеет неподдерживаемый формат.");
                 if (jokes.Count > 100) throw new Exception("Не больше 100 связок за один запуск.");
                 return;
             }
@@ -64,12 +122,18 @@ namespace VideoBatch {
         }
 
         // Injectable HTTP transport for offline integration tests; production always uses official endpoints.
-        internal static async Task<IReadOnlyList<string>> GenerateAsync(WarmupVideoJob job, Action<string> log, CancellationToken ct, HttpClient client, string ffmpeg, string ffprobe) {
+        internal static async Task<IReadOnlyList<string>> GenerateAsync(WarmupVideoJob job, Action<string> log, CancellationToken ct, HttpClient routerClient, HttpClient elevenClient, string ffmpeg, string ffprobe) {
             Validate(job); ct.ThrowIfCancellationRequested(); log = log ?? (_ => { });
             Directory.CreateDirectory(job.OutputFolder);
-            var manualJokes = job.UsesManualBundles ? job.Jokes.Select(j => (j ?? "").Trim()).Where(j => j.Length > 0).ToList() : null;
-            var manualBackgrounds = job.UsesManualBundles ? job.BackgroundFiles.Where(p => IsBackground(p) && File.Exists(p)).ToList() : null;
-            int total = job.UsesManualBundles ? manualJokes.Count : job.Count;
+            var inventory = job.UsesManualBundles ? WarmupBundleHistory.Inventory(job.Market, job.Jokes, job.BackgroundFiles) : null;
+            var plans = inventory?.Next;
+            if (inventory != null) {
+                log("Связки · всего " + inventory.Total + " · использовано " + inventory.Used + " · осталось " + inventory.Remaining);
+                if (plans.Count == 0) throw new InvalidOperationException("Все связки этих анекдотов и фонов уже использованы. Добавьте новые тексты или фоны.");
+            }
+            var manualJokes = plans?.Select(p => p.Joke).ToList();
+            var manualBackgrounds = plans?.Select(p => p.Background).Distinct().ToList();
+            int total = job.UsesManualBundles ? plans.Count : job.Count;
             foreach (var bg in job.UsesManualBundles ? (IEnumerable<string>)manualBackgrounds : new[] { job.BackgroundFile })
                 await Core.Tool(ffmpeg, new[] { "-v", "error", "-i", bg, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-" }, ct, null, 30).ConfigureAwait(false);
             var outputs = new List<string>();
@@ -78,12 +142,12 @@ namespace VideoBatch {
             string partial = null;
             try {
                 log("Получаю доступные голоса ElevenLabs…");
-                var voices = await FetchVoicesAsync(client, job.ElevenLabsKey, ct).ConfigureAwait(false);
+                var voices = await FetchVoicesAsync(elevenClient, job.ElevenLabsKey, ct).ConfigureAwait(false);
                 var rnd = new Random(); var previous = new List<string>();
                 for (int i = 0; i < total; i++) {
                     ct.ThrowIfCancellationRequested();
                     string prefix = "[" + (i + 1) + "/" + total + "] ";
-                    string backgroundFile = job.UsesManualBundles ? manualBackgrounds[i] : job.BackgroundFile;
+                    string backgroundFile = job.UsesManualBundles ? plans[i].Background : job.BackgroundFile;
                     string voice = voices[rnd.Next(voices.Count)], text = "";
                     string mp3 = Path.Combine(work, "speech.mp3"), wav = Path.Combine(work, "speech.wav");
                     double duration = 0; WarmupAlignment alignment = null;
@@ -93,10 +157,10 @@ namespace VideoBatch {
                             log(prefix + (attempt == 0 ? "Озвучиваю ваш текст через ElevenLabs…" : "Повторная озвучка (тот же текст)…"));
                         } else {
                             log(prefix + (attempt == 0 ? "Придумываю короткий анекдот…" : "Сокращаю анекдот целиком, без обрезки речи…"));
-                            text = await FetchTextAsync(client, job, previous, text, duration, ct).ConfigureAwait(false);
+                            text = await FetchTextAsync(routerClient, job, previous, text, duration, ct).ConfigureAwait(false);
                             log(prefix + "Озвучиваю через ElevenLabs…");
                         }
-                        alignment = await SynthesizeAsync(client, job.ElevenLabsKey, voice, text, mp3, job.Subtitles?.Enabled == true, ct).ConfigureAwait(false);
+                        alignment = await SynthesizeAsync(elevenClient, job.ElevenLabsKey, voice, text, mp3, job.Subtitles?.Enabled == true, ct).ConfigureAwait(false);
                         // Decode MP3 delay/padding once. The PCM sample count, not an estimated text length,
                         // drives the video. No silence padding, speed change or speech trimming.
                         await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-i", mp3, "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", wav }, ct, null, 30).ConfigureAwait(false);
@@ -120,6 +184,10 @@ namespace VideoBatch {
                     await VerifyOutputAsync(ffprobe, partial, duration, ct).ConfigureAwait(false);
                     ct.ThrowIfCancellationRequested();
                     File.Move(partial, output); partial = null;
+                    if (job.UsesManualBundles) {
+                        try { WarmupBundleHistory.Complete(job.Market, plans[i], output); }
+                        catch (Exception e) { throw new IOException("Ролик создан: " + output + ", но история связки не сохранена. Остановлено: " + e.Message, e); }
+                    }
                     outputs.Add(output); previous.Add(text);
                     log(prefix + "Готово: " + name);
                 }
@@ -240,8 +308,13 @@ namespace VideoBatch {
         static void CheckHttp(HttpResponseMessage response, string service) {
             if (response.IsSuccessStatusCode) return;
             int code = (int)response.StatusCode;
+            string location = response.Headers.Location?.ToString() ?? "";
+            if (code == 302 || code == 301 || code == 307 || code == 308 || location.IndexOf("22497891312401", StringComparison.OrdinalIgnoreCase) >= 0 || location.IndexOf("restrict", StringComparison.OrdinalIgnoreCase) >= 0)
+                throw new Exception(service + ": доступ с вашего IP закрыт ElevenLabs (санкции/регион). Укажите HTTP(S)-прокси с зарубежным IP в «Настройки → нейросеть и озвучка» или проверьте exit-IP прокси.");
             // Never put provider response bodies, request text or API keys into UI logs.
-            string hint = code == 401 || code == 403 ? "Проверьте API-ключ и права доступа." : code == 402 ? "Проверьте баланс API." : code == 429 ? "Достигнут лимит API. Повторите позже." : "Сервис не выполнил запрос. Повторите позже.";
+            string hint = code == 401 ? "Проверьте API-ключ." : code == 403 && service.StartsWith("ElevenLabs", StringComparison.Ordinal)
+                ? "Часто это блок по региону (не ключ). Укажите HTTP(S)-прокси с зарубежным IP в настройках."
+                : code == 403 ? "Проверьте API-ключ и права доступа." : code == 402 ? "Проверьте баланс API." : code == 429 ? "Достигнут лимит API. Повторите позже." : "Сервис не выполнил запрос. Повторите позже.";
             throw new Exception(service + ": HTTP " + code + ". " + hint);
         }
     }

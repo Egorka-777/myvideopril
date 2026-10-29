@@ -160,6 +160,7 @@ namespace VideoBatch {
                 case "item_accepted":
                 case "item_publishing":
                 case "studio_close":
+                case "studio_checks":
                 case "studio_verify":
                 case "studio_dialog":
                 case "metadata": return TaskQueueStatus.Scheduling;

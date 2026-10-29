@@ -48,7 +48,30 @@ const S=require('../../tools/uploader/youtube-studio-upload');
   await assert.rejects(B.openFile(page,path.join(temp,'selected-ru-false.mp4'),async()=>{touched=true;},()=>{},{readyMs:350}),/Файл не передавался/);
   assert(!touched,'A failure before file selection must not lock the item as submitted');
   await assert.rejects(B.bounded(()=>new Promise(()=>{}),20,'bounded diagnostic'),/bounded diagnostic/);
+  // Completed transfer is not completed checking; only the latter permits Publish.
+  for(const lang of ['ru','en']){
+   await page.setContent('<ytcp-uploads-dialog><ytcp-video-upload-progress></ytcp-video-upload-progress></ytcp-uploads-dialog>');
+   const status=page.locator('ytcp-video-upload-progress');
+   await status.evaluate((e,text)=>e.textContent=text,lang==='ru'?'Проверка: 5 % ... Осталось 5 минут':'Checks running: 5%');
+   let completed=false;const waiting=S.waitChecks(page,{timeout:4000}).then(()=>{completed=true;});
+   await page.waitForTimeout(650);assert(!completed,'Running checks must not permit publication');
+   await status.evaluate((e,text)=>e.textContent=text,lang==='ru'?'Проверка завершена. На контент заявлены права.':'Checks complete. Copyright-protected content found.');
+   await waiting;assert(completed);
+   await status.evaluate(e=>e.textContent='Uploaded: 100%');
+   await assert.rejects(S.waitChecks(page,{timeout:250}),/не подтвердил окончание проверки/);
+  }
+  const {setup}=require('./studio-shorts-queue');
+  const fixture=await setup(browser,'ru',temp,{count:1});
+  let waited=false;
+  const result=await S.runSequential(fixture.page,fixture.pack,{writeDescription:false,waitForChecks:true,titleDelay:1,checksTimeout:5000},{...fixture.host,waitUpload:async p=>{
+   await S.waitUpload(p);
+   await p.locator('ytcp-video-upload-progress').evaluate(e=>{e.textContent='Проверка: 5 %';setTimeout(()=>{window.checksFinished=true;e.textContent='Проверка завершена. На контент заявлены права.';},1000);});
+  },progress:(stage,text,extra)=>{if(stage==='studio_checks')waited=true;fixture.host.progress(stage,text,extra);}});
+  assert.equal(result.length,1);assert(waited);assert(await fixture.page.evaluate(()=>window.checksFinished));
+  assert.equal(fixture.saved.get('video000001').description,'Old default','Studio description must remain untouched');
+  assert(!fixture.stages.some(s=>s.stage==='metadata_description'));
+  await fixture.ctx.close();
   await context.close();
-  console.log('PASS no navigation wait on loading resources, active dialog, no false pending, bounded diagnostics');
+  console.log('PASS no navigation wait on loading resources, active dialog, no false pending, bounded diagnostics; RU/EN checks awaited, copyright completion accepted, transfer alone rejected');
  }finally{await browser.close();fs.rmSync(temp,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

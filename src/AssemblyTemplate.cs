@@ -18,10 +18,24 @@ namespace VideoBatch {
         public string Font = "Arial";
         public double FontSize = 54, Radius = 28, Padding = 24;
     }
+    public class AssemblySpeechSettings {
+        public string Text = "", VoiceId = "", ModelId = "eleven_multilingual_v2";
+        public double Stability = .5, Similarity = .75, Style = 0, Speed = 1;
+        public bool SpeakerBoost = true;
+    }
+    public class AssemblySpeechLine {
+        public string Text = "", AudioPath = "";
+    }
+    public class AssemblyCaption {
+        public string Text = "";
+        public double Start, End;
+    }
     public class AssemblyScene {
         public string Folder = "";
         public string Name = "Сцена", Videos = "", VideoMode = ""; // Empty mode preserves legacy folder fallback.
         public double Duration = 4;
+        public string Music = "";
+        public double MusicVolume = 1;
         public List<AssemblyLayer> Layers = new List<AssemblyLayer>();
         public override string ToString() { return Name + " · " + Duration.ToString("0.##") + " с"; }
     }
@@ -43,12 +57,26 @@ namespace VideoBatch {
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
+        public List<AssemblyLayer> GlobalLayers = new List<AssemblyLayer>();
+        public bool ContinuousVideo = false;
+        public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
+        public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
+        public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
+        public double SplitSoftness = .08, VoiceoverVolume = 1;
+        public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
+        public List<AssemblyCaption> Captions = new List<AssemblyCaption>();
         public double TransitionSeconds { get { return SceneTimingVersion>0?Math.Round(TransitionDuration*Fps,MidpointRounding.AwayFromZero)/Fps:TransitionDuration; } }
         public double Duration { get { return Scenes.Sum(s => s.Duration)+(SceneTimingVersion>0 && Transition!="cut"?Math.Max(0,Scenes.Count-1)*TransitionSeconds:0); } }
         public string Resolve(string path) {
             if (string.IsNullOrWhiteSpace(path)) return "";
             string full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Materials, path));
             return PathUtil.Normalize(full);
+        }
+        public string ResolveAudio(string source) {
+            if (string.IsNullOrWhiteSpace(source)) return "";
+            string path = Resolve(source);
+            if (File.Exists(path)) return path;
+            return AssemblyFiles.Pool(path, AssemblyFiles.MusicExtensions).FirstOrDefault() ?? "";
         }
         public static AssemblyTemplate Defaults() {
             var t = new AssemblyTemplate { PackStudioVersion = 1, ObjectStudioVersion = 1, SceneTimingVersion=1,Transition="random", LoopShortVideos = true, AllowVideoReuse = true, Music = "Музыка" };
@@ -79,6 +107,22 @@ namespace VideoBatch {
             TitleBank = AssemblyOutputTags.NormalizeBank(TitleBank);
             HistoryScope = AssemblyHistoryScope.Normalize(HistoryScope);
             if (!Transitions.Contains(Transition)) throw new Exception("Неизвестный переход.");
+            if (SplitLayout != "none" && SplitLayout != "horizontal" && SplitLayout != "vertical") throw new Exception("Неизвестный шаблон двух видео.");
+            Check(SplitSoftness, 0, .5, "Мягкость границы"); Check(VoiceoverVolume, 0, 2, "Громкость озвучки");
+            if (GlobalLayers == null) GlobalLayers = new List<AssemblyLayer>();
+            if (Captions == null) Captions = new List<AssemblyCaption>();
+            if (SubtitleStyle == null) SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
+            foreach (var caption in Captions) {
+                Check(caption.Start, 0, 86400, "Начало субтитра"); Check(caption.End, 0, 86400, "Конец субтитра");
+                if (caption.End <= caption.Start) throw new Exception("Конец субтитра должен быть позже начала.");
+            }
+            foreach (var l in GlobalLayers.Where(l => l.Enabled)) {
+                if (string.IsNullOrWhiteSpace(l.Source)) throw new Exception("Укажи изображения для слоя на весь ролик.");
+                Check(l.X, 0, 1, "X"); Check(l.Y, 0, 1, "Y"); Check(l.Width, .02, 1, "Ширина"); Check(l.Height, .02, 1, "Высота");
+                if (l.X + l.Width > 1.000001 || l.Y + l.Height > 1.000001) throw new Exception("Изображение выходит за край кадра.");
+                Check(l.Opacity, 0, 1, "Непрозрачность");
+                if (l.Fixed && l.Unique) throw new Exception("Фиксированное изображение не может одновременно быть без повторов.");
+            }
             foreach (var scene in Scenes) {
                 if (scene.VideoMode != "" && scene.VideoMode != "shared" && scene.VideoMode != "own") throw new Exception("Неизвестный источник видео сцены.");
                 if (scene.VideoMode == "own" && string.IsNullOrWhiteSpace(scene.Videos)) throw new Exception("Укажи папку своих видео для сцены.");
@@ -277,12 +321,20 @@ namespace VideoBatch {
         public AssemblyVideo Video;
         public double VideoStart, RenderDuration, IncomingPad, OutgoingPad;
         public string TransitionOut="";
+        public string Music = "", MusicHash = "";
         public List<AssemblyLayerPlan> Layers = new List<AssemblyLayerPlan>();
     }
     public class AssemblyPlan {
         public List<AssemblyScenePlan> Scenes = new List<AssemblyScenePlan>();
         public List<string> UniqueImages = new List<string>();
         public string Signature, Music, MusicHash;
+        public string Voiceover = "";
+        /// <summary>When voiceover is shorter than scene sum, render stops here (no second pass of speech).</summary>
+        public double RenderDuration;
+        public AssemblyVideo SecondaryVideo;
+        public List<AssemblyLayerPlan> GlobalLayers = new List<AssemblyLayerPlan>();
+        public List<WarmupCaption> Captions = new List<WarmupCaption>();
+        public double RollDuration(AssemblyTemplate t) => RenderDuration > 0 ? RenderDuration : t.Duration;
     }
     public class AssemblyPlanBatch {
         public List<AssemblyPlan> Plans = new List<AssemblyPlan>();

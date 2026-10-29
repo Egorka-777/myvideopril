@@ -623,13 +623,25 @@ namespace VideoBatch {
             Add(Labeled("OpenRouter API-ключ", openRouterKey));
             Add(Labeled("Модель OpenRouter (например openai/gpt-4o-mini)", openRouterModel));
             Add(Labeled("ElevenLabs API-ключ", elevenKey));
+            var warmupProxy = Theme.MakeSearchBox(); warmupProxy.Width = 560;
+            var savedProxy = WindowsSupport.Unprotect(settings.ProtectedWarmupHttpProxy);
+            if (!string.IsNullOrWhiteSpace(savedProxy)) warmupProxy.Text = savedProxy;
+            Add(Labeled("HTTP(S)-прокси для OpenRouter и ElevenLabs (не SOCKS Dolphin)", warmupProxy));
+            Add(new Label {
+                Text = "ElevenLabs блокирует IP из РФ и ряда стран. Запросы идут с этого ПК, не через Dolphin. Формат: http://login:pass@host:port",
+                ForeColor = Theme.TextSecondary,
+                AutoSize = true,
+                MaximumSize = new Size(780, 0),
+                Margin = new Padding(0, 0, 0, 6)
+            });
             Add(Theme.MakeButton("Сохранить API", accent: true, action: () => {
                 settings.ProtectedOpenRouterKey = string.IsNullOrWhiteSpace(openRouterKey.Text) ? "" : WindowsSupport.Protect(openRouterKey.Text.Trim());
                 settings.OpenRouterModel = (openRouterModel.Text ?? "").Trim();
                 if (string.IsNullOrWhiteSpace(settings.OpenRouterModel)) settings.OpenRouterModel = "openai/gpt-4o-mini";
                 settings.ProtectedElevenLabsKey = string.IsNullOrWhiteSpace(elevenKey.Text) ? "" : WindowsSupport.Protect(elevenKey.Text.Trim());
+                settings.ProtectedWarmupHttpProxy = string.IsNullOrWhiteSpace(warmupProxy.Text) ? "" : WindowsSupport.Protect(warmupProxy.Text.Trim());
                 save();
-                MessageBox.Show(FindForm(), "Ключи OpenRouter и ElevenLabs сохранены.", "Настройки", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(FindForm(), "Ключи и прокси для прогрева сохранены.", "Настройки", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }));
 
             Add(new Label {

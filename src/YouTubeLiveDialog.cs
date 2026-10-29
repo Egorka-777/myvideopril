@@ -16,7 +16,7 @@ namespace VideoBatch {
         readonly ComboBox privacy = new ComboBox();
         readonly CheckBox kids = new CheckBox();
         readonly ListBox accounts = new ListBox();
-        readonly Button connect = new Button(), launch = new Button();
+        readonly Button connect = new Button(), launch = new Button(), prepareVideo = new Button();
         readonly Label oauth = new Label();
         readonly Label progressLabel=new Label{Dock=DockStyle.Fill,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Theme.TextPrimary};
         bool connecting, launching;
@@ -38,6 +38,9 @@ namespace VideoBatch {
             title.MaxLength = 100; description.Multiline = true; description.MaxLength = 5000; description.ScrollBars = ScrollBars.Vertical;
             title.Text = "Прямой эфир";
             AddRow(fields, "Видеофайл", folder, Button("Выбрать видео", PickFile), 42);
+            prepareVideo.Text = "Подготовить видео"; prepareVideo.Dock = DockStyle.Fill;
+            prepareVideo.Click += async (s, e) => await PrepareVideoFile();
+            AddRow(fields, "Перекодирование", new Label { Text = "Отдельно сохраните готовый файл .ts и .live.xml; затем выберите .ts выше.", AutoSize = true }, prepareVideo, 48);
             AddRow(fields, "Название", title, null, 42);
             AddRow(fields, "Описание", description, null, 74);
             var thumbButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -68,8 +71,32 @@ namespace VideoBatch {
             var cancel = Button("Отмена", () => Close()); cancel.DialogResult = DialogResult.Cancel;
             launch.Text = "Запустить эфир"; launch.Width = 180; launch.Height = 32; launch.Click += async (s, e) => await ValidateLaunch();
             buttons.Controls.Add(cancel); buttons.Controls.Add(launch); root.Controls.Add(buttons, 0, 2); CancelButton = cancel;
-            FormClosing += (s, e) => lifetime.Cancel();
+            LoadDraft();
+            FormClosing += (s, e) => {
+                try { SaveDrafts(); }
+                catch (Exception error) {
+                    e.Cancel = true;
+                    manager.Trace("Не удалось сохранить черновик эфира: " + error.Message);
+                    MessageBox.Show(this, "Не удалось сохранить черновик эфира: " + error.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                lifetime.Cancel();
+            };
             UpdateAccounts();manager.Trace("Открыто окно эфира · "+Text);
+        }
+        void LoadDraft() {
+            var draft = channels.Count == 0 ? null : manager.Store.Draft(channels[0].ChannelId);
+            if (draft == null) return;
+            folder.Text = draft.VideoFile; title.Text = draft.Title; description.Text = draft.Description;
+            thumbnail.Text = draft.Thumbnail; tags.Text = draft.Tags; kids.Checked = draft.MadeForKids;
+            privacy.SelectedIndex = Math.Max(0, Array.IndexOf(new[] { "public", "unlisted", "private" }, draft.Privacy));
+        }
+        void SaveDrafts() {
+            manager.Store.SaveDrafts(channels.Select(channel => new LiveDialogDraft {
+                LocalId = channel.ChannelId, VideoFile = folder.Text, Title = title.Text, Description = description.Text,
+                Thumbnail = thumbnail.Text, Tags = tags.Text,
+                Privacy = new[] { "public", "unlisted", "private" }[privacy.SelectedIndex], MadeForKids = kids.Checked
+            }));
         }
         void ShowProgress(string line) {
             if(IsDisposed)return;
@@ -84,8 +111,43 @@ namespace VideoBatch {
             if (action != null) { action.Margin = new Padding(4, 6, 0, 6); panel.Controls.Add(action, 2, row); }
         }
         void PickFile() {
-            using (var dialog = new OpenFileDialog { Title = "Видео для бесконечного эфира", Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi", CheckFileExists = true, Multiselect = false })
+            using (var dialog = new OpenFileDialog { Title = "Видео для бесконечного эфира", Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi;*.ts", CheckFileExists = true, Multiselect = false })
                 if (dialog.ShowDialog(this) == DialogResult.OK) folder.Text = dialog.FileName;
+        }
+        async Task PrepareVideoFile() {
+            if (launching || connecting) return;
+            string source, destination;
+            using (var input = new OpenFileDialog { Title = "Исходное видео для подготовки", Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi", CheckFileExists = true }) {
+                if (input.ShowDialog(this) != DialogResult.OK) return;
+                source = input.FileName;
+            }
+            using (var output = new SaveFileDialog { Title = "Сохранить готовое видео для эфира", Filter = "Готовое видео эфира|*.ts", FileName = Path.GetFileNameWithoutExtension(source) + ".live.ts" }) {
+                if (output.ShowDialog(this) != DialogResult.OK) return;
+                destination = output.FileName;
+            }
+            launching = true; launch.Enabled = connect.Enabled = prepareVideo.Enabled = false;
+            preparationProgress.Visible = true; preparationProgress.Value = 0;
+            try {
+                string ffmpeg, ffprobe, hint;
+                if (!ToolsLocator.TryResolve(out ffmpeg, out ffprobe, out hint)) throw new InvalidOperationException(hint);
+                var progress = new Progress<double>(value => {
+                    if (!IsDisposed && !lifetime.IsCancellationRequested) {
+                        preparationProgress.Value = Math.Max(0, Math.Min(100, (int)value));
+                        progressLabel.Text = "Подготовка файла · " + preparationProgress.Value + "%";
+                    }
+                });
+                await YouTubeLiveMedia.PrepareFile(source, destination, ffmpeg, ffprobe, manager.Trace, lifetime.Token, progress);
+                if (IsDisposed || lifetime.IsCancellationRequested) return;
+                folder.Text = destination;
+                manager.Trace("Готовое видео сохранено: " + destination + " · храните рядом файл .live.xml");
+                MessageBox.Show(this, "Готово: " + destination + "\nФайл .live.xml должен оставаться рядом. Запуск эфира не будет перекодировать это видео повторно.", "Подготовка видео");
+            } catch (Exception error) {
+                manager.Trace(lifetime.IsCancellationRequested ? "Подготовка файла отменена." : "Ошибка подготовки файла: " + error.Message);
+                if (!IsDisposed && !lifetime.IsCancellationRequested) MessageBox.Show(this, error.Message, "Подготовка видео", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            } finally {
+                launching = false;
+                if (!IsDisposed) { launch.Enabled = connect.Enabled = prepareVideo.Enabled = true; preparationProgress.Visible = false; }
+            }
         }
         void PickThumbnail() {
             using (var dialog = new OpenFileDialog { Filter = "Превью JPG/PNG|*.jpg;*.jpeg;*.png" })
@@ -126,9 +188,7 @@ namespace VideoBatch {
         }
         async Task ValidateLaunch() {
             if (launching) return;
-            launching = true; launch.Enabled = connect.Enabled = false;
-            if (launching) return;
-            launching = true; launch.Enabled = connect.Enabled = false;
+            launching = true; launch.Enabled = connect.Enabled = prepareVideo.Enabled = false;
             manager.Trace("Нажат запуск: проверяю видеофайл, превью и параметры");
             try {
                 Options = new LiveOptions { VideoFile = folder.Text, Title = title.Text, Description = description.Text, Thumbnail = thumbnail.Text,
@@ -160,7 +220,7 @@ namespace VideoBatch {
                 if(!IsDisposed && !lifetime.IsCancellationRequested)MessageBox.Show(this, e.Message, "Прямой эфир", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             } finally {
                 launching = false;
-                if (!IsDisposed) { launch.Enabled = connect.Enabled = true; preparationProgress.Visible = false; }
+                if (!IsDisposed) { launch.Enabled = connect.Enabled = prepareVideo.Enabled = true; preparationProgress.Visible = false; }
             }
         }
         protected override void Dispose(bool disposing) { if (disposing) {manager.LogLine-=ShowProgress;lifetime.Cancel();if(prepared!=null){prepared.Dispose();prepared=null;}} base.Dispose(disposing); }

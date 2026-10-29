@@ -253,10 +253,20 @@ function retryableDolphinStartError(error) {
   return /initConnectionError/i.test(String(error && error.message || error || ""));
 }
 
+const { loginWithToken } = require("./dolphin-local-auth");
+
 async function startOrConnectProfile() {
   send("dolphin", "Проверяю локальный API Dolphin…", { percent: 2 });
-  await dolphinApi("/v1.0/auth/login-with-token", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
+  await loginWithToken(job, async (path, options, timeoutMs) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`http://127.0.0.1:${job.localPort}${path}`, Object.assign({}, options, { signal: controller.signal }));
+      const text = await response.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
+      return { ok: response.ok, status: response.status, data };
+    } finally { clearTimeout(timer); }
   });
   return require("./dolphin-session").startOrAttach(job,
     path.join(path.dirname(path.dirname(jobPath)), "dolphin-sessions"),

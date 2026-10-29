@@ -123,7 +123,7 @@ namespace VideoBatch {
                         Directory.CreateDirectory(output);
                         foreach(var tab in new[]{0,1,2}) {
                             panel.SelectTab(tab);System.Windows.Forms.Application.DoEvents();
-                            if(tab==2){foreach(System.Windows.Forms.Control c in Descendants(panel))if(c.Name=="InviteLink")c.Text="https://t.me/+local_fixture";}
+                            if(tab==2){foreach(System.Windows.Forms.Control c in Descendants(panel)){if(c.Name=="InviteRecipients")c.Text="@user_one\n@user_two\n123456789";if(c.Name=="InviteLink"){c.Visible=true;c.Text="https://t.me/+local_fixture";}}}
                             using(var bitmap=new System.Drawing.Bitmap(panel.ClientSize.Width,panel.ClientSize.Height)){panel.DrawToBitmap(bitmap,panel.ClientRectangle);bitmap.Save(Path.Combine(output,tab==0?"telegram-accounts.png":tab==1?"telegram-proxies.png":"telegram-invites.png"));}
                         }
                         using(var wizard=new TelegramImportDialog(store,new[]{@"C:\Downloads\700001.json"})){

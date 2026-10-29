@@ -7,6 +7,19 @@ namespace VideoBatch {
     public class AssemblyMarketSettings {
         public bool Configured;
         public bool WorkspaceConfigured;
+        public bool EditorSettingsConfigured;
+        public int Fps = 30;
+        public double MusicVolume = .8, TransitionDuration = .35;
+        public string Transition = "fade", RenderMode = "auto";
+        public bool RandomVideoStart, LoopShortVideos, AllowVideoReuse;
+        public List<AssemblyLayer> GlobalLayers = new List<AssemblyLayer>();
+        public bool ContinuousVideo;
+        public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
+        public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
+        public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
+        public double SplitSoftness = .08, VoiceoverVolume = 1;
+        public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
+        public List<AssemblyCaption> Captions = new List<AssemblyCaption>();
         public List<string> TitleBank = new List<string>();
         public string Output = "";
         public int Count = 10;
@@ -42,32 +55,9 @@ namespace VideoBatch {
             return t.MarketRu ?? (t.MarketRu = new AssemblyMarketSettings());
         }
 
-        /// <summary>When a scene gains objects in one profile, copy missing layers to sibling profiles (same scene folder).</summary>
-        static void PropagateSceneLayers(AssemblyTemplate t, string sourceProfile) {
-            var source = Slice(t, sourceProfile);
-            if (source.Scenes == null || source.Scenes.Count == 0) return;
-            foreach (string profile in AssemblyProfile.All) {
-                if (profile == sourceProfile) continue;
-                var slice = Slice(t, profile);
-                if (!slice.WorkspaceConfigured || slice.Scenes == null || slice.Scenes.Count == 0) continue;
-                foreach (var srcScene in source.Scenes) {
-                    if (string.IsNullOrWhiteSpace(srcScene.Folder)) continue;
-                    var dst = slice.Scenes.FirstOrDefault(s => string.Equals(s.Folder, srcScene.Folder, StringComparison.OrdinalIgnoreCase));
-                    if (dst == null) continue;
-                    for (int li = dst.Layers.Count; li < srcScene.Layers.Count; li++)
-                        dst.Layers.Add(CloneLayer(srcScene.Layers[li]));
-                }
-            }
-        }
-
+        // Retained for existing callers: only initial migration may seed sibling workspaces.
         public static void SyncMissingLayersFromPrimary(AssemblyTemplate t) {
-            if (t == null) return;
-            // EnsureSeeded calls us after seeding (and on every subsequent use).
-            // Calling it again for a seeded template recurses until process termination.
-            if (!t.AssemblyMarketsSeeded) { EnsureSeeded(t); return; }
-            var primary = t.MarketRu;
-            if (primary == null || !primary.WorkspaceConfigured || primary.Scenes == null) return;
-            PropagateSceneLayers(t, AssemblyProfile.Ru);
+            if (t != null && !t.AssemblyMarketsSeeded) EnsureSeeded(t);
         }
 
         static AssemblyOutputMetadata CloneMetadata(AssemblyOutputMetadata source) {
@@ -116,7 +106,9 @@ namespace VideoBatch {
                 Videos = s.Videos,
                 VideoMode = s.VideoMode,
                 Duration = s.Duration,
-                Layers = s.Layers == null ? new List<AssemblyLayer>() : s.Layers.Select(CloneLayer).ToList()
+                Music = s.Music,
+                MusicVolume = s.MusicVolume,
+                Layers = CloneLayers(s.Layers)
             };
         }
 
@@ -125,15 +117,85 @@ namespace VideoBatch {
             return scenes.Select(CloneScene).ToList();
         }
 
+        static List<AssemblyLayer> CloneLayers(List<AssemblyLayer> layers) {
+            return layers == null ? new List<AssemblyLayer>() : layers.Select(CloneLayer).ToList();
+        }
+
+        static List<AssemblyCaption> CloneCaptions(List<AssemblyCaption> captions) {
+            return captions == null ? new List<AssemblyCaption>() : captions.Select(c => new AssemblyCaption {
+                Text = c.Text, Start = c.Start, End = c.End
+            }).ToList();
+        }
+
+        static AssemblySpeechSettings CloneSpeech(AssemblySpeechSettings speech) {
+            if (speech == null) return new AssemblySpeechSettings();
+            return new AssemblySpeechSettings {
+                Text = speech.Text, VoiceId = speech.VoiceId, ModelId = speech.ModelId,
+                Stability = speech.Stability, Similarity = speech.Similarity, Style = speech.Style,
+                Speed = speech.Speed, SpeakerBoost = speech.SpeakerBoost
+            };
+        }
+
+        static List<AssemblySpeechLine> CloneSpeechLines(List<AssemblySpeechLine> lines) {
+            return lines == null ? new List<AssemblySpeechLine>() : lines.Select(l => new AssemblySpeechLine { Text = l.Text ?? "", AudioPath = l.AudioPath ?? "" }).ToList();
+        }
+
+        static void CaptureEditorSettings(AssemblyTemplate t, AssemblyMarketSettings slice) {
+            slice.Fps = t.Fps;
+            slice.MusicVolume = t.MusicVolume;
+            slice.Transition = t.Transition;
+            slice.TransitionDuration = t.TransitionDuration;
+            slice.RenderMode = t.RenderMode;
+            slice.RandomVideoStart = t.RandomVideoStart;
+            slice.LoopShortVideos = t.LoopShortVideos;
+            slice.AllowVideoReuse = t.AllowVideoReuse;
+            slice.GlobalLayers = CloneLayers(t.GlobalLayers);
+            slice.ContinuousVideo = t.ContinuousVideo;
+            slice.Speech = CloneSpeech(t.Speech);
+            slice.SpeechLines = CloneSpeechLines(t.SpeechLines);
+            slice.SecondaryVideos = t.SecondaryVideos;
+            slice.SplitLayout = t.SplitLayout;
+            slice.SplitSoftness = t.SplitSoftness;
+            slice.Voiceover = t.Voiceover;
+            slice.VoiceoverVolume = t.VoiceoverVolume;
+            slice.SubtitleStyle = t.SubtitleStyle == null ? new WarmupSubtitleStyle { Enabled = false } : t.SubtitleStyle.Copy();
+            slice.Captions = CloneCaptions(t.Captions);
+            slice.EditorSettingsConfigured = true;
+        }
+
+        static void ApplyEditorSettings(AssemblyTemplate t, AssemblyMarketSettings slice) {
+            // Old XML slices did not contain these settings: preserve the active editor on first use.
+            if (!slice.EditorSettingsConfigured) CaptureEditorSettings(t, slice);
+            t.Fps = slice.Fps;
+            t.MusicVolume = slice.MusicVolume;
+            t.Transition = slice.Transition;
+            t.TransitionDuration = slice.TransitionDuration;
+            t.RenderMode = slice.RenderMode;
+            t.RandomVideoStart = slice.RandomVideoStart;
+            t.LoopShortVideos = slice.LoopShortVideos;
+            t.AllowVideoReuse = slice.AllowVideoReuse;
+            t.GlobalLayers = CloneLayers(slice.GlobalLayers);
+            t.ContinuousVideo = slice.ContinuousVideo;
+            t.Speech = CloneSpeech(slice.Speech);
+            t.SpeechLines = CloneSpeechLines(slice.SpeechLines);
+            t.SecondaryVideos = slice.SecondaryVideos;
+            t.SplitLayout = slice.SplitLayout;
+            t.SplitSoftness = slice.SplitSoftness;
+            t.Voiceover = slice.Voiceover;
+            t.VoiceoverVolume = slice.VoiceoverVolume;
+            t.SubtitleStyle = slice.SubtitleStyle == null ? new WarmupSubtitleStyle { Enabled = false } : slice.SubtitleStyle.Copy();
+            t.Captions = CloneCaptions(slice.Captions);
+        }
+
         static void CaptureWorkspace(AssemblyTemplate t, AssemblyMarketSettings slice) {
             slice.Videos = t.Videos ?? "";
             slice.Music = t.Music ?? "";
             slice.Scenes = CloneScenes(t.Scenes);
-            slice.WorkspaceConfigured = slice.Scenes.Count > 0;
+            slice.WorkspaceConfigured = true;
         }
 
         static void ApplyWorkspace(AssemblyTemplate t, AssemblyMarketSettings slice) {
-            if (!slice.WorkspaceConfigured || slice.Scenes == null || slice.Scenes.Count == 0) return;
+            if (!slice.WorkspaceConfigured) CaptureWorkspace(t, slice);
             t.Videos = slice.Videos ?? "";
             t.Music = slice.Music ?? "";
             t.Scenes = CloneScenes(slice.Scenes);
@@ -144,7 +206,7 @@ namespace VideoBatch {
             target.Videos = source.Videos ?? "";
             target.Music = source.Music ?? "";
             target.Scenes = CloneScenes(source.Scenes);
-            target.WorkspaceConfigured = target.Scenes.Count > 0;
+            target.WorkspaceConfigured = true;
         }
 
         static bool SnapshotMatchesMarket(AssemblyTemplate snap, string scope) {
@@ -211,17 +273,23 @@ namespace VideoBatch {
             if (t.MarketRuTikTok == null) t.MarketRuTikTok = new AssemblyMarketSettings();
             if (t.MarketEnTikTok == null) t.MarketEnTikTok = new AssemblyMarketSettings();
             if (t.AssemblyMarketsSeeded) {
-                SyncMissingLayersFromPrimary(t);
+                foreach (string profile in AssemblyProfile.All) {
+                    var slice = Slice(t, profile);
+                    if (!slice.EditorSettingsConfigured) CaptureEditorSettings(t, slice);
+                }
                 return;
             }
-            Capture(t, AssemblyProfile.Ru);
-            t.MarketEn.TitleBank = t.MarketRu.TitleBank.ToList();
-            t.MarketEn.Count = t.MarketRu.Count;
-            t.MarketEn.OutputMetadata = CloneMetadata(t.MarketRu.OutputMetadata);
-            t.MarketEn.FormatWidth = t.MarketRu.FormatWidth;
-            t.MarketEn.FormatHeight = t.MarketRu.FormatHeight;
-            t.MarketEn.Output = DefaultOutput(AssemblyProfile.En);
-            t.MarketEn.Configured = t.MarketRu.Configured;
+            if (!t.MarketRu.Configured) Capture(t, AssemblyProfile.Ru);
+            if (!t.MarketEn.Configured) {
+                t.MarketEn.TitleBank = t.MarketRu.TitleBank.ToList();
+                t.MarketEn.Count = t.MarketRu.Count;
+                t.MarketEn.OutputMetadata = CloneMetadata(t.MarketRu.OutputMetadata);
+                t.MarketEn.FormatWidth = t.MarketRu.FormatWidth;
+                t.MarketEn.FormatHeight = t.MarketRu.FormatHeight;
+                t.MarketEn.Output = DefaultOutput(AssemblyProfile.En);
+                if (!t.MarketEn.WorkspaceConfigured) ImportWorkspaceFromSettings(t.MarketEn, t.MarketRu);
+                t.MarketEn.Configured = true;
+            }
             if (string.Equals(t.HistoryScope, AssemblyHistoryScope.En, StringComparison.OrdinalIgnoreCase)) {
                 Capture(t, AssemblyProfile.En);
             }
@@ -229,8 +297,11 @@ namespace VideoBatch {
             SeedChannelProfile(t, AssemblyProfile.EnInst, AssemblyProfile.En);
             SeedChannelProfile(t, AssemblyProfile.RuTikTok, AssemblyProfile.Ru);
             SeedChannelProfile(t, AssemblyProfile.EnTikTok, AssemblyProfile.En);
+            foreach (string profile in AssemblyProfile.All) {
+                var slice = Slice(t, profile);
+                if (!slice.EditorSettingsConfigured) CaptureEditorSettings(t, slice);
+            }
             t.AssemblyMarketsSeeded = true;
-            SyncMissingLayersFromPrimary(t);
         }
 
         static void SeedChannelProfile(AssemblyTemplate t, string channel, string main) {
@@ -258,7 +329,7 @@ namespace VideoBatch {
             slice.FormatHeight = t.Height;
             slice.OutputMetadata = CloneMetadata(t.OutputMetadata);
             CaptureWorkspace(t, slice);
-            PropagateSceneLayers(t, profile);
+            CaptureEditorSettings(t, slice);
             slice.Configured = true;
         }
 
@@ -293,6 +364,7 @@ namespace VideoBatch {
             }
             t.OutputMetadata = CloneMetadata(slice.OutputMetadata);
             ApplyWorkspace(t, slice);
+            ApplyEditorSettings(t, slice);
         }
     }
 }

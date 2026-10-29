@@ -54,6 +54,13 @@ async function visible(locator) {
   for (const item of await locator.all()) if (await item.isVisible()) return item;
   return null;
 }
+async function createButton(page) {
+  // Prefer the actionable button, not its decorative #create-icon child.
+  // An old/disabled icon must not mask the enabled Create control.
+  for(const locator of [page.getByRole('button',{name:/^(Create|Создать)$/i}),page.locator('#create-icon')])
+    for(const button of await locator.all())if(await button.isVisible()&&await controlEnabled(button))return button;
+  return null;
+}
 async function anyVisible(locator) {
   for (const item of await locator.all()) if (await item.isVisible()) return true;
   return false;
@@ -225,8 +232,8 @@ async function openStudio(page, channelUrl, report, {preserveCompleted=false}={}
       if(expected&&/studio\.youtube\.com\/channel\/UC/.test(current)&&!current.includes('/channel/'+expected))
         throw new Error('Studio открыл другой канал. Файл не передавался.');
       if(await isPostPublishScreen(page))return {completed:true};
-      const button=await visible(page.locator('#create-icon').or(page.getByRole('button',{name:/^(Create|Создать)$/i})));
-      return button&&await controlEnabled(button)?{button}:null;
+      const button=await createButton(page);
+      return button?{button}:null;
     },90000,'Studio не показал доступную кнопку «Создать» за 90 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
     if(!ready.completed)break;
     await dismissPublishDialog(page,report);
@@ -337,8 +344,8 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
   let input = await ensureUploadPicker(page, channelUrl);
   if (!input) {
     const create=await waitFor(async()=>{
-      const button=await visible(page.locator('#create-icon').or(page.getByRole('button',{name:/^(Create|Создать)$/i})));
-      return button&&await controlEnabled(button)?button:null;
+      const button=await createButton(page);
+      return button;
     },readyMs,'Studio не показал доступную кнопку «Создать». Предыдущий мастер должен закрыться; Файл не передавался.');
     await create.click({ timeout: 8000 });
     const upload = await waitFor(() => visible(page.getByRole('menuitem', { name: /^(Upload videos?|Загрузить видео|Добавить видео)$/i })
@@ -351,4 +358,4 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
   await transferFile(page, input, file, report, { forceCdp, beforeTransfer:beforeSelection });
   report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
-module.exports = { assertRuntimePackage,uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };
+module.exports = { assertRuntimePackage,createButton,uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };

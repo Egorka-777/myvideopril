@@ -37,7 +37,11 @@ function inspectEditors(nodes){
 }
 function typingPolicy(text,{name='текста',delay=45,activationMs=12000,verifyMs=5000}={}){
  const description=name==='описания',chars=Array.from(String(text||'')).length;
- const chunkSize=description?40:80,typeDelay=description?Math.max(delay,20):delay;
+ if(description){
+  const attemptMs=activationMs+16000+verifyMs+chars*(Math.max(0,delay)+30);
+  return {chunkSize:1,typeDelay:delay,chunkVerify:0,finalVerify:verifyMs,maxAttempts:1,activationMs,attemptMs,totalMs:attemptMs};
+ }
+ const chunkSize=80,typeDelay=delay;
  const chunkVerify=description?Math.max(verifyMs,35000):verifyMs,finalVerify=description?Math.max(verifyMs,45000):verifyMs;
  const maxAttempts=description?3:2;
  // One total deadline per attempt bounds repeated 35-second polls. This also
@@ -101,6 +105,31 @@ module.exports=function({until,norm,read,typingBudget}){
   }
  }
  async function typeText(box,text,{delay=45,onProgress=()=>{},onState=()=>{},scope=null,name='текста',activationMs=12000,verifyMs=5000,signal}={}){
+  if(name==='описания'){
+   check(signal);
+   await activateEditor(box,{timeoutMs:activationMs,name,onState,signal});
+   await box.press('Control+A',{timeout:3000});
+   await box.press('Delete',{timeout:3000});
+   // Keep combining marks, variation selectors and joined emoji in one input
+   // event: splitting them can break Studio's social-suggestions selection.
+   const segments=new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(String(text??'').replace(/\r\n?/g,'\n'));
+   for(const {segment:char} of segments){
+    check(signal);
+    if(char==='\n')await box.press('Shift+Enter',{timeout:3000});
+    else await box.page().keyboard.insertText(char);
+    if(delay>0)await new Promise(resolve=>setTimeout(resolve,delay));
+   }
+   check(signal);
+   await box.press('Tab',{timeout:3000});
+   // A completed input loop is not proof that Studio accepted the text.
+   try{await waitTyped(box,text,{timeoutMs:verifyMs,name,signal});}
+   catch(error){
+    error.editorDiagnostic={field:name,comparison:error.editorMismatch||null};
+    onState('verification_failed','Точный текст описания не подтверждён.',error.editorDiagnostic);
+    throw error;
+   }
+   return;
+  }
   text=norm(text);const chars=Array.from(text),policy=typingPolicy(text,{name,delay,activationMs,verifyMs});
   let resume='';
   for(let attempt=0;attempt<policy.maxAttempts;attempt++){
@@ -153,5 +182,6 @@ module.exports=function({until,norm,read,typingBudget}){
  }
  return {editorState,activateEditor,typeText,inspectEditors};
 };
+module.exports.mismatch=mismatch;
 module.exports.typingPolicy=typingPolicy;
 module.exports.typingTotalBudget=(text,options)=>typingPolicy(text,options).totalMs;

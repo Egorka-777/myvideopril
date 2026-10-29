@@ -6,11 +6,16 @@ namespace VideoBatch {
     public sealed class WarmupPreviewControl : Control {
         string overlay = "none";
         Image background, subtitle;
+        bool dragSubtitles;
+
+        public bool SubtitleDragEnabled { get; set; }
+        public event Action<int> SubtitlePositionChanged;
 
         public WarmupPreviewControl() {
             DoubleBuffered = true;
             BackColor = Theme.Background;
             MinimumSize = new Size(200, 320);
+            Cursor = Cursors.Default;
         }
 
         public void SetOverlay(string mode) {
@@ -26,17 +31,53 @@ namespace VideoBatch {
 
         public void SetSubtitles(WarmupSubtitleStyle style, string text) {
             subtitle?.Dispose(); subtitle = style != null && style.Enabled ? WarmupSubtitles.Paint(text, style) : null;
+            Cursor = SubtitleDragEnabled && subtitle != null ? Cursors.SizeNS : Cursors.Default;
             Invalidate();
+        }
+
+        RectangleF FrameRect {
+            get {
+                float pad = 12;
+                float w = Width - pad * 2;
+                float h = Height - pad * 2;
+                float scale = Math.Min(w / 1080f, h / 1920f);
+                return new RectangleF(pad + (w - 1080 * scale) / 2, pad + (h - 1920 * scale) / 2, 1080 * scale, 1920 * scale);
+            }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e) {
+            base.OnMouseDown(e);
+            if (!SubtitleDragEnabled || subtitle == null || e.Button != MouseButtons.Left) return;
+            var frame = FrameRect;
+            if (!frame.Contains(e.Location)) return;
+            dragSubtitles = true;
+            Capture = true;
+            ApplyDrag(e.Location, frame);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e) {
+            base.OnMouseMove(e);
+            if (!dragSubtitles) return;
+            ApplyDrag(e.Location, FrameRect);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e) {
+            base.OnMouseUp(e);
+            if (!dragSubtitles) return;
+            dragSubtitles = false;
+            Capture = false;
+        }
+
+        void ApplyDrag(Point screen, RectangleF frame) {
+            float localY = (screen.Y - frame.Y) / Math.Max(1f, frame.Height);
+            int pos = (int)Math.Round(Math.Max(10, Math.Min(90, localY * 100f)));
+            SubtitlePositionChanged?.Invoke(pos);
         }
 
         protected override void OnPaint(PaintEventArgs e) {
             base.OnPaint(e);
             e.Graphics.Clear(Theme.Background);
-            float pad = 12;
-            float w = Width - pad * 2;
-            float h = Height - pad * 2;
-            float scale = Math.Min(w / 1080f, h / 1920f);
-            var frame = new RectangleF(pad + (w - 1080 * scale) / 2, pad + (h - 1920 * scale) / 2, 1080 * scale, 1920 * scale);
+            var frame = FrameRect;
             e.Graphics.FillRectangle(Brushes.Black, frame);
             if (background != null) {
                 float cropScale = Math.Max(frame.Width / background.Width, frame.Height / background.Height);
@@ -50,6 +91,10 @@ namespace VideoBatch {
             if (overlay == "tiktok") DrawTikTokChrome(e.Graphics, frame);
             else if (overlay == "shorts") DrawShortsChrome(e.Graphics, frame);
             using (var pen = new Pen(Theme.Accent, 2)) e.Graphics.DrawRectangle(pen, frame.X, frame.Y, frame.Width, frame.Height);
+            if (SubtitleDragEnabled && subtitle != null)
+                using (var hint = new Font("Segoe UI", Math.Max(7f, frame.Width * .022f)))
+                using (var brush = new SolidBrush(Color.FromArgb(180, 255, 255, 255)))
+                    e.Graphics.DrawString("Тяните субтитры", hint, brush, frame.X + 6, frame.Y + 6);
         }
 
         static void DrawTikTokChrome(Graphics g, RectangleF f) {

@@ -162,10 +162,10 @@ async function stopProfile() {
   profileStarted = false;
 }
 
+const { loginWithToken } = require("./dolphin-local-auth");
+
 async function startOrConnectProfile() {
-  await api("/v1.0/auth/login-with-token", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
-  });
+  await loginWithToken(job, apiRaw);
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
     { onAttached: () => { profileOwned = false; } }

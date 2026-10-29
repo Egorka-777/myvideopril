@@ -9,7 +9,8 @@ namespace VideoBatch {
     public sealed class YouTubeWarmupPanel : UserControl {
         readonly Preferences settings;
         readonly YouTubeBackend backend;
-        readonly NumericUpDown minMinutes, maxMinutes, minWatchSec, maxWatchSec, likePercent;
+        readonly NumericUpDown likePercent;
+        readonly TextBox keywords;
         readonly Panel numHost;
         readonly DataGridView grid;
         readonly RichTextBox log;
@@ -26,10 +27,6 @@ namespace VideoBatch {
 
             numHost = new Panel { Visible = false, Size = new Size(0, 0) };
             Controls.Add(numHost);
-            minMinutes = HiddenNum(settings.YouTubeWarmupMinMinutes, 1, 120);
-            maxMinutes = HiddenNum(settings.YouTubeWarmupMaxMinutes, 1, 120);
-            minWatchSec = HiddenNum(settings.YouTubeWarmupWatchMinSec, 1, 40);
-            maxWatchSec = HiddenNum(settings.YouTubeWarmupWatchMaxSec, 1, 40);
             likePercent = HiddenNum(settings.YouTubeWarmupLikePercent, 0, 100);
             likesOn = settings.YouTubeWarmupLikesEnabled;
 
@@ -62,12 +59,18 @@ namespace VideoBatch {
                 int w = Math.Max(220, sliders.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 8);
                 foreach (Control child in sliders.Controls) child.Width = w;
             };
-            sliders.Controls.Add(new AssemblyRangeSlider("Длительность сессии", minMinutes, maxMinutes, "мин") { Width = 340 });
-            sliders.Controls.Add(new AssemblyRangeSlider("Просмотр одного ролика (диапазон)", minWatchSec, maxWatchSec, "сек") { Width = 340 });
             sliders.Controls.Add(new Label {
-                Text = "Внутри сессии ~80% роликов листаются за 1–10 сек., ~20% — дольше (до 40 сек., иногда до конца). Реклама пролистывается без остановки.",
-                ForeColor = Theme.TextMuted, AutoSize = false, Width = 340, MaximumSize = new Size(340, 0), Margin = new Padding(0, 0, 0, 10)
+                Text = "10 минут на аккаунт: поиск по ключам, обычные видео и Shorts. На запрос 2–5 разных роликов; просмотр от 5 секунд, иногда до конца или с перемоткой.",
+                ForeColor = Theme.TextMuted, AutoSize = false, Width = 340, Height = 84, Margin = new Padding(0, 0, 0, 10)
             });
+            sliders.Controls.Add(new Label { Text = "Ключевые фразы — по одной на строку", AutoSize = true, ForeColor = Theme.TextPrimary });
+            keywords = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true, Width = 340, Height = 190,
+                Text = (settings.YouTubeWarmupKeywords ?? "").Replace("\r\n", "\n").Replace("\n", Environment.NewLine), BackColor = Theme.Background, ForeColor = Theme.TextPrimary };
+            sliders.Controls.Add(keywords);
+            keywords.TextChanged += (s, e) => {
+                settings.YouTubeWarmupKeywords = NormalizeKeywords(keywords.Text);
+                try { Store.Save(settings); } catch (Exception error) { AppendLog("Не удалось сохранить ключевые фразы: " + error.Message); }
+            };
 
             var likeWrap = new Panel { Width = 340, Height = 132, BackColor = Theme.Card, Margin = new Padding(0, 4, 0, 8) };
             likeWrap.Controls.Add(new Label { Text = "Лайки", ForeColor = Theme.TextPrimary, Location = new Point(12, 8), AutoSize = true });
@@ -227,15 +230,13 @@ namespace VideoBatch {
             else log.AppendText(line + Environment.NewLine);
         }
 
+        public static string NormalizeKeywords(string text) {
+            return string.Join("\n", (text ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim()).Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase));
+        }
         void SavePrefs() {
-            settings.YouTubeWarmupMinMinutes = (int)minMinutes.Value;
-            settings.YouTubeWarmupMaxMinutes = (int)maxMinutes.Value;
-            if (settings.YouTubeWarmupMaxMinutes < settings.YouTubeWarmupMinMinutes)
-                maxMinutes.Value = settings.YouTubeWarmupMaxMinutes = settings.YouTubeWarmupMinMinutes;
-            settings.YouTubeWarmupWatchMinSec = (int)minWatchSec.Value;
-            settings.YouTubeWarmupWatchMaxSec = (int)maxWatchSec.Value;
-            if (settings.YouTubeWarmupWatchMaxSec < settings.YouTubeWarmupWatchMinSec)
-                maxWatchSec.Value = settings.YouTubeWarmupWatchMaxSec = settings.YouTubeWarmupWatchMinSec;
+            settings.YouTubeWarmupMinMinutes = settings.YouTubeWarmupMaxMinutes = 10;
+            settings.YouTubeWarmupKeywords = NormalizeKeywords(keywords.Text);
             settings.YouTubeWarmupLikesEnabled = likesOn;
             settings.YouTubeWarmupLikePercent = (int)likePercent.Value;
             PersistChecks();
@@ -244,6 +245,10 @@ namespace VideoBatch {
 
         async Task RunWarmup() {
             SavePrefs();
+            if (string.IsNullOrWhiteSpace(settings.YouTubeWarmupKeywords)) {
+                MessageBox.Show(this, "Добавьте хотя бы одну ключевую фразу.", "Автопрогрев", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             var list = SelectedChannels();
             if (list.Count == 0) {
                 MessageBox.Show(this, "Отметьте галочкой хотя бы один аккаунт в списке " + marketView + ".", "Автопрогрев", MessageBoxButtons.OK, MessageBoxIcon.Information);

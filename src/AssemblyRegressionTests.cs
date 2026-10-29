@@ -55,6 +55,33 @@ namespace VideoBatch {
                 using (var b = AssemblyRaster.Create(t, new AssemblyLayerPlan { Layer = layer, Asset = new AssemblyAsset { Path = text } })) {
                     if (b.GetPixel(0, 0).A != 0 || b.GetPixel(36, 128).A != 0 || b.GetPixel(50, 150).A < 200) return false;
                 }
+                // Every source aspect must fit inside the configured object box, not cover and overflow it.
+                var fitLayer = new AssemblyLayer { X = .1, Y = .2, Width = .8, Height = .3, Opacity = .6 };
+                var sizes = new[] { new Size(160,40), new Size(40,160), new Size(80,80) };
+                var expected = new[] { new RectangleF(36,188,288,72), new RectangleF(156,128,48,192), new RectangleF(84,128,192,192) };
+                for (int i = 0; i < sizes.Length; i++) {
+                    string source = Path.Combine(temp, "aspect-" + i + ".png");
+                    using (var b = new Bitmap(sizes[i].Width,sizes[i].Height)) {
+                        using (var g = Graphics.FromImage(b)) {
+                            g.Clear(Color.Red);
+                            g.FillRectangle(Brushes.Lime,b.Width/2,0,b.Width/2,b.Height/2);
+                            g.FillRectangle(Brushes.Blue,0,b.Height/2,b.Width/2,b.Height/2);
+                            g.FillRectangle(Brushes.Yellow,b.Width/2,b.Height/2,b.Width/2,b.Height/2);
+                        }
+                        b.Save(source,System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    var bounds = AssemblyRaster.FitImageBounds(new RectangleF(36,128,288,192),sizes[i]);
+                    if (Math.Abs(bounds.X-expected[i].X)>.01 || Math.Abs(bounds.Y-expected[i].Y)>.01 || Math.Abs(bounds.Width-expected[i].Width)>.01 || Math.Abs(bounds.Height-expected[i].Height)>.01) throw new Exception("Image fit geometry changed");
+                    using (var b = AssemblyRaster.Create(t,new AssemblyLayerPlan { Layer = fitLayer, Asset = new AssemblyAsset { Path = source } })) {
+                        for (int y=0; y<b.Height; y++) for (int x=0; x<b.Width; x++)
+                            if (b.GetPixel(x,y).A>128 && !expected[i].Contains(x+.5f,y+.5f)) throw new Exception("Image escaped its fitted bounds");
+                        var colors = new[] {Color.Red,Color.Lime,Color.Blue,Color.Yellow};
+                        for (int corner=0; corner<4; corner++) {
+                            var pixel = b.GetPixel((int)(bounds.X+bounds.Width*(corner%2==0?.1:.9)),(int)(bounds.Y+bounds.Height*(corner<2?.1:.9)));
+                            if (pixel.A<145 || pixel.A>160 || Math.Abs(pixel.R-colors[corner].R)>5 || Math.Abs(pixel.G-colors[corner].G)>5 || Math.Abs(pixel.B-colors[corner].B)>5) throw new Exception("Image edge content or opacity was lost during fit");
+                        }
+                    }
+                }
                 return true;
             } finally { Directory.Delete(temp, true); }
         }
@@ -198,6 +225,66 @@ namespace VideoBatch {
         static System.Collections.Generic.IEnumerable<System.Windows.Forms.Control> All(System.Windows.Forms.Control c) {
             foreach (System.Windows.Forms.Control child in c.Controls) { yield return child; foreach (var nested in All(child)) yield return nested; }
         }
+        public static bool RunMediaEditorTests() { return MediaEditorCheck(null); }
+        public static bool WriteMediaScreenshots(string folder) { Directory.CreateDirectory(folder); return MediaEditorCheck(folder); }
+        static bool MediaEditorCheck(string screenshots) {
+            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-media-ui-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root = temp;
+                var initial = AssemblyTemplate.Defaults(); initial.Materials = Path.Combine(temp,"materials"); initial.Output = Path.Combine(temp,"output");
+                AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
+                using (var window = new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    if (screenshots != null) Capture(window,Path.Combine(screenshots,"studio-four-profiles.png"));
+                    var labels = All(window).OfType<System.Windows.Forms.Button>().Where(b => b.Name.StartsWith("AssemblyProfile")).Select(b => b.Text).ToArray();
+                    if (labels.Length != 4 || !labels.SequenceEqual(new[] {"RU YT","EN YT","RU INS","EN INS"})) throw new Exception("Four visible studio tabs do not match agreed names.");
+                    var current = (AssemblyTemplate)Field(window,"template");
+                    var layer = current.Scenes[0].Layers[0];
+                    Invoke(window,"MoveImageScope");
+                    if (current.GlobalLayers.Count != 1 || current.Scenes[0].Layers.Contains(layer)) throw new Exception("Image scope move duplicated or lost layer.");
+                    Invoke(window,"SwitchProfile",AssemblyProfile.En);
+                    if (current.GlobalLayers.Count != 0) throw new Exception("Whole-video layers leaked into another profile.");
+                    Invoke(window,"SwitchProfile",AssemblyProfile.Ru);
+                    if (current.GlobalLayers.Count != 1) throw new Exception("Whole-video layer was not restored.");
+                    Invoke(window,"SetImageScope",true); Invoke(window,"MoveImageScope");
+                    if (current.GlobalLayers.Count != 0 || current.Scenes[0].Layers.Count != 1) throw new Exception("Image could not return to its scene.");
+                    {
+                        var voiceType = typeof(AssemblyWindow).GetNestedType("AssemblyVoiceEditor", BindingFlags.NonPublic);
+                        using (var form = (System.Windows.Forms.Form)Activator.CreateInstance(voiceType, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new object[] { window }, null)) {
+                            form.Show(window); System.Windows.Forms.Application.DoEvents();
+                            if (screenshots != null) Capture(form, Path.Combine(screenshots, "studio-voice.png"));
+                            form.Close();
+                        }
+                    }
+                    var preview=(System.Windows.Forms.Panel)Field(window,"heroPreviewHost");
+                    var settings=(System.Windows.Forms.Panel)Field(window,"contentHost");
+                    if(preview.PointToScreen(Point.Empty).X >= settings.PointToScreen(Point.Empty).X || preview.Height<400) throw new Exception("Large preview is not on the left");
+                    Invoke(window,"OpenAudioEditor");System.Windows.Forms.Application.DoEvents();
+                    if(!preview.Visible || ((System.Windows.Forms.TableLayoutPanel)Field(window,"sceneEditor")).Visible)throw new Exception("Music section hides preview or overlaps scene controls");
+                    if(screenshots!=null)Capture(window,Path.Combine(screenshots,"studio-music.png"));
+                    Invoke(window,"OpenVoiceWorkspace");System.Windows.Forms.Application.DoEvents();
+                    if(!preview.Visible)throw new Exception("Voice section hides preview");
+                    if(screenshots!=null)Capture(window,Path.Combine(screenshots,"studio-voice-settings.png"));
+                    string speechFile=Path.Combine(temp,"sample.mp3");File.WriteAllText(speechFile,"preview fixture");
+                    current.SpeechLines.Add(new AssemblySpeechLine {Text="Проверка положения субтитров",AudioPath=speechFile});
+                    current.SubtitleStyle.Enabled=true;
+                    Invoke(window, "OpenSubtitleEditor"); System.Windows.Forms.Application.DoEvents();
+                    var subtitleCanvas=Field(window,"canvas");
+                    if(string.IsNullOrWhiteSpace((string)Field(subtitleCanvas,"subtitlePreviewText")) || Field(subtitleCanvas,"subtitleOverlay")==null)throw new Exception("Enabled subtitle formatting has no visible preview");
+                    if(!((System.Windows.Forms.Label)Field(window,"subtitlePanelMessage")).Text.Contains("Нет таймкодов"))throw new Exception("Missing timing has no explanation");
+                    var enabled=(System.Windows.Forms.CheckBox)Field(window,"subtitleEnabled");enabled.Checked=false;
+                    if(Field(subtitleCanvas,"subtitleOverlay")!=null)throw new Exception("Disabled subtitles remain visible");
+                    enabled.Checked=true;
+                    if(((System.Windows.Forms.Panel)Field(window,"audioWorkspace")).Visible || !preview.Visible)throw new Exception("Subtitle section overlaps music or hides preview");
+                    if (screenshots != null) Capture(window, Path.Combine(screenshots, "studio-subtitles.png"));
+                    Invoke(window, "LeaveSubtitleWorkspace");
+                    Invoke(window,"Save"); window.Close();
+                }
+                var saved = AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml"));
+                if (saved.MarketRu.GlobalLayers.Count != 0 || saved.MarketRu.Scenes[0].Layers.Count != 1) throw new Exception("Media scope persistence failed.");
+                return true;
+            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp,true); }
+        }
         public static bool RunStudioUiTests() { return StudioCheck(null); }
         public static bool WriteStudioScreenshots(string folder) { return StudioCheck(folder); }
         static bool StudioCheck(string screenshots) {
@@ -279,7 +366,7 @@ namespace VideoBatch {
                         Invoke(window,"SelectScene",1);Invoke(window,"ImportPool",3,new string[] {current.Resolve("Видео/darkblue.mp4")},false);
                         Invoke(window,"SelectScene",0);Invoke(window,"MoveScene",1);if (current.Scenes[1]!=firstScene || firstScene.Videos!=ownPath || firstScene.VideoMode!="own" || secondScene.VideoMode!="own") throw new Exception("Moving a scene lost its video assignment");Invoke(window,"MoveScene",-1);
                         WaitFor(() => ((System.Windows.Forms.Label)Field(window,"capacityLabel")).Text.StartsWith("Осталось "),"Own video capacity did not finish");
-                        Capture(window,Path.Combine(screenshots,"studio-own-videos.png"));Invoke(window,"SceneVideoMenu");System.Windows.Forms.Application.DoEvents();var videoChoice=window.OwnedForms.First(f => f.Name=="StudioChoice");Capture(videoChoice,Path.Combine(screenshots,"studio-video-source-choice.png"));videoChoice.Close();
+                        Capture(window,Path.Combine(screenshots,"studio-own-videos.png"));Invoke(window,"OpenVideoEditor");System.Windows.Forms.Application.DoEvents();var videoForm=window.OwnedForms.First(f => f.Text.StartsWith("Видео"));Capture(videoForm,Path.Combine(screenshots,"studio-video-source-choice.png"));videoForm.Close();
                         Invoke(window,"SetSceneVideoMode","shared");if (firstScene.Videos!=ownPath || current.VideoSource(firstScene)!=current.Videos) throw new Exception("Switching to shared discarded the own pack");Invoke(window,"SelectScene",1);Invoke(window,"SetSceneVideoMode","shared");Invoke(window,"SelectScene",0);
                     }
                     // Replacement changes the pool atomically and retains old originals/copies.

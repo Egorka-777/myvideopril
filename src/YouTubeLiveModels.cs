@@ -24,10 +24,16 @@ namespace VideoBatch {
             return CreationPending || !string.IsNullOrWhiteSpace(BroadcastId) || !string.IsNullOrWhiteSpace(StreamId);
         }
     }
+    public sealed class LiveDialogDraft {
+        public string LocalId = "", VideoFile = "", Title = "Прямой эфир", Description = "", Thumbnail = "", Tags = "", Privacy = "public";
+        public bool MadeForKids;
+        internal LiveDialogDraft Copy() { return (LiveDialogDraft)MemberwiseClone(); }
+    }
     public sealed class LiveConfiguration {
         public string ClientId = "", ProtectedClientSecret = "";
         public List<LiveAccount> Accounts = new List<LiveAccount>();
         public List<LiveJournalEntry> Pending = new List<LiveJournalEntry>();
+        public List<LiveDialogDraft> Drafts = new List<LiveDialogDraft>();
     }
     public sealed class LiveOptions {
         public string Folder = "", VideoFile = "", Title = "", Description = "", Thumbnail = "", Privacy = "public";
@@ -35,7 +41,7 @@ namespace VideoBatch {
         public bool MadeForKids;
         public int Height; // Legacy field retained for saved/test callers; new streams use source geometry.
         public string[] Files() {
-            var extensions = new[] { ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi" };
+            var extensions = new[] { ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".ts" };
             if (!string.IsNullOrWhiteSpace(VideoFile)) {
                 if (!File.Exists(VideoFile) || !extensions.Contains(Path.GetExtension(VideoFile).ToLowerInvariant()))
                     throw new InvalidOperationException("Выберите существующий видеофайл для эфира.");
@@ -97,12 +103,22 @@ namespace VideoBatch {
             Config = File.Exists(path) ? Read(path) : new LiveConfiguration();
             Config.Accounts = Config.Accounts ?? new List<LiveAccount>();
             Config.Pending = Config.Pending ?? new List<LiveJournalEntry>();
+            Config.Drafts = Config.Drafts ?? new List<LiveDialogDraft>();
         }
         static LiveConfiguration Read(string path) {
             try { using (var file = File.OpenRead(path)) return (LiveConfiguration)new XmlSerializer(typeof(LiveConfiguration)).Deserialize(file); }
             catch (Exception e) { throw new InvalidOperationException("Не удалось прочитать youtube-live.xml. Сохраните файл для диагностики; не запускайте повторные эфиры до проверки старых.", e); }
         }
         public LiveAccount Account(string localId) { lock (gate) return Config.Accounts.FirstOrDefault(a => a.LocalId == localId); }
+        public LiveDialogDraft Draft(string localId) { lock (gate) return Config.Drafts.FirstOrDefault(d => d.LocalId == localId)?.Copy(); }
+        public void SaveDrafts(IEnumerable<LiveDialogDraft> drafts) {
+            lock (gate) {
+                var saved = drafts.Select(d => d.Copy()).ToArray();
+                var previous = Config.Drafts;
+                Config.Drafts = previous.Where(d => !saved.Any(s => s.LocalId == d.LocalId)).Concat(saved).ToList();
+                try { Save(); } catch { Config.Drafts = previous; throw; }
+            }
+        }
         public LiveJournalEntry[] PendingSnapshot() { lock (gate) return Config.Pending.ToArray(); }
         public void PruneAbandonedPending() {
             lock (gate) {

@@ -55,4 +55,42 @@ assert.match(playback,/curRaw >= likeAtSec/,'Like must happen during playback, n
 assert.match(playback,/disableAutoplay/,'Autoplay must be disabled to avoid wrong next video');
 assert.match(playback,/assertStillOnVideo/,'Must detect autoplay switching to another video');
 assert.match(navigation,/Подтвердите, что это вы/,'Channel navigation must fail clearly on account challenge');
-console.log('OK: watch_regressions.js (navigation, selection and profile preservation)');
+
+// Exercise the existing failure capture offline; no browser, network, or diagnostic files.
+(async()=>{
+  const vm=require('vm');
+  let saved, screenshot;
+  const button={tagName:'BUTTON',id:'',parentElement:{tagName:'YT-LIKE-BUTTON-VIEW-MODEL'},
+    getAttribute:name=>({'class':'ytSpecButtonShapeNextHost','aria-pressed':'false'}[name]??null),
+    hasAttribute:()=>false,getClientRects:()=>[{}]};
+  const video={paused:false,autoplay:false,currentTime:138,duration:155,ended:false,readyState:4};
+  const document={querySelector:()=>null,querySelectorAll:selector=>{
+    if(selector==='video')return [video];
+    if(selector.startsWith('#actions button'))return [button];
+    return [];
+  }};
+  const diagnosticFs={mkdirSync:()=>{},writeFileSync:(file,text)=>{saved={file,data:JSON.parse(text)};}};
+  const capture=vm.runInNewContext('('+navigation.slice(navigation.indexOf('async function captureNavigationFailure('),navigation.indexOf('\nasync function openChannelsWatch('))+')',{
+    require:name=>name==='fs'?diagnosticFs:require(name),process:{pid:42},URL
+  });
+  const page={isClosed:()=>false,url:()=> 'https://www.youtube.com/watch?v=LGE1SgZg-8s',
+    evaluate:async fn=>vm.runInNewContext('('+fn.toString()+')()',{
+      document,window:{ytInitialPlayerResponse:{videoDetails:{videoId:'LGE1SgZg-8s'}}},
+      getComputedStyle:()=>({visibility:'visible'})
+    }),screenshot:async opts=>{screenshot=opts.path;}};
+  await capture(page,{ownerProfileId:'836981176'},new Error('Не найдена кнопка «Нравится».'),'diagnostics',()=>{});
+  assert.equal(saved.data.error,'Не найдена кнопка «Нравится».');
+  assert.equal(saved.data.videoId,'LGE1SgZg-8s');
+  assert.equal(saved.data.state.videos[0].currentTime,138);
+  assert.equal(saved.data.state.videos[0].duration,155);
+  assert.equal(saved.data.state.videos[0].paused,false);
+  assert.equal(saved.data.state.actionButtons[0].parentTag,'yt-like-button-view-model');
+  assert.equal(saved.data.state.actionButtons[0].ariaLabel,'');
+  assert.equal(saved.data.state.actionButtons[0].ariaPressed,'false');
+  assert.equal(saved.data.state.actionButtons[0].visible,true);
+  assert.equal(screenshot,saved.file.replace(/\.json$/,'.png'));
+  video.duration=Infinity;
+  await capture(page,{},new Error('failure'),'diagnostics',()=>{});
+  assert.equal(saved.data.state.videos[0].duration,null);
+  console.log('OK: watch_regressions.js (navigation, selection, profile preservation, failure diagnostics)');
+})().catch(e=>{console.error(e);process.exitCode=1;});

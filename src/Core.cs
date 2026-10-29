@@ -87,6 +87,7 @@ namespace VideoBatch {
         public string AssemblyMarketView="RU";
         /// <summary>RU | EN | RU-Inst | EN-Inst в «Моя студия».</summary>
         public string AssemblyStudioProfile="RU";
+        public string AssemblyElevenLabsKey="";
         /// <summary>Активная вкладка Shorts/Long в workspace (не скрывает каналы).</summary>
         public string YouTubeKindView="shorts";
         public bool YouTubeLongScheduled20260923Migrated;
@@ -150,12 +151,13 @@ namespace VideoBatch {
         public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
         /// <summary>YouTube | TikTok | Telegram | Studio — стартовый раздел интерфейса.</summary>
         public string AppPlatformView="";
-        public int YouTubeWarmupMinMinutes=5, YouTubeWarmupMaxMinutes=15;
+        public int YouTubeWarmupMinMinutes=10, YouTubeWarmupMaxMinutes=10;
+        public string YouTubeWarmupKeywords="бинарные опционы стратегия\nтрейдинг\nbinodex\nбинодекс\nбинарные опционы binodex\nбинарные опционы покет опшн\nбинарные опционы сигналы\nторговый бот\nтрейдинг бот binodex";
         public int YouTubeWarmupWatchMinSec=1, YouTubeWarmupWatchMaxSec=40;
         public bool YouTubeWarmupLikesEnabled=true;
         public int YouTubeWarmupLikePercent=38;
         public bool YouTubeWarmupAutoBeforeUpload;
-        public string ProtectedOpenRouterKey="", ProtectedElevenLabsKey="";
+        public string ProtectedOpenRouterKey="", ProtectedElevenLabsKey="", ProtectedWarmupHttpProxy="";
         public string OpenRouterModel="openai/gpt-4o-mini";
         public string WarmupVideoMarketView="RU";
         public string WarmupVideoPromptRu="Короткие смешные анекдоты про трейдеров и трейдинг, без мата, 1–2 предложения.";
@@ -287,6 +289,12 @@ namespace VideoBatch {
                 if(File.Exists(MeshCatalogPath))File.Replace(temp,MeshCatalogPath,null);else File.Move(temp,MeshCatalogPath);
             }catch{}
         }
+        public static List<string> PadWarmupJokes(List<string> list) {
+            var copy = (list ?? new List<string>()).Select(x => (x ?? "").Trim()).ToList();
+            while (copy.Count < WarmupVideoPanel.BundleSlotCount) copy.Add("");
+            if (copy.Count > WarmupVideoPanel.BundleSlotCount) copy = copy.Take(WarmupVideoPanel.BundleSlotCount).ToList();
+            return copy;
+        }
         public static void Normalize(Preferences p){
             if(p.Profiles==null||p.Profiles.Length<1||p.Profiles.Length>10||p.ShortCount<1||p.ShortCount>10||p.VideoCount<1||p.VideoCount>10)throw new Exception("Повреждены настройки.");
             if(p.SettingsVersion<1){p.Profiles=Profile.Automatic(p.VideoCount);p.AutoProfiles=true;p.SettingsVersion=1;}
@@ -395,8 +403,8 @@ namespace VideoBatch {
             if(p.WarmupVideoJokesEn==null)p.WarmupVideoJokesEn=new List<string>();
             if(p.WarmupVideoBackgroundFilesRu==null)p.WarmupVideoBackgroundFilesRu=new List<string>();
             if(p.WarmupVideoBackgroundFilesEn==null)p.WarmupVideoBackgroundFilesEn=new List<string>();
-            p.WarmupVideoJokesRu=p.WarmupVideoJokesRu.Select(x=>(x??"").Trim()).ToList();
-            p.WarmupVideoJokesEn=p.WarmupVideoJokesEn.Select(x=>(x??"").Trim()).ToList();
+            p.WarmupVideoJokesRu=PadWarmupJokes(p.WarmupVideoJokesRu);
+            p.WarmupVideoJokesEn=PadWarmupJokes(p.WarmupVideoJokesEn);
             p.WarmupVideoBackgroundFilesRu=p.WarmupVideoBackgroundFilesRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.WarmupVideoBackgroundFilesEn=p.WarmupVideoBackgroundFilesEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             if(p.WarmupVideoBackgroundFilesRu.Count==0&&!string.IsNullOrWhiteSpace(p.WarmupVideoBackgroundFileRu))

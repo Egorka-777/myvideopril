@@ -73,9 +73,7 @@ namespace VideoBatch {
                 var probe=await Core.Probe(ffprobe,temp,ct).ConfigureAwait(false);
                 VideoMetadata.Verify(probe,sample,title); ct.ThrowIfCancellationRequested();
                 File.Replace(temp,videoPath,null);
-                if (sample!=null && sample.HasCaptureDate) {
-                    File.SetCreationTime(videoPath,sample.CaptureDate); File.SetLastWriteTime(videoPath,sample.CaptureDate);
-                }
+                // Capture date lives in container metadata only; keep real filesystem times so Explorer sort-by-date shows new renders.
                 return VideoMetadata.Report(probe);
             } finally { if (File.Exists(temp)) File.Delete(temp); }
         }

@@ -14,7 +14,8 @@ namespace VideoBatch {
 
         readonly Preferences settings;
         readonly TextBox[] jokeBoxes = new TextBox[BundleSlotCount];
-        readonly ListBox backgroundList;
+        readonly Label backgroundCaption;
+        readonly ComboBox backgroundPreviewPick;
         readonly TextBox output;
         readonly RichTextBox log;
         readonly WarmupPreviewControl preview;
@@ -36,7 +37,7 @@ namespace VideoBatch {
             settings = prefs; market = NormMarket(prefs.WarmupVideoMarketView);
             Dock = DockStyle.Fill; BackColor = Theme.Background; Font = Theme.FontBody;
             saveTimer = new System.Windows.Forms.Timer { Interval = 400 };
-            saveTimer.Tick += (s, e) => { saveTimer.Stop(); SaveFields(); };
+            saveTimer.Tick += (s, e) => { saveTimer.Stop(); SaveFields(); UpdateBundleSummary(); };
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(12), BackColor = Theme.Background };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 54)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
@@ -45,40 +46,42 @@ namespace VideoBatch {
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Card };
             fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, BackColor = Theme.Card, Margin = Padding.Empty };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            scroll.ClientSizeChanged += (s, e) => fields.MinimumSize = new Size(Math.Max(0, scroll.ClientSize.Width - SystemInformation.VerticalScrollBarWidth), 0);
             scroll.Controls.Add(fields); card.Controls.Add(scroll); root.Controls.Add(card, 0, 0);
 
             AddField(Label("Прогрев роликами", Theme.FontCardTitle, Theme.TextPrimary));
-            AddField(Label("Как в «Сборке»: каждая связка — свой фон и свой анекдот. Текст озвучивается в ElevenLabs, длина ролика = длина речи (до 10 с).", Theme.FontBody, Theme.TextSecondary));
+            AddField(Label("Связка — анекдот + фон. Фоны распределяются между текстами; использованные пары не повторяются. Длина ролика = длина речи (до 10 с).", Theme.FontBody, Theme.TextSecondary));
             var markets = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 8) };
             ru = Theme.MakeHeroToggle("RU", market == "RU", () => SwitchMarket("RU")); en = Theme.MakeHeroToggle("EN", market == "EN", () => SwitchMarket("EN"));
             markets.Controls.Add(ru); markets.Controls.Add(en); AddField(markets);
 
-            AddField(Label("Фоны · фото или видео", Theme.FontBody, Theme.TextPrimary, 8));
-            backgroundList = new ListBox { Name = "warmup-background-list", Height = 96, Dock = DockStyle.Top, IntegralHeight = false, BackColor = Theme.Elevated, ForeColor = Theme.TextPrimary, BorderStyle = BorderStyle.None };
-            backgroundList.SelectedIndexChanged += (s, e) => { if (!loading && backgroundList.SelectedIndex >= 0) _ = UpdatePreviewAsync(backgroundFiles[backgroundList.SelectedIndex]); };
-            AddField(backgroundList);
-            var bgActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 4) };
+            backgroundCaption = Label("Фоны: нет · нажмите «Добавить»", Theme.FontBody, Theme.TextSecondary, 4);
+            backgroundCaption.Name = "warmup-background-caption"; backgroundCaption.MaximumSize = new Size(640, 0);
+            AddField(backgroundCaption);
+            var bgActions = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 2, 0, 4) };
             addBackgrounds = Theme.MakeButton("Добавить файлы", ghost: true, action: PickBackgrounds); addBackgrounds.Name = "warmup-add-backgrounds";
-            removeBackground = Theme.MakeButton("Убрать", ghost: true, action: RemoveSelectedBackground); removeBackground.Name = "warmup-remove-background";
+            removeBackground = Theme.MakeButton("Убрать последний", ghost: true, action: RemoveLastBackground); removeBackground.Name = "warmup-remove-background";
             bgActions.Controls.Add(addBackgrounds); bgActions.Controls.Add(removeBackground); AddField(bgActions);
-            bundleSummary = Label("Связок: 0 · заполните одинаковое число фонов и анекдотов", Theme.FontBody, Theme.TextSecondary, 4);
+            backgroundPreviewPick = Theme.MakeCombo(Array.Empty<string>()); backgroundPreviewPick.Name = "warmup-background-preview"; backgroundPreviewPick.Width = 420; backgroundPreviewPick.Visible = false;
+            backgroundPreviewPick.SelectedIndexChanged += (s, e) => { if (!loading && backgroundPreviewPick.SelectedIndex >= 0) _ = UpdatePreviewAsync(backgroundFiles[backgroundPreviewPick.SelectedIndex]); };
+            AddField(backgroundPreviewPick);
+            bundleSummary = Label("Добавьте анекдоты и хотя бы один фон", Theme.FontBody, Theme.TextSecondary, 4);
+            bundleSummary.MaximumSize = new Size(300, 0);
             AddField(bundleSummary);
 
-            AddField(Label("Анекдоты (по одному на связку)", Theme.FontBody, Theme.TextPrimary, 8));
-            var jokesScroll = new Panel { Dock = DockStyle.Top, Height = 228, AutoScroll = true, BackColor = Theme.Card, Margin = new Padding(0, 0, 0, 4) };
-            jokesPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, Margin = Padding.Empty };
+            AddField(Label("Анекдоты · одна строка на связку", Theme.FontBody, Theme.TextPrimary, 8));
+            jokesPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, Margin = new Padding(0, 0, 0, 4) };
             jokesPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             for (int i = 0; i < BundleSlotCount; i++) {
                 jokesPanel.RowCount++; jokesPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-                var row = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = false, Height = 44, ColumnCount = 2, Margin = new Padding(0, 0, 0, 4) };
-                row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                row.Controls.Add(Label("Связка " + (i + 1), Theme.FontBody, Theme.TextMuted), 0, 0);
-                var box = Theme.MakeSearchBox(); box.Name = "warmup-joke-" + i; box.Multiline = true; box.Height = 40; box.Dock = DockStyle.Fill; box.ScrollBars = ScrollBars.Vertical;
+                var row = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = false, Height = 34, ColumnCount = 2, Margin = new Padding(0, 0, 0, 3) };
+                row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                row.Controls.Add(Label("#" + (i + 1), Theme.FontBody, Theme.TextMuted), 0, 0);
+                var box = Theme.MakeSearchBox(); box.Name = "warmup-joke-" + i; box.Multiline = false; box.Height = 28; box.Dock = DockStyle.Fill; box.ScrollBars = ScrollBars.None;
                 box.TextChanged += Changed; jokeBoxes[i] = box; row.Controls.Add(box, 1, 0);
                 jokesPanel.Controls.Add(row, 0, i);
             }
-            jokesScroll.Controls.Add(jokesPanel);
-            AddField(jokesScroll);
+            AddField(jokesPanel);
 
             AddField(Label("Папка с роликами", Theme.FontBody, Theme.TextPrimary, 8));
             output = PathBox("warmup-output");
@@ -97,7 +100,7 @@ namespace VideoBatch {
             captionSize = StyleNumber("warmup-subtitle-size", 28, 88); captionPosition = StyleNumber("warmup-subtitle-position", 10, 90);
             captionWords = StyleNumber("warmup-subtitle-words", 1, 6); captionOpacity = StyleNumber("warmup-subtitle-opacity", 0, 100);
             captionEditor.Controls.Add(SettingRow("Шрифт", captionFont)); captionEditor.Controls.Add(SettingRow("Размер текста", captionSize));
-            captionEditor.Controls.Add(SettingRow("Положение сверху, %", captionPosition)); captionEditor.Controls.Add(SettingRow("Слов за раз", captionWords));
+            captionEditor.Controls.Add(SettingRow("Положение сверху, % (или тяните в превью)", captionPosition)); captionEditor.Controls.Add(SettingRow("Слов за раз", captionWords));
             captionEditor.Controls.Add(SettingRow("Плашка", captionPlate)); captionEditor.Controls.Add(SettingRow("Плотность плашки, %", captionOpacity));
             var colors = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = false, Height = 38, RowCount = 1, ColumnCount = 2, Margin = new Padding(0, 6, 0, 0) };
             colors.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); colors.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -110,7 +113,15 @@ namespace VideoBatch {
             right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.Percent, 70));
             right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.Percent, 30));
             previewHint = Label("Предпросмотр фона", Theme.FontBody, Theme.TextSecondary); right.Controls.Add(previewHint, 0, 0);
-            preview = new WarmupPreviewControl { Dock = DockStyle.Fill, MinimumSize = new Size(100, 140) }; right.Controls.Add(preview, 0, 1);
+            preview = new WarmupPreviewControl { Dock = DockStyle.Fill, MinimumSize = new Size(100, 140) };
+            preview.SubtitlePositionChanged += pos => {
+                if (loading || subtitleStyle == null) return;
+                loading = true;
+                try { captionPosition.Value = Math.Max(captionPosition.Minimum, Math.Min(captionPosition.Maximum, pos)); subtitleStyle.Position = (int)captionPosition.Value; UpdateCaptionPreview(); }
+                finally { loading = false; }
+                SaveFields();
+            };
+            right.Controls.Add(preview, 0, 1);
             right.Controls.Add(Label("Ход создания", Theme.FontBody, Theme.TextSecondary, 6), 0, 2);
             log = Theme.MakeLogBox(); log.Dock = DockStyle.Fill; log.Margin = new Padding(0, 6, 0, 0); right.Controls.Add(log, 0, 3); root.Controls.Add(right, 1, 0);
 
@@ -128,6 +139,10 @@ namespace VideoBatch {
             LoadMarketFields();
         }
 
+        protected override void OnHandleCreated(EventArgs e) {
+            base.OnHandleCreated(e);
+            BeginInvoke(new Action(UpdateBundleSummary));
+        }
         static Label Label(string text, Font font, Color color, int top = 0) => new Label { Text = text, Font = font, ForeColor = color, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, top, 0, 4) };
         static TextBox PathBox(string name) { var box = Theme.MakeSearchBox(); box.Name = name; box.ReadOnly = true; box.Dock = DockStyle.Fill; box.Margin = new Padding(0, 7, 8, 0); return box; }
         static Control PickerRow(Control box, Button button) {
@@ -154,6 +169,7 @@ namespace VideoBatch {
             Color text = ColorTranslator.FromHtml(subtitleStyle.TextColor), plate = ColorTranslator.FromHtml(subtitleStyle.PlateColor);
             captionTextColor.BackColor = text; captionTextColor.ForeColor = text.GetBrightness() > .5 ? Color.Black : Color.White;
             captionPlateColor.BackColor = plate; captionPlateColor.ForeColor = plate.GetBrightness() > .5 ? Color.Black : Color.White;
+            preview.SubtitleDragEnabled = captionsEnabled.Checked;
             preview.SetSubtitles(subtitleStyle, market == "EN" ? "This is how captions look" : "Так выглядят ваши субтитры");
         }
         void PickCaptionColor(bool plate) {
@@ -165,20 +181,44 @@ namespace VideoBatch {
         }
         void AddField(Control control) { fields.RowCount++; fields.RowStyles.Add(new RowStyle(SizeType.AutoSize)); fields.Controls.Add(control, 0, fields.RowCount - 1); }
         static string NormMarket(string value) => value == "EN" ? "EN" : "RU";
-        void Changed(object sender, EventArgs e) { if (loading) return; UpdateBundleSummary(); saveTimer.Stop(); saveTimer.Start(); }
+        void Changed(object sender, EventArgs e) { if (loading) return; CaptureFields(); saveTimer.Stop(); saveTimer.Start(); }
         void SwitchMarket(string value) { if (run != null || value == market) return; SaveFields(); market = NormMarket(value); LoadMarketFields(); SaveFields(); }
-        List<string> ReadJokes() => jokeBoxes.Select(b => b.Text.Trim()).ToList();
-        void UpdateBundleSummary() {
-            int jokes = ReadJokes().Count(j => j.Length > 0);
-            int bgs = backgroundFiles.Count;
-            bundleSummary.Text = jokes == bgs && jokes > 0
-                ? "Готово к созданию: " + jokes + " связок"
-                : "Связок: тексты " + jokes + ", фоны " + bgs + " · числа должны совпадать";
-            bundleSummary.ForeColor = jokes == bgs && jokes > 0 ? Theme.Accent : Theme.TextSecondary;
+        List<string> ReadJokes() => jokeBoxes.Select(b => b.Text).ToList();
+        int summaryVersion;
+        async void UpdateBundleSummary() {
+            if (bundleSummary == null || !IsHandleCreated) return;
+            int version = ++summaryVersion;
+            var jokes = ReadJokes(); var backgrounds = backgroundFiles.ToArray(); string selectedMarket = market;
+            if (!jokes.Any(j => j.Length > 0) || backgrounds.Length == 0) {
+                bundleSummary.Text = "Добавьте анекдоты и хотя бы один фон"; bundleSummary.ForeColor = Theme.TextSecondary; return;
+            }
+            bundleSummary.Text = "Считаю доступные связки…";
+            try {
+                var inventory = await Task.Run(() => WarmupBundleHistory.Inventory(selectedMarket, jokes, backgrounds));
+                if (IsDisposed || version != summaryVersion) return;
+                bundleSummary.Text = "Всего: " + inventory.Total + " · использовано: " + inventory.Used + " · осталось: " + inventory.Remaining + " · в следующей сборке: " + inventory.Next.Count;
+                bundleSummary.ForeColor = inventory.Remaining > 0 ? Theme.Accent : Theme.Warning;
+            } catch (Exception e) {
+                if (!IsDisposed && version == summaryVersion) { bundleSummary.Text = "Не удалось прочитать историю: " + e.Message; bundleSummary.ForeColor = Theme.Warning; }
+            }
         }
         void RefreshBackgroundList() {
-            backgroundList.Items.Clear();
-            foreach (string path in backgroundFiles) backgroundList.Items.Add(Path.GetFileName(path));
+            if (backgroundFiles.Count == 0) {
+                backgroundCaption.Text = "Фоны: нет · нажмите «Добавить»";
+                backgroundCaption.ForeColor = Theme.TextSecondary;
+                backgroundPreviewPick.Visible = false;
+                backgroundPreviewPick.Items.Clear();
+            } else {
+                int missing = backgroundFiles.Count(p => !File.Exists(p));
+                backgroundCaption.Text = "Фоны: " + backgroundFiles.Count + (missing > 0 ? " · не найдено на диске: " + missing : "");
+                backgroundCaption.ForeColor = missing > 0 ? Theme.Warning : Theme.TextPrimary;
+                backgroundPreviewPick.Visible = backgroundFiles.Count > 1;
+                int keep = backgroundPreviewPick.SelectedIndex;
+                backgroundPreviewPick.Items.Clear();
+                foreach (string path in backgroundFiles) backgroundPreviewPick.Items.Add(Path.GetFileName(path));
+                if (keep >= 0 && keep < backgroundFiles.Count) backgroundPreviewPick.SelectedIndex = keep;
+                else if (backgroundFiles.Count > 0) backgroundPreviewPick.SelectedIndex = backgroundFiles.Count - 1;
+            }
             UpdateBundleSummary();
         }
         void LoadMarketFields() {
@@ -207,9 +247,10 @@ namespace VideoBatch {
                 else preview.SetBackgroundImage(null);
             } finally { loading = false; UpdateBundleSummary(); }
         }
-        void SaveFields() {
-            saveTimer.Stop(); if (loading) return;
+        void CaptureFields() {
+            if (loading) return;
             var jokes = ReadJokes();
+            jokes = Store.PadWarmupJokes(jokes);
             if (market == "EN") {
                 settings.WarmupVideoJokesEn = jokes; settings.WarmupVideoBackgroundFilesEn = new List<string>(backgroundFiles);
                 settings.WarmupVideoBackgroundFileEn = backgroundFiles.FirstOrDefault() ?? ""; settings.WarmupVideoOutputEn = output.Text;
@@ -218,7 +259,11 @@ namespace VideoBatch {
                 settings.WarmupVideoBackgroundFileRu = backgroundFiles.FirstOrDefault() ?? ""; settings.WarmupVideoOutputRu = output.Text;
             }
             if (market == "EN") settings.WarmupSubtitlesEn = subtitleStyle.Copy(); else settings.WarmupSubtitlesRu = subtitleStyle.Copy();
-            settings.WarmupVideoMarketView = market; Store.Save(settings);
+            settings.WarmupVideoMarketView = market;
+        }
+        void SaveFields() {
+            saveTimer.Stop(); if (loading) return;
+            CaptureFields(); Store.Save(settings);
         }
         void PickBackgrounds() {
             using (var dialog = new OpenFileDialog { Title = "Фоны для связок", Filter = "Фото и видео|*.jpg;*.jpeg;*.png;*.webp;*.bmp;*.mp4;*.mov;*.mkv;*.webm;*.avi;*.m4v", CheckFileExists = true, Multiselect = true }) {
@@ -228,11 +273,11 @@ namespace VideoBatch {
                 if (backgroundFiles.Count > 0) _ = UpdatePreviewAsync(backgroundFiles[backgroundFiles.Count - 1]);
             }
         }
-        void RemoveSelectedBackground() {
-            if (backgroundList.SelectedIndex < 0) return;
-            backgroundFiles.RemoveAt(backgroundList.SelectedIndex);
+        void RemoveLastBackground() {
+            if (backgroundFiles.Count == 0) return;
+            backgroundFiles.RemoveAt(backgroundFiles.Count - 1);
             RefreshBackgroundList(); SaveFields();
-            if (backgroundFiles.Count > 0) _ = UpdatePreviewAsync(backgroundFiles[0]); else preview.SetBackgroundImage(null);
+            if (backgroundFiles.Count > 0) _ = UpdatePreviewAsync(backgroundFiles[backgroundFiles.Count - 1]); else preview.SetBackgroundImage(null);
         }
         void PickOutput() { string path = Ui.PickFolder(FindForm(), output.Text, "Папка с готовыми роликами"); if (path == null) return; output.Text = path; SaveFields(); }
         async Task UpdatePreviewAsync(string path) {
@@ -262,11 +307,12 @@ namespace VideoBatch {
         async Task RunGenerate() {
             if (run != null) return;
             SaveFields();
-            var jokes = ReadJokes().Where(j => j.Length > 0).ToList();
+            var jokes = ReadJokes().Where(j => !string.IsNullOrWhiteSpace(j)).ToList();
             string key = WindowsSupport.Unprotect(settings.ProtectedElevenLabsKey);
             if (string.IsNullOrWhiteSpace(key)) key = WindowsSupport.Unprotect(settings.ProtectedKey);
             var job = new WarmupVideoJob {
-                Market = market, OutputFolder = output.Text, ElevenLabsKey = key, Subtitles = subtitleStyle.Copy(),
+                Market = market, OutputFolder = output.Text, ElevenLabsKey = key, HttpProxy = WindowsSupport.Unprotect(settings.ProtectedWarmupHttpProxy),
+                Subtitles = subtitleStyle.Copy(),
                 Jokes = jokes, BackgroundFiles = new List<string>(backgroundFiles)
             };
             run = new CancellationTokenSource(); SetBusy(true); log.Clear(); status.Text = "Создаю…";
@@ -275,7 +321,7 @@ namespace VideoBatch {
                 Append("Готово: " + files.Count + " роликов. Папка: " + job.OutputFolder); status.Text = "Готово: " + files.Count;
             } catch (OperationCanceledException) { Append("Остановлено. Готовые ролики остались в папке результатов."); status.Text = "Остановлено"; }
             catch (Exception ex) { Append("Ошибка: " + ex.Message); status.Text = "Не завершено · см. журнал"; }
-            finally { run.Dispose(); run = null; if (!IsDisposed) SetBusy(false); }
+            finally { run.Dispose(); run = null; if (!IsDisposed) { SetBusy(false); UpdateBundleSummary(); } }
         }
         void OpenResults() {
             try { SaveFields(); Directory.CreateDirectory(output.Text); Process.Start(new ProcessStartInfo(output.Text) { UseShellExecute = true }); }

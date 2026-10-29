@@ -6,21 +6,22 @@ const {NativeStudio}=require('../../tools/uploader/worker-youtube-live-session')
 (async()=>{
  const browser=await chromium.launch({headless:true});
  try {
-  for(const lang of ['ru','en']) {
-   const context=await browser.newContext();let step=0,now=0,encoder=0;
+  for(const lang of ['ru','en','ru-actual']) {
+   const context=await browser.newContext();let step=0,now=0,encoder=0,manageVisits=0;const ru=lang.startsWith('ru');
    await context.route('**/*',async route=>{
     const u=new URL(route.request().url());
     if(u.pathname==='/channel/UCfixture')return route.fulfill({contentType:'text/html; charset=utf-8',body:`<button>Создать</button><script>document.querySelector('button').onclick=()=>{const b=document.createElement('button');b.textContent='Начать трансляцию';b.onclick=()=>location.href='/channel/UCfixture/livestreaming';document.body.append(b);};</script>`});
     if(u.pathname==='/setup/now'){now++;step=1;return route.fulfill({body:'ok'});}
     if(u.pathname==='/setup/encoder'){encoder++;step=2;return route.fulfill({body:'ok'});}
-    const question=step===0?(lang==='ru'?'Когда вы хотите выйти в эфир?':'When do you want to go live?'):(lang==='ru'?'Как вы хотите проводить трансляцию?':'How would you like to go live?');
-    const label=step===0?(lang==='ru'?'Сейчас':'Right now'):(lang==='ru'?'С помощью видеокодера':'Streaming software');
-    const body=step<2?`<h1>${question}</h1><button>${label}</button><script>document.querySelector('button').onclick=async()=>{await fetch('/setup/${step===0?'now':'encoder'}',{method:'POST'});location.reload();};</script>`:
-     `<h1>${lang==='ru'?'Управление':'Manage'}</h1><button>${lang==='ru'?'Запланировать трансляцию':'Schedule stream'}</button>`;
+    if(u.pathname.endsWith('/manage'))manageVisits++;
+    const question=step===0?(ru?'Когда вы хотите выйти в эфир?':'When do you want to go live?'):(lang==='ru-actual'?'Выберите способ выхода в эфир.':ru?'Как вы хотите проводить трансляцию?':'How would you like to go live?');
+    const label=step===0?(ru?'Сейчас':'Right now'):(ru?'С помощью видеокодера':'Streaming software');
+    const background=`<h1>${ru?'Управление':'Manage'}</h1><button>${ru?'Запланировать трансляцию':'Schedule stream'}</button>`;
+    const body=step<2?`${background}<section role="dialog" style="position:fixed;inset:0;background:#222"><h1>${question}</h1><button id="choice">${label}</button></section><script>document.querySelector('#choice').onclick=async()=>{await fetch('/setup/${step===0?'now':'encoder'}',{method:'POST'});location.reload();};</script>`:background;
     return route.fulfill({contentType:'text/html; charset=utf-8',body});
    });
    const page=await context.newPage(),progress=[];const ui=new NativeStudio(page,'UCfixture',s=>progress.push(s));
-   await ui.prepare();assert.equal(now,1);assert.equal(encoder,1);assert.equal(step,2);assert(progress.some(s=>s.includes('видеокодера')));assert(progress.some(s=>s.includes('готов')));
+   await ui.prepare();assert.equal(now,1);assert.equal(encoder,1);assert.equal(step,2);assert(progress.some(s=>s.includes('видеокодера')));assert(progress.some(s=>s.includes('готов')));assert.equal(manageVisits,0,'onboarding must finish without forced management reloads');
    // All copying stays inside this task tab; each native clipboard path is captured.
    for(const mode of ['text','items','legacy']) {
     await page.route('**/copy',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<section><span>Stream key (paste in encoder)</span><textarea id='key'>fixture-key-private</textarea><button>Copy</button></section><script>

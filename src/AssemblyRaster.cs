@@ -7,6 +7,11 @@ using System.Text;
 
 namespace VideoBatch {
     public static class AssemblyRaster {
+        public static RectangleF FitImageBounds(RectangleF box, Size imageSize) {
+            float ratio = Math.Min(box.Width / imageSize.Width, box.Height / imageSize.Height);
+            float width = imageSize.Width * ratio, height = imageSize.Height * ratio;
+            return new RectangleF(box.X + (box.Width - width) / 2, box.Y + (box.Height - height) / 2, width, height);
+        }
         public static Bitmap Create(AssemblyTemplate t, AssemblyLayerPlan plan) {
             var bitmap = new Bitmap(t.Width, t.Height, PixelFormat.Format32bppArgb);
             try {
@@ -39,11 +44,10 @@ namespace VideoBatch {
                         }
                     } else {
                         using (var image = Image.FromFile(plan.Asset.Path)) {
-                            float ratio = Math.Max(box.Width / image.Width, box.Height / image.Height);
-                            var target = new Rectangle((int)Math.Round(box.X + (box.Width - image.Width * ratio) / 2), (int)Math.Round(box.Y + (box.Height - image.Height * ratio) / 2), Math.Max(1, (int)Math.Round(image.Width * ratio)), Math.Max(1, (int)Math.Round(image.Height * ratio)));
+                            var target = FitImageBounds(box, image.Size);
                             using (var attrs = new ImageAttributes()) {
                                 var matrix = new ColorMatrix(); matrix.Matrix33 = (float)l.Opacity; attrs.SetColorMatrix(matrix);
-                                g.DrawImage(image, target, 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attrs);
+                                g.DrawImage(image, new[] { new PointF(target.Left,target.Top), new PointF(target.Right,target.Top), new PointF(target.Left,target.Bottom) }, new RectangleF(0, 0, image.Width, image.Height), GraphicsUnit.Pixel, attrs);
                             }
                         }
                     }

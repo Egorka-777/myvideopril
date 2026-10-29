@@ -19,6 +19,9 @@ namespace VideoBatch {
         readonly Label summary, status;
         readonly TextBox search, users, target;
         readonly ComboBox senderChoice;
+        readonly NumericUpDown inviteDelay, inviteLimit;
+        readonly Label recipientHint;
+        readonly TextBox inviteLink;
         readonly Label targetHint;
         readonly Dictionary<string,TelegramWebWindow> webWindows=new Dictionary<string,TelegramWebWindow>();
         readonly Panel pageHost;
@@ -48,7 +51,7 @@ namespace VideoBatch {
             summary=new Label{Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary,TextAlign=ContentAlignment.MiddleLeft};layout.Controls.Add(summary,0,1);
             tabStrip=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(tabStrip,0,2);
             pageHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(pageHost,0,3);
-            var accountsPage=Page("Аккаунты");var proxiesPage=Page("Прокси");var invitePage=Page("Ссылка в группу");var logsPage=Page("Журнал");
+            var accountsPage=Page("Аккаунты");var proxiesPage=Page("Прокси");var invitePage=Page("Добавить участников");var logsPage=Page("Журнал");
             BuildProxyPage(proxiesPage);
             grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,ReadOnly=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=true,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(grid);
             grid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;grid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
@@ -74,23 +77,38 @@ namespace VideoBatch {
             foot.Controls.Add(Theme.MakeButton("Изменить данные",ghost:true,action:async()=>await ApplyProfileTemplate()));
             foreach(var button in foot.Controls.OfType<Button>())workButtons.Add(button);
             foot.Controls.Add(new Label{Text="",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,0,0)});table.Controls.Add(foot,0,1);accountsPage.Controls.Add(table);
-            var form=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=7,Padding=new Padding(16)};
+            var form=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=9,Padding=new Padding(16)};
             form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-            foreach(var h in new[]{36,45,48,64,48,64})form.RowStyles.Add(new RowStyle(SizeType.Absolute,h));
+            foreach(var h in new[]{36,45,48,44,36})form.RowStyles.Add(new RowStyle(SizeType.Absolute,h));
             form.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-            form.Controls.Add(new Label{Text="Приглашение в свою группу",AutoSize=true,Font=Theme.FontCardTitle},0,0);
+            foreach(var h in new[]{48,40,36})form.RowStyles.Add(new RowStyle(SizeType.Absolute,h));
+            form.Controls.Add(new Label{Text="Добавить участников в свою группу",AutoSize=true,Font=Theme.FontCardTitle},0,0);
             var senderRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};senderRow.Controls.Add(new Label{Text="Администратор",Width=130,Margin=new Padding(0,8,0,0)});
             senderChoice=TelegramImportDialog.ProxyChoices(new TelegramData());senderChoice.Items.Clear();senderChoice.Width=390;senderChoice.Name="InviteSender";senderChoice.DisplayMember="name";senderRow.Controls.Add(senderChoice);form.Controls.Add(senderRow,0,1);
             var targetRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3};targetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,130));targetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));targetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,170));
             targetRow.Controls.Add(new Label{Text="Группа / канал",AutoSize=true,Margin=new Padding(0,8,0,0)},0,0);
             target=Theme.MakeSearchBox();target.Name="InviteTarget";target.Dock=DockStyle.Fill;targetRow.Controls.Add(target,1,0);
             var preview=Theme.MakeButton("Проверить права",ghost:true,action:async()=>await PreviewTarget());workButtons.Add(preview);targetRow.Controls.Add(preview,2,0);form.Controls.Add(targetRow,0,2);
-            targetHint=new Label{Text="Вставьте t.me/… или @username своей группы. Нужны права администратора на приглашения.",Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary};form.Controls.Add(targetHint,0,3);
-            var options=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-            var start=Theme.MakeButton("Создать ссылку",accent:true,action:async()=>await CreateInviteLink());workButtons.Add(start);options.Controls.Add(start);
-            options.Controls.Add(Theme.MakeButton("Копировать",ghost:true,action:()=>{if(Regex.IsMatch(users.Text,@"^https://t\.me/\+[A-Za-z0-9_-]+$"))Clipboard.SetText(users.Text);}));form.Controls.Add(options,0,4);
-            users=Theme.MakeSearchBox();users.ReadOnly=true;users.Dock=DockStyle.Fill;users.Name="InviteLink";form.Controls.Add(users,0,5);
-            form.Controls.Add(new Label{Text="Человек открывает ссылку и подаёт заявку сам. Вы подтверждаете её в Telegram. Новая кнопка создаёт новую ссылку; ссылки управляются в Telegram.",Dock=DockStyle.Fill,ForeColor=Theme.TextMuted},0,6);invitePage.Controls.Add(form);
+            targetHint=new Label{Text="Ссылка t.me/… или @username вашей группы. Аккаунт должен состоять в группе и иметь право «добавлять участников».",Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary};form.Controls.Add(targetHint,0,3);
+            var recipientBar=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
+            recipientBar.Controls.Add(Theme.MakeButton("Загрузить TXT/CSV/JSON",ghost:true,action:()=>{try{ChooseRecipientFile();}catch(Exception e){Failure(e);}}));
+            recipientBar.Controls.Add(Theme.MakeButton("Очистить список",ghost:true,action:()=>{users.Clear();UpdateRecipientHint(null);}));
+            form.Controls.Add(recipientBar,0,4);
+            users=Theme.MakeSearchBox();users.Multiline=true;users.ScrollBars=ScrollBars.Vertical;users.AcceptsReturn=true;users.Dock=DockStyle.Fill;users.Name="InviteRecipients";
+            users.TextChanged+=(s,e)=>UpdateRecipientHint(null);form.Controls.Add(users,0,5);
+            var options=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=true,AutoSize=true};
+            options.Controls.Add(new Label{Text="Пауза, сек",AutoSize=true,Margin=new Padding(0,8,6,0),ForeColor=Theme.TextSecondary});
+            inviteDelay=new NumericUpDown{Minimum=10,Maximum=3600,Width=72,Margin=new Padding(0,4,12,0)};options.Controls.Add(inviteDelay);
+            options.Controls.Add(new Label{Text="За запуск",AutoSize=true,Margin=new Padding(0,8,6,0),ForeColor=Theme.TextSecondary});
+            inviteLimit=new NumericUpDown{Minimum=1,Maximum=10000,Width=72,Margin=new Padding(0,4,12,0),Name="InviteLimit"};options.Controls.Add(inviteLimit);
+            var start=Theme.MakeButton("Добавить участников",accent:true,action:async()=>await StartInvite());workButtons.Add(start);options.Controls.Add(start);
+            options.Controls.Add(Theme.MakeButton("Ссылка-приглашение",ghost:true,action:async()=>await CreateInviteLink()));form.Controls.Add(options,0,6);
+            recipientHint=new Label{Text="Вставьте @username или ID — по одному в строке, через пробел или запятую. После парсинга чатов сюда попадают логины.",Dock=DockStyle.Fill,ForeColor=Theme.TextMuted};form.Controls.Add(recipientHint,0,7);
+            inviteLink=Theme.MakeSearchBox();inviteLink.ReadOnly=true;inviteLink.Dock=DockStyle.Fill;inviteLink.Name="InviteLink";inviteLink.Visible=false;form.Controls.Add(inviteLink,0,8);
+            invitePage.AllowDrop=true;invitePage.DragEnter+=(s,e)=>e.Effect=!busy&&e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;
+            invitePage.DragDrop+=(s,e)=>{if(busy||!e.Data.GetDataPresent(DataFormats.FileDrop))return;try{ApplyRecipients(TelegramRecipients.Read(((string[])e.Data.GetData(DataFormats.FileDrop)).First()));}catch(Exception ex){Failure(ex);}};
+            users.TextChanged+=(s,e)=>{if(recipientHint!=null&&!busy)UpdateRecipientHint(null);};
+            invitePage.Controls.Add(form);
             log=Theme.MakeLogBox();logsPage.Controls.Add(log);
             var reportButton=Theme.MakeButton("Открыть отчёт диагностики",ghost:true,action:()=>{
                 string path=TelegramDoctor.LatestReport(store.Root);
@@ -103,7 +121,7 @@ namespace VideoBatch {
             SelectTab(0);
             AllowDrop=true;DragEnter+=(s,e)=>e.Effect=!busy&&e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;
             DragDrop+=async(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))await Import((string[])e.Data.GetData(DataFormats.FileDrop));};
-            try{SeedProxies();var data=store.Load();target.Text=data.target;RefreshData();RefreshProxies();}catch(Exception e){status.Text=e.Message;actions.Enabled=false;unavailable=true;}
+            try{SeedProxies();var data=store.Load();target.Text=data.target;inviteDelay.Value=Math.Max(10,Math.Min(3600,data.delay<=0?60:data.delay));inviteLimit.Value=Math.Max(1,Math.Min(10000,data.invite_limit<=0?200:data.invite_limit));RefreshData();RefreshProxies();}catch(Exception e){status.Text=e.Message;actions.Enabled=false;unavailable=true;}
         }
         protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);TryAutoSync();}
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);TryAutoSync();}
@@ -196,9 +214,40 @@ namespace VideoBatch {
         List<TelegramAccount> InviteSender(){if(!(senderChoice.SelectedItem is TelegramAccount a))throw new InvalidOperationException("Выберите отправителя");return new List<TelegramAccount>{store.Load().accounts.First(x=>x.id==a.id)};}
         void RefreshSenders(){if(senderChoice==null)return;string id=(senderChoice.SelectedItem as TelegramAccount)?.id??(grid.CurrentRow?.Tag as TelegramAccount)?.id;senderChoice.Items.Clear();foreach(var a in store.Load().accounts)senderChoice.Items.Add(a);var match=senderChoice.Items.Cast<TelegramAccount>().FirstOrDefault(a=>a.id==id);if(match!=null)senderChoice.SelectedItem=match;else if(senderChoice.Items.Count>0)senderChoice.SelectedIndex=0;}
         async Task PreviewTarget(){try{if(busy)return;if(string.IsNullOrWhiteSpace(target.Text))throw new InvalidOperationException("Вставьте ссылку на группу/канал");await Run(new Dictionary<string,object>{{"action","invite_preview"},{"accounts",InviteSender()},{"target",target.Text.Trim()}});}catch(Exception e){targetHint.Text=e.Message;Failure(e);}}
+        void ChooseRecipientFile(){
+            using(var dialog=new OpenFileDialog{Filter="Списки пользователей|*.txt;*.csv;*.json|Все файлы|*.*",Title="Загрузить @username или ID"}){
+                if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+                ApplyRecipients(TelegramRecipients.Read(dialog.FileName));
+            }
+        }
+        void ApplyRecipients(TelegramRecipientList list){
+            users.Text=list.Text;UpdateRecipientHint(list);
+            if(list.Users.Count==0)throw new InvalidOperationException("После разбора списка не осталось ни одного @username или ID");
+        }
+        void UpdateRecipientHint(TelegramRecipientList list){
+            if(recipientHint==null)return;
+            if(list==null){
+                try{list=TelegramRecipients.Parse(users.Text,".txt");}catch{recipientHint.Text="Проверьте формат: @username, t.me/username или числовой ID.";recipientHint.ForeColor=Theme.Error;return;}
+            }
+            string tail=list.Invalid+list.Duplicates>0?" · пропущено "+list.Invalid+", дубликатов "+list.Duplicates:"";
+            recipientHint.ForeColor=list.Users.Count>0?Theme.TextMuted:Theme.Error;
+            recipientHint.Text=list.Users.Count>0?"Готово к добавлению: "+list.Users.Count+" пользователей"+tail+". Повторы из истории пропускаются автоматически.":"Список пуст — вставьте логины или загрузите файл.";
+        }
+        async Task StartInvite(){
+            try{
+                if(busy)return;
+                if(string.IsNullOrWhiteSpace(target.Text))throw new InvalidOperationException("Укажите группу или канал");
+                var list=TelegramRecipients.Parse(users.Text,".txt");
+                if(list.Users.Count==0)throw new InvalidOperationException("Список пользователей пуст");
+                string destination=target.Text.Trim();
+                int delay=(int)inviteDelay.Value,limit=(int)inviteLimit.Value;
+                store.Change(d=>{d.target=destination;d.delay=delay;d.invite_limit=limit;});
+                await Run(new Dictionary<string,object>{{"action","invite"},{"accounts",InviteSender()},{"target",destination},{"users",list.Text},{"limit",limit},{"delay",delay}});
+            }catch(Exception e){Failure(e);}
+        }
         async Task CreateInviteLink(){
             try{if(busy)return;if(string.IsNullOrWhiteSpace(target.Text))throw new InvalidOperationException("Вставьте ссылку на свою группу/канал");
-                string destination=target.Text.Trim();users.Clear();store.Change(d=>d.target=destination);
+                string destination=target.Text.Trim();inviteLink.Clear();inviteLink.Visible=true;store.Change(d=>d.target=destination);
                 await Run(new Dictionary<string,object>{{"action","invite_link"},{"accounts",InviteSender()},{"target",destination}});
             }catch(Exception e){Failure(e);}
         }
@@ -239,7 +288,7 @@ namespace VideoBatch {
                     if(type=="web_token_request"){status.Text=Get(ev,"text");Log(task,Get(ev,"id"),type,status.Text);tokenTask=SendFreshToken();return;}
                     if(type=="invite_link"){
                         string link=Get(ev,"link");if(!Regex.IsMatch(link,@"^https://t\.me/\+[A-Za-z0-9_-]+$"))throw new IOException("Telegram не вернул корректную ссылку");
-                        users.Text=link;
+                        if(inviteLink!=null){inviteLink.Visible=true;inviteLink.Text=link;}
                     }
                     if(type=="connection"){
                         string id=Get(ev,"id"),session=Get(ev,"session");

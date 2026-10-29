@@ -2,7 +2,7 @@
 param(
     [string]$KitRoot='D:\VideoBatch\VideoBatch',
     [string]$NodePath='',
-    [string]$ExpectedBuild='2026-10-22-studio-upload-recovery-v20'
+    [string]$ExpectedBuild='2026-10-23-studio-two-profiles-v21'
 )
 $ErrorActionPreference='Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Run this script on the Windows PC containing the installed kit.' }

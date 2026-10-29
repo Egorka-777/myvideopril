@@ -204,11 +204,6 @@ namespace VideoBatch {
             var ai=new ToolStripMenuItem("Использование ИИ: "+(settings.YouTubeStudioAlteredContent?"Да":"Нет")){Checked=settings.YouTubeStudioAlteredContent,CheckOnClick=true};
             ai.CheckedChanged+=(s,e)=>{settings.YouTubeStudioAlteredContent=ai.Checked;ai.Text="Использование ИИ: "+(ai.Checked?"Да":"Нет");Store.Save(settings);};
             studio.DropDownItems.Add(paid);studio.DropDownItems.Add(ai);menu.Items.Add(studio);
-            menu.Items.Add("Studio: сбросить защиту после ручной проверки",null,(s,e)=>{
-                var ch=grid.CurrentRow?.Tag as YouTubeChannel;if(ch==null)return;
-                if(MessageBox.Show(this,"Сначала проверьте Studio: ролик мог уже загрузиться. Сбросить защиту для выбранного аккаунта?","Studio",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-                foreach(var it in ch.Items??new List<YouTubeItem>()){it.StudioPending=false;it.StudioUploadId=Guid.NewGuid().ToString("N");}Store.Save(settings);RefreshGrid();
-            });
             menu.Items.Add("Подписи комментариев…", null, (s, e) => EditAllOwnerComments());
             menu.Items.Add("Предпросмотр расписания", null, (s, e) => PreviewSchedule());
             menu.Items.Add("Проверить IP (выделенный канал)", null, (s, e) => { _ = RunCheck(); });

@@ -24,23 +24,33 @@ namespace VideoBatch {
                 Check(job.studioProtocolVersion==2,"durable Studio protocol advertised by EXE");
                 Check(job.items.Length==5,"five separate items");
                 Check(!job.studioPaidPromotion&&!job.studioAlteredContent,"explicit No settings");
-                Check(job.items.All(x=>!string.IsNullOrWhiteSpace(x.tags)&&!string.IsNullOrWhiteSpace(x.description)),"Configured descriptions reach the Studio worker");
+                Check(job.items.All(x=>!string.IsNullOrWhiteSpace(x.tags)&&x.description==null),"Studio leaves descriptions untouched");
                 for(int i=0;i<5;i++){
                     var item=job.items[i];var slot=ScheduleGenerator.ParseSlot(item.scheduleDate,item.scheduleTime);
-                    Check(item.description==YouTubeMetadata.Build(prefs,channel,i+1).description,"description snapshot for each item");
+                    Check(item.description==null,"description is not sent for any item");
                     Check(item.video==channel.Items[i].Video,"original video path without copies");
                     Check(item.localJobId==channel.Items[i].StudioUploadId,"stable per-item id");
                     Check(item.scheduledUnixSeconds==new DateTimeOffset(slot).ToUnixTimeSeconds(),"PC instant");
                     Check(item.scheduledUtcOffsetMinutes==(int)TimeZoneInfo.Local.GetUtcOffset(slot).TotalMinutes,"offset at planned date");
                 }
+                string keys=YouTubeWarmupPanel.NormalizeKeywords("  трейдинг\r\nbinodex\nBINODEX\n\n бинодекс ");
+                Check(keys=="трейдинг\nbinodex\nбинодекс","warmup key normalization");
+                prefs.YouTubeWarmupKeywords=keys;Store.Save(prefs);
+                Check(Store.Load().YouTubeWarmupKeywords==keys,"warmup keys survive restart");
                 var serializer=new DataContractJsonSerializer(typeof(UploadJob));
+                var warmup=new UploadJob{shortsWarmup=true,warmupKeywords=keys,warmupMinMinutes=10,warmupMaxMinutes=10,keepProfileOpen=true,warmupLikePercent=37,warmupLikesEnabled=true};
+                using(var memory=new MemoryStream()){serializer.WriteObject(memory,warmup);memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.warmupKeywords==keys&&round.warmupMinMinutes==10&&round.warmupMaxMinutes==10&&round.keepProfileOpen&&round.warmupLikePercent==37,"warmup settings wire roundtrip");}
+                Console.WriteLine("Warmup: keyword normalization, restart persistence and wire settings PASS");
                 using(var memory=new MemoryStream()){serializer.WriteObject(memory,job);string raw=Encoding.UTF8.GetString(memory.ToArray());Check(raw.Contains("\"scheduledUtcOffsetMinutes\"")&&raw.Contains("\"tags\""),"wire field names");memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.items[4].description==job.items[4].description,"metadata serializer roundtrip");}
                 var en=new YouTubeChannel{Market="EN",ProfileId="profile-en"};Check(YouTubeMetadata.Build(prefs,en,1).description.Contains("English"),"English description bank");
                 prefs.YouTubeChannels=new List<YouTubeChannel>{channel};channel.Items[0].StudioPending=true;channel.Items[0].StudioVideoId="abcdefghijk";channel.Items[0].StudioPhase="editing";Store.Save(prefs);
-                var loaded=Store.Load();Check(loaded.YouTubeChannels[0].Items[0].StudioPending,"uncertain upload survives restart");Check(loaded.YouTubeChannels[0].Items[0].StudioUploadId==job.items[0].localJobId,"id survives restart");Check(loaded.YouTubeDescriptionBankEn.Count==2,"English bank survives restart");
+                var loaded=Store.Load();Check(StudioUploadState.WasSubmitted(loaded.YouTubeChannels[0].Items[0]),"draft is excluded from new transfers after restart");Check(!StudioUploadState.WasSubmitted(loaded.YouTubeChannels[0].Items[2]),"next untouched video remains eligible");Check(StudioUploadState.WasSubmitted(new YouTubeItem{StudioPending=true}),"interrupted transfer without ID never repeats automatically");Check(loaded.YouTubeChannels[0].Items[0].StudioPending,"uncertain upload survives restart");Check(loaded.YouTubeChannels[0].Items[0].StudioUploadId==job.items[0].localJobId,"id survives restart");Check(loaded.YouTubeDescriptionBankEn.Count==2,"English bank survives restart");
                 var retry=batch.ToUploadJob("not-saved",3001,prefs);
                 Check(retry.items[0].studioPending&&retry.items[0].studioVideoId=="abcdefghijk"&&retry.items[0].studioPhase=="editing","pending server ID reaches worker without resetting state");
                 using(var memory=new MemoryStream()){serializer.WriteObject(memory,retry);memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.items[0].studioVideoId=="abcdefghijk"&&round.items[0].studioPending&&round.items[0].studioPhase=="editing"&&round.studioProtocolVersion==2,"pending server ID wire roundtrip");}
+                var restarted=channel.Items[0];
+                bool duplicateBlocked=false;try{StudioUploadState.Apply(restarted,new UploadMessage{stage="item_submitting",localJobId=restarted.StudioUploadId});}catch{duplicateBlocked=true;}
+                Check(duplicateBlocked&&restarted.StudioVideoId=="abcdefghijk"&&restarted.StudioPending,"uncertain ID survives blocked duplicate transfer");
                 var durable=channel.Items[1];
                 foreach(var stage in new[]{"item_submitting","item_accepted","item_publishing","item_confirmed"}){
                     Check(StudioUploadState.RequiresAck(stage),"durable stage waits for host ack: "+stage);
@@ -75,7 +85,7 @@ namespace VideoBatch {
                 Check(Path.GetDirectoryName(renamed)==root,"rename does not create a staging copy");
                 Check(File.ReadAllText(occupied)=="existing bytes"&&File.ReadAllText(renamed)=="source bytes","collision keeps both files intact");
                 Check(UploadWindow.RenameVideoFile(renamed,"Новый заголовок",1,1)==renamed,"reselecting same title is idempotent");
-                foreach(var stage in new[]{"studio_date","studio_zone","studio_time","metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_publish","studio_close","studio_verify"})
+                foreach(var stage in new[]{"studio_date","studio_zone","studio_time","metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_publish","studio_close","studio_checks","studio_verify"})
                     Check(TaskQueueStore.MapStage(stage)==TaskQueueStatus.Scheduling,"Studio phase remains active: "+stage);
                 Check(TaskQueueStore.MapStage("upload_transfer")==TaskQueueStatus.Uploading,"upload transfer keeps active queue status");
                 Check(YouTubeOwnerPublishTests.RunSelfTests(),"author publication contract");

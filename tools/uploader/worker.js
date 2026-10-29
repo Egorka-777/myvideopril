@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-22-studio-upload-recovery-v20";
+const WORKER_BUILD = "2026-10-23-studio-two-profiles-v21";
 const studioBrowser = require('./studio-browser');
 const studioAcks=new Map();
 async function durableCheckpoint(stage,item,packIndex,extra={}){
@@ -182,22 +182,19 @@ async function apiRaw(path, options = {}, timeoutMs = 35000) {
 
 const { automationEndpoint, releaseTaskPage } = require("./dolphin-session");
 
-async function stopProfile() {
-  if (!profileStarted || !job || !profileOwned || job.keepProfileOpen) return;
-  try { await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
+async function stopProfile({ completedUpload = false } = {}) {
+  if (!profileStarted || !job || (!profileOwned && !completedUpload) || job.keepProfileOpen) return;
+  if(completedUpload)await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`);
+  else try { await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
   profileStarted = false;
 }
 
+const { loginWithToken } = require("./dolphin-local-auth");
+
 async function startOrConnectProfile() {
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
-  const loginOptions={
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: job.token })
-  };
   const studioUpload=studioBrowser.isStudioUpload(job);
-  if(studioUpload){
-    const auth=await apiRaw('/v1.0/auth/login-with-token',loginOptions,35000);
-    if(!auth.ok||auth.data.success===false)throw new Error('Dolphin: не подтверждена авторизация локального API (HTTP '+auth.status+').');
-  }else await api('/v1.0/auth/login-with-token',loginOptions);
+  await loginWithToken(job, apiRaw);
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
     { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:false}:{}) }
@@ -356,7 +353,7 @@ async function closeProfileSafely(page) {
   if (page && !page.isClosed()) await releaseTaskPage(page);
   if (browser) await browser.close(); // Disconnect CDP; Dolphin owns the browser.
   browser = null;
-  await stopProfile();
+  await stopProfile({ completedUpload: studioBrowser.isStudioUpload(job) });
 }
 
 async function fetchText(url, timeoutMs = 20000) {
@@ -2877,9 +2874,9 @@ function hydrateStudioItem(item){
 }
 async function uploadPackBulk(page,pack){
  const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
- await studioBrowser.openStudio(page,job.channelUrl,send,{preserveCompleted:selected.some(item=>item.studioPending||item.studioVideoId)});
+ await studioBrowser.openStudio(page,job.channelUrl,send);
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true,newTabPerVideo:true,channelUrl:job.channelUrl,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:false,waitForChecks:true,newTabPerVideo:true,channelUrl:job.channelUrl,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,accepted:studioAccepted,publishing:studioPublishing,confirmed:studioConfirmed,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send,{channelUrl:job.channelUrl}),
   usePage:page=>{taskPage=page;attachPageGuards(page);},
@@ -2938,14 +2935,14 @@ async function main() {
   if (job.shortsWarmup) {
     const { runShortsWarmup } = require("./youtube-shorts-warmup.js");
     youtubeOpened = true;
-    send("youtube", "Прогрев Shorts…", { percent: 30 });
+    send("youtube", "Автопрогрев по ключевым фразам · 10 минут…", { percent: 30 });
     await runShortsWarmup(page, job, (stage, text) => send(stage || "youtube", text, { percent: 50 }));
     if (job.keepProfileOpen) {
       if (page && !page.isClosed()) await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
       await browser.close().catch(() => {});
       browser = null;
       finished = true;
-      send("done", "Прогрев Shorts завершён.", { success: true, keptOpen: true, ip: verifiedIp, percent: 100 });
+      send("done", "Автопрогрев по ключевым фразам завершён.", { success: true, keptOpen: true, ip: verifiedIp, percent: 100 });
       return;
     }
     await browser.close().catch(() => {});
@@ -2953,7 +2950,7 @@ async function main() {
     await stopProfile();
     await pauseAfterWatch();
     finished = true;
-    send("done", "Прогрев Shorts завершён.", { success: true, keptOpen: false, ip: verifiedIp, percent: 100 });
+    send("done", "Автопрогрев по ключевым фразам завершён.", { success: true, keptOpen: false, ip: verifiedIp, percent: 100 });
     return;
   }
 

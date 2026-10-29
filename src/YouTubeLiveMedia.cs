@@ -16,6 +16,32 @@ namespace VideoBatch {
     }
     public static class YouTubeLiveMedia {
         public static string ConcatEntry(string path) => "file '" + path.Replace('\\', '/').Replace("'", "'\\''") + "'";
+        public static async Task PrepareFile(string source, string destination, string ffmpeg, string ffprobe, Action<string> log, CancellationToken ct, IProgress<double> progress = null) {
+            using (var playlist = await Prepare(new LiveOptions { VideoFile = source }, ffmpeg, ffprobe, log, ct, progress).ConfigureAwait(false)) {
+                ct.ThrowIfCancellationRequested();
+                File.Copy(System.IO.Path.Combine(playlist.DirectoryPath, "00000.ts"), destination, false);
+                try {
+                    var info = new FileInfo(destination);
+                    new System.Xml.Linq.XElement("VideoBatchLive", new System.Xml.Linq.XAttribute("length", info.Length),
+                        new System.Xml.Linq.XAttribute("duration", playlist.Duration.ToString("R", Core.Inv)))
+                        .Save(destination + ".live.xml");
+                } catch { File.Delete(destination); throw; }
+            }
+        }
+        static LivePlaylist OpenPreparedFile(string file) {
+            string marker = file + ".live.xml";
+            if (!File.Exists(marker)) return null;
+            var saved = System.Xml.Linq.XElement.Load(marker);
+            double duration;
+            if (saved.Name != "VideoBatchLive" || (long)saved.Attribute("length") != new FileInfo(file).Length
+                || !double.TryParse((string)saved.Attribute("duration"), System.Globalization.NumberStyles.Float, Core.Inv, out duration) || duration <= 0)
+                throw new InvalidOperationException("Готовый файл эфира изменён или повреждён. Подготовьте его заново.");
+            var playlist = new LivePlaylist { DirectoryPath = System.IO.Path.Combine(Store.Root, "live-media", Guid.NewGuid().ToString("N")), Duration = duration };
+            Directory.CreateDirectory(playlist.DirectoryPath);
+            playlist.Path = System.IO.Path.Combine(playlist.DirectoryPath, "playlist.ffconcat");
+            File.WriteAllLines(playlist.Path, new[] { "ffconcat version 1.0", ConcatEntry(System.IO.Path.GetFullPath(file)), "duration " + Core.N(duration) }, new UTF8Encoding(false));
+            return playlist;
+        }
         public static double FrameRate(string fps) { var parts=(fps ?? "").Split('/'); return parts.Length==2 && Core.Parse(parts[1])>0 ? Core.Parse(parts[0])/Core.Parse(parts[1]) : Core.Parse(fps); }
         public static IEnumerable<string> SourceArguments(string input, string output, Media media) {
             double fps=FrameRate(media.Fps);
@@ -32,6 +58,11 @@ namespace VideoBatch {
             return args;
         }
         public static async Task<LivePlaylist> Prepare(LiveOptions options, string ffmpeg, string ffprobe, Action<string> log, CancellationToken ct, IProgress<double> progress = null) {
+            if (!string.IsNullOrWhiteSpace(options.VideoFile) && System.IO.Path.GetExtension(options.VideoFile).Equals(".ts", StringComparison.OrdinalIgnoreCase)) {
+                var ready = OpenPreparedFile(options.VideoFile);
+                if (ready == null) throw new InvalidOperationException("Выберите TS-файл, созданный кнопкой «Подготовить видео», вместе с его .live.xml.");
+                log("Готовое видео · без повторного перекодирования"); progress?.Report(100); return ready;
+            }
             var result = new LivePlaylist { DirectoryPath = System.IO.Path.Combine(Store.Root, "live-media", Guid.NewGuid().ToString("N")) };
             Directory.CreateDirectory(result.DirectoryPath);
             try {

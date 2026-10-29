@@ -36,6 +36,10 @@ async function matchingImage(page,editor,reference,{persistent=false,cache=new M
  for(let i=0;i<await imgs.count();i++){
   const img=imgs.nth(i),info=await img.evaluate(e=>{const r=e.getBoundingClientRect();return {src:e.currentSrc||e.src,ready:e.complete&&e.naturalWidth>0,key:JSON.stringify([e.currentSrc||e.src,e.naturalWidth,e.naturalHeight,r.x,r.y,r.width,r.height])};});
   if(!info.ready||persistent&&!/^https:\/\//.test(info.src||''))continue;
+  // Readback may show a generated suggestion while the saved custom image is
+  // outside the viewport. Reveal each persistent candidate, not just the first
+  // visible image in the editor. Never scroll the live upload wizard here.
+  if(persistent&&await img.isVisible())await img.scrollIntoViewIfNeeded({timeout:5000});
   const old=cache.get(info.key);if(old&&Date.now()-old.at<2000){if(old.match)return info.src;continue;}
   const match=await matches(page,img,reference);cache.set(info.key,{at:Date.now(),match});if(match)return info.src;
  }return null;

@@ -878,8 +878,10 @@ async def resolve_target(client, text):
         target = await asyncio.wait_for(client.get_entity(text), 35)
     if not isinstance(target, (types.Channel, types.Chat)):
         raise ValueError('Нужна ссылка на группу/канал, а не на пользователя или сообщение')
-    if not target.creator and not (getattr(target, 'admin_rights', None) and target.admin_rights.invite_users):
-        raise ValueError('У выбранного аккаунта нет прав добавлять участников. Для теста выдайте ему права администратора в вашей группе')
+    me = await asyncio.wait_for(client.get_me(), 20)
+    perms = await asyncio.wait_for(client.get_permissions(target, me), 35)
+    if not (perms.is_creator or getattr(perms, 'invite_users', False)):
+        raise ValueError('У выбранного аккаунта нет прав добавлять участников. Выдайте право «Добавлять участников» администратору в группе или канале')
     return target
 
 

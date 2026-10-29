@@ -43,8 +43,103 @@ namespace VideoBatch {
                     using (var bmp = new System.Drawing.Bitmap(dialog.Width, dialog.Height)) { dialog.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(Path.Combine(outputDirectory, "live-dialog.png")); }
                     dialog.Close();
                 }
+                DialogDraftRoundTrip(root);
                 return true;
             } finally { Store.Root = previousRoot; Directory.Delete(root, true); }
+        }
+        public static bool RunPreparationUiSelfTests(string ffmpeg, string ffprobe) {
+            Check(Thread.CurrentThread.GetApartmentState() == ApartmentState.STA, "preparation UI test requires STA");
+            string oldRoot = Store.Root, root = Path.Combine(Path.GetTempPath(), "vb-live-preparation-ui-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root); Store.Root = root;
+            File.WriteAllText(AppPaths.InstallRootHintPathForUser(), Path.GetDirectoryName(Path.GetDirectoryName(ffmpeg)));
+            try {
+                string source = Path.Combine(root, "source.mp4");
+                Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", source }, CancellationToken.None).GetAwaiter().GetResult();
+                var manager = new YouTubeLiveManager(new LiveStore(root));
+                using (var dialog = new YouTubeLiveDialog(manager, new[] { new YouTubeChannel { ChannelId = "preparation-ui", Name = "Preparation UI" } })) {
+                    dialog.Show(); System.Windows.Forms.Application.DoEvents();
+                    DialogField<System.Windows.Forms.TextBox>(dialog, "folder").Text = source;
+                    var operation = (Task)typeof(YouTubeLiveDialog).GetMethod("ValidateLaunch", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(dialog, null);
+                    var bar = DialogField<System.Windows.Forms.ProgressBar>(dialog, "preparationProgress");
+                    Check(!operation.IsCompleted && bar.Visible && !DialogField<System.Windows.Forms.Button>(dialog, "launch").Enabled, "launch returned before displaying preparation (duplicate launch guard)");
+                    Check(bar.RectangleToScreen(bar.ClientRectangle).IntersectsWith(dialog.RectangleToScreen(dialog.ClientRectangle)), "preparation progress outside dialog");
+                    var wait = System.Diagnostics.Stopwatch.StartNew();
+                    while (bar.Value == 0 && !operation.IsCompleted && wait.Elapsed < TimeSpan.FromSeconds(30)) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(10); }
+                    Check(bar.Value > 0, "actual FFmpeg progress never reached the dialog");
+                    ((System.Windows.Forms.Button)dialog.CancelButton).PerformClick();
+                    wait.Restart();
+                    while (!operation.IsCompleted && wait.Elapsed < TimeSpan.FromSeconds(15)) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(10); }
+                    Check(operation.IsCompleted, "cancel did not stop preparation"); operation.GetAwaiter().GetResult();
+                    Check(manager.Store.Account("preparation-ui") == null, "cancelled preparation connected a channel");
+                }
+                Console.WriteLine("LIVE PREPARATION UI PASS: launch enters real FFmpeg preparation, visible progress and cancellation before browser.");
+                return true;
+            } finally { Store.Root = oldRoot; Directory.Delete(root, true); }
+        }
+        static T DialogField<T>(YouTubeLiveDialog dialog, string name) where T : class {
+            return (T)typeof(YouTubeLiveDialog).GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(dialog);
+        }
+        static void DialogDraftRoundTrip(string root) {
+            var channel = new YouTubeChannel { ChannelId = "draft-ui", Name = "Draft UI" };
+            var other = new YouTubeChannel { ChannelId = "draft-ui-other", Name = "Other UI" };
+            var manager = new YouTubeLiveManager(new LiveStore(root));
+            using (var dialog = new YouTubeLiveDialog(manager, new[] { channel })) {
+                dialog.Show();
+                DialogField<System.Windows.Forms.TextBox>(dialog, "title").Text = "Не запущенный эфир";
+                DialogField<System.Windows.Forms.TextBox>(dialog, "description").Text = "Описание\r\nВторая строка";
+                DialogField<System.Windows.Forms.TextBox>(dialog, "tags").Text = " a,тег с пробелом,, ";
+                DialogField<System.Windows.Forms.TextBox>(dialog, "folder").Text = Path.Combine(root, "missing-video.mp4");
+                DialogField<System.Windows.Forms.TextBox>(dialog, "thumbnail").Text = Path.Combine(root, "missing-thumb.png");
+                DialogField<System.Windows.Forms.ComboBox>(dialog, "privacy").SelectedIndex = 2;
+                DialogField<System.Windows.Forms.CheckBox>(dialog, "kids").Checked = true;
+                ((System.Windows.Forms.Button)dialog.CancelButton).PerformClick();
+            }
+            var reloaded = new YouTubeLiveManager(new LiveStore(root));
+            using (var dialog = new YouTubeLiveDialog(reloaded, new[] { channel })) {
+                dialog.Show();
+                Check(DialogField<System.Windows.Forms.TextBox>(dialog, "title").Text == "Не запущенный эфир" &&
+                    DialogField<System.Windows.Forms.TextBox>(dialog, "description").Text.Replace("\r\n", "\n") == "Описание\nВторая строка" &&
+                    DialogField<System.Windows.Forms.TextBox>(dialog, "tags").Text == " a,тег с пробелом,, " &&
+                    DialogField<System.Windows.Forms.TextBox>(dialog, "folder").Text == Path.Combine(root, "missing-video.mp4") &&
+                    DialogField<System.Windows.Forms.TextBox>(dialog, "thumbnail").Text == Path.Combine(root, "missing-thumb.png") &&
+                    DialogField<System.Windows.Forms.ComboBox>(dialog, "privacy").SelectedIndex == 2 &&
+                    DialogField<System.Windows.Forms.CheckBox>(dialog, "kids").Checked, "cancel/reopen lost draft fields");
+                DialogField<System.Windows.Forms.TextBox>(dialog, "title").Text = "";
+                dialog.Close();
+            }
+            using (var dialog = new YouTubeLiveDialog(reloaded, new[] { other })) {
+                dialog.Show();
+                Check(DialogField<System.Windows.Forms.TextBox>(dialog, "title").Text == "Прямой эфир" &&
+                    DialogField<System.Windows.Forms.TextBox>(dialog, "folder").Text == "", "new channel inherited another channel draft");
+                DialogField<System.Windows.Forms.TextBox>(dialog, "title").Text = "Другой эфир";
+                dialog.Close();
+            }
+            var saved = new LiveStore(root);
+            Check(saved.Draft(channel.ChannelId).Title == "" && saved.Draft(other.ChannelId).Title == "Другой эфир", "close/empty title or UI channel isolation failed");
+            Console.WriteLine("LIVE UI TEST: draft cancel/reopen, close, invalid unfinished fields and channel isolation passed");
+        }
+        static void DraftStoreRoundTrip(string root) {
+            string directory = Path.Combine(root, "drafts");
+            var store = new LiveStore(directory);
+            var a = new LiveDialogDraft { LocalId = "a", Title = "Черновик <&>", Description = "Строка 1\nСтрока 2", Tags = " тег, ещё тег,, ",
+                VideoFile = @"C:\missing\video.mp4", Thumbnail = @"C:\missing\thumb.png", Privacy = "unlisted", MadeForKids = true };
+            var b = new LiveDialogDraft { LocalId = "b", Title = "Другой канал", Privacy = "private" };
+            store.SaveDrafts(new[] { a, b });
+            a.Title = "Unsaved mutation";
+            store = new LiveStore(directory);
+            var loaded = store.Draft("a");
+            Check(loaded.Title == "Черновик <&>" && loaded.Description == "Строка 1\nСтрока 2" && loaded.Tags == " тег, ещё тег,, " &&
+                loaded.VideoFile == a.VideoFile && loaded.Thumbnail == a.Thumbnail && loaded.Privacy == "unlisted" && loaded.MadeForKids,
+                "draft XML roundtrip lost fields or stored caller reference");
+            loaded.Title = "Unsaved read mutation";
+            Check(store.Draft("a").Title == "Черновик <&>", "draft read leaked mutable store state");
+            store.SaveDrafts(new[] { new LiveDialogDraft { LocalId = "a", Title = "", Tags = "" } });
+            store = new LiveStore(directory);
+            Check(store.Draft("a").Title == "" && store.Draft("b").Title == "Другой канал" && store.Draft("b").Privacy == "private" &&
+                store.Draft("unrelated") == null && store.Config.Drafts.Count == 2, "draft replacement/clear affected another local channel");
+            Check(typeof(LiveDialogDraft).GetFields().Select(f => f.Name).OrderBy(n => n).SequenceEqual(
+                new[] { "LocalId", "VideoFile", "Title", "Description", "Thumbnail", "Tags", "Privacy", "MadeForKids" }.OrderBy(n => n)), "draft schema contains non-editor fields or secrets");
+            Console.WriteLine("LIVE TEST: draft XML roundtrip, detached snapshots and per-channel isolation passed");
         }
         static void Check(bool ok, string message) { if (!ok) throw new InvalidOperationException("Live self-test: " + message); }
         static void Rejected(Action action,string message) { bool rejected=false;try{action();}catch(InvalidOperationException){rejected=true;}Check(rejected,message); }
@@ -122,6 +217,7 @@ namespace VideoBatch {
             string root = Path.Combine(Path.GetTempPath(), "videobatch-live-tests-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);string previousRoot=Store.Root;Store.Root=root;
             try {
+                DraftStoreRoundTrip(root);
                 string folder = Path.Combine(root, "videos"); Directory.CreateDirectory(folder);
                 File.WriteAllText(Path.Combine(folder, "02.mp4"), "dummy"); File.WriteAllText(Path.Combine(folder, "01.mp4"), "dummy");
                 var options = new LiveOptions { Folder = folder, Title = "Test", Tags = new[] { "a", "b" } };
@@ -290,6 +386,20 @@ namespace VideoBatch {
                     Check(times.Length > 315, "not enough video frames across repeats");
                     for (int i = 1; i < times.Length; i++) Check(times[i] > times[i - 1] && times[i] - times[i - 1] < 0.1, "timestamp pause at file or loop boundary: "+i+" · "+Core.N(times[i-1])+" → "+Core.N(times[i]));
                 }
+                string saved = Path.Combine(root, "saved.live.ts");
+                await YouTubeLiveMedia.PrepareFile(a, saved, ffmpeg, ffprobe, _ => { }, ct).ConfigureAwait(false);
+                Check(File.Exists(saved) && File.Exists(saved + ".live.xml"), "standalone preparation not saved");
+                var savedOptions = new LiveOptions { VideoFile = saved, Title = "ready" }; savedOptions.Validate();
+                // Invalid tool paths prove that reopening a prepared file invokes no encoder/probe.
+                using (var ready = await YouTubeLiveMedia.Prepare(savedOptions, "missing-ffmpeg", "missing-ffprobe", _ => { }, ct).ConfigureAwait(false)) {
+                    string output = Path.Combine(root, "saved-loop.flv");
+                    var args = YouTubeLiveMedia.StreamArguments(ready, true, 0, output).ToList(); args.Remove("-re");
+                    args.InsertRange(args.Count - 3, new[] { "-t", "5", "-y" });
+                    await Core.Tool(ffmpeg, args, ct, null, 60).ConfigureAwait(false);
+                    Check(Core.VideoInfo(await Core.Probe(ffprobe, output, ct).ConfigureAwait(false)).Duration > 4.8, "saved file did not loop");
+                }
+                Check(File.Exists(saved) && File.Exists(saved + ".live.xml"), "session cleanup deleted saved video");
+                Console.WriteLine("LIVE MEDIA PASS: separate saved preparation, no re-encoding, loop playback, persistent file survives cleanup.");
                 string portrait=Path.Combine(root,"portrait");Directory.CreateDirectory(portrait);
                 await Core.Tool(ffmpeg,new[]{"-y","-f","lavfi","-i","testsrc2=size=360x640:rate=60000/1001","-t","1","-c:v","libx264",Path.Combine(portrait,"01.mp4")},ct).ConfigureAwait(false);
                 var preparationProgress = new InlineProgress();

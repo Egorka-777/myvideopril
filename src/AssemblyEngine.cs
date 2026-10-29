@@ -20,12 +20,13 @@ namespace VideoBatch {
         static string Sample(string source,string scale) {
             string x="((X-W/2)/"+scale+"+W/2)", y="((Y-H/2)/"+scale+"+H/2)";
             string coordinates="min(W-1,max(0,"+x+")),min(H-1,max(0,"+y+"))";
-            return "if(eq(PLANE,0),"+source+"0("+coordinates+"),if(eq(PLANE,1),"+source+"1("+coordinates+"),"+source+"2("+coordinates+")))";
+            return "if(eq(PLANE,0),"+source+"0("+coordinates+"),if(eq(PLANE,1),"+source+"1("+coordinates+"),if(eq(PLANE,2),"+source+"2("+coordinates+"),"+source+"3("+coordinates+"))))";
         }
         public static async Task<List<AssemblyVideo>> ReadVideos(AssemblyTemplate t, string ffmpeg, string probe, CancellationToken ct) {
             if (t.Scenes.Count == 0) return new List<AssemblyVideo>();
-            for (int i=0;i<t.Scenes.Count;i++) if (AssemblyFiles.Pool(t.Resolve(t.VideoSource(t.Scenes[i])),AssemblyFiles.VideoExtensions).Count==0) throw new Exception("Нет видео для сцены "+(i+1)+". Выбери общие видео или загрузи свои для этой сцены.");
-            var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(t.VideoSource(s)), AssemblyFiles.VideoExtensions)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            for (int i=0;i<t.Scenes.Count;i++) if (AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo?t.Videos:t.VideoSource(t.Scenes[i])),AssemblyFiles.VideoExtensions).Count==0) throw new Exception("Нет видео для сцены "+(i+1)+". Выбери общие видео или загрузи свои для этой сцены.");
+            if(t.SplitLayout!="none" && AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions).Count==0)throw new Exception("Добавь второе видео для разделённого экрана.");
+            var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo?t.Videos:t.VideoSource(s)), AssemblyFiles.VideoExtensions)).Concat(t.SplitLayout!="none"?AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions):new List<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (paths.Count == 0) throw new Exception("Не найдены видео. Нажми «Видео» слева и добавь хотя бы один файл.");
             var result = new List<AssemblyVideo>();
             foreach (var path in paths) {
@@ -34,7 +35,13 @@ namespace VideoBatch {
                 var m = Core.VideoInfo(await Core.Probe(probe, ready, ct).ConfigureAwait(false));
                 result.Add(new AssemblyVideo { Path = ready, Duration = m.VideoDuration, Hash = AssemblyFiles.Hash(ready) });
             }
-            foreach (string path in AssemblyFiles.Pool(t.Resolve(t.Music), AssemblyFiles.MusicExtensions)) {
+            var audioPaths=AssemblyFiles.Pool(t.Resolve(t.Music),AssemblyFiles.MusicExtensions).Concat(t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(s.Music),AssemblyFiles.MusicExtensions))).ToList();
+            foreach (var line in t.SpeechLines ?? new List<AssemblySpeechLine>()) {
+                string speech = t.Resolve(line.AudioPath);
+                if (!string.IsNullOrWhiteSpace(speech) && File.Exists(speech)) audioPaths.Add(speech);
+            }
+            if(!string.IsNullOrWhiteSpace(t.Voiceover)) {string voice=t.ResolveAudio(t.Voiceover);if(!string.IsNullOrWhiteSpace(voice)&&File.Exists(voice))audioPaths.Add(voice);}
+            foreach (string path in audioPaths.Distinct(StringComparer.OrdinalIgnoreCase)) {
                 try { Core.AudioDuration(await Core.Probe(probe, path, ct).ConfigureAwait(false)); }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception e) { throw new Exception("Не удалось прочитать музыку «" + Path.GetFileName(path) + "»: " + e.Message, e); }
@@ -91,6 +98,9 @@ namespace VideoBatch {
         }
         // Retained only as a reference for controlled before/after benchmarks.
         public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
+            if(t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
+                await AssemblyRender.Run(t,p,ffmpeg,ffprobe,output,work,rasterize,ct,progress).ConfigureAwait(false);return;
+            }
             Directory.CreateDirectory(work); var paths = new List<string>();
             for (int i = 0; i < p.Scenes.Count; i++) {
                 ct.ThrowIfCancellationRequested(); var scene = p.Scenes[i];
@@ -136,7 +146,8 @@ namespace VideoBatch {
                             ct.ThrowIfCancellationRequested(); var plan = batch.Plans[i];
                             string itemWork = Path.Combine(work, global.ToString()); Directory.CreateDirectory(itemWork);
                             string partial = Path.Combine(itemWork, "result.mp4");
-                            string destination = Path.Combine(t.Output, "assembled-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4");
+                            string assembledStem = "assembled-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                            string destination = AssemblyFiles.SafeImportDestination(t.Output, Path.Combine(t.Output, assembledStem + ".mp4"));
                             try {
                                 double renderFraction = 0;
                                 await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct,
