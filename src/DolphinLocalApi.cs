@@ -21,8 +21,9 @@ namespace VideoBatch {
             using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel)) {
                 deadline.CancelAfter(TimeSpan.FromSeconds(20));
                 try {
-                    return await ResolvePortsAsync(token.Trim(), CandidatePorts(preferredPort),
-                        new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }, deadline.Token, report).ConfigureAwait(false);
+                    // Process/port enumeration must never run on the WinForms UI thread.
+                    return await Task.Run(() => ResolvePortsAsync(token.Trim(), CandidatePorts(preferredPort),
+                        new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }, deadline.Token, report), deadline.Token).ConfigureAwait(false);
                 } catch (OperationCanceledException) when (!cancel.IsCancellationRequested) {
                     throw new TimeoutException("Проверка API Dolphin превысила 20 секунд. Укажите API-порт из окна Health в Dolphin; подробности — в журнале приложения.");
                 }
