@@ -194,7 +194,7 @@ const { loginWithToken } = require("./dolphin-local-auth");
 async function startOrConnectProfile() {
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
   const studioUpload=studioBrowser.isStudioUpload(job);
-  await loginWithToken(job, apiRaw);
+  await loginWithToken(job, apiRaw, text => send("dolphin", text));
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
     { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:false}:{}) }
@@ -3162,3 +3162,4 @@ module.exports = {
   setSchedule, publish, waitEnabled, enrichWatchTarget, buildCatalogPlan,
   buildMeshCatalogPlan, findWatchLinkOnVideosTab, openMeshLongFromVideosTab
 };
+

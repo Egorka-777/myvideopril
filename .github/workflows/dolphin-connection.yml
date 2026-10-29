@@ -1,0 +1,51 @@
+name: Dolphin local API connection
+on:
+  push:
+    branches: [fix/dolphin-local-api-20261029]
+  pull_request:
+    paths:
+      - 'src/DolphinLocalApi*.cs'
+      - 'src/AppShell.cs'
+      - 'tools/uploader/dolphin-local-auth.js'
+      - 'tests/dolphin_local_auth.js'
+      - '.github/workflows/dolphin-connection.yml'
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Local auth and profile reuse regressions
+        run: |
+          node tests/dolphin_local_auth.js
+          if ($LASTEXITCODE -ne 0) { throw 'Dolphin auth regressions' }
+          node tests/dolphin_session_regressions.js
+          if ($LASTEXITCODE -ne 0) { throw 'Dolphin session regressions' }
+      - name: Compile actual desktop application
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: CSharp auth regressions
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          if (!$asm.GetType('VideoBatch.DolphinLocalApiTests').GetMethod('RunSelfTests').Invoke($null,@())) { throw 'Dolphin local API tests failed' }
+      - name: Record source version
+        shell: pwsh
+        run: |
+          Set-Content SOURCE_COMMIT.txt '${{ github.sha }}'
+          Set-Content CONNECTION_BUILD.txt '2026-10-29-dolphin-auth-v2'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dolphin-Connection-Fix-20261029
+          path: |
+            bin/Release/net48/VideoBatch.exe
+            bin/Release/net48/VideoBatch.exe.config
+            tools/uploader/dolphin-local-auth.js
+            tools/uploader/worker.js
+            SOURCE_COMMIT.txt
+            CONNECTION_BUILD.txt
+            docs/AGENT_DOLPHIN_CONNECTION_20261029_RU.md

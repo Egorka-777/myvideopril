@@ -1,91 +1,83 @@
 "use strict";
 
 const { execSync } = require("child_process");
+const BUILD = "2026-10-29-dolphin-auth-v2";
 
 function discoverDolphinListeningPorts() {
-  const ports = [];
-  const seen = new Set();
-  const add = (p) => {
-    const n = Number(p);
-    if (!Number.isInteger(n) || n < 1 || n > 65535 || seen.has(n)) return;
-    seen.add(n);
-    ports.push(n);
-  };
+  if (process.platform !== "win32") return [];
   try {
-    let taskOut = "";
-    try {
-      taskOut = execSync('tasklist /FI "IMAGENAME eq Dolphin Anty.exe" /FO CSV /NH', {
-        encoding: "utf8",
-        timeout: 5000,
-        windowsHide: true
-      });
-    } catch (_) {
-      return ports;
-    }
+    const taskOut = execSync('tasklist /FI "IMAGENAME eq Dolphin Anty.exe" /FO CSV /NH', {
+      encoding: "utf8", timeout: 2500, windowsHide: true
+    });
     const pids = new Set();
     for (const line of taskOut.split(/\r?\n/)) {
       const m = line.match(/^"Dolphin Anty\.exe","(\d+)"/i);
       if (m) pids.add(Number(m[1]));
     }
-    if (!pids.size) return ports;
-    const netOut = execSync("netstat -ano", { encoding: "utf8", timeout: 8000, windowsHide: true });
-    for (const line of netOut.split(/\r?\n/)) {
-      if (!/LISTENING/i.test(line)) continue;
+    if (!pids.size) return [];
+    const out = execSync("netstat -ano -p tcp", { encoding: "utf8", timeout: 2500, windowsHide: true });
+    const ports = [];
+    for (const line of out.split(/\r?\n/)) {
       const parts = line.trim().split(/\s+/);
-      if (parts.length < 5) continue;
-      const pid = Number(parts[parts.length - 1]);
-      if (!pids.has(pid)) continue;
-      const addr = parts[1] || "";
-      const colon = addr.lastIndexOf(":");
-      if (colon < 0) continue;
-      const portText = addr.slice(colon + 1);
-      if (portText.startsWith("[")) continue;
-      add(portText);
+      if (parts.length < 5 || !/LISTENING/i.test(line) || !pids.has(Number(parts[parts.length - 1]))) continue;
+      const port = Number((parts[1] || "").slice((parts[1] || "").lastIndexOf(":") + 1));
+      if (Number.isInteger(port) && port > 0 && port <= 65535 && !ports.includes(port)) ports.push(port);
     }
-  } catch (_) {}
-  return ports;
+    return ports;
+  } catch (_) { return []; }
 }
 
-function candidatePorts(preferred) {
-  const out = [];
-  const seen = new Set();
-  const add = (p) => {
-    const n = Number(p);
-    if (!Number.isInteger(n) || n < 1 || n > 65535 || seen.has(n)) return;
-    seen.add(n);
-    out.push(n);
-  };
-  for (const p of discoverDolphinListeningPorts()) add(p);
-  add(preferred);
-  for (let p = 3001; p <= 3020; p++) add(p);
-  return out;
+function candidatePorts(preferred, discovered = []) {
+  const valid = p => Number.isInteger(Number(p)) && Number(p) > 0 && Number(p) <= 65535;
+  const primary = valid(preferred) ? Number(preferred) : 3001;
+  return [...new Set([primary, 3001, ...discovered, ...Array.from({ length: 19 }, (_, i) => i + 3002)].filter(valid).map(Number))];
 }
 
-async function loginWithToken(job, requestRaw) {
-  const token = job.token;
-  if (!token) throw new Error("Нет API-токена Dolphin. Откройте «1. Dolphin…» и вставьте токен.");
-  const options = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token })
-  };
-  let lastStatus = 0;
-  let wrongServiceOnPreferred = false;
-  const preferred = job.localPort;
-  for (const port of candidatePorts(job.localPort)) {
+async function loginWithToken(job, requestRaw, report = () => {}, options = {}) {
+  const token = typeof job.token === "string" ? job.token.trim() : "";
+  if (!token) throw new Error("Нет API-токена Dolphin. Сохраните токен в настройках.");
+  const previous = job.localPort;
+  const deadline = Date.now() + (options.timeoutMs || 20000);
+  const checked = new Set(), replies = [];
+  let confirmed = false;
+  report("Проверка API Dolphin · " + BUILD);
+  async function probe(port) {
+    if (checked.has(port)) return false;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("Проверка API Dolphin превысила лимит времени. Проверьте API-порт в окне Health; подробности — в журнале.");
+    checked.add(port);
     job.localPort = port;
-    const auth = await requestRaw("/v1.0/auth/login-with-token", options, 4000);
-    lastStatus = auth.status || 0;
-    if (auth.ok && auth.data && auth.data.success !== false) return port;
-    if (auth.status === 401 || auth.status === 403 || (auth.data && auth.data.success === false)) {
-      throw new Error("API-токен Dolphin не принят локальным API (порт " + port + "). Создайте токен в кабинете dolphin-anty.com → API и оставьте Dolphin Anty запущенным под тем же аккаунтом.");
+    let auth;
+    try {
+      auth = await requestRaw("/v1.0/auth/login-with-token", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token })
+      }, Math.min(2500, remaining));
+    } catch (_) {
+      // Bodies/errors can echo credentials; log only endpoint/status instead.
+      auth = { ok: false, status: 0 };
     }
-    if (port === preferred && auth.status === 404) wrongServiceOnPreferred = true;
+    const status = Number(auth && auth.status) || 0;
+    const ok = !!(auth && auth.ok && status >= 200 && status < 300 && auth.data && auth.data.success === true);
+    const detail = status ? "HTTP " + status : "нет ответа / таймаут";
+    report("POST 127.0.0.1:" + port + "/v1.0/auth/login-with-token → " + detail + (ok ? "; success=true" : "; вход не подтверждён"));
+    replies.push(port + ": " + detail);
+    return ok;
   }
-  if (wrongServiceOnPreferred) {
-    throw new Error("Порт " + preferred + " занят не Dolphin (HTTP 404). Закройте другой сервис на этом порту или укажите порт из окна Health в Dolphin Anty.");
+  try {
+    // Fast path before tasklist/netstat.
+    const initial = candidatePorts(previous);
+    for (const port of initial.slice(0, initial[0] === 3001 ? 1 : 2)) {
+      if (await probe(port)) { confirmed = true; return port; }
+    }
+    const discovered = options.discoverPorts ? await options.discoverPorts() : discoverDolphinListeningPorts();
+    for (const port of candidatePorts(previous, discovered)) {
+      if (await probe(port)) { confirmed = true; return port; }
+    }
+    throw new Error("Не удалось подтвердить вход в локальный API Dolphin. Ответы: " + replies.slice(0, 5).join("; ") +
+      ". Проверьте API-порт в окне Health. Отказ служебного порта не доказывает, что токен неверный; все попытки записаны в журнале.");
+  } finally {
+    if (!confirmed) job.localPort = previous;
   }
-  throw new Error("Dolphin: не подтверждена авторизация локального API (HTTP " + lastStatus + "). Запустите Dolphin Anty и укажите в «1. Dolphin…» порт из окна Health.");
 }
 
-module.exports = { candidatePorts, discoverDolphinListeningPorts, loginWithToken };
+module.exports = { BUILD, candidatePorts, discoverDolphinListeningPorts, loginWithToken };

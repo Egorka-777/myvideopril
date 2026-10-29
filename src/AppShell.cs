@@ -425,29 +425,43 @@ namespace VideoBatch {
                 if (manual) MessageBox.Show(this, "Проверка Dolphin уже выполняется. Подождите несколько секунд.", "Dolphin API", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            if (manual) dolphinRefreshBtn.Enabled = false;
+            dolphinRefreshBtn.Enabled = false;
+            string detail = "";
+            string checkId = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            SetDolphinState("checking", "Dolphin · проверяю API…");
+            AppDiagnostics.Write("Dolphin", "", checkId, "connection_start", DolphinLocalApi.Build);
             try {
                 using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20))) {
                     var live = Store.Load();
                     settings.ProtectedDolphinToken = live.ProtectedDolphinToken;
                     settings.DolphinPort = live.DolphinPort;
                     string token = WindowsSupport.Unprotect(live.ProtectedDolphinToken);
-                    if (string.IsNullOrWhiteSpace(token)) { SetDolphinState("fail", "Dolphin · нет токена"); return; }
-                    int port = await DolphinLocalApi.ResolvePortAsync(token, live.DolphinPort, timeout.Token).ConfigureAwait(true);
+                    if (string.IsNullOrWhiteSpace(token)) { detail = "Dolphin · API-токен не задан или не читается на этом ПК. Сохраните токен в настройках."; SetDolphinState("fail", "Dolphin · нет токена"); return; }
+                    int port = await DolphinLocalApi.ResolvePortAsync(token, live.DolphinPort, timeout.Token,
+                        line => AppDiagnostics.Write("Dolphin", "", checkId, "connection_probe", line)).ConfigureAwait(true);
+                    if (IsDisposed || Disposing) return;
                     if (port != live.DolphinPort) {
                         settings.DolphinPort = port;
                         SaveSettings();
                     }
+                    detail = "Dolphin · вход подтверждён, API-порт " + port;
                     SetDolphinState("ok", "Dolphin · порт " + port);
                 }
             } catch (Exception ex) {
-                string msg = ex.Message ?? "недоступен";
+                detail = ex is OperationCanceledException
+                    ? "Проверка Dolphin превысила 20 секунд. Проверьте API-порт в окне Health; затем нажмите обновление."
+                    : (ex.Message ?? "Dolphin недоступен");
+                string msg = detail;
                 if (msg.Length > 72) msg = msg.Substring(0, 69) + "…";
-                SetDolphinState("fail", "Dolphin · " + msg);
+                if (!IsDisposed && !Disposing) SetDolphinState("fail", "Dolphin · " + msg);
             } finally {
                 Interlocked.Exchange(ref dolphinCheckRunning, 0);
-                if (manual) dolphinRefreshBtn.Enabled = true;
-                if (manual) MessageBox.Show(this, dolphinLabel.Text, "Dolphin API", MessageBoxButtons.OK, dolphinState == "ok" ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                AppDiagnostics.Write("Dolphin", "", checkId, "connection_end", detail + " · " + elapsed.ElapsedMilliseconds + " мс", dolphinState == "ok" ? "info" : "warning");
+                if (!IsDisposed && !Disposing) {
+                    dolphinRefreshBtn.Enabled = true;
+                    if (manual) MessageBox.Show(this, detail, "Dolphin API", MessageBoxButtons.OK, dolphinState == "ok" ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                }
             }
         }
 
@@ -456,3 +470,4 @@ namespace VideoBatch {
         void SaveSettings() { try { Store.Save(settings); } catch { } }
     }
 }
+
