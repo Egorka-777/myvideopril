@@ -54,6 +54,7 @@ namespace VideoBatch {
         public AssemblyMarketSettings MarketRu = new AssemblyMarketSettings(), MarketEn = new AssemblyMarketSettings();
         public AssemblyMarketSettings MarketRuInst = new AssemblyMarketSettings(), MarketEnInst = new AssemblyMarketSettings();
         public AssemblyMarketSettings MarketRuTikTok = new AssemblyMarketSettings(), MarketEnTikTok = new AssemblyMarketSettings();
+        public AssemblyMarketSettings MarketTest = new AssemblyMarketSettings();
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
@@ -62,6 +63,9 @@ namespace VideoBatch {
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
+        /// <summary>Доля первой половины (верх/слева), 0.25–0.75.</summary>
+        public double SplitRatio = .5;
+        public double SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
         public List<AssemblyCaption> Captions = new List<AssemblyCaption>();
@@ -108,7 +112,9 @@ namespace VideoBatch {
             HistoryScope = AssemblyHistoryScope.Normalize(HistoryScope);
             if (!Transitions.Contains(Transition)) throw new Exception("Неизвестный переход.");
             if (SplitLayout != "none" && SplitLayout != "horizontal" && SplitLayout != "vertical") throw new Exception("Неизвестный шаблон двух видео.");
-            Check(SplitSoftness, 0, .5, "Мягкость границы"); Check(VoiceoverVolume, 0, 2, "Громкость озвучки");
+            Check(SplitSoftness, 0, .5, "Мягкость границы"); Check(SplitRatio, .25, .75, "Доля первой половины");
+            Check(SplitPrimaryZoom, .85, 1.15, "Масштаб первой половины"); Check(SplitSecondaryZoom, .85, 1.15, "Масштаб второй половины");
+            Check(VoiceoverVolume, 0, 2, "Громкость озвучки");
             if (GlobalLayers == null) GlobalLayers = new List<AssemblyLayer>();
             if (Captions == null) Captions = new List<AssemblyCaption>();
             if (SubtitleStyle == null) SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };

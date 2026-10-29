@@ -37,7 +37,8 @@ namespace VideoBatch {
         FlowLayoutPanel options;
         FlowLayoutPanel footer, packChips;
         Label status, selectedCaption, capacityLabel;
-        Button videoButton, musicButton, globalImagesButton, voiceToolbarButton, subsToolbarButton, formatButton, titlesButton, profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, profileRuTikTokBtn, profileEnTikTokBtn, stop, imageFiles, transitionButton, objectFiles, countButton, lessButton, moreButton, assembleButton, sharedVideoButton, sceneVideoButton;
+        Button videoButton, musicButton, globalImagesButton, voiceToolbarButton, subsToolbarButton, formatButton, titlesButton, profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, profileTestBtn, profileRuTikTokBtn, profileEnTikTokBtn, stop, imageFiles, transitionButton, objectFiles, countButton, lessButton, moreButton, assembleButton;
+        NumericUpDown splitPrimaryZoom, splitSecondaryZoom;
         double? timingAnchorDuration;
         List<WarmupCaption> previewSpeechCaptions;
         int timingVersion;
@@ -135,13 +136,15 @@ namespace VideoBatch {
             profileEnBtn = ProfileToggle("EN YT", AssemblyProfile.En);
             profileRuInstBtn = ProfileToggle("RU INS", AssemblyProfile.RuInst);
             profileEnInstBtn = ProfileToggle("EN INS", AssemblyProfile.EnInst);
+            profileTestBtn = ProfileToggle("ТЕСТ", AssemblyProfile.Test);
             profileRuTikTokBtn = ProfileToggle("RU TikTok", AssemblyProfile.RuTikTok);
             profileEnTikTokBtn = ProfileToggle("EN TikTok", AssemblyProfile.EnTikTok);
             profileRuBtn.Name = "AssemblyProfileRu"; profileEnBtn.Name = "AssemblyProfileEn";
             profileRuInstBtn.Name = "AssemblyProfileRuInst"; profileEnInstBtn.Name = "AssemblyProfileEnInst";
+            profileTestBtn.Name = "AssemblyProfileTest";
             profileRuTikTokBtn.Name = "AssemblyProfileRuTikTok"; profileEnTikTokBtn.Name = "AssemblyProfileEnTikTok";
             var marketRow = new FlowLayoutPanel { AutoSize = true, AutoSizeMode=AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = new Padding(0, 8, 0, 0) };
-            marketRow.Controls.Add(Theme.MakeHeroSegmentGroup("", profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn));
+            marketRow.Controls.Add(Theme.MakeHeroSegmentGroup("", profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, profileTestBtn));
             headerGrid.Controls.Add(marketRow, 0, 1); headerGrid.SetColumnSpan(marketRow, 2);
             header.Controls.Add(headerGrid);
             workspace = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(workspace,0,1);
@@ -177,11 +180,13 @@ namespace VideoBatch {
             settingsColumn.Controls.Add(contentHost, 0, 2);
             globalImagesButton = HeaderAsset("GlobalImages", () => { globalEditing = true; layerIndex = 0; RefreshChips(); LoadLayer(); RefreshCanvas(); if (SelectedLayer == null) AddObject(); OpenPool(2); });
             globalImagesButton.Visible = false;
-            previewColumn = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, BackColor = Theme.Background, Margin = Padding.Empty };
-            previewColumn.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); previewColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            previewColumn = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Theme.Background, Margin = Padding.Empty };
+            previewColumn.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            previewColumn.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            previewColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             heroPreviewHost.Controls.Add(previewColumn);
-            sceneEditor = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = Theme.Card, Padding = new Padding(12), AutoScroll = true };
-            sceneEditor.RowStyles.Add(new RowStyle(SizeType.Absolute,40)); sceneEditor.RowStyles.Add(new RowStyle(SizeType.Absolute,48)); sceneEditor.RowStyles.Add(new RowStyle(SizeType.Absolute,96)); sceneEditor.RowStyles.Add(new RowStyle(SizeType.Absolute,148));
+            sceneEditor = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Theme.Card, Padding = new Padding(12), AutoScroll = true };
+            sceneEditor.RowStyles.Add(new RowStyle(SizeType.Absolute,40)); sceneEditor.RowStyles.Add(new RowStyle(SizeType.Absolute,96)); sceneEditor.RowStyles.Add(new RowStyle(SizeType.Absolute,148));
             contentHost.Controls.Add(sceneEditor);
             BuildSubtitleWorkspace();
             var sceneHead = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1 };
@@ -189,18 +194,16 @@ namespace VideoBatch {
             selectedCaption = Label(""); selectedCaption.Font = Theme.FontCardTitle; selectedCaption.ForeColor = Theme.TextPrimary; sceneHead.Controls.Add(selectedCaption,0,0);
             sceneHead.Controls.Add(Button("←", () => MoveScene(-1)),1,0); sceneHead.Controls.Add(Button("→", () => MoveScene(1)),2,0);
             sceneHead.Controls.Add(Button("⋯", SceneMenu),3,0); sceneEditor.Controls.Add(sceneHead,0,0);
-            var sceneMedia = Row(); sceneMedia.Name = "SceneMedia";
-            sharedVideoButton = Button("", () => OpenPool(0)); sharedVideoButton.Name = "SharedVideoPool"; sharedVideoButton.AutoSize = false; sharedVideoButton.Size = new Size(168, 40); sharedVideoButton.MinimumSize = sharedVideoButton.Size; sharedVideoButton.Margin = new Padding(0, 0, 8, 0);
-            sceneVideoButton = Button("", () => { if (SelectedScene == null) return; SetSceneVideoMode("own"); OpenPool(3); }); sceneVideoButton.Name = "SceneVideoPool"; sceneVideoButton.AutoSize = false; sceneVideoButton.Size = new Size(168, 40); sceneVideoButton.MinimumSize = sceneVideoButton.Size;
-            sceneMedia.Controls.Add(sharedVideoButton); sceneMedia.Controls.Add(sceneVideoButton); sceneEditor.Controls.Add(sceneMedia, 0, 1);
             var objects=new TableLayoutPanel {Dock=DockStyle.Fill,RowCount=2,ColumnCount=1,Margin=Padding.Empty}; objects.RowStyles.Add(new RowStyle(SizeType.Absolute,54)); objects.RowStyles.Add(new RowStyle(SizeType.Absolute,40));
             packChips=Row(); packChips.Name="Objects"; objects.Controls.Add(packChips,0,0);
             var objectActions=Row();
-            imageFiles=Button("Изображения · добавить / выбрать",() => OpenSceneImages()); imageFiles.Name="SceneFiles"; objectFiles=Button("Файлы объекта",() => OpenPool(2)); objectFiles.Name="ObjectFiles";
-            objectActions.Controls.Add(imageFiles); objectFiles.Visible=false; objects.Controls.Add(objectActions,0,1); sceneEditor.Controls.Add(objects,0,2);
+            imageFiles=Button("Картинки сцены",() => OpenSceneImages()); imageFiles.Name="SceneFiles"; objectFiles=Button("Файлы объекта",() => OpenPool(2)); objectFiles.Name="ObjectFiles";
+            objectActions.Controls.Add(imageFiles); objectFiles.Visible=false; objects.Controls.Add(objectActions,0,1); sceneEditor.Controls.Add(objects,0,1);
             canvas = new AssemblyCanvas { Dock = DockStyle.Fill };
             canvas.LayerSelected += i => { if (i < 0 || i >= previewLayerOrder.Count) return; var layer = previewLayerOrder[i]; globalEditing = template.GlobalLayers.Contains(layer); layerIndex = EditableLayers.IndexOf(layer); LoadLayer(); RefreshChips(); };
             canvas.PlacementChanged += () => { if (SelectedLayer != null) SelectedLayer.PlacementConfigured = true; LoadLayer(); Changed(false); };
+            canvas.SplitRatioChanged += () => Safe(() => { Changed(true); Save(); RequestBackground(); });
+            canvas.SplitZoomChanged += () => Safe(() => { if (splitPrimaryZoom != null && !loading) { splitPrimaryZoom.Value = (decimal)(template.SplitPrimaryZoom * 100); splitSecondaryZoom.Value = (decimal)(template.SplitSecondaryZoom * 100); } Changed(true); Save(); RequestBackground(); });
             canvas.SubtitlePositionChanged += pos => Safe(() => {
                 if (template.SubtitleStyle == null) template.SubtitleStyle = new WarmupSubtitleStyle { Enabled = true };
                 template.SubtitleStyle.Enabled = true;
@@ -216,9 +219,17 @@ namespace VideoBatch {
             var positions = Row(); positions.Controls.Add(Button("↑", () => NudgePlacement(-1))); positions.Controls.Add(Button("По центру", () => CenterPlacement())); positions.Controls.Add(Button("↓", () => NudgePlacement(1))); controls.Controls.Add(positions,0,1); controls.SetColumnSpan(positions,2);
             subtitlePositionSlider = new AssemblySlider("Субтитры сверху", subtitlePosition, "%") { Dock = DockStyle.Fill, Name = "SubtitlePositionSlider", Visible = false };
             controls.Controls.Add(subtitlePositionSlider,0,2); controls.SetColumnSpan(subtitlePositionSlider,2);
-            sceneEditor.Controls.Add(controls, 0, 3);
-            previewColumn.Controls.Add(Label("ПРЕВЬЮ · перетаскивайте изображение или субтитры"), 0, 0);
-            previewColumn.Controls.Add(canvas, 0, 1);
+            sceneEditor.Controls.Add(controls, 0, 2);
+            var splitZoomRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, Visible = false, Name = "SplitZoomRow", Padding = new Padding(0, 2, 0, 0) };
+            splitPrimaryZoom = Value(85, 115, 0); splitSecondaryZoom = Value(85, 115, 0);
+            splitPrimaryZoom.Visible = splitSecondaryZoom.Visible = false;
+            splitZoomRow.Controls.Add(new AssemblySlider("Верх/лево · масштаб", splitPrimaryZoom, "%") { Width = 220, Margin = new Padding(0, 0, 8, 0) });
+            splitZoomRow.Controls.Add(new AssemblySlider("Низ/право · масштаб", splitSecondaryZoom, "%") { Width = 220 });
+            splitPrimaryZoom.ValueChanged += (s, e) => { if (loading) return; template.SplitPrimaryZoom = (double)splitPrimaryZoom.Value / 100; Changed(true); Save(); RequestBackground(); };
+            splitSecondaryZoom.ValueChanged += (s, e) => { if (loading) return; template.SplitSecondaryZoom = (double)splitSecondaryZoom.Value / 100; Changed(true); Save(); RequestBackground(); };
+            previewColumn.Controls.Add(Label("ПРЕВЬЮ · картинки, субтитры, граница двух видео"), 0, 0);
+            previewColumn.Controls.Add(splitZoomRow, 0, 1);
+            previewColumn.Controls.Add(canvas, 0, 2);
             var bottom=new TableLayoutPanel {Dock=DockStyle.Fill,RowCount=3,ColumnCount=1,Padding=new Padding(0,6,0,4)};
             bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,22)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,4)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,52)); root.Controls.Add(bottom,0,2);
             status=Label(""); status.Name="AssemblyStatus"; var notices=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty}; notices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,40)); notices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,60)); notices.Controls.Add(status,0,0); capacityLabel=Label("Добавь видео для расчёта связок"); capacityLabel.Name="AssemblyCapacity"; capacityLabel.TextAlign=ContentAlignment.MiddleRight; notices.Controls.Add(capacityLabel,1,0); bottom.Controls.Add(notices,0,0);
@@ -257,8 +268,8 @@ namespace VideoBatch {
                 var row = new AssemblySceneRow { Width = 228, Height = 84, BackColor=Theme.Card, Margin = new Padding(0, 0, 8, 0) };
                 var mediaStrip = new TableLayoutPanel { Dock = DockStyle.Right, Width = 92, RowCount = 2, ColumnCount = 1, Margin = Padding.Empty, Padding = new Padding(4, 6, 4, 6) };
                 mediaStrip.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); mediaStrip.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-                var sceneVideoChip = Button("Видео", () => { SelectScene(index); SetSceneVideoMode("own"); OpenPool(3); }); sceneVideoChip.Name = "SceneVideo" + i; sceneVideoChip.Dock = DockStyle.Fill; sceneVideoChip.Margin = new Padding(0, 0, 0, 3); sceneVideoChip.AutoSize = false;
-                var filesButton = Button("Карт.", () => { SelectScene(index); OpenSceneImages(); }); filesButton.AccessibleName="Изображения сцены " + (index+1); filesButton.Dock = DockStyle.Fill; filesButton.Margin = new Padding(0, 3, 0, 0); filesButton.Name = "SceneFiles" + i; filesButton.AutoSize = false;
+                var sceneVideoChip = Button("Своё", () => { SelectScene(index); SetSceneVideoMode("own"); OpenPool(3); }); sceneVideoChip.Name = "SceneVideo" + i; sceneVideoChip.Dock = DockStyle.Fill; sceneVideoChip.Margin = new Padding(0, 0, 0, 3); sceneVideoChip.AutoSize = false;
+                var filesButton = Button("Слой", () => { SelectScene(index); OpenSceneImages(); }); filesButton.AccessibleName="Картинка на сцене " + (index+1); filesButton.Dock = DockStyle.Fill; filesButton.Margin = new Padding(0, 3, 0, 0); filesButton.Name = "SceneFiles" + i; filesButton.AutoSize = false;
                 mediaStrip.Controls.Add(sceneVideoChip, 0, 0); mediaStrip.Controls.Add(filesButton, 0, 1);
                 var context = CreateSceneMenu(index); card.ContextMenuStrip = filesButton.ContextMenuStrip = sceneVideoChip.ContextMenuStrip = row.ContextMenuStrip = context; row.Disposed += (sender,args) => DisposeMenuLater(context);
                 row.Controls.Add(card); row.Controls.Add(mediaStrip); sceneCards.Add(card); sceneStack.Controls.Add(row);
@@ -281,8 +292,6 @@ namespace VideoBatch {
             if (imageFiles == null) return;
             imageFiles.Enabled = SelectedScene != null;
             objectFiles.Enabled = SelectedLayer != null;
-            if (sharedVideoButton != null) sharedVideoButton.Enabled = true;
-            if (sceneVideoButton != null) sceneVideoButton.Enabled = SelectedScene != null;
         }
         void RefreshChips() {
             foreach (Control c in packChips.Controls.Cast<Control>().ToArray()) c.Dispose(); packChips.Controls.Clear();
@@ -316,13 +325,8 @@ namespace VideoBatch {
         void RefreshInfo() {
             if (videoButton == null) return;
             int videos = Pool(template.Videos,AssemblyFiles.VideoExtensions).Count, songs = Pool(template.Music,AssemblyFiles.MusicExtensions).Count;
-            int sceneVideos = SelectedScene == null ? 0 : Pool(SelectedScene.Videos, AssemblyFiles.VideoExtensions).Count;
             if (videoButton != null)
                 videoButton.Text = "Видео · " + videos + (template.ContinuousVideo ? " · сквозное" : " · по сценам");
-            if (sharedVideoButton != null)
-                sharedVideoButton.Text = "Общее видео · " + videos;
-            if (sceneVideoButton != null)
-                sceneVideoButton.Text = SelectedScene == null ? "Видео сцены" : "Видео сцены · " + sceneVideos;
             int speechFiles = AssemblySpeechPlan.AvailableLines(template).Count;
             if (musicButton != null) musicButton.Text = "Музыка · " + songs;
             if (voiceToolbarButton != null) voiceToolbarButton.Text = "Озвучки · " + speechFiles;
@@ -351,6 +355,15 @@ namespace VideoBatch {
             if (template.SplitLayout != "none" && Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Count == 0)
                 videoButton.ForeColor = Theme.Error;
             else if (videoButton != null) videoButton.ForeColor = Theme.TextPrimary;
+            var splitZoomRow = previewColumn?.Controls.Find("SplitZoomRow", true).FirstOrDefault() as Control;
+            bool splitOn = template.SplitLayout != "none";
+            if (splitZoomRow != null) splitZoomRow.Visible = splitOn;
+            if (splitOn && splitPrimaryZoom != null && splitSecondaryZoom != null) {
+                loading = true;
+                splitPrimaryZoom.Value = (decimal)(template.SplitPrimaryZoom * 100);
+                splitSecondaryZoom.Value = (decimal)(template.SplitSecondaryZoom * 100);
+                loading = false;
+            }
             int gcd=Gcd(template.Width,template.Height); formatButton.Text="Формат\n"+template.Width/gcd+":"+template.Height/gcd+" ▾";
             countButton.Text="Роликов\n"+template.Count.ToString("N0"); transitionButton.Text="Переход\n"+TransitionLabel(template.Transition)+" ▾";
             if (titlesButton != null) titlesButton.Text = template.TitleBank.Count == 0 ? "Заголовки\n+ Загрузить ключи" : ("Заголовки\n" + template.TitleBank.Count + " фраз");
@@ -506,6 +519,7 @@ namespace VideoBatch {
             Theme.ApplyHeroToggleStyle(profileEnBtn, studioProfile == AssemblyProfile.En);
             Theme.ApplyHeroToggleStyle(profileRuInstBtn, studioProfile == AssemblyProfile.RuInst);
             Theme.ApplyHeroToggleStyle(profileEnInstBtn, studioProfile == AssemblyProfile.EnInst);
+            Theme.ApplyHeroToggleStyle(profileTestBtn, studioProfile == AssemblyProfile.Test);
             Theme.ApplyHeroToggleStyle(profileRuTikTokBtn, studioProfile == AssemblyProfile.RuTikTok);
             Theme.ApplyHeroToggleStyle(profileEnTikTokBtn, studioProfile == AssemblyProfile.EnTikTok);
         }
@@ -742,14 +756,13 @@ namespace VideoBatch {
                 try {
                     var second = Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions);
                     if (template.SplitLayout != "none" && second.Count > 0) {
-                        bool vertical = template.SplitLayout == "vertical" || template.SplitLayout == "top-bottom"; int dimension = vertical ? h : w;
-                        int feather = (int)Math.Round(dimension * template.SplitSoftness / 2) * 2;
-                        int span = Math.Min(dimension, ((dimension + feather + 3) / 4) * 2);
-                        int sw = vertical ? w : span, sh = vertical ? span : h;
-                        string fill = "scale="+sw+":"+sh+":force_original_aspect_ratio=increase,crop="+sw+":"+sh+",setsar=1";
-                        string coordinate = vertical ? "Y" : "X";
-                        string weight = feather == 0 ? "gte("+coordinate+","+dimension/2+")" : "clip(("+coordinate+"-"+Core.N((dimension-feather)/2.0)+")/"+feather+",0,1)";
-                        string graph = "[0:v]"+fill+",pad="+w+":"+h+":0:0,format=yuv444p[a];[1:v]"+fill+",pad="+w+":"+h+":"+(vertical ? "0:"+(h-sh) : (w-sw)+":0")+",format=yuv444p[b];[a][b]blend=all_expr='A*(1-("+weight+"))+B*("+weight+")'[preview]";
+                        bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+                        AssemblySplit.PaneSizes(template, out int primarySpan, out int secondarySpan, out int splitLine, out int feather);
+                        int pw = vertical ? w : primarySpan, ph = vertical ? primarySpan : h;
+                        int sw2 = vertical ? w : secondarySpan, sh2 = vertical ? secondarySpan : h;
+                        string padB = AssemblySplit.PadOffset(vertical, true, primarySpan, w, h);
+                        string weight = AssemblySplit.BlendWeight(vertical, splitLine, feather);
+                        string graph = "[0:v]" + AssemblySplit.Fill(pw, ph, template.Fps, template.SplitPrimaryZoom) + ",pad=" + w + ":" + h + ":0:0,format=yuv444p[a];[1:v]" + AssemblySplit.Fill(sw2, sh2, template.Fps, template.SplitSecondaryZoom) + ",pad=" + w + ":" + h + ":" + padB + ",format=yuv444p[b];[a][b]blend=all_expr='A*(1-(" + weight + "))+B*(" + weight + ")'[preview]";
                         await Core.Tool(ffmpeg,new[] { "-v","error","-y","-i",files[0],"-i",second[0],"-filter_complex_threads","1","-filter_complex",graph,"-map","[preview]","-frames:v","1","-threads","1",file },ct.Token,null,60);
                     } else await Core.Tool(ffmpeg,new[] { "-v","error","-y","-i",files[0],"-frames:v","1","-vf","scale="+w+":"+h+":force_original_aspect_ratio=increase,crop="+w+":"+h,"-threads","1",file },ct.Token,null,60);
                     if (version == previewVersion && !IsDisposed) using (var img = Image.FromFile(file)) canvas.SetBackground(new Bitmap(img));
@@ -871,13 +884,15 @@ namespace VideoBatch {
         readonly Dictionary<AssemblyLayer, Size> sourceSizes = new Dictionary<AssemblyLayer, Size>();
         Point origin;
         double oldX, oldY, oldWidth, oldHeight;
-        bool dragging, resizing, draggingSubtitle, subtitleDragEnabled, subtitleEditing, subtitleSelected;
+        bool dragging, resizing, draggingSplit, draggingSubtitle, subtitleDragEnabled, subtitleEditing, subtitleSelected;
         WarmupSubtitleStyle subtitleStyle;
         string subtitlePreviewText = "";
         RectangleF subtitlePlateScreen = RectangleF.Empty;
         public event Action<int> LayerSelected;
         public event Action PlacementChanged;
         public event Action<int> SubtitlePositionChanged;
+        public event Action SplitRatioChanged;
+        public event Action SplitZoomChanged;
         public AssemblyCanvas() { DoubleBuffered = true; BackColor = Theme.Background; }
         public void SetBackground(Image value) { background?.Dispose(); background = value; Invalidate(); }
         public void SetSubtitleEditing(bool value) { subtitleEditing = value; subtitleSelected = value; Invalidate(); }
@@ -932,17 +947,22 @@ namespace VideoBatch {
             if (background != null) e.Graphics.DrawImage(background, f);
             else { using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center }) e.Graphics.DrawString("Добавь видео в шапке\n\nПревью появится автоматически", Font, Brushes.Gray, f, format); }
             if (template != null && template.SplitLayout != "none") {
-                bool vertical = template.SplitLayout == "vertical" || template.SplitLayout == "top-bottom";
-                float line = vertical ? f.Top + f.Height / 2f : f.Left + f.Width / 2f;
-                using (var pen = new Pen(Color.FromArgb(210, Theme.Accent), Math.Max(2f, f.Width / template.Width * 3f))) {
+                bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+                AssemblySplit.PaneSizes(template, out int primarySpan, out _, out int splitLine, out _);
+                float ratio = splitLine / (float)(vertical ? template.Height : template.Width);
+                float line = vertical ? f.Top + f.Height * ratio : f.Left + f.Width * ratio;
+                using (var pen = new Pen(Color.FromArgb(230, Theme.Accent), Math.Max(2f, f.Width / template.Width * 3f))) {
                     if (vertical) e.Graphics.DrawLine(pen, f.Left, line, f.Right, line);
                     else e.Graphics.DrawLine(pen, line, f.Top, line, f.Bottom);
                 }
-                using (var label = new Font(Font.FontFamily, Math.Max(8f, f.Height * .035f), FontStyle.Bold)) {
-                    var primary = template.SplitLayout == "horizontal" ? "Слева · основное" : "Сверху · основное";
-                    var secondary = template.SplitLayout == "horizontal" ? "Справа · второе" : "Снизу · второе";
-                    TextRenderer.DrawText(e.Graphics, primary, label, Rectangle.Round(new RectangleF(f.Left + 6, f.Top + 6, f.Width / 2 - 12, f.Height / 2)), Color.White, TextFormatFlags.Left | TextFormatFlags.Top);
-                    TextRenderer.DrawText(e.Graphics, secondary, label, vertical ? Rectangle.Round(new RectangleF(f.Left + 6, line + 6, f.Width - 12, f.Height / 2)) : Rectangle.Round(new RectangleF(line + 6, f.Top + 6, f.Width / 2, f.Height - 12)), Color.White, TextFormatFlags.Left | TextFormatFlags.Top);
+                using (var grip = new SolidBrush(Color.FromArgb(220, Theme.Accent)))
+                    e.Graphics.FillEllipse(grip, vertical ? f.Left + f.Width / 2f - 8 : line - 8, vertical ? line - 8 : f.Top + f.Height / 2f - 8, 16, 16);
+                using (var label = new Font(Font.FontFamily, Math.Max(8f, f.Height * .032f), FontStyle.Bold)) {
+                    int pct = (int)Math.Round((vertical ? ratio : ratio) * 100);
+                    string primary = (vertical ? "Верх" : "Слева") + " · " + pct + "%";
+                    string secondary = (vertical ? "Низ" : "Справа") + " · " + (100 - pct) + "%";
+                    TextRenderer.DrawText(e.Graphics, primary, label, Rectangle.Round(new RectangleF(f.Left + 6, f.Top + 6, f.Width - 12, (vertical ? line - f.Top : f.Height) - 8)), Color.White, TextFormatFlags.Left | TextFormatFlags.Top);
+                    TextRenderer.DrawText(e.Graphics, secondary, label, vertical ? Rectangle.Round(new RectangleF(f.Left + 6, line + 6, f.Width - 12, f.Bottom - line - 8)) : Rectangle.Round(new RectangleF(line + 6, f.Top + 6, f.Right - line - 8, f.Height - 12)), Color.White, TextFormatFlags.Left | TextFormatFlags.Top);
                 }
             }
             for (int i = 0; i < images.Count; i++) if (images[i] != null) e.Graphics.DrawImage(images[i], f);
@@ -963,10 +983,41 @@ namespace VideoBatch {
                 var box = Box(l); using (var pen = new Pen(l == selected ? Theme.Accent : Theme.TextMuted, l == selected ? 2 : 1)) e.Graphics.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
                 using (var brush = new SolidBrush(Theme.Accent)) { if (l == selected) e.Graphics.FillEllipse(brush, box.Right - 6, box.Bottom - 6, 12, 12); }
             }
-            if (subtitleDragEnabled && subtitleOverlay != null)
+            if (template != null && template.SplitLayout != "none")
+                using (var hint = new Font("Segoe UI", Math.Max(7f, f.Width * .022f)))
+                using (var brush = new SolidBrush(Color.FromArgb(190, 255, 255, 255)))
+                    e.Graphics.DrawString("Границу тяните · колёсико над половиной — масштаб", hint, brush, f.X + 6, f.Bottom - 22);
+            else if (subtitleDragEnabled && subtitleOverlay != null)
                 using (var hint = new Font("Segoe UI", Math.Max(7f, f.Width * .022f)))
                 using (var brush = new SolidBrush(Color.FromArgb(200, 255, 255, 255)))
                     e.Graphics.DrawString(subtitleEditing ? "Тяните плашку субтитров" : "Нажмите «Субтитры» или тяните текст", hint, brush, f.X + 6, f.Y + 6);
+        }
+        bool SplitLineHit(Point p, out float lineScreen) {
+            lineScreen = 0;
+            if (template == null || template.SplitLayout == "none") return false;
+            var f = Frame; if (f.Width <= 0) return false;
+            bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+            AssemblySplit.PaneSizes(template, out int primarySpan, out _, out _, out _);
+            float ratio = primarySpan / (float)(vertical ? template.Height : template.Width);
+            lineScreen = vertical ? f.Top + f.Height * ratio : f.Left + f.Width * ratio;
+            return vertical ? Math.Abs(p.Y - lineScreen) <= 12 : Math.Abs(p.X - lineScreen) <= 12;
+        }
+        void ApplySplitDrag(Point screen) {
+            var f = Frame; if (f.Width <= 0 || template == null) return;
+            bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+            double ratio = vertical ? (screen.Y - f.Y) / f.Height : (screen.X - f.X) / f.Width;
+            template.SplitRatio = Math.Max(.25, Math.Min(.75, ratio));
+            SplitRatioChanged?.Invoke();
+            Invalidate();
+        }
+        int SplitPaneAt(Point p) {
+            if (template == null || template.SplitLayout == "none") return -1;
+            var f = Frame; if (!f.Contains(p)) return -1;
+            bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+            AssemblySplit.PaneSizes(template, out int primarySpan, out _, out _, out _);
+            float ratio = primarySpan / (float)(vertical ? template.Height : template.Width);
+            float line = vertical ? f.Top + f.Height * ratio : f.Left + f.Width * ratio;
+            return vertical ? (p.Y < line ? 0 : 1) : (p.X < line ? 0 : 1);
         }
         void ApplySubtitleDrag(Point screen) {
             var f = Frame;
@@ -981,8 +1032,20 @@ namespace VideoBatch {
             }
             Invalidate();
         }
+        protected override void OnMouseWheel(MouseEventArgs e) {
+            base.OnMouseWheel(e);
+            if (template == null || template.SplitLayout == "none") return;
+            int pane = SplitPaneAt(e.Location);
+            if (pane < 0) return;
+            double step = e.Delta > 0 ? .01 : -.01;
+            if (pane == 0) template.SplitPrimaryZoom = Math.Max(.85, Math.Min(1.15, template.SplitPrimaryZoom + step));
+            else template.SplitSecondaryZoom = Math.Max(.85, Math.Min(1.15, template.SplitSecondaryZoom + step));
+            SplitZoomChanged?.Invoke();
+            Invalidate();
+        }
         protected override void OnMouseDown(MouseEventArgs e) {
             base.OnMouseDown(e); if (scene == null || e.Button != MouseButtons.Left) return;
+            if (SplitLineHit(e.Location, out _)) { draggingSplit = true; Capture = true; ApplySplitDrag(e.Location); return; }
             if (subtitleDragEnabled && (subtitleEditing || SubtitleHit(e.Location))) {
                 draggingSubtitle = true; subtitleSelected = true; Capture = true; ApplySubtitleDrag(e.Location); return;
             }
@@ -999,6 +1062,11 @@ namespace VideoBatch {
         }
         protected override void OnMouseMove(MouseEventArgs e) {
             base.OnMouseMove(e);
+            if (draggingSplit) { ApplySplitDrag(e.Location); return; }
+            if (template != null && template.SplitLayout != "none") {
+                if (SplitLineHit(e.Location, out _)) Cursor = AssemblySplit.IsVertical(template.SplitLayout) ? Cursors.SizeNS : Cursors.SizeWE;
+                else if (SplitPaneAt(e.Location) >= 0) Cursor = Cursors.SizeAll;
+            }
             if (draggingSubtitle) { ApplySubtitleDrag(e.Location); return; }
             if (!dragging || selected == null) return; var f = Frame; double dx = (e.X - origin.X) / f.Width, dy = (e.Y - origin.Y) / f.Height;
             if (resizing) {
@@ -1011,7 +1079,7 @@ namespace VideoBatch {
             else { selected.X = Math.Max(0, Math.Min(1 - selected.Width, oldX + dx)); selected.Y = Math.Max(0, Math.Min(1 - selected.Height, oldY + dy)); }
             PlacementChanged?.Invoke(); Invalidate();
         }
-        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); dragging = false; draggingSubtitle = false; Capture = false; }
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); dragging = false; draggingSplit = false; draggingSubtitle = false; Capture = false; }
         protected override void Dispose(bool disposing) { if (disposing) { background?.Dispose(); subtitleOverlay?.Dispose(); foreach (var image in images) image?.Dispose(); } base.Dispose(disposing); }
     }
     public sealed class AssemblyScrollStack : FlowLayoutPanel {

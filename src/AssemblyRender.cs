@@ -104,16 +104,15 @@ namespace VideoBatch {
                 int second=input++;
                 if(t.LoopShortVideos && p.SecondaryVideo.Duration+.001<dur)args.AddRange(new[]{"-stream_loop","-1"});
                 args.AddRange(new[]{"-threads","1","-t",Core.N(dur),"-i",p.SecondaryVideo.Path});
-                bool vertical=t.SplitLayout=="vertical" || t.SplitLayout=="top-bottom";
-                int dimension=vertical?t.Height:t.Width;
-                int feather=(int)Math.Round(dimension*t.SplitSoftness/2)*2;
-                int span=Math.Min(dimension,((dimension+feather+3)/4)*2);
-                int width=vertical?t.Width:span,height=vertical?span:t.Height;
-                graph.Add("["+joined+"]"+Fill(width,height,t.Fps)+",pad="+t.Width+":"+t.Height+":0:0,format=yuv444p[splitA]");
-                graph.Add("["+second+":v:0]setpts=PTS-STARTPTS,"+Fill(width,height,t.Fps)+",pad="+t.Width+":"+t.Height+":"+(vertical?"0:"+(t.Height-height):(t.Width-width)+":0")+",format=yuv444p[splitB]");
-                string coordinate=vertical?"Y":"X";
-                string weight=feather==0?"gte("+coordinate+","+dimension/2+")":"clip(("+coordinate+"-"+Core.N((dimension-feather)/2.0)+")/"+feather+",0,1)";
-                graph.Add("[splitA][splitB]blend=all_expr='A*(1-("+weight+"))+B*("+weight+")':shortest=1[split]");joined="split";
+                bool vertical = AssemblySplit.IsVertical(t.SplitLayout);
+                AssemblySplit.PaneSizes(t, out int primarySpan, out int secondarySpan, out int splitLine, out int feather);
+                int pw = vertical ? t.Width : primarySpan, ph = vertical ? primarySpan : t.Height;
+                int sw = vertical ? t.Width : secondarySpan, sh = vertical ? secondarySpan : t.Height;
+                string padB = AssemblySplit.PadOffset(vertical, true, primarySpan, t.Width, t.Height);
+                graph.Add("[" + joined + "]" + AssemblySplit.Fill(pw, ph, t.Fps, t.SplitPrimaryZoom) + ",pad=" + t.Width + ":" + t.Height + ":0:0,format=yuv444p[splitA]");
+                graph.Add("[" + second + ":v:0]setpts=PTS-STARTPTS," + AssemblySplit.Fill(sw, sh, t.Fps, t.SplitSecondaryZoom) + ",pad=" + t.Width + ":" + t.Height + ":" + padB + ",format=yuv444p[splitB]");
+                string weight = AssemblySplit.BlendWeight(vertical, splitLine, feather);
+                graph.Add("[splitA][splitB]blend=all_expr='A*(1-(" + weight + "))+B*(" + weight + ")':shortest=1[split]"); joined = "split";
             }
             if(sceneOverlay!=null) {graph.Add("["+joined+"]["+sceneOverlay+"]overlay=0:0:format=yuv420:shortest=1[sceneComposited]");joined="sceneComposited";}
             for(int j=0;j<p.GlobalLayers.Count;j++) {

@@ -237,7 +237,7 @@ namespace VideoBatch {
                     window.Show(); System.Windows.Forms.Application.DoEvents();
                     if (screenshots != null) Capture(window,Path.Combine(screenshots,"studio-four-profiles.png"));
                     var labels = All(window).OfType<System.Windows.Forms.Button>().Where(b => b.Name.StartsWith("AssemblyProfile")).Select(b => b.Text).ToArray();
-                    if (labels.Length != 4 || !labels.SequenceEqual(new[] {"RU YT","EN YT","RU INS","EN INS"})) throw new Exception("Four visible studio tabs do not match agreed names.");
+                    if (labels.Length != 5 || !labels.SequenceEqual(new[] {"RU YT","EN YT","RU INS","EN INS","ТЕСТ"})) throw new Exception("Visible studio tabs do not match agreed names.");
                     var current = (AssemblyTemplate)Field(window,"template");
                     var layer = current.Scenes[0].Layers[0];
                     Invoke(window,"MoveImageScope");

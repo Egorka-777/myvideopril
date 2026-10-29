@@ -14,9 +14,18 @@ namespace VideoBatch {
             p.Contrast = settings.Contrast.Sample(random, p.Short ? p.Contrast * 100 : 100) / 100;
             double cut = media.Duration * settings.Trim.Sample(random, 0) / 100;
             double start = cut * random.NextDouble();
+            bool horizontal = media.Width >= media.Height;
+            double rotation = settings.Rotation.Sample(random, 0);
+            if (horizontal) {
+                const double cap = .2;
+                if (rotation > cap) rotation = cap;
+                else if (rotation < -cap) rotation = -cap;
+            }
             var s = new ProcessingSample {
-                TrimStart = start, TrimEnd = cut - start, Rotation = settings.Rotation.Sample(random, 0),
+                TrimStart = start, TrimEnd = cut - start, Rotation = rotation,
                 Sharpness = settings.Sharpness.Sample(random, 0), Noise = settings.Noise.Sample(random, 0),
+                FilmDust = settings.FilmDust.Sample(random, 0),
+                FrameScale = settings.FrameScale.Sample(random, 100) / 100,
                 Volume = settings.Volume.Sample(random, 100) / 100, Pitch = settings.Pitch.Sample(random, 100) / 100,
                 Tempo = settings.Tempo.Sample(random, 100) / 100, FadeIn = settings.FadeIn.Sample(random, 0),
                 FadeOut = settings.FadeOut.Sample(random, 0), Mirror = settings.Mirror && random.Next(2) == 0,
@@ -24,7 +33,8 @@ namespace VideoBatch {
                 GridCell = settings.GridCell.Sample(random), Zoom = settings.Zoom.Sample(random, 100) / 100,
                 ZoomPeriod = settings.ZoomPeriod.Sample(random), ZoomX = .3 + random.NextDouble() * .4,
                 ZoomY = .3 + random.NextDouble() * .4, ModulationDepth = settings.AudioModulation.Sample(random, 0) / 100,
-                ModulationFrequency = settings.ModulationFrequency.Sample(random), NoiseSeed = random.Next()
+                ModulationFrequency = settings.ModulationFrequency.Sample(random), NoiseSeed = random.Next(),
+                FilmDustSeed = random.Next()
             };
             if (settings.DeviceMetadata) {
                 var device = ProcessingDevices.Sample(settings.Brands, random);
@@ -79,14 +89,25 @@ namespace VideoBatch {
                 string rem = N(1 - 2 * p.Crop / 100);
                 vf.Add("crop=trunc(iw*" + rem + "/2)*2:trunc(ih*" + rem + "/2)*2");
             }
-            if (Math.Abs(s.Rotation) > .000001) vf.Add("rotate=" + N(s.Rotation) + "*PI/180:ow=iw:oh=ih:fillcolor=black");
+            if (Math.Abs(s.Rotation) > .000001)
+                vf.Add("rotate=" + N(s.Rotation) + "*PI/180:ow=iw:oh=ih:fillcolor=black");
             vf.Add("scale=" + w + ":" + h + ":flags=lanczos"); vf.Add("setsar=1");
+            if (Math.Abs(s.FrameScale - 1) > .0005) {
+                if (s.FrameScale < 1)
+                    vf.Add("scale=trunc(iw*" + N(s.FrameScale) + "/2)*2:trunc(ih*" + N(s.FrameScale) + "/2)*2,pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2:color=black");
+                else
+                    vf.Add("scale=trunc(iw*" + N(s.FrameScale) + "/2)*2:trunc(ih*" + N(s.FrameScale) + "/2)*2,crop=" + w + ":" + h);
+            }
             if (s.Mirror) vf.Add("hflip");
             if (p.Gray > 0) vf.Add("hue=s=" + N(1 - p.Gray / 100));
             if (p.Short || Math.Abs(p.Brightness) > .000001 || Math.Abs(p.Contrast - 1) > .000001)
                 vf.Add("eq=brightness=" + N(p.Brightness) + ":contrast=" + N(p.Contrast));
             if (Math.Abs(s.Sharpness) > .000001) vf.Add("unsharp=5:5:" + N(s.Sharpness / 25) + ":5:5:0");
             if (s.Noise > 0) vf.Add("noise=alls=" + N(s.Noise) + ":allf=t+u:all_seed=" + s.NoiseSeed);
+            if (s.FilmDust > 0) {
+                double strength = Math.Max(.5, s.FilmDust * .35);
+                vf.Add("noise=c0s=" + N(strength) + ":c0f=t:c1s=0:c2s=0:c0_seed=" + s.FilmDustSeed);
+            }
             vf.Add("fps=" + N(fps));
             if (s.Zoom > 1) vf.Add("zoompan=z='1+" + N(s.Zoom - 1) + "*(0.5-0.5*cos(2*PI*on/" + N(fps * s.ZoomPeriod) + "))':x='(iw-iw/zoom)*" + N(s.ZoomX) + "':y='(ih-ih/zoom)*" + N(s.ZoomY) + "':d=1:s=" + w + "x" + h + ":fps=" + N(fps));
             if (s.GridOpacity > 0) vf.Add("drawgrid=w=" + Math.Max(8, (int)Math.Round(s.GridCell)) + ":h=" + Math.Max(8, (int)Math.Round(s.GridCell)) + ":t=1:c=white@" + N(s.GridOpacity));

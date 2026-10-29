@@ -9,9 +9,10 @@ namespace VideoBatch {
         public const string EnInst = "EN-Inst";
         public const string RuTikTok = "RU-TikTok";
         public const string EnTikTok = "EN-TikTok";
+        public const string Test = "TEST";
 
-        public static readonly string[] All = { Ru, En, RuInst, EnInst, RuTikTok, EnTikTok };
-        public static readonly string[] Visible = { Ru, En, RuInst, EnInst };
+        public static readonly string[] All = { Ru, En, RuInst, EnInst, RuTikTok, EnTikTok, Test };
+        public static readonly string[] Visible = { Ru, En, RuInst, EnInst, Test };
 
         public static string Normalize(string profile) {
             if (string.IsNullOrWhiteSpace(profile)) return Ru;
@@ -22,6 +23,7 @@ namespace VideoBatch {
             if (profile.Equals(EnInst, StringComparison.OrdinalIgnoreCase) || profile.Equals("EN Inst", StringComparison.OrdinalIgnoreCase)) return EnInst;
             if (profile.Equals(RuTikTok, StringComparison.OrdinalIgnoreCase) || profile.Equals("RU TikTok", StringComparison.OrdinalIgnoreCase)) return RuTikTok;
             if (profile.Equals(EnTikTok, StringComparison.OrdinalIgnoreCase) || profile.Equals("EN TikTok", StringComparison.OrdinalIgnoreCase)) return EnTikTok;
+            if (profile.Equals(Test, StringComparison.OrdinalIgnoreCase) || profile.Equals("ТЕСТ", StringComparison.OrdinalIgnoreCase)) return Test;
             return Ru;
         }
 
@@ -46,6 +48,7 @@ namespace VideoBatch {
             profile = Normalize(profile);
             if (profile == RuInst) return "RU INS";
             if (profile == EnInst) return "EN INS";
+            if (profile == Test) return "ТЕСТ";
             if (profile == RuTikTok) return "RU TikTok";
             if (profile == EnTikTok) return "EN TikTok";
             return profile == En ? "EN YT" : "RU YT";

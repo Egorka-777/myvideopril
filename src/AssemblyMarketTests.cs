@@ -71,9 +71,9 @@ namespace VideoBatch {
                 Directory.CreateDirectory(root);
                 var t = AssemblyTemplate.Defaults();
                 AssemblyMarketProfiles.EnsureSeeded(t);
-                Check(AssemblyProfile.Visible.SequenceEqual(new[] { "RU", "EN", "RU-Inst", "EN-Inst" }), "Visible IDs preserve persistence keys");
-                Check(AssemblyProfile.Visible.Select(AssemblyProfile.ShortLabel).SequenceEqual(new[] { "RU YT", "EN YT", "RU INS", "EN INS" }), "Four exact visible labels");
-                Check(AssemblyProfile.All.Length == 6, "Hidden TikTok persistence keys remain");
+                Check(AssemblyProfile.Visible.SequenceEqual(new[] { "RU", "EN", "RU-Inst", "EN-Inst", "TEST" }), "Visible IDs preserve persistence keys");
+                Check(AssemblyProfile.Visible.Select(AssemblyProfile.ShortLabel).SequenceEqual(new[] { "RU YT", "EN YT", "RU INS", "EN INS", "ТЕСТ" }), "Visible profile labels");
+                Check(AssemblyProfile.All.Length == 7, "Hidden TikTok persistence keys remain");
                 for (int i = 0; i < AssemblyProfile.All.Length; i++) {
                     SetEditorSettings(t, i);
                     AssemblyMarketProfiles.Capture(t, AssemblyProfile.All[i]);

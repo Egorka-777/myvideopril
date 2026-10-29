@@ -22,12 +22,16 @@ namespace VideoBatch {
     public class ProcessingSettings {
         public ProcessingParameter Crop = new ProcessingParameter(.3, 1.5);
         public ProcessingParameter Trim = new ProcessingParameter(1, 2);
-        public ProcessingParameter Rotation = new ProcessingParameter(0, 2);
+        public ProcessingParameter Rotation = new ProcessingParameter(0, .25);
         public ProcessingParameter Speed = new ProcessingParameter(98, 102);
         public ProcessingParameter Brightness = new ProcessingParameter(-10, 10);
         public ProcessingParameter Contrast = new ProcessingParameter(90, 110);
         public ProcessingParameter Sharpness = new ProcessingParameter(-10, 10);
         public ProcessingParameter Noise = new ProcessingParameter(1, 5);
+        /// <summary>Мерцающие точки (кино/пыль), отдельно от равномерной зернистости.</summary>
+        public ProcessingParameter FilmDust = new ProcessingParameter(2, 8);
+        /// <summary>Масштаб кадра в рамке: &lt;100 — поля, &gt;100 — лёгкий зум.</summary>
+        public ProcessingParameter FrameScale = new ProcessingParameter(97, 103);
         public ProcessingParameter Volume = new ProcessingParameter(85, 110);
         public ProcessingParameter Pitch = new ProcessingParameter(98, 102);
         public ProcessingParameter Tempo = new ProcessingParameter(98, 102);
@@ -49,8 +53,8 @@ namespace VideoBatch {
             get { return Parameters().Any(p => p.Enabled) || Mirror || DeviceMetadata || CaptureDateEnabled || !string.IsNullOrWhiteSpace(MetadataSoftware); }
         }
         public IEnumerable<ProcessingParameter> Parameters() {
-            return new[] { Crop, Trim, Rotation, Speed, Brightness, Contrast, Sharpness, Noise, Volume, Pitch,
-                Tempo, FadeIn, FadeOut, GridOpacity, Zoom, AudioModulation };
+            return new[] { Crop, Trim, Rotation, Speed, Brightness, Contrast, Sharpness, Noise, FilmDust, FrameScale,
+                Volume, Pitch, Tempo, FadeIn, FadeOut, GridOpacity, Zoom, AudioModulation };
         }
         public void Validate() {
             if(Parameters().Any(p=>p==null))throw new Exception("Отсутствует параметр обработки.");
@@ -58,6 +62,7 @@ namespace VideoBatch {
             Rotation.Validate(-180, 180, "Поворот, °"); Speed.Validate(50, 200, "Скорость, %");
             Brightness.Validate(-50, 50, "Яркость, %"); Contrast.Validate(50, 150, "Контраст, %");
             Sharpness.Validate(-50, 50, "Резкость, %"); Noise.Validate(0, 100, "Шум, %");
+            FilmDust.Validate(0, 30, "Пыль / точки, %"); FrameScale.Validate(94, 106, "Масштаб в рамке, %");
             Volume.Validate(0, 200, "Громкость, %"); Pitch.Validate(50, 200, "Высота тона, %");
             Tempo.Validate(50, 200, "Темп аудио, %"); FadeIn.Validate(0, 10, "Затемнение в начале, с");
             FadeOut.Validate(0, 10, "Затемнение в конце, с"); GridOpacity.Validate(0, 50, "Сетка, %");
@@ -97,11 +102,11 @@ namespace VideoBatch {
     }
 
     public class ProcessingSample {
-        public double TrimStart, TrimEnd, Rotation, Sharpness, Noise, Volume = 1, Pitch = 1, Tempo = 1;
+        public double TrimStart, TrimEnd, Rotation, Sharpness, Noise, FilmDust, FrameScale = 1, Volume = 1, Pitch = 1, Tempo = 1;
         public double FadeIn, FadeOut, GridOpacity, GridCell, Zoom = 1, ZoomPeriod, ZoomX, ZoomY;
         public double ModulationDepth, ModulationFrequency;
         public bool Mirror;
-        public int NoiseSeed;
+        public int NoiseSeed, FilmDustSeed;
         public string Brand = "", Model = "", Software = "";
         public bool HasCaptureDate;
         public DateTime CaptureDate;

@@ -17,6 +17,7 @@ namespace VideoBatch {
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
+        public double SplitRatio = .5, SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
         public List<AssemblyCaption> Captions = new List<AssemblyCaption>();
@@ -42,6 +43,7 @@ namespace VideoBatch {
             if (profile == AssemblyProfile.EnInst) return Path.Combine(root, "Assembled-EN-Inst");
             if (profile == AssemblyProfile.RuTikTok) return Path.Combine(root, "Assembled-RU-TikTok");
             if (profile == AssemblyProfile.EnTikTok) return Path.Combine(root, "Assembled-EN-TikTok");
+            if (profile == AssemblyProfile.Test) return Path.Combine(root, "Assembled-TEST");
             return Path.Combine(root, "Assembled");
         }
 
@@ -52,6 +54,7 @@ namespace VideoBatch {
             if (profile == AssemblyProfile.EnInst) return t.MarketEnInst ?? (t.MarketEnInst = new AssemblyMarketSettings());
             if (profile == AssemblyProfile.RuTikTok) return t.MarketRuTikTok ?? (t.MarketRuTikTok = new AssemblyMarketSettings());
             if (profile == AssemblyProfile.EnTikTok) return t.MarketEnTikTok ?? (t.MarketEnTikTok = new AssemblyMarketSettings());
+            if (profile == AssemblyProfile.Test) return t.MarketTest ?? (t.MarketTest = new AssemblyMarketSettings());
             return t.MarketRu ?? (t.MarketRu = new AssemblyMarketSettings());
         }
 
@@ -155,6 +158,9 @@ namespace VideoBatch {
             slice.SpeechLines = CloneSpeechLines(t.SpeechLines);
             slice.SecondaryVideos = t.SecondaryVideos;
             slice.SplitLayout = t.SplitLayout;
+            slice.SplitRatio = t.SplitRatio;
+            slice.SplitPrimaryZoom = t.SplitPrimaryZoom;
+            slice.SplitSecondaryZoom = t.SplitSecondaryZoom;
             slice.SplitSoftness = t.SplitSoftness;
             slice.Voiceover = t.Voiceover;
             slice.VoiceoverVolume = t.VoiceoverVolume;
@@ -180,6 +186,9 @@ namespace VideoBatch {
             t.SpeechLines = CloneSpeechLines(slice.SpeechLines);
             t.SecondaryVideos = slice.SecondaryVideos;
             t.SplitLayout = slice.SplitLayout;
+            t.SplitRatio = slice.SplitRatio <= 0 ? .5 : slice.SplitRatio;
+            t.SplitPrimaryZoom = slice.SplitPrimaryZoom <= 0 ? 1 : slice.SplitPrimaryZoom;
+            t.SplitSecondaryZoom = slice.SplitSecondaryZoom <= 0 ? 1 : slice.SplitSecondaryZoom;
             t.SplitSoftness = slice.SplitSoftness;
             t.Voiceover = slice.Voiceover;
             t.VoiceoverVolume = slice.VoiceoverVolume;
@@ -272,6 +281,7 @@ namespace VideoBatch {
             if (t.MarketEnInst == null) t.MarketEnInst = new AssemblyMarketSettings();
             if (t.MarketRuTikTok == null) t.MarketRuTikTok = new AssemblyMarketSettings();
             if (t.MarketEnTikTok == null) t.MarketEnTikTok = new AssemblyMarketSettings();
+            if (t.MarketTest == null) t.MarketTest = new AssemblyMarketSettings();
             if (t.AssemblyMarketsSeeded) {
                 foreach (string profile in AssemblyProfile.All) {
                     var slice = Slice(t, profile);
@@ -297,6 +307,7 @@ namespace VideoBatch {
             SeedChannelProfile(t, AssemblyProfile.EnInst, AssemblyProfile.En);
             SeedChannelProfile(t, AssemblyProfile.RuTikTok, AssemblyProfile.Ru);
             SeedChannelProfile(t, AssemblyProfile.EnTikTok, AssemblyProfile.En);
+            SeedChannelProfile(t, AssemblyProfile.Test, AssemblyProfile.Ru);
             foreach (string profile in AssemblyProfile.All) {
                 var slice = Slice(t, profile);
                 if (!slice.EditorSettingsConfigured) CaptureEditorSettings(t, slice);

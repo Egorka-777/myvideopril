@@ -26,7 +26,7 @@ namespace VideoBatch {
                 var now = new DateTime(2026, 10, 5, 12, 0, 0, DateTimeKind.Local); double previous = -1; bool varied = false;
                 for (int i = 0; i < 300; i++) {
                     var profile = new Profile(); ProcessingEngine.Apply(profile, settings, media, random, now); var s = profile.Processing;
-                    if (s.Rotation < 0 || s.Rotation > 2 || s.Pitch < .98 || s.Pitch > 1.02 || s.Volume < .85 || s.Volume > 1.1) return false;
+                    if (s.Rotation < 0 || s.Rotation > .25 || s.Pitch < .98 || s.Pitch > 1.02 || s.Volume < .85 || s.Volume > 1.1) return false;
                     if (s.TrimStart < 0 || s.TrimEnd < 0 || s.TrimStart + s.TrimEnd < .1 - 1e-8 || s.TrimStart + s.TrimEnd > .2 + 1e-8) return false;
                     if (s.CaptureDate > now || s.CaptureDate < now.AddDays(-30) || s.Brand != "OnePlus" || s.Software != "") return false;
                     varied |= previous >= 0 && previous != s.Rotation; previous = s.Rotation;
