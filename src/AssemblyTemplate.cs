@@ -35,6 +35,8 @@ namespace VideoBatch {
         public string Name = "Сцена", Videos = "", VideoMode = ""; // Empty mode preserves legacy folder fallback.
         public double Duration = 4;
         public string Music = "";
+        // Empty mode keeps the old whole-roll voiceover; shared/own/none enable scene-level voiceover.
+        public string Voiceover = "", VoiceMode = "";
         public double MusicVolume = 1;
         public List<AssemblyLayer> Layers = new List<AssemblyLayer>();
         public override string ToString() { return Name + " · " + Duration.ToString("0.##") + " с"; }
@@ -58,6 +60,7 @@ namespace VideoBatch {
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
+        public bool HasSceneVoiceovers { get { return Scenes != null && Scenes.Any(s => !string.IsNullOrWhiteSpace(s.VoiceMode)); } }
         public List<AssemblyLayer> GlobalLayers = new List<AssemblyLayer>();
         public bool ContinuousVideo = false;
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
@@ -131,6 +134,8 @@ namespace VideoBatch {
             }
             foreach (var scene in Scenes) {
                 if (scene.VideoMode != "" && scene.VideoMode != "shared" && scene.VideoMode != "own") throw new Exception("Неизвестный источник видео сцены.");
+                if (scene.VoiceMode != "" && scene.VoiceMode != "shared" && scene.VoiceMode != "own" && scene.VoiceMode != "none") throw new Exception("Неизвестный режим озвучки сцены.");
+                if (scene.VoiceMode == "own" && string.IsNullOrWhiteSpace(scene.Voiceover)) throw new Exception(scene.Name + ": добавьте свои файлы озвучки.");
                 if (scene.VideoMode == "own" && string.IsNullOrWhiteSpace(scene.Videos)) throw new Exception("Укажи папку своих видео для сцены.");
                 Check(scene.Duration, .5, 60, "Длительность сцены");
                 if (Transition != "cut" && TransitionDuration >= scene.Duration / 2) throw new Exception("Переход должен быть короче половины каждой сцены.");
@@ -293,7 +298,8 @@ namespace VideoBatch {
     }
     public static class AssemblyTimeline {
         public static readonly string[] RandomTransitions={"fade","zoomsoft","zoomout","pull","swipe"};
-        public static double ContentDuration(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?s.Scene.Duration:s.RenderDuration;
+        public static double SceneSeconds(AssemblyScenePlan s) => s.ContentSeconds>0?s.ContentSeconds:s.Scene.Duration;
+        public static double ContentDuration(AssemblyTemplate t,AssemblyScenePlan s) => s.ContentSeconds>0?s.ContentSeconds:(t.SceneTimingVersion>0?s.Scene.Duration:s.RenderDuration);
         public static bool LoopInput(AssemblyTemplate t,AssemblyScenePlan s) => t.LoopShortVideos && !(t.SceneTimingVersion>0 && s.Scene.VideoMode=="own") && s.Video.Duration+.001<ContentDuration(t,s);
         public static double SourceStart(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?0:s.VideoStart;
         public static string Transition(AssemblyTemplate t,AssemblyScenePlan s) => string.IsNullOrEmpty(s.TransitionOut)?(t.Transition=="random"?"fade":t.Transition):s.TransitionOut;
@@ -328,6 +334,8 @@ namespace VideoBatch {
         public double VideoStart, RenderDuration, IncomingPad, OutgoingPad;
         public string TransitionOut="";
         public string Music = "", MusicHash = "";
+        public string Voiceover = "";
+        public double VoiceSeconds, ContentSeconds;
         public List<AssemblyLayerPlan> Layers = new List<AssemblyLayerPlan>();
     }
     public class AssemblyPlan {
@@ -335,7 +343,7 @@ namespace VideoBatch {
         public List<string> UniqueImages = new List<string>();
         public string Signature, Music, MusicHash;
         public string Voiceover = "";
-        /// <summary>When voiceover is shorter than scene sum, render stops here (no second pass of speech).</summary>
+        /// <summary>Effective duration for the selected voice file(s), with one second of visual tail.</summary>
         public double RenderDuration;
         public AssemblyVideo SecondaryVideo;
         public List<AssemblyLayerPlan> GlobalLayers = new List<AssemblyLayerPlan>();

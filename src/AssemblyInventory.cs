@@ -19,6 +19,7 @@ namespace VideoBatch {
         }
         public void Record(AssemblyPlan p) {
             if(!string.IsNullOrWhiteSpace(p.Voiceover))Add("voice",AssemblyFiles.Hash(p.Voiceover));
+            for (int i=0;i<p.Scenes.Count;i++) if(!string.IsNullOrWhiteSpace(p.Scenes[i].Voiceover)) Add("sceneVoice:"+i,AssemblyFiles.Hash(p.Scenes[i].Voiceover));
             foreach(var layer in p.GlobalLayers.Where(l => !l.Layer.Fixed)) Add("image:"+layer.Layer.ObjectId,layer.Asset.Hash);
             if(p.SecondaryVideo!=null) Add("secondary",p.SecondaryVideo.Hash);
             foreach(var scene in p.Scenes) if(!string.IsNullOrEmpty(scene.MusicHash)) Add("sceneMusic",scene.MusicHash);
@@ -226,7 +227,10 @@ namespace VideoBatch {
                 var song=pool.OrderBy(a => mix.Usage("sceneMusic",a.Hash)).ThenBy(a => random.Next()).FirstOrDefault();
                 scene.Music=song==null?"":song.Path;scene.MusicHash=song==null?"":song.Hash;
             }
-            p.Voiceover=AssemblySpeechPlan.SelectVoiceover(template,random,mix);
+            if (template.HasSceneVoiceovers) {
+                p.Voiceover = "";
+                for(int i=0;i<p.Scenes.Count;i++) p.Scenes[i].Voiceover = AssemblySpeechPlan.SelectSceneVoiceover(template,p.Scenes[i].Scene,i,random,mix);
+            } else p.Voiceover=AssemblySpeechPlan.SelectVoiceover(template,random,mix);
             p.Captions=template.Captions.Select(c => new WarmupCaption {Text=c.Text,Start=c.Start,End=c.End}).ToList();
             mix.Record(p);
         }

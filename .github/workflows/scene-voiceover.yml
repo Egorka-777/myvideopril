@@ -1,0 +1,40 @@
+name: Scene voiceover MP4 regression
+on:
+  pull_request:
+    paths:
+      - 'src/Assembly*.cs'
+      - '.github/workflows/scene-voiceover.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/Assembly*.cs'
+      - '.github/workflows/scene-voiceover.yml'
+jobs:
+  render-scene-voice:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile desktop
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Install pinned FFmpeg
+        shell: pwsh
+        run: ./scripts/Install-CiFfmpeg.ps1
+      - name: Check actual timed MP4 output and per-scene voiceover
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          $ffmpeg = Get-ChildItem "$env:ChocolateyInstall/lib/ffmpeg" -Filter ffmpeg.exe -Recurse -File | Sort-Object Length -Descending | Select-Object -First 1
+          if (!$ffmpeg) { throw 'ffmpeg.exe not found' }
+          $ffprobe = Join-Path $ffmpeg.DirectoryName 'ffprobe.exe'
+          if (!(Test-Path $ffprobe)) { throw 'ffprobe.exe not found' }
+          $type = $asm.GetType('VideoBatch.AssemblyScopedRenderTests')
+          $ffmpegPath = [string]$ffmpeg.FullName
+          $ffprobePath = [string]$ffprobe
+          $argsForReflection = [object[]]@($ffmpegPath, $ffprobePath)
+          $ok = $type.GetMethod('Run').Invoke($null,$argsForReflection)
+          if (!$ok) { throw 'Scene voiceover regression failed' }
+          Write-Host 'Voiceover and MP4 timings verified.'

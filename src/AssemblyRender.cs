@@ -33,7 +33,7 @@ namespace VideoBatch {
     }
     public static class AssemblyRender {
         static string Fill(int width,int height,int fps) => "fps="+fps+",scale="+width+":"+height+":force_original_aspect_ratio=increase,crop="+width+":"+height+",setsar=1,format=yuv420p";
-        static bool HasAudio(AssemblyPlan p) => !string.IsNullOrWhiteSpace(p.Music) || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music));
+        static bool HasAudio(AssemblyPlan p) => !string.IsNullOrWhiteSpace(p.Music) || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover));
         static bool BurnCaptions(AssemblyTemplate t, AssemblyPlan p) => t.SubtitleStyle?.Enabled == true && p.Captions != null && p.Captions.Count > 0;
         public static List<string> EncoderArguments(string encoder, int threads) {
             var args = new List<string> { "-c:v", encoder };
@@ -58,7 +58,7 @@ namespace VideoBatch {
                 continuous=input++; var video=p.Scenes[0].Video;
                 if(t.LoopShortVideos && video.Duration+.001<dur)args.AddRange(new[]{"-stream_loop","-1"});
                 args.AddRange(new[]{"-threads","1","-t",Core.N(dur),"-i",video.Path});
-                graph.Add("["+continuous+":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+",trim=duration="+Core.N(dur)+"[continuous]");
+                graph.Add("["+continuous+":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+",tpad=stop_mode=clone:stop_duration="+Core.N(dur)+",trim=duration="+Core.N(dur)+"[continuous]");
             }
             for (int i = 0; i < p.Scenes.Count; i++) {
                 var s = p.Scenes[i]; string current = "base" + i;
@@ -67,7 +67,7 @@ namespace VideoBatch {
                     int video=input++;
                     if (AssemblyTimeline.LoopInput(t,s)) args.AddRange(new[] { "-stream_loop", "-1" });
                     args.AddRange(new[] { "-threads", "1", "-ss", Core.N(AssemblyTimeline.SourceStart(t,s)), "-t", Core.N(AssemblyTimeline.ContentDuration(t,s)), "-i", s.Video.Path });
-                    graph.Add("[" + video + ":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+","+(t.SceneTimingVersion>0?"tpad=stop_mode=clone:stop_duration="+Core.N(s.Scene.Duration)+",":"")+"trim=duration=" + Core.N(AssemblyTimeline.ContentDuration(t,s)) + "[" + (split && !t.ContinuousVideo ? "videoBase" + i : current) + "]");
+                    graph.Add("[" + video + ":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+","+(t.SceneTimingVersion>0 || s.ContentSeconds>0?"tpad=stop_mode=clone:stop_duration="+Core.N(AssemblyTimeline.ContentDuration(t,s))+",":"")+"trim=duration=" + Core.N(AssemblyTimeline.ContentDuration(t,s)) + "[" + (split && !t.ContinuousVideo ? "videoBase" + i : current) + "]");
                 }
                 for (int j = 0; j < s.Layers.Count; j++) {
                     var layer = s.Layers[j]; int picture = input++;
@@ -87,7 +87,7 @@ namespace VideoBatch {
             } else {
                 joined = "s0"; double offset = 0;
                 for (int i = 1; i < p.Scenes.Count; i++) {
-                    offset += p.Scenes[i - 1].Scene.Duration+(t.SceneTimingVersion>0?p.Scenes[i-1].IncomingPad:0); string next = "joined" + i;
+                    offset += AssemblyTimeline.SceneSeconds(p.Scenes[i - 1])+(t.SceneTimingVersion>0?p.Scenes[i-1].IncomingPad:0); string next = "joined" + i;
                     graph.Add("[" + joined + "][s" + i + "]xfade=" + AssemblyEngine.TransitionFilter(AssemblyTimeline.Transition(t,p.Scenes[i-1])) + ":duration=" + Core.N(t.TransitionSeconds)
                         + ":offset=" + Core.N(offset) + "[" + next + "]"); joined = next;
                 }
@@ -97,7 +97,7 @@ namespace VideoBatch {
             else if(split) {
                 joined="videoScene0";
                 if(!transitions) {graph.Add(string.Join("",Enumerable.Range(0,p.Scenes.Count).Select(i=>"[videoScene"+i+"]"))+"concat=n="+p.Scenes.Count+":v=1:a=0[videoJoined]");joined="videoJoined";}
-                else {double offset=0;for(int i=1;i<p.Scenes.Count;i++){offset+=p.Scenes[i-1].Scene.Duration+(t.SceneTimingVersion>0?p.Scenes[i-1].IncomingPad:0);string next="videoJoined"+i;graph.Add("["+joined+"][videoScene"+i+"]xfade="+AssemblyEngine.TransitionFilter(AssemblyTimeline.Transition(t,p.Scenes[i-1]))+":duration="+Core.N(t.TransitionSeconds)+":offset="+Core.N(offset)+"["+next+"]");joined=next;}}
+                else {double offset=0;for(int i=1;i<p.Scenes.Count;i++){offset+=AssemblyTimeline.SceneSeconds(p.Scenes[i-1])+(t.SceneTimingVersion>0?p.Scenes[i-1].IncomingPad:0);string next="videoJoined"+i;graph.Add("["+joined+"][videoScene"+i+"]xfade="+AssemblyEngine.TransitionFilter(AssemblyTimeline.Transition(t,p.Scenes[i-1]))+":duration="+Core.N(t.TransitionSeconds)+":offset="+Core.N(offset)+"["+next+"]");joined=next;}}
             }
             if(split) {
                 if(p.SecondaryVideo==null)throw new Exception("Не выбрано второе видео для разделённого экрана.");
@@ -110,7 +110,7 @@ namespace VideoBatch {
                 int sw = vertical ? t.Width : secondarySpan, sh = vertical ? secondarySpan : t.Height;
                 string padB = AssemblySplit.PadOffset(vertical, true, primarySpan, t.Width, t.Height);
                 graph.Add("[" + joined + "]" + AssemblySplit.Fill(pw, ph, t.Fps, t.SplitPrimaryZoom) + ",pad=" + t.Width + ":" + t.Height + ":0:0,format=yuv444p[splitA]");
-                graph.Add("[" + second + ":v:0]setpts=PTS-STARTPTS," + AssemblySplit.Fill(sw, sh, t.Fps, t.SplitSecondaryZoom) + ",pad=" + t.Width + ":" + t.Height + ":" + padB + ",format=yuv444p[splitB]");
+                graph.Add("[" + second + ":v:0]setpts=PTS-STARTPTS," + AssemblySplit.Fill(sw, sh, t.Fps, t.SplitSecondaryZoom) + ",tpad=stop_mode=clone:stop_duration=" + Core.N(dur) + ",pad=" + t.Width + ":" + t.Height + ":" + padB + ",format=yuv444p[splitB]");
                 string weight = AssemblySplit.BlendWeight(vertical, splitLine, feather);
                 graph.Add("[splitA][splitB]blend=all_expr='A*(1-(" + weight + "))+B*(" + weight + ")':shortest=1[split]"); joined = "split";
             }
@@ -140,16 +140,20 @@ namespace VideoBatch {
                 var scene=p.Scenes[i];
                 if(!string.IsNullOrWhiteSpace(scene.Music)) {
                     int index=input++;args.AddRange(new[]{"-stream_loop","-1","-i",scene.Music});string label="sceneAudio"+i;
-                    graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,atrim=duration="+Core.N(scene.Scene.Duration)+",volume="+Core.N(scene.Scene.MusicVolume)+",adelay="+Math.Round(sceneTime*1000).ToString(Core.Inv)+":all=1,apad,atrim=duration="+Core.N(dur)+"["+label+"]");audio.Add(label);
+                    graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,atrim=duration="+Core.N(AssemblyTimeline.SceneSeconds(scene))+",volume="+Core.N(scene.Scene.MusicVolume)+",adelay="+Math.Round(sceneTime*1000).ToString(Core.Inv)+":all=1,apad,atrim=duration="+Core.N(dur)+"["+label+"]");audio.Add(label);
                 }
-                sceneTime+=scene.Scene.Duration+(t.SceneTimingVersion>0 && t.Transition!="cut"?t.TransitionSeconds:0);
+                if(!string.IsNullOrWhiteSpace(scene.Voiceover)) {
+                    int index=input++;args.AddRange(new[]{"-i",scene.Voiceover});string label="sceneVoice"+i;
+                    graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,volume=1,adelay="+Math.Round(sceneTime*1000).ToString(Core.Inv)+":all=1,apad,atrim=duration="+Core.N(dur)+"["+label+"]");audio.Add(label);
+                }
+                sceneTime+=AssemblyTimeline.SceneSeconds(scene)+(t.SceneTimingVersion>0 && t.Transition!="cut"?t.TransitionSeconds:0);
             }
             if(!string.IsNullOrWhiteSpace(p.Voiceover)) {
                 int index=input++;args.AddRange(new[]{"-i",p.Voiceover});
-                graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,volume=1,atrim=duration="+Core.N(dur)+"[voiceover]");audio.Add("voiceover");
+                graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,volume=1,apad,atrim=duration="+Core.N(dur)+"[voiceover]");audio.Add("voiceover");
             }
             bool music=audio.Count>0;
-            string mixDuration = !string.IsNullOrWhiteSpace(p.Voiceover) ? "shortest" : "longest";
+            string mixDuration = "longest"; // Keep the one-second tail after speech.
             if(music)graph.Add(string.Join("",audio.Select(a=>"["+a+"]"))+"amix=inputs="+audio.Count+":duration="+mixDuration+":normalize=0,atrim=duration="+Core.N(dur)+"[audio]");
             File.WriteAllText(script, string.Join(";\n", graph), new UTF8Encoding(false));
             args.AddRange(new[] { context.GraphFileOption, script, "-map", "[vout]" });
