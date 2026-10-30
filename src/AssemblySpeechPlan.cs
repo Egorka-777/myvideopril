@@ -54,7 +54,7 @@ namespace VideoBatch {
                 // Each scene gets the duration of the selected voice file + one second, not
                 // the longest clip in its pool. Silent scenes retain their manual duration.
                 p.Voiceover = "";
-                var captions = new List<WarmupCaption>(p.Captions ?? new List<WarmupCaption>());
+                var captions = (t.Captions ?? new List<AssemblyCaption>()).Select(c => new WarmupCaption { Text=c.Text, Start=c.Start, End=c.End }).ToList();
                 double start = 0;
                 for (int i = 0; i < p.Scenes.Count; i++) {
                     ct.ThrowIfCancellationRequested();
@@ -85,6 +85,8 @@ namespace VideoBatch {
                 p.RenderDuration = start - (p.Scenes.Count > 0 && t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
                 p.Captions = captions;
             } else {
+                // Prepare may be called more than once for a preview and its final render.
+                foreach (var scene in p.Scenes) { scene.ContentSeconds = 0; scene.VoiceSeconds = 0; }
                 if (string.IsNullOrWhiteSpace(p.Voiceover)) p.Voiceover = await ResolveVoiceoverAsync(t, ffmpeg, probe, work, ct).ConfigureAwait(false);
                 double voiceSeconds = 0;
                 if (!string.IsNullOrWhiteSpace(p.Voiceover) && File.Exists(p.Voiceover)) {
@@ -94,7 +96,7 @@ namespace VideoBatch {
                     if (p.RenderDuration > t.Duration && p.Scenes.Count > 0) {
                         var last = p.Scenes[p.Scenes.Count - 1];
                         last.ContentSeconds = last.Scene.Duration + (p.RenderDuration - t.Duration);
-                        last.RenderDuration += p.RenderDuration - t.Duration;
+                        last.RenderDuration = AssemblyTimeline.SceneSeconds(last) + (t.SceneTimingVersion > 0 ? last.IncomingPad + last.OutgoingPad : 0);
                     }
                 }
                 if (t.SubtitleStyle?.Enabled == true && !string.IsNullOrWhiteSpace(p.Voiceover)) {
