@@ -341,7 +341,7 @@ namespace VideoBatch {
                 SceneLabel(SelectedScene,sceneIndex) + (template.HasSceneVoiceovers
                     ? " · длительность по выбранной озвучке (+1 с)"
                     : " · " + SelectedScene.Duration.ToString("0.#") + " с · ручная длина " + rollDuration.ToString("0.#") + " с");
-            if (globalImagesButton != null) globalImagesButton.Text = "Изображения\\nвесь ролик";
+            if (globalImagesButton != null) globalImagesButton.Text = "Изображения\nвесь ролик";
             if (voiceToolbarButton != null) voiceToolbarButton.ForeColor = Theme.TextPrimary;
             if (subsToolbarButton != null) {
                 subsToolbarButton.Text = "Субтитры";
@@ -527,6 +527,7 @@ namespace VideoBatch {
             menu.Opening += (sender,args) => {int at=template.Scenes.IndexOf(target); if (at>=0) SelectScene(at);else args.Cancel=true;};
             Func<Action,Action> onScene=action => () => {int at=template.Scenes.IndexOf(target);if (at>=0) {SelectScene(at);action();}};
             MenuAction(menu,"Видео этой сцены…",onScene(SceneVideoMenu));
+            MenuAction(menu,"Озвучка этой сцены…",onScene(OpenVoiceWorkspace));
             MenuAction(menu,"Изображения сцены…",onScene(OpenSceneImages));
             MenuAction(menu,"Добавить перед",onScene(() => InsertScene(sceneIndex)));
             MenuAction(menu,"Добавить после",onScene(() => InsertScene(sceneIndex+1)));
