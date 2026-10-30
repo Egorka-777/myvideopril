@@ -40,6 +40,7 @@ namespace VideoBatch {
                 }
                 var rendered = WarmupSubtitles.Rasterize(Sample(), green, folder, 540, 960);
                 using (var image = Image.FromFile(rendered[0].ImagePath)) Check(image.Size == new Size(540, 960), "export uses canvas dimensions");
+                Check(File.Exists(rendered[0].TrackPath), "one subtitle track instead of many live decoders");
                 for (int i = 0; i < 100; i++) {
                     var profile = UploadPreparation.ProfileForUpload(ProcessingSettings.MildDefaults(), new Random(i), DateTime.Now, true);
                     var sample = profile.Processing;
@@ -47,7 +48,7 @@ namespace VideoBatch {
                     Check(Math.Abs(profile.Brightness) <= .001 && Math.Abs(profile.Contrast - 1) <= .001001, "publish color limits");
                     var media = new Media { Duration = 3, Width = 128, Height = 224, Fps = "25/1", VideoIndex = 0, AudioIndex = 1, HasAudio = true };
                     var args = UploadPreparation.Arguments("input.mp4", "output.mp4", profile, media, "test-edition", true);
-                    string all = string.Join(" ", args); Check(!all.Contains("rotate=") && !all.Contains("noise=") && !all.Contains("hflip") && !all.Contains("zoompan") && !all.Contains("drawgrid"), "publish filter exclusions");
+                    string all = args[args.IndexOf("-vf") + 1]; Check(!all.Contains("rotate=") && !all.Contains("noise=") && !all.Contains("hflip") && !all.Contains("zoompan") && !all.Contains("drawgrid"), "publish filter exclusions");
                     var copy = UploadPreparation.Arguments("input.mp4", "output.mp4", profile, media, "copy-edition", false);
                     Check(copy.Contains("copy") && !copy.Contains("-vf") && copy.Contains("edition_id=copy-edition"), "metadata-only remux");
                 }
@@ -67,10 +68,14 @@ namespace VideoBatch {
                 string source = Path.Combine(folder, "источник.mp4");
                 await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=128x224:rate=25:duration=3.2", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=3.2", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-metadata", "location=old-private-location", "-movflags", "+use_metadata_tags", source }, CancellationToken.None, null, 40);
                 string original = Hash(source); var settings = new Preferences { UploadStagingFolder = Path.Combine(folder, "upload"), Processing = ProcessingSettings.MildDefaults() };
+                var subtitles = WarmupSubtitles.Rasterize(Sample(), SubtitlePresets.BuiltIn().First(p => p.Id == "bold-green").Style, folder);
+                string subtitled = Path.Combine(folder, "subtitled.mp4");
+                await Core.Tool(ffmpeg, WarmupVideoEngine.RenderArguments(source, source, subtitled, 3.2, subtitles), CancellationToken.None, null, 90);
+                await WarmupVideoEngine.VerifyOutputAsync(ffprobe, subtitled, 3.2, CancellationToken.None);
                 var keys = new[] { "test-profile-a", "test-profile-b", "test-profile-c" }; int peak = 0; var seen = new Dictionary<string, int>(); var gate = new object();
                 var progress = new Callback(state => { lock (gate) {
                     if (seen.TryGetValue(state.Key, out int previous)) Check(state.Percent >= previous, "monotonic progress"); seen[state.Key] = state.Percent;
-                    peak = Math.Max(peak, keys.Count(key => UploadPreparation.State(key)?.Stage != null && UploadPreparation.State(key)?.Stage != "queued"));
+                    peak = Math.Max(peak, keys.Select(UploadPreparation.State).Count(state => state != null && state.Stage != "queued"));
                 } });
                 var results = await Task.WhenAll(keys.Select(key => UploadPreparation.PrepareAsync(key, "YouTube", key, new[] { source }, settings, progress)));
                 Check(peak <= 2 && seen.Count == 3 && seen.Values.All(v => v == 100), "two-slot queue and completed progress");

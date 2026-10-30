@@ -35,6 +35,7 @@ jobs:
           if (!$asm.GetType('VideoBatch.SubtitleUploadTests').GetMethod('RunIntegrationTests').Invoke($null, @($ffmpeg, $ffprobe))) { throw 'Upload preparation integration failed' }
           if (!$asm.GetType('VideoBatch.WarmupVideoTests').GetMethod('RunIntegrationTests').Invoke($null, @($ffmpeg, $ffprobe))) { throw 'Existing speech/video integration failed' }
       - name: Native subtitle gallery screenshots
+        if: always()
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)

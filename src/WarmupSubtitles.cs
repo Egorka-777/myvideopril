@@ -40,7 +40,7 @@ namespace VideoBatch {
         public double[] character_end_times_seconds { get; set; }
     }
     public sealed class WarmupCaption {
-        public string Text, ImagePath;
+        public string Text, ImagePath, TrackPath;
         public double Start, End;
         public List<SubtitleWord> Words;
         public int ActiveWord = -1;
@@ -79,6 +79,8 @@ namespace VideoBatch {
             return cues;
         }
         public static Bitmap Paint(string text, WarmupSubtitleStyle style) => Paint(text, style, 1080, 1920);
+        public static Bitmap PaintAt(WarmupCaption cue, WarmupSubtitleStyle style, int width, int height, double time) => SubtitleTypography.UsesTypography(style)
+            ? SubtitleTypography.Paint(SubtitlePresets.FrameAt(cue, style, time), style, width, height) : Paint(cue.Text, style, width, height);
         public static RectangleF PlateRect(string text, WarmupSubtitleStyle style, int canvasWidth, int canvasHeight) {
             if (SubtitleTypography.UsesTypography(style)) return SubtitleTypography.Bounds(text, style, canvasWidth, canvasHeight);
             Layout(text, style, canvasWidth, canvasHeight, out RectangleF plate, out _);
@@ -159,7 +161,26 @@ namespace VideoBatch {
                 cues[i].ImagePath = Path.Combine(folder, "caption-" + i + ".png");
                 using (var image = SubtitleTypography.UsesTypography(style) ? SubtitleTypography.Paint(cues[i], style, canvasWidth, canvasHeight) : Paint(cues[i].Text, style, canvasWidth, canvasHeight)) image.Save(cues[i].ImagePath, ImageFormat.Png);
             }
+            WriteTrack(cues, folder, canvasWidth, canvasHeight);
             return cues;
+        }
+        static void WriteTrack(List<WarmupCaption> cues, string folder, int width, int height) {
+            if (cues.Count == 0 || cues.Zip(cues.Skip(1), (a, b) => b.Start < a.End - .00001).Any(overlap => overlap)) return;
+            string blank = Path.Combine(folder, "caption-blank.png"), track = Path.Combine(folder, "captions.ffconcat");
+            using (var image = new Bitmap(width, height, PixelFormat.Format32bppArgb)) image.Save(blank, ImageFormat.Png);
+            var text = new StringBuilder("ffconcat version 1.0\n");
+            Action<string, double> add = (path, seconds) => {
+                text.Append("file '").Append(Path.GetFullPath(path).Replace('\\', '/').Replace("'", "'\\''")).Append("'\noption framerate 1000\nduration ").Append(Core.N(seconds)).Append('\n');
+            };
+            double cursor = 0;
+            foreach (var cue in cues) {
+                if (cue.Start > cursor) add(blank, cue.Start - cursor);
+                add(cue.ImagePath, cue.End - cue.Start); cursor = cue.End;
+            }
+            add(blank, .1);
+            text.Append("file '").Append(Path.GetFullPath(blank).Replace('\\', '/').Replace("'", "'\\''")).Append("'\noption framerate 1000\n");
+            File.WriteAllText(track, text.ToString(), new UTF8Encoding(false));
+            foreach (var cue in cues) cue.TrackPath = track;
         }
     }
 }

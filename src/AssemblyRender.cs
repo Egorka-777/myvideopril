@@ -122,7 +122,14 @@ namespace VideoBatch {
                 double end=layer.Layer.End==0?dur:Math.Min(layer.Layer.End,dur);
                 graph.Add("["+joined+"]["+picture+":v:0]overlay=0:0:format=yuv420:repeatlast=1:eof_action=repeat:enable='gte(t,"+Core.N(layer.Layer.Start)+")*lt(t,"+Core.N(end)+")'["+next+"]");joined=next;
             }
-            if(BurnCaptions(t,p)) for(int j=0;j<p.Captions.Count;j++) {
+            string captionTrack = BurnCaptions(t,p) ? p.Captions[0].TrackPath : null;
+            if (!string.IsNullOrEmpty(captionTrack)) {
+                int picture = input++;
+                args.AddRange(new[] { "-threads", "1", "-f", "concat", "-safe", "0", "-i", captionTrack });
+                graph.Add("[" + picture + ":v:0]fps=" + t.Fps + ",format=rgba[captionTrack]");
+                graph.Add("[" + joined + "][captionTrack]overlay=0:0:format=yuv420:repeatlast=1:eof_action=repeat[captioned]"); joined = "captioned";
+            }
+            else if(BurnCaptions(t,p)) for(int j=0;j<p.Captions.Count;j++) {
                 var cue=p.Captions[j];int picture=input++;string next="caption"+j;
                 args.AddRange(new[]{"-threads","1","-framerate",t.Fps.ToString(),"-i",cue.ImagePath});
                 graph.Add("["+picture+":v:0]scale="+t.Width+":"+t.Height+"[captionImage"+j+"]");

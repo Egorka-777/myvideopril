@@ -206,9 +206,13 @@ namespace VideoBatch {
             if (IsVideo(background)) args.AddRange(new[] { "-stream_loop", "-1" });
             else args.AddRange(new[] { "-loop", "1", "-framerate", "30" });
             args.AddRange(new[] { "-i", background, "-i", audio });
-            if (captions != null) foreach (var cue in captions) args.AddRange(new[] { "-i", cue.ImagePath });
+            string captionTrack = captions?.FirstOrDefault()?.TrackPath;
+            if (!string.IsNullOrEmpty(captionTrack)) args.AddRange(new[] { "-f", "concat", "-safe", "0", "-i", captionTrack });
+            else if (captions != null) foreach (var cue in captions) args.AddRange(new[] { "-i", cue.ImagePath });
             const string backgroundFilter = "setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p";
-            if (captions != null && captions.Count > 0) {
+            if (!string.IsNullOrEmpty(captionTrack)) {
+                args.AddRange(new[] { "-filter_complex", "[0:v:0]" + backgroundFilter + "[base];[2:v:0]fps=30,format=rgba[captions];[base][captions]overlay=0:0:repeatlast=1:eof_action=repeat[captioned]", "-map", "[captioned]" });
+            } else if (captions != null && captions.Count > 0) {
                 var filter = new StringBuilder("[0:v:0]" + backgroundFilter + "[base0];");
                 for (int i = 0; i < captions.Count; i++) {
                     filter.Append("[base" + i + "][" + (i + 2) + ":v:0]overlay=0:0:enable='gte(t," + Number(captions[i].Start) + ")*lt(t," + Number(captions[i].End) + ")'[base" + (i + 1) + "]");

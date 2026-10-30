@@ -442,7 +442,10 @@ namespace VideoBatch {
             style.Enabled = true;
             style.Normalize();
             canvas.SetSubtitleEditing(subtitleEditing);
-            canvas.SetSubtitles(style, CaptionPreviewText());
+            string text = CaptionPreviewText(); double time = PreviewGlobalTime();
+            var cues = SubtitlePresets.ForStyle(PreviewCaptionCues(), style);
+            var cue = cues.FirstOrDefault(c => c.Text == text && time >= c.Start && time < c.End) ?? cues.FirstOrDefault(c => c.Text == text);
+            canvas.SetSubtitles(style, text, cue, cue == null ? 0 : Math.Max(cue.Start, Math.Min(cue.End, time)));
         }
         void NudgePlacement(int direction) {
             if (subtitleEditing) { NudgeSubtitle(direction * 3); return; }
@@ -881,6 +884,8 @@ namespace VideoBatch {
         bool dragging, resizing, draggingSplit, draggingSubtitle, subtitleDragEnabled, subtitleEditing, subtitleSelected;
         WarmupSubtitleStyle subtitleStyle;
         string subtitlePreviewText = "";
+        WarmupCaption subtitlePreviewCue;
+        double subtitlePreviewTime;
         RectangleF subtitlePlateScreen = RectangleF.Empty;
         public event Action<int> LayerSelected;
         public event Action PlacementChanged;
@@ -902,13 +907,14 @@ namespace VideoBatch {
         public void SetBackground(Image value) { background?.Dispose(); background = value; Invalidate(); }
         public void SetSubtitleEditing(bool value) { subtitleEditing = value; subtitleSelected = value; Invalidate(); }
         public void ClearSubtitles() { subtitleOverlay?.Dispose(); subtitleOverlay = null; subtitleDragEnabled = false; subtitleStyle = null; subtitlePlateScreen = RectangleF.Empty; subtitleSelected = false; Cursor = Cursors.Default; Invalidate(); }
-        public void SetSubtitles(WarmupSubtitleStyle style, string text) {
+        public void SetSubtitles(WarmupSubtitleStyle style, string text, WarmupCaption cue = null, double time = 0) {
             subtitleOverlay?.Dispose();
             subtitlePreviewText = text ?? "";
+            subtitlePreviewCue = cue; subtitlePreviewTime = time;
             subtitleStyle = style?.Copy();
             subtitleDragEnabled = subtitleStyle != null && subtitleStyle.Enabled && !string.IsNullOrWhiteSpace(subtitlePreviewText);
             if (subtitleDragEnabled && template != null)
-                subtitleOverlay = WarmupSubtitles.Paint(subtitlePreviewText, subtitleStyle, template.Width, template.Height);
+                subtitleOverlay = WarmupSubtitles.PaintAt(subtitlePreviewCue ?? new WarmupCaption { Text = subtitlePreviewText }, subtitleStyle, template.Width, template.Height, subtitlePreviewTime);
             else subtitleOverlay = null;
             UpdateSubtitlePlateScreen();
             Cursor = subtitleDragEnabled ? Cursors.SizeNS : Cursors.Default;
@@ -1032,7 +1038,7 @@ namespace VideoBatch {
             if (subtitleStyle != null && template != null && !string.IsNullOrWhiteSpace(subtitlePreviewText)) {
                 subtitleStyle.Position = pos;
                 subtitleOverlay?.Dispose();
-                subtitleOverlay = WarmupSubtitles.Paint(subtitlePreviewText, subtitleStyle, template.Width, template.Height);
+                subtitleOverlay = WarmupSubtitles.PaintAt(subtitlePreviewCue ?? new WarmupCaption { Text = subtitlePreviewText }, subtitleStyle, template.Width, template.Height, subtitlePreviewTime);
                 subtitleSelected = true;
             }
             Invalidate();
