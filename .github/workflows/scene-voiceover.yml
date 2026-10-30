@@ -32,6 +32,9 @@ jobs:
           $ffprobe = Join-Path $ffmpeg.DirectoryName 'ffprobe.exe'
           if (!(Test-Path $ffprobe)) { throw 'ffprobe.exe not found' }
           $type = $asm.GetType('VideoBatch.AssemblyScopedRenderTests')
-          $ok = $type.GetMethod('Run').Invoke($null,@($ffmpeg.FullName,$ffprobe))
+          $ffmpegPath = [string]$ffmpeg.FullName
+          $ffprobePath = [string]$ffprobe
+          $argsForReflection = [object[]]@($ffmpegPath, $ffprobePath)
+          $ok = $type.GetMethod('Run').Invoke($null,$argsForReflection)
           if (!$ok) { throw 'Scene voiceover regression failed' }
           Write-Host 'Voiceover and MP4 timings verified.'
