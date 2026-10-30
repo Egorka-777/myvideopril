@@ -122,18 +122,52 @@ namespace VideoBatch {
         }
         void OpenVoiceWorkspace() {
             LeaveSubtitleWorkspaceIfOpen();
-            using (var form = MediaDialog("Озвучки · " + AssemblyProfile.ShortLabel(studioProfile), 360)) {
+            // Capture the scene so that actions never change a different scene by accident.
+            var scene = SelectedScene;
+            using (var form = MediaDialog("Озвучка · " + AssemblyProfile.ShortLabel(studioProfile), 620)) {
                 var body = MediaBody(form);
-                body.Controls.Add(new Label { Text = "Один файл на ролик. Субтитры синхронизируются с выбранной озвучкой.", Width = 560, Height = 40, ForeColor = Theme.TextSecondary });
-                body.Controls.Add(new Label { Text = "Готовых вариантов: " + AssemblySpeechPlan.AvailableLines(template).Count, Height = 30, ForeColor = Theme.TextSecondary });
-                body.Controls.Add(Button("Тексты и генерация ElevenLabs", OpenVoiceEditor, true));
-                body.Controls.Add(Button("Использовать варианты ElevenLabs", () => { template.Voiceover = ""; Changed(false); Save(); RequestTimingHints(); RefreshInfo(); form.Close(); }));
-                body.Controls.Add(Button("Выбрать отдельный файл озвучки", () => {
+                Action refresh = () => { Changed(false); Save(); RequestTimingHints(); RefreshInfo(); };
+                body.Controls.Add(new Label { Text = "Один вариант озвучки выбирается из пачки для каждого ролика. Длина видео = выбранное аудио + 1 секунда. Музыка настраивается отдельно.", Width = 560, Height = 54, ForeColor = Theme.TextSecondary });
+                body.Controls.Add(new Label { Text = "ОБЩАЯ ПАЧКА ОЗВУЧКИ", Width = 560, Height = 28, Font = Theme.FontCardTitle });
+                var sharedCount = AssemblySpeechPlan.SharedVoiceOptions(template).Count;
+                body.Controls.Add(new Label { Text = "Доступно вариантов: " + sharedCount + (string.IsNullOrWhiteSpace(template.Voiceover) ? " · ElevenLabs" : " · загруженные файлы"), Width = 560, Height = 32, ForeColor = Theme.TextSecondary });
+                body.Controls.Add(Button("Добавить файлы в общую пачку", () => Safe(() => {
                     var paths = PickFiles(1); if (paths == null || paths.Length == 0) return;
-                    template.Voiceover = paths[0]; Changed(false); Save(); RequestTimingHints(); RefreshInfo(); form.Close();
+                    string source = template.Voiceover;
+                    int count = AssemblyWorkspace.Import(template, ref source, Path.Combine("Озвучка", "Общая"), paths, AssemblyFiles.MusicExtensions, false);
+                    if (count > 0) { template.Voiceover = source; refresh(); form.Close(); OpenVoiceWorkspace(); }
+                })));
+                body.Controls.Add(Button("Использовать варианты ElevenLabs", () => {
+                    template.Voiceover = ""; refresh(); form.Close(); OpenVoiceWorkspace();
                 }));
-                body.Controls.Add(new Label { Text = string.IsNullOrWhiteSpace(template.Voiceover) ? "По одному варианту на каждый ролик." : "Выбран: " + Path.GetFileName(template.ResolveAudio(template.Voiceover)), Height = 52, ForeColor = Theme.TextSecondary });
-                body.Controls.Add(Button("Готово", () => form.Close(), true));
+                body.Controls.Add(Button("Тексты и генерация ElevenLabs", () => { form.Close(); OpenVoiceEditor(); }, true));
+                if (scene != null) {
+                    body.Controls.Add(new Label { Text = "ОЗВУЧКА · " + SceneLabel(scene,sceneIndex), Width = 560, Height = 32, Font = Theme.FontCardTitle, Margin = new Padding(0, 16, 0, 3) });
+                    string mode = scene.VoiceMode == "own" ? "Своя пачка" : scene.VoiceMode == "shared" ? "Общая пачка" : scene.VoiceMode == "none" || template.HasSceneVoiceovers ? "Без озвучки" : "Старая настройка · весь ролик";
+                    int ownCount = AssemblyFiles.Pool(template.Resolve(scene.Voiceover),AssemblyFiles.MusicExtensions).Count;
+                    body.Controls.Add(new Label { Text = "Сейчас: " + mode + " · своих аудиофайлов: " + ownCount, Width = 560, Height = 34, ForeColor = Theme.TextSecondary });
+                    body.Controls.Add(Button("Использовать общую пачку в этой сцене", () => Safe(() => {
+                        if (AssemblySpeechPlan.SharedVoiceOptions(template).Count == 0) throw new Exception("Добавьте общие файлы или сначала создайте озвучки в ElevenLabs.");
+                        scene.VoiceMode = "shared"; refresh(); form.Close(); OpenVoiceWorkspace();
+                    })));
+                    body.Controls.Add(Button("+ Добавить свою пачку для этой сцены", () => Safe(() => {
+                        var paths = PickFiles(1); if (paths == null || paths.Length == 0) return;
+                        string source = scene.Voiceover;
+                        int count = AssemblyWorkspace.Import(template, ref source, Path.Combine(scene.Folder, "Озвучка"), paths, AssemblyFiles.MusicExtensions, false);
+                        if (count > 0) { scene.Voiceover = source; scene.VoiceMode = "own"; refresh(); form.Close(); OpenVoiceWorkspace(); }
+                    }), true));
+                    if (ownCount > 0) body.Controls.Add(Button("Использовать уже добавленные файлы сцены", () => {
+                        scene.VoiceMode = "own"; refresh(); form.Close(); OpenVoiceWorkspace();
+                    }));
+                    body.Controls.Add(Button("Без озвучки в этой сцене", () => {
+                        scene.VoiceMode = "none"; refresh(); form.Close(); OpenVoiceWorkspace();
+                    }));
+                }
+                body.Controls.Add(Button("Вернуть старую озвучку на весь ролик", () => {
+                    foreach (var item in template.Scenes) item.VoiceMode = "";
+                    refresh(); form.Close();
+                }));
+                body.Controls.Add(Button("Готово", () => { Save(); form.Close(); }, true));
                 form.ShowDialog(this);
             }
         }
