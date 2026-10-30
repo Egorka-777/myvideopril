@@ -46,7 +46,7 @@ namespace VideoBatch {
                 string work=Path.Combine(root,"work-"+layout),output=Path.Combine(root,layout+".mp4");
                 await AssemblyRender.Run(t,plan,ffmpeg,probe,output,work,raster,ct,null).ConfigureAwait(false);
                 var info=Core.VideoInfo(await Core.Probe(probe,output,ct).ConfigureAwait(false));
-                Require(info.HasAudio && Math.Abs(info.VideoDuration-t.Duration)<.15,"Output duration or mixed audio invalid");
+                Require(info.HasAudio && Math.Abs(info.VideoDuration-plan.RollDuration(t))<.15,"Output duration or mixed audio invalid");
                 string frame=Path.Combine(root,layout+".png");
                 await tool(ffmpeg,new List<string>{"-y","-v","error","-ss","1.6","-i",output,"-frames:v","1",frame});
                 using(var bmp=new Bitmap(frame)) {
@@ -85,12 +85,38 @@ namespace VideoBatch {
                 Require(chosen.Captions.Count==1 && Math.Abs(chosen.Captions[0].Start-.2)<.001,"Provider subtitle start changed");
                 string graph=Path.Combine(work,"graph.txt");AssemblyRender.Arguments(speech,chosen,"libx264",graph,Path.Combine(root,"speech-"+i+".mp4"),new AssemblyRenderContext());
                 string filters=File.ReadAllText(graph);
-                Require(filters.Contains("volume=1,atrim") && filters.Contains("volume=0.15,") && !filters.Contains("volume=0.1,"),"Voice is not 100% or music slider ignored");
+                Require(filters.Contains("volume=1,apad,atrim") && filters.Contains("volume=0.15,") && !filters.Contains("volume=0.1,"),"Voice is not 100% or music slider ignored");
                 await AssemblyRender.Run(speech,chosen,ffmpeg,probe,Path.Combine(root,"speech-"+i+".mp4"),work,raster,ct,null);
                 var actual=Core.VideoInfo(await Core.Probe(probe,Path.Combine(root,"speech-"+i+".mp4"),ct));
                 Require(actual.HasAudio && Math.Abs(actual.VideoDuration-chosen.RollDuration(speech))<.15,"Speech render duration differs");
             }
             Require(usedVoices.Count==2,"Voice variants were concatenated or not rotated");
+            // Two scenes use two independent voice pools; each selected WAV controls its own
+            // scene duration (+ 1 second), even when the source videos are shorter.
+            var sceneSpeech = new AssemblyTemplate {Materials=root,Videos=a,Width=240,Height=320,Fps=20,
+                SceneTimingVersion=1,PackStudioVersion=1,AllowVideoReuse=true,LoopShortVideos=true,
+                Transition="cut",RenderMode="cpu"};
+            sceneSpeech.Scenes.Add(new AssemblyScene {Duration=2,VoiceMode="own",Voiceover=voice});
+            sceneSpeech.Scenes.Add(new AssemblyScene {Duration=2,VoiceMode="own",Voiceover=secondVoice});
+            var perScene = AssemblyPlanner.Create(sceneSpeech,videos,new AssemblyHistory(),new Random(9),1).Plans.Single();
+            Require(string.IsNullOrEmpty(perScene.Voiceover) && perScene.Scenes[0].Voiceover==voice
+                && perScene.Scenes[1].Voiceover==secondVoice,"Scene voices were not selected separately");
+            string sceneWork=Path.Combine(root,"scene-speech-work");Directory.CreateDirectory(sceneWork);
+            await AssemblySpeechPlan.Prepare(sceneSpeech,perScene,ffmpeg,probe,sceneWork,ct);
+            Require(Math.Abs(perScene.Scenes[0].ContentSeconds-5)<.06
+                && Math.Abs(perScene.Scenes[1].ContentSeconds-2.8)<.06
+                && Math.Abs(perScene.RollDuration(sceneSpeech)-7.8)<.06,"Scene duration is not audio length plus one second");
+            var sceneGraph=Path.Combine(sceneWork,"scene-graph.txt");
+            AssemblyRender.Arguments(sceneSpeech,perScene,"libx264",sceneGraph,Path.Combine(root,"scene-voice.mp4"),new AssemblyRenderContext());
+            string sceneFilters=File.ReadAllText(sceneGraph);
+            Require(sceneFilters.Contains("sceneVoice0") && sceneFilters.Contains("sceneVoice1")
+                && sceneFilters.Contains("adelay=5000"),"Scene voice tracks or offsets missing");
+            string sceneOutput=Path.Combine(root,"scene-voice.mp4");
+            await AssemblyRender.Run(sceneSpeech,perScene,ffmpeg,probe,sceneOutput,sceneWork,raster,ct,null);
+            var sceneVideo=Core.VideoInfo(await Core.Probe(probe,sceneOutput,ct));
+            Require(sceneVideo.HasAudio && Math.Abs(sceneVideo.VideoDuration-7.8)<.15,"Per-scene speech output duration/audio invalid");
+            await AssemblySpeechPlan.Prepare(sceneSpeech,perScene,ffmpeg,probe,sceneWork,ct);
+            Require(Math.Abs(perScene.RollDuration(sceneSpeech)-7.8)<.06,"Re-preparing scene voice changed duration");
             var clipped=WarmupSubtitles.FitToDuration(new[]{new WarmupCaption {Text="early",Start=.5,End=1},new WarmupCaption {Text="late",Start=4,End=5}},2);
             Require(clipped.Count==1 && clipped[0].Start==.5 && clipped[0].End==1,"Subtitle timeline was accelerated to fit video");
             // Large pools use backtracking instead of enumeration; shared unique packs still reserve distinct images.
