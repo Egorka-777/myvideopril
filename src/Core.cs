@@ -81,6 +81,7 @@ namespace VideoBatch {
         public string YouTubeHttpPublishMode="scheduled";
         public string YouTubeHttpLongPublishMode="scheduled";
         public string UploadStagingFolder=@"C:\VideoBatch\Upload";
+        public bool UploadPreparationSubtleEffects = true;
         public List<YouTubeChannel> YouTubeChannels=new List<YouTubeChannel>();
         public string YouTubeSearchTitle="", YouTubeSearchUrl="", YouTubeSearchFilter="today";
         public string YouTubeMarketView="RU";

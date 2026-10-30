@@ -11,8 +11,15 @@ namespace VideoBatch {
 
         void OpenSubtitleEditor() {
             Safe(() => {
-                if (subtitleWorkspaceActive) { ApplySubtitlePreview(); return; }
-                EnterSubtitleWorkspace();
+                if (subtitleWorkspaceActive) LeaveSubtitleWorkspace();
+                using (var background = canvas.SubtitleBackground())
+                using (var dialog = new SubtitleStyleDialog(template.SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }, PreviewCaptionCues(), background, template.Width, template.Height, template.Captions?.Count > 0)) {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    template.SubtitleStyle = dialog.Style.Copy();
+                    loading = true; subtitlePosition.Value = template.SubtitleStyle.Position; loading = false;
+                    Changed(false); Save(); ApplySubtitlePreview(); RequestTimingHints(); RefreshInfo();
+                    if (dialog.EditCaptions) { EnterSubtitleWorkspace(); subtitleCaptions.Visible = true; }
+                }
             });
         }
 
@@ -35,7 +42,7 @@ namespace VideoBatch {
             subtitleUppercase = new CheckBox { AutoSize = true, Text = "Все буквы заглавные", Margin = new Padding(0, 0, 0, 8) };
             stack.Controls.Add(subtitleUppercase);
 
-            subtitleFont = Theme.MakeCombo(new[] { "Segoe UI", "Arial", "Tahoma" }); SubtitleField(stack, "Шрифт", subtitleFont);
+            subtitleFont = Theme.MakeCombo(SubtitlePresets.Fonts); SubtitleField(stack, "Шрифт", subtitleFont);
             subtitleSize = SubtitleSlider(stack, "Размер текста", 28, 88, 0, 56, "");
             subtitlePanelPosition = SubtitleSlider(stack, "Положение сверху", 10, 90, 0, 72, "%");
             subtitleWords = SubtitleSlider(stack, "Слов в группе", 1, 6, 0, 3, "");

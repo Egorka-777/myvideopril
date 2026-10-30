@@ -15,13 +15,22 @@ namespace VideoBatch {
         public string FontFamily = "Segoe UI", TextColor = "#FFFFFF", PlateColor = "#171717", Plate = "rounded";
         public int FontSize = 56, Position = 72, WordsPerCaption = 3, Opacity = 90;
         public bool Uppercase = false;
+        public string PresetId = "classic", AccentColor = "#32F56B", OutlineColor = "#000000";
+        public string Highlight = "none", Motion = "none";
+        public int OutlineWidth;
+        public bool Bold = true;
         public WarmupSubtitleStyle Copy() => (WarmupSubtitleStyle)MemberwiseClone();
         public void Normalize() {
-            if (FontFamily != "Segoe UI" && FontFamily != "Arial" && FontFamily != "Tahoma") FontFamily = "Segoe UI";
+            if (!SubtitlePresets.Fonts.Contains(FontFamily)) FontFamily = "Segoe UI";
             if (Plate != "rounded" && Plate != "solid" && Plate != "none") Plate = "rounded";
             FontSize = Math.Max(28, Math.Min(88, FontSize)); Position = Math.Max(10, Math.Min(90, Position));
             WordsPerCaption = Math.Max(1, Math.Min(6, WordsPerCaption)); Opacity = Math.Max(0, Math.Min(100, Opacity));
             TextColor = Hex(TextColor, "#FFFFFF"); PlateColor = Hex(PlateColor, "#171717");
+            AccentColor = Hex(AccentColor, "#32F56B"); OutlineColor = Hex(OutlineColor, "#000000");
+            OutlineWidth = Math.Max(0, Math.Min(10, OutlineWidth));
+            if (!new[] { "none", "active", "progressive" }.Contains(Highlight)) Highlight = "none";
+            if (Motion != "none" && Motion != "pop") Motion = "none";
+            if (string.IsNullOrWhiteSpace(PresetId)) PresetId = "classic";
         }
         static string Hex(string value, string fallback) => System.Text.RegularExpressions.Regex.IsMatch(value ?? "", "^#[0-9a-fA-F]{6}$") ? value.ToUpperInvariant() : fallback;
     }
@@ -33,6 +42,9 @@ namespace VideoBatch {
     public sealed class WarmupCaption {
         public string Text, ImagePath;
         public double Start, End;
+        public List<SubtitleWord> Words;
+        public int ActiveWord = -1;
+        public float TextScale = 1;
     }
     public static class WarmupSubtitles {
         // Build complete words using the provider's character alignment. No estimated reading speed.
@@ -60,13 +72,15 @@ namespace VideoBatch {
                 double cueEnd = part.Last().End;
                 if (i < words.Count) cueEnd = Math.Min(words[i].Start, cueEnd + .12);
                 cueEnd = Math.Min(duration, cueEnd);
-                if (cueEnd > part[0].Start) cues.Add(new WarmupCaption { Text = string.Join(" ", part.Select(p => p.Text)), Start = part[0].Start, End = cueEnd });
+                if (cueEnd > part[0].Start) cues.Add(new WarmupCaption { Text = string.Join(" ", part.Select(p => p.Text)), Start = part[0].Start, End = cueEnd,
+                    Words = part.Select(p => new SubtitleWord { Text = p.Text, Start = p.Start, End = p.End }).ToList() });
             }
             if (cues.Count == 0) throw new Exception("В озвучке нет пригодных таймкодов субтитров.");
             return cues;
         }
         public static Bitmap Paint(string text, WarmupSubtitleStyle style) => Paint(text, style, 1080, 1920);
         public static RectangleF PlateRect(string text, WarmupSubtitleStyle style, int canvasWidth, int canvasHeight) {
+            if (SubtitleTypography.UsesTypography(style)) return SubtitleTypography.Bounds(text, style, canvasWidth, canvasHeight);
             Layout(text, style, canvasWidth, canvasHeight, out RectangleF plate, out _);
             return plate;
         }
@@ -92,6 +106,7 @@ namespace VideoBatch {
         }
         // Shared renderer: the preview and exported captions use the same font, wrapping and plate geometry.
         public static Bitmap Paint(string text, WarmupSubtitleStyle style, int canvasWidth, int canvasHeight) {
+            if (SubtitleTypography.UsesTypography(style)) return SubtitleTypography.Paint(new WarmupCaption { Text = text, ActiveWord = 0 }, style, canvasWidth, canvasHeight);
             style = style.Copy(); style.Normalize();
             text = DisplayText(text, style);
             Layout(text, style, canvasWidth, canvasHeight, out RectangleF plate, out RectangleF box);
@@ -118,7 +133,8 @@ namespace VideoBatch {
         public static List<WarmupCaption> FitToDuration(IEnumerable<WarmupCaption> source, double duration) {
             if (duration <= 0 || source == null) return new List<WarmupCaption>();
             var cues = source.Where(c => c != null && !string.IsNullOrWhiteSpace(c.Text))
-                .Select(c => new WarmupCaption { Text = c.Text.Trim(), Start = c.Start, End = c.End }).ToList();
+                .Select(c => new WarmupCaption { Text = c.Text.Trim(), Start = c.Start, End = c.End,
+                    Words = c.Words?.Select(w => new SubtitleWord { Text = w.Text, Start = w.Start, End = Math.Min(w.End, duration) }).Where(w => w.Start < duration).ToList() }).ToList();
             if (cues.Count == 0) return cues;
             foreach (var cue in cues) {
                 if (double.IsNaN(cue.Start) || double.IsInfinity(cue.Start)) cue.Start = 0;
@@ -136,10 +152,12 @@ namespace VideoBatch {
             return result;
         }
 
-        public static List<WarmupCaption> Rasterize(List<WarmupCaption> cues, WarmupSubtitleStyle style, string folder) {
+        public static List<WarmupCaption> Rasterize(List<WarmupCaption> cues, WarmupSubtitleStyle style, string folder, int canvasWidth = 1080, int canvasHeight = 1920) {
+            var frames = SubtitlePresets.Frames(cues, style);
+            cues.Clear(); cues.AddRange(frames);
             for (int i = 0; i < cues.Count; i++) {
                 cues[i].ImagePath = Path.Combine(folder, "caption-" + i + ".png");
-                using (var image = Paint(cues[i].Text, style)) image.Save(cues[i].ImagePath, ImageFormat.Png);
+                using (var image = SubtitleTypography.UsesTypography(style) ? SubtitleTypography.Paint(cues[i], style, canvasWidth, canvasHeight) : Paint(cues[i].Text, style, canvasWidth, canvasHeight)) image.Save(cues[i].ImagePath, ImageFormat.Png);
             }
             return cues;
         }

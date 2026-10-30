@@ -28,6 +28,7 @@ namespace VideoBatch {
             background = img;
             Invalidate();
         }
+        public Image CopyBackground() => background == null ? null : new Bitmap(background);
 
         public void SetSubtitles(WarmupSubtitleStyle style, string text) {
             subtitle?.Dispose(); subtitle = style != null && style.Enabled ? WarmupSubtitles.Paint(text, style) : null;

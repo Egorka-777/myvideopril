@@ -888,6 +888,17 @@ namespace VideoBatch {
         public event Action SplitRatioChanged;
         public event Action SplitZoomChanged;
         public AssemblyCanvas() { DoubleBuffered = true; BackColor = Theme.Background; }
+        public Bitmap SubtitleBackground() {
+            if (template == null || scene == null) return null;
+            var result = new Bitmap(template.Width, template.Height);
+            using (var graphics = Graphics.FromImage(result)) {
+                graphics.Clear(Color.Black);
+                var frame = new Rectangle(0, 0, template.Width, template.Height);
+                if (background != null) graphics.DrawImage(background, frame);
+                foreach (var image in images) if (image != null) graphics.DrawImage(image, frame);
+            }
+            return result;
+        }
         public void SetBackground(Image value) { background?.Dispose(); background = value; Invalidate(); }
         public void SetSubtitleEditing(bool value) { subtitleEditing = value; subtitleSelected = value; Invalidate(); }
         public void ClearSubtitles() { subtitleOverlay?.Dispose(); subtitleOverlay = null; subtitleDragEnabled = false; subtitleStyle = null; subtitlePlateScreen = RectangleF.Empty; subtitleSelected = false; Cursor = Cursors.Default; Invalidate(); }

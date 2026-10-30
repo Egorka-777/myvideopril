@@ -28,6 +28,7 @@ namespace VideoBatch {
         string statusFilterValue = "Все статусы";
         Button httpUploadBtn, studioUploadBtn, ownerPublishBtn;
         int uploadRuns;
+        readonly HashSet<string> preparationKeys = new HashSet<string>();
 
         public YouTubeWorkspacePanel(Preferences prefs, YouTubeBackend be, NavigationService nav) {
             settings = prefs;
@@ -154,6 +155,7 @@ namespace VideoBatch {
             grid.CellClick += OnGridClick;
             grid.CellEndEdit += SaveChannelLink;
             grid.CellPainting += OnAccountCellPaint;
+            Disposed += (s, e) => { foreach (var key in preparationKeys.ToArray()) UploadPreparation.Cancel(key); };
             grid.RowPostPaint += OnRowPostPaint;
             grid.SelectionChanged += (s, e) => { RememberSelectedChannel(); UpdateLiveRows(); };
             grid.MouseDown += GridMouseDown;
@@ -187,6 +189,7 @@ namespace VideoBatch {
 
         Button BuildMoreMenuButton() {
             var menu = Theme.MakeContextMenu();
+            UploadPreparation.AddSettingsMenu(menu, settings);
             menu.Items.Add("Поиск канала…", null, (s, e) => PromptSearch());
             statusMenuRoot = new ToolStripMenuItem("Фильтр статуса");
             RebuildStatusSubmenu();
@@ -290,7 +293,9 @@ namespace VideoBatch {
         }
 
         void OnAccountCellPaint(object sender, DataGridViewCellPaintingEventArgs e) {
-            if (e.RowIndex < 0 || e.ColumnIndex != grid.Columns["account"].Index) return;
+            if (e.RowIndex < 0) return;
+            if (e.ColumnIndex == grid.Columns["status"].Index && grid.Rows[e.RowIndex].Tag is YouTubeChannel preparing && UploadPreparation.PaintProgress(e, UploadPreparation.YouTubeKey(preparing))) return;
+            if (e.ColumnIndex != grid.Columns["account"].Index) return;
             e.Paint(e.ClipBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.Border | DataGridViewPaintParts.Focus);
             var ch = grid.Rows[e.RowIndex].Tag as YouTubeChannel;
             if (ch == null) return;
@@ -536,6 +541,7 @@ namespace VideoBatch {
             menu.Items.Add("Подписи комментариев (все аккаунты)…", null, (s, e) => EditAllOwnerComments());
             menu.Items.Add("Опубликовать видео…", null, async (s, e) => await RunOwnerPublish(new List<YouTubeChannel>{ch}));
             menu.Items.Add("Добавить видео", null, (s, e) => AddVideosForChannel(ch));
+            if (UploadPreparation.IsBusy(UploadPreparation.YouTubeKey(ch))) menu.Items.Add("Отменить подготовку видео", null, (s, e) => UploadPreparation.Cancel(UploadPreparation.YouTubeKey(ch)));
             menu.Items.Add("Задать превью", null, (s, e) => PickThumbnail(rowIndex));
             menu.Items.Add("Удалить превью", null, (s, e) => ClearThumbnail(rowIndex));
             menu.Items.Add(new ToolStripSeparator());
@@ -703,20 +709,33 @@ namespace VideoBatch {
             AddVideosForChannel(ch);
         }
 
-        void AddVideosForChannel(YouTubeChannel ch) {
+        async void AddVideosForChannel(YouTubeChannel ch) {
             if (ch == null) return;
             if(backend.Window.OwnerPublishing){MessageBox.Show(this,"Дождитесь окончания публикации перед заменой списка видео.","YouTube");return;}
+            string preparationKey = UploadPreparation.YouTubeKey(ch);
+            if (UploadPreparation.IsBusy(preparationKey)) { AppendLog("Для «" + ch.Name + "» уже идёт подготовка видео."); return; }
             RestoreGridSelection(ch.ChannelId);
             using (var d = new OpenFileDialog { Multiselect = true, Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все|*.*" }) {
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
+                if (ch.Items?.Any(i => i != null && !string.IsNullOrWhiteSpace(i.Video)) == true && MessageBox.Show(FindForm(), "Заменить видео у «" + ch.Name + "» после подготовки новой пачки?", "YouTube", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                string taskId = "prepare-" + Guid.NewGuid().ToString("N"); int logged = -1;
                 try {
-                    try { Store.Save(settings); } catch { }
-                    SyncWorkspaceToBackend();
-                    backend.SelectChannel(ch);
-                    backend.AssignVideosToChannel(ch, d.FileNames);
-                    RefreshGrid();
-                    AppendLog("Добавлено видео: " + d.FileNames.Length + " → " + ch.Name);
-                } catch (Exception ex) { MessageBox.Show(this, ex.Message, "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                    SyncWorkspaceToBackend(); preparationKeys.Add(preparationKey);
+                    AppendLog(ch.Name + ": подготовка видео…");
+                    var progress = new Progress<UploadPreparationProgress>(state => {
+                        if (IsDisposed || !UploadPreparation.IsBusy(preparationKey)) return;
+                        grid.Invalidate();
+                        if (state.Percent / 5 == logged && state.Stage != "queued") return;
+                        logged = state.Percent / 5;
+                        AppendLog(ch.Name + ": " + state.Caption);
+                        AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare", state.Caption + " · " + state.File);
+                    });
+                    await backend.AssignPreparedVideosToChannelAsync(ch, d.FileNames, progress);
+                    if (!IsDisposed) { RefreshGrid(); AppendLog(ch.Name + ": подготовлено 100% · " + d.FileNames.Length + " видео."); }
+                    AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
+                } catch (OperationCanceledException) { if (!IsDisposed) AppendLog(ch.Name + ": подготовка отменена. Исходники сохранены."); }
+                catch (Exception ex) { AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { AppendLog(ch.Name + ": ошибка подготовки · " + ex.Message); MessageBox.Show(this, ex.Message, "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning); } }
+                finally { preparationKeys.Remove(preparationKey); if (!IsDisposed) RefreshGrid(); }
             }
         }
 
@@ -930,7 +949,9 @@ namespace VideoBatch {
         }
 
         async Task RunUpload(bool http) {
-            var checkedChannels = GetCheckedChannels();
+            var selectedChannels = GetCheckedChannels();
+            var checkedChannels = selectedChannels.Where(ch => !UploadPreparation.IsBusy(UploadPreparation.YouTubeKey(ch))).ToList();
+            if (selectedChannels.Count != checkedChannels.Count) AppendLog("Готовящиеся аккаунты пропущены: дождитесь подготовки и запустите их отдельно.");
             if (checkedChannels.Count == 0) {
                 MessageBox.Show(this,
                     "Отметьте галочкой ✓ каналы, которые нужно загрузить.\n\n" +

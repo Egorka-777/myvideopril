@@ -6,10 +6,12 @@ using System.Windows.Forms;
 namespace VideoBatch {
     /// <summary>Hidden legacy UploadWindow — business logic only, never shown in shell.</summary>
     public sealed class YouTubeBackend : IDisposable {
+        readonly Preferences settings;
         public UploadWindow Window { get; }
         public event Action<string> LogLine;
 
         public YouTubeBackend(Preferences settings) {
+            this.settings = settings;
             Window = new UploadWindow(settings);
             Window.ShowInTaskbar = false;
             Window.FormBorderStyle = FormBorderStyle.None;
@@ -47,6 +49,14 @@ namespace VideoBatch {
         public void AssignVideos(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }
         public void AssignVideosToProfile(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }
         public void AssignVideosToChannel(YouTubeChannel channel, string[] files) { Window.AssignVideosToChannel(channel, files); }
+        public async Task AssignPreparedVideosToChannelAsync(YouTubeChannel channel, string[] files, IProgress<UploadPreparationProgress> progress) {
+            string[] prepared = null;
+            try {
+                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, files, settings, progress);
+                if (Window.IsDisposed) throw new OperationCanceledException();
+                Window.AssignVideosToChannel(channel, prepared, true);
+            } catch { UploadPreparation.DeleteOutputs(prepared); throw; }
+        }
         public void SelectChannel(YouTubeChannel channel) { Window.SelectChannel(channel); }
         public bool TrySchedulePreview() { return Window.TryShowSchedulePreview(); }
         public bool TryShowSchedulePreview() { return Window.TryShowSchedulePreview(); }
@@ -57,10 +67,12 @@ namespace VideoBatch {
     }
 
     public sealed class TikTokBackend : IDisposable {
+        readonly Preferences settings;
         public TikTokUploadWindow Window { get; }
         public event Action<string> LogLine;
 
         public TikTokBackend(Preferences settings) {
+            this.settings = settings;
             Window = new TikTokUploadWindow(settings);
             Window.ShowInTaskbar = false;
             Window.FormBorderStyle = FormBorderStyle.None;
@@ -88,6 +100,14 @@ namespace VideoBatch {
         public void Stop() { Window.RequestStopUpload(); }
         public void AssignVideos(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }
         public void AssignVideosToProfile(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }
+        public async Task AssignPreparedVideosToProfileAsync(TikTokAccount account, string[] files, IProgress<UploadPreparationProgress> progress) {
+            string[] prepared = null;
+            try {
+                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.TikTokKey(account), "TikTok", account.ProfileId, files, settings, progress);
+                if (Window.IsDisposed) throw new OperationCanceledException();
+                Window.AssignVideosToProfile(account.ProfileId, account.Market, prepared, true);
+            } catch { UploadPreparation.DeleteOutputs(prepared); throw; }
+        }
 
         public void Dispose() {
             try { Window.Dispose(); } catch { }

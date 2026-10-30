@@ -1224,13 +1224,13 @@ namespace VideoBatch {
             SaveGrid();LoadGrid();
             row.Cells[COn].Value=true;SaveGrid();
         }
-        public void AssignVideosToChannel(YouTubeChannel channel,string[] files){
+        public void AssignVideosToChannel(YouTubeChannel channel,string[] files,bool replaceConfirmed=false){
             if(channel==null||files==null||files.Length==0)return;
             SetMarketView(string.IsNullOrWhiteSpace(channel.Market)?marketView:channel.Market);
             LoadGrid();
             var row=FindChannelRow(channel);
             if(row==null)throw new Exception("Канал не найден: «"+(channel.Name??"")+"» (Profile "+(channel.ProfileId??"")+")");
-            AssignVideoPackToChannel((YouTubeChannel)row.Tag,row,files);
+            AssignVideoPackToChannel((YouTubeChannel)row.Tag,row,files,replaceConfirmed);
             SaveGrid();LoadGrid();
             row=FindChannelRow(channel)??row;
             row.Cells[COn].Value=true;SaveGrid();
@@ -1302,9 +1302,9 @@ namespace VideoBatch {
                 }catch(Exception ex){Ui.Error(this,ex);}
             }
         }
-        void AssignVideoPackToChannel(YouTubeChannel ch,DataGridViewRow row,string[] filePaths){
+        void AssignVideoPackToChannel(YouTubeChannel ch,DataGridViewRow row,string[] filePaths,bool replaceConfirmed=false){
             var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
-            if(ch.Items!=null&&ch.Items.Any(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Video))&&
+            if(!replaceConfirmed&&ch.Items!=null&&ch.Items.Any(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Video))&&
                 MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+paths.Length+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
             string packKind=EffectiveKind(ch);

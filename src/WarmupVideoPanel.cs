@@ -91,11 +91,11 @@ namespace VideoBatch {
             var captionHead = new TableLayoutPanel { ColumnCount = 2, RowCount = 1, Height = 38, Dock = DockStyle.Top, AutoSize = false, Margin = new Padding(0, 8, 0, 0) };
             captionHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); captionHead.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
             captionsEnabled = new CheckBox { Name = "warmup-subtitles-enabled", Text = "Субтитры", AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 8, 0, 0) };
-            editCaptions = Theme.MakeButton("Настроить", ghost: true, action: () => { captionEditor.Visible = !captionEditor.Visible; }); editCaptions.AutoSize = false; editCaptions.Dock = DockStyle.Fill; editCaptions.Margin = Padding.Empty;
+            editCaptions = Theme.MakeButton("Стили", ghost: true, action: OpenCaptionStyles); editCaptions.AutoSize = false; editCaptions.Dock = DockStyle.Fill; editCaptions.Margin = Padding.Empty;
             captionHead.Controls.Add(captionsEnabled, 0, 0); captionHead.Controls.Add(editCaptions, 1, 0); AddField(captionHead);
             captionEditor = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Visible = false, Margin = new Padding(0, 6, 0, 0) };
             captionEditor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            captionFont = Theme.MakeCombo(new[] { "Segoe UI", "Arial", "Tahoma" });
+            captionFont = Theme.MakeCombo(SubtitlePresets.Fonts);
             captionPlate = Theme.MakeCombo(new[] { "Скруглённая", "Прямая", "Без плашки" });
             captionSize = StyleNumber("warmup-subtitle-size", 28, 88); captionPosition = StyleNumber("warmup-subtitle-position", 10, 90);
             captionWords = StyleNumber("warmup-subtitle-words", 1, 6); captionOpacity = StyleNumber("warmup-subtitle-opacity", 0, 100);
@@ -162,6 +162,22 @@ namespace VideoBatch {
             subtitleStyle.Plate = captionPlate.SelectedIndex == 2 ? "none" : captionPlate.SelectedIndex == 1 ? "solid" : "rounded";
             subtitleStyle.FontSize = (int)captionSize.Value; subtitleStyle.Position = (int)captionPosition.Value; subtitleStyle.WordsPerCaption = (int)captionWords.Value; subtitleStyle.Opacity = (int)captionOpacity.Value;
             UpdateCaptionPreview(); Changed(sender, e);
+        }
+        void OpenCaptionStyles() {
+            using (var background = preview.CopyBackground())
+            using (var dialog = new SubtitleStyleDialog(subtitleStyle, null, background)) {
+                if (dialog.ShowDialog(FindForm()) != DialogResult.OK) return;
+                loading = true;
+                try {
+                    subtitleStyle = dialog.Style.Copy(); captionsEnabled.Checked = subtitleStyle.Enabled;
+                    captionFont.SelectedItem = subtitleStyle.FontFamily;
+                    captionPlate.SelectedIndex = subtitleStyle.Plate == "none" ? 2 : subtitleStyle.Plate == "solid" ? 1 : 0;
+                    captionSize.Value = subtitleStyle.FontSize; captionPosition.Value = subtitleStyle.Position;
+                    captionWords.Value = subtitleStyle.WordsPerCaption; captionOpacity.Value = subtitleStyle.Opacity;
+                    UpdateCaptionPreview();
+                } finally { loading = false; }
+                SaveFields();
+            }
         }
         void UpdateCaptionPreview() {
             captionEditor.Enabled = captionsEnabled.Checked; editCaptions.Enabled = captionsEnabled.Checked;

@@ -311,13 +311,13 @@ namespace VideoBatch {
         }
         public Task RunCheckProfilesAsync()=>TrackOperation(()=>CheckProfiles());
         public void RequestStopUpload(){stop.Enabled=false;if(uploadCts!=null)uploadCts.Cancel();if(cancellation!=null)cancellation.Cancel();Write("Остановка по запросу…");}
-        public void AssignVideosToProfile(string profileId,string market,string[] files){
+        public void AssignVideosToProfile(string profileId,string market,string[] files,bool replaceConfirmed=false){
             if(files==null||files.Length==0)return;
             SetMarketView(market);
             SelectProfileById(profileId,market);
             var row=CurrentAccountRow();
             if(row==null)throw new Exception("Аккаунт не найден для Profile ID "+profileId);
-            AssignVideoPackToAccount((TikTokAccount)row.Tag,row,files);
+            AssignVideoPackToAccount((TikTokAccount)row.Tag,row,files,replaceConfirmed);
             SaveGrid();LoadGrid();
             row.Cells[COn].Value=true;SaveGrid();
         }
@@ -338,9 +338,9 @@ namespace VideoBatch {
                 }catch(Exception ex){Ui.Error(this,ex);}
             }
         }
-        void AssignVideoPackToAccount(TikTokAccount acc,DataGridViewRow row,string[] filePaths){
+        void AssignVideoPackToAccount(TikTokAccount acc,DataGridViewRow row,string[] filePaths,bool replaceConfirmed=false){
             var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
-            if(acc.Items!=null&&acc.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
+            if(!replaceConfirmed&&acc.Items!=null&&acc.Items.Any(it=>!string.IsNullOrWhiteSpace(it.Video))){
                 if(MessageBox.Show(this,"«"+acc.Name+"» уже имеет видео. Заменить новой пачкой ("+paths.Length+")?","TikTok",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             }
             List<string> captions=AllocCaptions(paths.Length);

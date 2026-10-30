@@ -201,7 +201,7 @@ namespace VideoBatch {
                         throw new Exception("Субтитры не попали в длительность ролика (" + roll.ToString("0.#", Core.Inv) + " с). Открой «Субтитры» и проверь начало/конец строк.");
                 }
                 if (p.Captions.Count > 0)
-                    WarmupSubtitles.Rasterize(p.Captions, t.SubtitleStyle, work);
+                    WarmupSubtitles.Rasterize(p.Captions, t.SubtitleStyle, work, t.Width, t.Height);
             }
             report.RasterSeconds = stage.Elapsed.TotalSeconds; stage.Restart();
             progress?.Invoke("Проверяю ускорение…");

@@ -36,6 +36,7 @@ namespace VideoBatch {
 
         readonly Panel accountBadge;
 
+        readonly HashSet<string> preparationKeys = new HashSet<string>();
         string marketView = "RU";
 
         string statusFilterValue = "Все статусы";
@@ -118,6 +119,7 @@ namespace VideoBatch {
 
                 ("Сверить загрузку", () => ReconcileCheckedOrSelected()),
                 ("Снять все галочки", ClearAllChecks),
+                ("Цветокоррекция подготовки…", () => UploadPreparation.ToggleEffects(FindForm(), settings)),
                 ("Открыть лог", OpenLog)));
 
             headerBar.Controls.Add(marketHint, 0, 0);
@@ -239,6 +241,8 @@ namespace VideoBatch {
             grid.Columns.Add("status", "Статус");
 
             grid.Columns["status"].FillWeight = 100;
+            grid.CellPainting += (sender, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == grid.Columns["status"].Index && grid.Rows[e.RowIndex].Tag is TikTokAccount a) UploadPreparation.PaintProgress(e, UploadPreparation.TikTokKey(a)); };
+            Disposed += (sender, e) => { foreach (var key in preparationKeys.ToArray()) UploadPreparation.Cancel(key); };
 
             grid.CellValueChanged += (s, e) => { if (e.ColumnIndex >= 0 && grid.Columns[e.ColumnIndex].Name == "on") SyncEnabledFromGrid(); };
 
@@ -250,6 +254,8 @@ namespace VideoBatch {
                 grid.ClearSelection(); grid.Rows[hit.RowIndex].Selected = true;
                 var row = grid.Rows[hit.RowIndex];
                 var menu = Theme.MakeContextMenu();
+                UploadPreparation.AddSettingsMenu(menu, settings);
+                if (UploadPreparation.IsBusy(UploadPreparation.TikTokKey(account))) menu.Items.Add("Отменить подготовку видео", null, (sender, args) => UploadPreparation.Cancel(UploadPreparation.TikTokKey(account)));
                 string listMarket = NormMarket(account.Market);
                 menu.Items.Add("Снять галочку", null, (sender, args) => { account.Enabled = false; row.Cells["on"].Value = false; SyncEnabledFromGrid(); RefreshGrid(skipSync: true); });
                 menu.Items.Add("Сверить загрузку", null, (sender, args) => ReconcileAccount(account));
@@ -656,7 +662,7 @@ namespace VideoBatch {
 
 
 
-        void AddVideos() {
+        async void AddVideos() {
 
             var acc = SelectedAccount();
 
@@ -680,15 +686,25 @@ namespace VideoBatch {
 
             }
 
+            string preparationKey = UploadPreparation.TikTokKey(acc);
+            if (UploadPreparation.IsBusy(preparationKey)) { AppendLog("Для «" + acc.Name + "» уже идёт подготовка видео."); return; }
             using (var d = new OpenFileDialog { Multiselect = true, Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm|Все|*.*" }) {
 
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
 
+                if (acc.Items?.Any(i => i != null && !string.IsNullOrWhiteSpace(i.Video)) == true && MessageBox.Show(FindForm(), "Заменить видео у «" + acc.Name + "» после подготовки новой пачки?", "TikTok", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                string taskId = "prepare-" + Guid.NewGuid().ToString("N"); int logged = -1;
                 try {
-
-                    SyncWorkspaceToBackend();
-
-                    backend.AssignVideosToProfile(acc.ProfileId, marketView, d.FileNames);
+                    SyncWorkspaceToBackend(); preparationKeys.Add(preparationKey);
+                    AppendLog(acc.Name + ": подготовка видео…");
+                    var progress = new Progress<UploadPreparationProgress>(state => {
+                        if (IsDisposed || !UploadPreparation.IsBusy(preparationKey)) return;
+                        grid.Invalidate();
+                        if (state.Percent / 5 == logged && state.Stage != "queued") return;
+                        logged = state.Percent / 5; AppendLog(acc.Name + ": " + state.Caption);
+                        AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare", state.Caption + " · " + state.File);
+                    });
+                    await backend.AssignPreparedVideosToProfileAsync(acc, d.FileNames, progress);
 
                     foreach (DataGridViewRow row in grid.Rows)
 
@@ -702,13 +718,12 @@ namespace VideoBatch {
 
                     AppendLog("Добавлено видео: " + d.FileNames.Length + " → " + acc.Name);
 
-                } catch (Exception ex) { MessageBox.Show(this, ex.Message, "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
-
+                    AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
+                } catch (OperationCanceledException) { if (!IsDisposed) AppendLog(acc.Name + ": подготовка отменена. Исходники сохранены."); }
+                catch (Exception ex) { AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { AppendLog(acc.Name + ": ошибка подготовки · " + ex.Message); MessageBox.Show(this, ex.Message, "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Warning); } }
+                finally { preparationKeys.Remove(preparationKey); if (!IsDisposed) RefreshGrid(skipSync: true); }
             }
-
         }
-
-
 
         async Task RunUpload(string transport) {
 
@@ -718,8 +733,9 @@ namespace VideoBatch {
 
             if (modeHint != null) modeHint.Text = "Загрузка через браузер Dolphin";
 
-            var checkedAccounts = GetCheckedAccounts();
-
+            var selectedAccounts = GetCheckedAccounts();
+            var checkedAccounts = selectedAccounts.Where(a => !UploadPreparation.IsBusy(UploadPreparation.TikTokKey(a))).ToList();
+            if (selectedAccounts.Count != checkedAccounts.Count) AppendLog("Готовящиеся аккаунты пропущены: дождитесь подготовки и запустите их отдельно.");
             if (checkedAccounts.Count == 0) {
 
                 MessageBox.Show(this,

@@ -1,0 +1,61 @@
+name: Subtitle presets and upload preparation
+on:
+  push:
+    branches: [feat/subtitle-presets-upload-prep-20261030, main]
+    paths: ['src/**', 'VideoBatch.csproj', '.github/workflows/subtitle-upload-preparation.yml']
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install FFmpeg
+        shell: pwsh
+        run: ./scripts/Install-CiFfmpeg.ps1
+      - name: Build desktop
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Presets, compatibility and effect limits
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          foreach ($type in @('SubtitleUploadTests', 'ProcessingRegressionTests', 'AssemblyMarketTests')) {
+            $method = $asm.GetType("VideoBatch.$type").GetMethod('RunSelfTests')
+            if ($method -and !$method.Invoke($null, @())) { throw "$type failed" }
+          }
+      - name: Real files, queue, metadata and source preservation
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          $ffmpeg = [string](Get-Command ffmpeg.exe).Source
+          $ffprobe = [string](Get-Command ffprobe.exe).Source
+          if (!$asm.GetType('VideoBatch.SubtitleUploadTests').GetMethod('RunIntegrationTests').Invoke($null, @($ffmpeg, $ffprobe))) { throw 'Upload preparation integration failed' }
+          if (!$asm.GetType('VideoBatch.WarmupVideoTests').GetMethod('RunIntegrationTests').Invoke($null, @($ffmpeg, $ffprobe))) { throw 'Existing speech/video integration failed' }
+      - name: Native subtitle gallery screenshots
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          if (!$asm.GetType('VideoBatch.SubtitleUploadTests').GetMethod('RunUiTests').Invoke($null, @([IO.Path]::GetFullPath('artifacts/subtitle-ui')))) { throw 'Subtitle UI failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Subtitle-Preset-Screenshots
+          path: artifacts/subtitle-ui
+          if-no-files-found: ignore
+      - name: Package desktop update
+        shell: pwsh
+        run: |
+          $dest = 'artifacts/VideoBatch-Subtitle-Upload-Update'
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          Copy-Item bin/Release/net48/VideoBatch.exe* $dest
+          Copy-Item bin/Release/net48/*.dll $dest
+          if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes $dest -Recurse }
+          Copy-Item docs/AGENT_SUBTITLE_UPLOAD_20261030_RU.md $dest
+          git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoBatch-Subtitle-Upload-Update
+          path: artifacts/VideoBatch-Subtitle-Upload-Update
