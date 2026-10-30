@@ -321,26 +321,28 @@ namespace VideoBatch {
             int videos = Pool(template.Videos,AssemblyFiles.VideoExtensions).Count, songs = Pool(template.Music,AssemblyFiles.MusicExtensions).Count;
             if (videoButton != null)
                 videoButton.Text = "Видео · " + videos + (template.ContinuousVideo ? " · сквозное" : " · по сценам");
-            int speechFiles = AssemblySpeechPlan.AvailableLines(template).Count;
+            int speechFiles = AssemblySpeechPlan.SharedVoiceOptions(template).Count;
+            int scenesWithVoice = template.Scenes.Count(scene => scene.VoiceMode == "shared" || scene.VoiceMode == "own");
             if (musicButton != null) musicButton.Text = "Музыка · " + songs;
-            if (voiceToolbarButton != null) voiceToolbarButton.Text = "Озвучки · " + speechFiles;
-            double rollDuration = template.Duration;
-            bool overAnchor = timingAnchorDuration.HasValue && rollDuration > timingAnchorDuration.Value + .05;
+            if (voiceToolbarButton != null) voiceToolbarButton.Text = "Озвучка · " + (template.HasSceneVoiceovers ? scenesWithVoice + " сцен" : speechFiles + " файлов");
+            double rollDuration = template.Duration; // Effective length is selected per output at render time.
             for (int i = 0; i < sceneCards.Count; i++) {
                 var scene = template.Scenes[i];
                 int images = scene.Layers.Where(l => l.Enabled).Sum(l => Pool(l.Source,AssemblyFiles.PictureExtensions).Count);
                 string detail = scene.Duration.ToString("0.##") + " с · " + (images == 0 ? "Добавь картинки" : images + " вариантов");
-                if (overAnchor) detail = "озвучка до " + timingAnchorDuration.Value.ToString("0.#") + " с · ролик " + rollDuration.ToString("0.#") + " с · конец по озвучке";
-                ((AssemblySceneButton)sceneCards[i]).SetInfo(SceneLabel(scene,i), detail, i == sceneIndex, overAnchor);
+                if (template.HasSceneVoiceovers) {
+                    int voices = AssemblySpeechPlan.SceneVoiceOptions(template,scene).Count;
+                    detail = voices > 0 ? "Озвучка · " + voices + " вариантов · +1 с" : detail + " · без озвучки";
+                }
+                ((AssemblySceneButton)sceneCards[i]).SetInfo(SceneLabel(scene,i), detail, i == sceneIndex, false);
             }
-            selectedCaption.ForeColor = overAnchor ? Theme.Error : Theme.TextPrimary;
-            selectedCaption.Text=SelectedScene==null ? "Нет сцен · нажми + в ленте сцен" : SceneLabel(SelectedScene,sceneIndex)+" · "+SelectedScene.Duration.ToString("0.#")+" с · ролик "+rollDuration.ToString("0.#")+" с"+(overAnchor && timingAnchorDuration.HasValue ? " · озвучка "+timingAnchorDuration.Value.ToString("0.#")+" с" : "");
-            if (overAnchor && timingAnchorDuration.HasValue && cancellation == null)
-                status.Text = "Ролик длиннее озвучки ElevenLabs: максимум " + timingAnchorDuration.Value.ToString("0.#") + " с, сейчас " + rollDuration.ToString("0.#") + " с. Ролик завершится вместе с выбранной озвучкой.";
-            if (globalImagesButton != null) globalImagesButton.Text = "Изображения\nвесь ролик";
-            int speechLines = template.SpeechLines?.Count(l => !string.IsNullOrWhiteSpace(l.Text) || !string.IsNullOrWhiteSpace(l.AudioPath)) ?? 0;
-            if (voiceToolbarButton != null)
-                voiceToolbarButton.ForeColor = overAnchor ? Theme.Error : Theme.TextPrimary;
+            selectedCaption.ForeColor = Theme.TextPrimary;
+            selectedCaption.Text = SelectedScene == null ? "Нет сцен · нажми + в ленте сцен" :
+                SceneLabel(SelectedScene,sceneIndex) + (template.HasSceneVoiceovers
+                    ? " · длительность по выбранной озвучке (+1 с)"
+                    : " · " + SelectedScene.Duration.ToString("0.#") + " с · ручная длина " + rollDuration.ToString("0.#") + " с");
+            if (globalImagesButton != null) globalImagesButton.Text = "Изображения\\nвесь ролик";
+            if (voiceToolbarButton != null) voiceToolbarButton.ForeColor = Theme.TextPrimary;
             if (subsToolbarButton != null) {
                 subsToolbarButton.Text = "Субтитры";
                 subsToolbarButton.BackColor = subtitleWorkspaceActive ? Theme.Accent : Theme.Card;
@@ -718,6 +720,7 @@ namespace VideoBatch {
             timingCancellation?.Cancel(); int version = ++timingVersion;
             var ct = new CancellationTokenSource(); timingCancellation = ct;
             try {
+                if (template.HasSceneVoiceovers) { timingAnchorDuration = null; previewSpeechCaptions = null; RefreshInfo(); RefreshCanvas(); return; }
                 if (!ToolsLocator.TryResolve(out _, out string probe, out _)) { timingAnchorDuration = null; previewSpeechCaptions = null; RefreshInfo(); return; }
                 double? total = await Task.Run(async () => await AssemblySpeechPlan.ResolveVoiceoverDurationAsync(template, probe, ct.Token).ConfigureAwait(false), ct.Token);
                 List<WarmupCaption> speechCaptions = null;
