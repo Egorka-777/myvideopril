@@ -31,10 +31,17 @@ namespace VideoBatch {
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56)); Controls.Add(root);
             preview = new SubtitleStylePreview(canvasWidth, canvasHeight, background) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 16, 8) }; root.Controls.Add(preview, 0, 0);
-            var tabs = new TabControl { Dock = DockStyle.Fill, Name = "SubtitleStyleTabs" };
-            var gallery = new TabPage("Стили") { BackColor = Theme.Card, Padding = new Padding(8) };
-            var settings = new TabPage("Настройки") { BackColor = Theme.Card, Padding = new Padding(12), AutoScroll = true };
-            tabs.TabPages.Add(gallery); tabs.TabPages.Add(settings); root.Controls.Add(tabs, 1, 0);
+            var tabs = new TableLayoutPanel { Dock = DockStyle.Fill, Name = "SubtitleStyleTabs", ColumnCount = 1, RowCount = 2, BackColor = Theme.Card };
+            tabs.RowStyles.Add(new RowStyle(SizeType.AutoSize)); tabs.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var switches = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, Padding = new Padding(8) };
+            var pages = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card };
+            var gallery = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card, Padding = new Padding(8) };
+            var settings = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card, Padding = new Padding(12), AutoScroll = true, Visible = false };
+            pages.Controls.Add(gallery); pages.Controls.Add(settings);
+            Button stylesTab = null, settingsTab = null;
+            Action<bool> showStyles = value => { gallery.Visible = value; settings.Visible = !value; Theme.ApplyHeroToggleStyle(stylesTab, value); Theme.ApplyHeroToggleStyle(settingsTab, !value); };
+            stylesTab = Theme.MakeHeroToggle("Стили", true, () => showStyles(true)); settingsTab = Theme.MakeHeroToggle("Настройки", false, () => showStyles(false));
+            switches.Controls.Add(stylesTab); switches.Controls.Add(settingsTab); tabs.Controls.Add(switches, 0, 0); tabs.Controls.Add(pages, 0, 1); root.Controls.Add(tabs, 1, 0);
             cards = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, BackColor = Theme.Card }; gallery.Controls.Add(cards);
             cards.ClientSizeChanged += (s, e) => { foreach (Control card in cards.Controls) card.Width = Math.Max(170, (cards.ClientSize.Width - 36) / 2); };
             var fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Padding = new Padding(0, 0, 12, 0) };
@@ -108,8 +115,8 @@ namespace VideoBatch {
             foreach (Control old in cards.Controls.Cast<Control>().ToArray()) old.Dispose(); cards.Controls.Clear();
             try {
                 foreach (var preset in SubtitlePresets.Load()) {
-                    var card = new SubtitlePresetCard(preset) { Width = Math.Max(170, (cards.ClientSize.Width - 36) / 2), Height = 135, Margin = new Padding(4) };
-                    card.Click += (s, e) => { Style = preset.Style.Copy(); Style.Enabled = true; selected.Text = preset.Name; LoadFields(); cards.Invalidate(true); };
+                    var card = new SubtitlePresetCard(preset) { Width = Math.Max(170, (cards.ClientSize.Width - 36) / 2), Height = 135, Margin = new Padding(4), IsSelected = preset.Id == Style.PresetId };
+                    card.Click += (s, e) => { Style = preset.Style.Copy(); Style.Enabled = true; selected.Text = preset.Name; LoadFields(); foreach (SubtitlePresetCard item in cards.Controls) item.IsSelected = item.PresetId == Style.PresetId; cards.Invalidate(true); };
                     cards.Controls.Add(card);
                 }
             } catch (Exception ex) { MessageBox.Show(this, "Не удалось прочитать ваши стили: " + ex.Message, "Субтитры"); }
@@ -132,16 +139,19 @@ namespace VideoBatch {
     sealed class SubtitlePresetCard : Control {
         readonly Bitmap image;
         readonly SubtitlePreset preset;
+        public string PresetId => preset.Id;
+        public bool IsSelected { get; set; }
         public SubtitlePresetCard(SubtitlePreset value) {
-            preset = value; Name = "SubtitlePreset-" + value.Id; Cursor = Cursors.Hand; DoubleBuffered = true; AccessibleName = value.Name;
+            preset = value; Name = "SubtitlePreset-" + value.Id; Cursor = Cursors.Hand; DoubleBuffered = true; AccessibleName = value.Name; AccessibleRole = AccessibleRole.PushButton; TabStop = true; SetStyle(ControlStyles.Selectable, true);
             var style = value.Style.Copy(); style.Position = 50; style.FontSize = Math.Min(60, style.FontSize);
-            image = WarmupSubtitles.Paint("ТВОЙ СТИЛЬ", style, 540, 230);
+            image = WarmupSubtitles.Paint("Твой стиль", style, 540, 230);
         }
         protected override void OnPaint(PaintEventArgs e) {
             e.Graphics.Clear(Theme.Background); e.Graphics.DrawImage(image, new Rectangle(4, 4, Width - 8, Height - 34));
             TextRenderer.DrawText(e.Graphics, preset.Name, Theme.FontSmall, new Rectangle(8, Height - 28, Width - 16, 24), Theme.TextPrimary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            using (var pen = new Pen(Focused ? Theme.Accent : Theme.Border)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            using (var pen = new Pen(IsSelected || Focused ? Theme.Accent : Theme.Border, IsSelected ? 2 : 1)) e.Graphics.DrawRectangle(pen, 1, 1, Width - 3, Height - 3);
         }
+        protected override void OnKeyDown(KeyEventArgs e) { base.OnKeyDown(e); if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { e.Handled = true; OnClick(EventArgs.Empty); } }
         protected override void Dispose(bool disposing) { if (disposing) image.Dispose(); base.Dispose(disposing); }
     }
 

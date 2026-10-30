@@ -18,6 +18,14 @@ jobs:
         run: ./scripts/Install-CiFfmpeg.ps1
       - name: Build desktop
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Prepare isolated portable tool layout
+        shell: pwsh
+        run: |
+          $homeDir = Join-Path $env:RUNNER_TEMP 'VideoBatchTestHome'
+          New-Item -ItemType Directory -Force "$homeDir/tools" | Out-Null
+          Copy-Item (Get-Command ffmpeg.exe).Source "$homeDir/tools/ffmpeg.exe"
+          Copy-Item (Get-Command ffprobe.exe).Source "$homeDir/tools/ffprobe.exe"
+          "VIDEOBATCH_HOME=$homeDir" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Presets, compatibility and effect limits
         shell: powershell
         run: |
