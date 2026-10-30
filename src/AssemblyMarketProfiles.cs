@@ -35,16 +35,17 @@ namespace VideoBatch {
     public static class AssemblyMarketProfiles {
         public static string NormMarket(string market) => AssemblyProfile.MainProfile(market);
 
-        public static string DefaultOutput(string profile) {
-            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "VideoBatch");
-            profile = AssemblyProfile.Normalize(profile);
-            if (profile == AssemblyProfile.En) return Path.Combine(root, "Assembled-EN");
-            if (profile == AssemblyProfile.RuInst) return Path.Combine(root, "Assembled-RU-Inst");
-            if (profile == AssemblyProfile.EnInst) return Path.Combine(root, "Assembled-EN-Inst");
-            if (profile == AssemblyProfile.RuTikTok) return Path.Combine(root, "Assembled-RU-TikTok");
-            if (profile == AssemblyProfile.EnTikTok) return Path.Combine(root, "Assembled-EN-TikTok");
-            if (profile == AssemblyProfile.Test) return Path.Combine(root, "Assembled-TEST");
-            return Path.Combine(root, "Assembled");
+        public static string DefaultOutput(string profile) => VideoBatchOutputPaths.AssemblyFolder(profile);
+
+        public static void MigrateLegacyOutputPaths(AssemblyTemplate t) {
+            if (t == null) return;
+            foreach (string profile in AssemblyProfile.All) {
+                var slice = Slice(t, profile);
+                if (!string.IsNullOrWhiteSpace(slice.Output))
+                    slice.Output = VideoBatchOutputPaths.RemapAssemblyOutput(slice.Output, profile);
+            }
+            if (!string.IsNullOrWhiteSpace(t.Output))
+                t.Output = VideoBatchOutputPaths.RemapAssemblyOutput(t.Output, AssemblyProfile.Ru);
         }
 
         static AssemblyMarketSettings Slice(AssemblyTemplate t, string profile) {
@@ -313,6 +314,7 @@ namespace VideoBatch {
                 if (!slice.EditorSettingsConfigured) CaptureEditorSettings(t, slice);
             }
             t.AssemblyMarketsSeeded = true;
+            MigrateLegacyOutputPaths(t);
         }
 
         static void SeedChannelProfile(AssemblyTemplate t, string channel, string main) {
@@ -367,7 +369,7 @@ namespace VideoBatch {
             }
             t.HistoryScope = AssemblyProfile.LedgerScope(profile);
             t.TitleBank = (slice.TitleBank ?? new List<string>()).ToList();
-            t.Output = string.IsNullOrWhiteSpace(slice.Output) ? DefaultOutput(profile) : slice.Output;
+            t.Output = string.IsNullOrWhiteSpace(slice.Output) ? DefaultOutput(profile) : VideoBatchOutputPaths.RemapAssemblyOutput(slice.Output, profile);
             t.Count = slice.Count <= 0 ? 10 : slice.Count;
             if (slice.FormatWidth >= 180 && slice.FormatHeight >= 180) {
                 t.Width = slice.FormatWidth;

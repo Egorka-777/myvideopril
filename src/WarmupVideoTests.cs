@@ -29,8 +29,7 @@ namespace VideoBatch {
                     var data = Json().Deserialize<Dictionary<string, object>>(raw);
                     var message = ((System.Collections.IEnumerable)data["messages"]).Cast<Dictionary<string, object>>().First();
                     string prompt = (string)message["content"];
-                    Check(prompt.Contains(Market == "RU" ? "Russian" : "English") && prompt.Contains("6–7") && prompt.Contains("10 seconds"), "language and speech constraint");
-                    if (TextCalls > 1 && SpeechCalls <= LongCount) Check(prompt.Contains("Rewrite substantially shorter"), "long speech requests new complete joke");
+                    Check(prompt.Contains(Market == "RU" ? "Russian" : "English") && prompt.Contains("complete"), "language and joke constraint");
                     return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Reply((Market == "RU" ? "Короткий анекдот, кавычки: \"пример\". Номер " : "A short complete joke. Number ") + TextCalls), Encoding.UTF8, "application/json") };
                 }
                 Check(request.RequestUri.Host == "api.elevenlabs.io" && request.Headers.GetValues("xi-api-key").Single() == "fixture-eleven-key", "ElevenLabs auth stays on official host");
@@ -136,7 +135,7 @@ namespace VideoBatch {
                         Check(green && red == (plate != "none"), "actual text/plate colors and transparent no-plate mode");
                     }
                 }
-                // Boundary near 10 s: container rounding is allowed, output is never longer than 10 s.
+                // Long narration: container rounding is allowed; output follows audio length.
                 string boundaryWav = Path.Combine(temp, "boundary.wav"), boundary = Path.Combine(temp, "boundary.mp4");
                 await RunTool(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=duration=9.999", "-ar", "48000", boundaryWav);
                 double boundarySeconds = await WarmupVideoEngine.AudioDurationAsync(ffprobe, boundaryWav, CancellationToken.None);
@@ -153,8 +152,13 @@ namespace VideoBatch {
                             try { await WarmupVideoEngine.GenerateAsync(job, lines.Add, cancel.Token, client, client, ffmpeg, ffprobe); }
                             catch (OperationCanceledException) { Check(failure == "cancel", "only explicit cancellation"); failed = true; }
                             catch (Exception e) { Check(failure != "cancel", "cancellation remains cancellation"); Check(!e.Message.Contains("SECRET") && !e.Message.Contains("fixture-eleven-key"), "provider credentials/bodies not logged"); failed = true; }
-                            Check(failed && !Directory.GetFiles(output, "*.mp4").Any(), "failed job has no misleading finished file");
-                            Check(api.SpeechCalls == (failure == "long" ? 3 : failure == "bad-background" ? 0 : 1), "bounded attempts, preflight before credit use");
+                            if (failure == "long") {
+                                Check(!failed && Directory.GetFiles(output, "*.mp4").Length == 1, "long speech still renders one video");
+                                Check(api.SpeechCalls == 1, "no pointless retries for long manual-length speech");
+                            } else {
+                                Check(failed && !Directory.GetFiles(output, "*.mp4").Any(), "failed job has no misleading finished file");
+                                Check(api.SpeechCalls == (failure == "bad-background" ? 0 : 1), "single speech attempt when not long fixture");
+                            }
                         }
                     }
                 }

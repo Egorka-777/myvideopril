@@ -127,7 +127,7 @@ namespace VideoBatch {
             string historyScope = t.HistoryScope;
             AssemblyHistoryStore.EnsureFolder(historyFolder, historyScope);
             string historyPath = AssemblyHistoryStore.PathFor(historyFolder, historyScope);
-            var result = new BatchResult(); string work = Path.Combine(t.Output, ".assembly-" + Guid.NewGuid().ToString("N")), limitNote="";
+            var result = new BatchResult(); string work = Path.Combine(t.Output, ".tmp-сборка-" + Guid.NewGuid().ToString("N")), limitNote="";
             try {
                 // One lock per ledger so RU and EN batches can run without clobbering each other.
                 using (var gate = new FileStream(historyPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
@@ -146,8 +146,7 @@ namespace VideoBatch {
                             ct.ThrowIfCancellationRequested(); var plan = batch.Plans[i];
                             string itemWork = Path.Combine(work, global.ToString()); Directory.CreateDirectory(itemWork);
                             string partial = Path.Combine(itemWork, "result.mp4");
-                            string assembledStem = "assembled-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
-                            string destination = AssemblyFiles.SafeImportDestination(t.Output, Path.Combine(t.Output, assembledStem + ".mp4"));
+                            string destination = null;
                             try {
                                 double renderFraction = 0;
                                 await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct,
@@ -156,6 +155,7 @@ namespace VideoBatch {
                                 ct.ThrowIfCancellationRequested();
                                 // Tag and validate the private file before making it visible as a result.
                                 string chosenTitle=AssemblyOutputTags.PickTitle(t.TitleBank,random,usedTitles);
+                                destination = AssemblyFiles.SafeImportDestination(t.Output, Path.Combine(t.Output, VideoBatchOutputPaths.AssemblyVideoFileName(t, global, chosenTitle)));
                                 var metadata=await AssemblyOutputTags.Apply(ffmpeg,ffprobe,partial,chosenTitle,t.OutputMetadata,random,ct).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 AssemblyHistoryRecord reservation=null; bool published=false;

@@ -59,7 +59,8 @@ namespace VideoBatch {
         public int SettingsVersion=0;public bool AutoProfiles=true;public double BackgroundDb=-18;
         public List<string> BackgroundMusic=new List<string>();
         public List<string> BackgroundMusicRu=new List<string>(), BackgroundMusicEn=new List<string>();
-        public string Output=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"VideoBatch");
+        public string Output=VideoBatchOutputPaths.Processing;
+        public bool OutputPaths20261030Migrated;
         public Profile[] Profiles=Profile.Defaults(); public ShortSettings Ranges=new ShortSettings();
         public ProcessingSettings Processing=ProcessingSettings.MildDefaults();
         public bool ProcessingMildEnabled20261006Migrated;
@@ -570,6 +571,12 @@ namespace VideoBatch {
                 p.ProcessingMirrorDisabled20261006Migrated=true;
             }
             if(p.SettingsVersion<2)p.SettingsVersion=2;
+            if(!p.OutputPaths20261030Migrated){
+                p.Output=VideoBatchOutputPaths.RemapProcessingOutput(p.Output);
+                p.WarmupVideoOutputRu=VideoBatchOutputPaths.RemapWarmupOutput(p.WarmupVideoOutputRu,"RU");
+                p.WarmupVideoOutputEn=VideoBatchOutputPaths.RemapWarmupOutput(p.WarmupVideoOutputEn,"EN");
+                p.OutputPaths20261030Migrated=true;
+            }
             if(p.Profiles.Length<10){var expanded=Profile.Defaults();Array.Copy(p.Profiles,expanded,p.Profiles.Length);p.Profiles=expanded;}
             foreach(var x in p.Profiles)x.Validate();p.Ranges.Validate();Profile.Check(p.BackgroundDb,-60,-.1,"Громкость фона, дБ");
         }

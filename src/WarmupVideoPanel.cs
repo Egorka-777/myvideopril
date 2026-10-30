@@ -50,7 +50,7 @@ namespace VideoBatch {
             scroll.Controls.Add(fields); card.Controls.Add(scroll); root.Controls.Add(card, 0, 0);
 
             AddField(Label("Прогрев роликами", Theme.FontCardTitle, Theme.TextPrimary));
-            AddField(Label("Связка — анекдот + фон. Фоны распределяются между текстами; использованные пары не повторяются. Длина ролика = длина речи (до 10 с).", Theme.FontBody, Theme.TextSecondary));
+            AddField(Label("Связка — анекдот + фон. Фоны распределяются между текстами; использованные пары не повторяются. Длина ролика = длина речи.", Theme.FontBody, Theme.TextSecondary));
             var markets = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 8) };
             ru = Theme.MakeHeroToggle("RU", market == "RU", () => SwitchMarket("RU")); en = Theme.MakeHeroToggle("EN", market == "EN", () => SwitchMarket("EN"));
             markets.Controls.Add(ru); markets.Controls.Add(en); AddField(markets);
@@ -132,7 +132,7 @@ namespace VideoBatch {
             stop = Theme.MakeButton("Стоп", ghost: true, action: () => { run?.Cancel(); stop.Enabled = false; status.Text = "Останавливаю…"; }); stop.Enabled = false;
             results = Theme.MakeButton("Результаты", action: OpenResults); results.Name = "warmup-results";
             actions.Controls.Add(create); actions.Controls.Add(stop); actions.Controls.Add(results); bottom.Controls.Add(actions, 0, 0);
-            status = Label("До 10 секунд · 1080 × 1920", Theme.FontBody, Theme.TextSecondary); status.Margin = new Padding(8, 8, 0, 0); bottom.Controls.Add(status, 1, 0);
+            status = Label("1080 × 1920 · длина по озвучке", Theme.FontBody, Theme.TextSecondary); status.Margin = new Padding(8, 8, 0, 0); bottom.Controls.Add(status, 1, 0);
             root.Controls.Add(bottom, 0, 1); root.SetColumnSpan(bottom, 2);
             captionsEnabled.CheckedChanged += CaptionChanged; captionFont.SelectedIndexChanged += CaptionChanged; captionPlate.SelectedIndexChanged += CaptionChanged;
             captionSize.ValueChanged += CaptionChanged; captionPosition.ValueChanged += CaptionChanged; captionWords.ValueChanged += CaptionChanged; captionOpacity.ValueChanged += CaptionChanged;
@@ -237,8 +237,8 @@ namespace VideoBatch {
                 }
                 RefreshBackgroundList();
                 string savedOutput = market == "EN" ? settings.WarmupVideoOutputEn : settings.WarmupVideoOutputRu;
-                string oldDefault = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "VideoBatch", "Warmup-" + market);
-                output.Text = string.IsNullOrWhiteSpace(savedOutput) || string.Equals(savedOutput, oldDefault, StringComparison.OrdinalIgnoreCase) ? WarmupVideoEngine.DefaultOutputFolder : savedOutput;
+                savedOutput = VideoBatchOutputPaths.RemapWarmupOutput(savedOutput, market);
+                output.Text = string.IsNullOrWhiteSpace(savedOutput) ? WarmupVideoEngine.DefaultOutputFolderFor(market) : savedOutput;
                 subtitleStyle = ((market == "EN" ? settings.WarmupSubtitlesEn : settings.WarmupSubtitlesRu) ?? new WarmupSubtitleStyle()).Copy(); subtitleStyle.Normalize();
                 captionsEnabled.Checked = subtitleStyle.Enabled; captionFont.SelectedItem = subtitleStyle.FontFamily; captionPlate.SelectedIndex = subtitleStyle.Plate == "none" ? 2 : subtitleStyle.Plate == "solid" ? 1 : 0;
                 captionSize.Value = subtitleStyle.FontSize; captionPosition.Value = subtitleStyle.Position; captionWords.Value = subtitleStyle.WordsPerCaption; captionOpacity.Value = subtitleStyle.Opacity;

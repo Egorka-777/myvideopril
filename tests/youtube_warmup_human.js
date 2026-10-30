@@ -1,9 +1,13 @@
 "use strict";
 const assert = require("assert/strict");
-const { parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, TOTAL_MS, WarmupDeadline, runShortsWarmup, watchResult } = require("../tools/uploader/youtube-shorts-warmup");
+const { parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, TOTAL_MS, WAIT_MS, WarmupDeadline, runShortsWarmup, watchResult, buildResult } = require("../tools/uploader/youtube-shorts-warmup");
 
 (async () => {
   assert.equal(TOTAL_MS, 600000);
+  assert.equal(WAIT_MS, 60000);
+  const partial = buildResult(["a", "b", "c"], new Set(["a"]), 2, "time_limit");
+  assert(partial.partial && partial.coveredKeywords === 1 && partial.totalKeywords === 3 && partial.missing.length === 2);
+  assert.equal(buildResult(["x"], new Set(["x"]), 1, "completed").partial, false);
   assert.deepEqual(parseKeywords(" one\r\n two \n\n one\nthree;four"), ["one", "two", "three;four"]);
   const input = [1, 2, 3, 4];
   assert.deepEqual(shuffle(input, () => 0), [2, 3, 4, 1]);

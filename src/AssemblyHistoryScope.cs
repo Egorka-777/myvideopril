@@ -10,6 +10,7 @@ namespace VideoBatch {
         public const string EnInst = "EN-Inst";
         public const string RuTikTok = "RU-TikTok";
         public const string EnTikTok = "EN-TikTok";
+        public const string Test = "TEST";
 
         public static string Normalize(string scope) {
             if (string.IsNullOrWhiteSpace(scope)) return Shared;
@@ -20,8 +21,9 @@ namespace VideoBatch {
             if (scope.Equals(EnInst, StringComparison.OrdinalIgnoreCase) || scope.Equals("EN Inst", StringComparison.OrdinalIgnoreCase)) return EnInst;
             if (scope.Equals(RuTikTok, StringComparison.OrdinalIgnoreCase) || scope.Equals("RU TikTok", StringComparison.OrdinalIgnoreCase)) return RuTikTok;
             if (scope.Equals(EnTikTok, StringComparison.OrdinalIgnoreCase) || scope.Equals("EN TikTok", StringComparison.OrdinalIgnoreCase)) return EnTikTok;
+            if (scope.Equals(Test, StringComparison.OrdinalIgnoreCase) || scope.Equals("ТЕСТ", StringComparison.OrdinalIgnoreCase)) return Test;
             if (scope.Equals(Shared, StringComparison.OrdinalIgnoreCase) || scope.Equals("Общий", StringComparison.OrdinalIgnoreCase)) return Shared;
-            throw new Exception("Журнал связок: выберите RU, EN, Inst, TikTok или общий.");
+            throw new Exception("Журнал связок: выберите RU, EN, Inst, TikTok, ТЕСТ или общий.");
         }
 
         public static string MenuLabel(string scope) {
@@ -32,6 +34,7 @@ namespace VideoBatch {
             if (scope == EnInst) return "EN Inst · Instagram";
             if (scope == RuTikTok) return "RU TikTok";
             if (scope == EnTikTok) return "EN TikTok";
+            if (scope == Test) return "ТЕСТ · отдельная вкладка";
             return "Общий · все каналы";
         }
 
@@ -43,6 +46,7 @@ namespace VideoBatch {
             if (scope == EnInst) return "EN Inst";
             if (scope == RuTikTok) return "RU TikTok";
             if (scope == EnTikTok) return "EN TikTok";
+            if (scope == Test) return "ТЕСТ";
             return "Общий";
         }
     }

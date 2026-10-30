@@ -136,8 +136,14 @@ namespace VideoBatch {
         [DataMember]public double percent;
         [DataMember]public int packIndex,packTotal;
         [DataMember]public bool success,keptOpen;
+        [DataMember]public string outcome,reason,waitStage;
+        [DataMember]public int warmupCovered,warmupTotal,waitMs;
     }
-    public class UploadRunResult { public bool Success,KeptOpen,ThumbnailWarning;public string Ip="",Url="",Error=""; }
+    public class UploadRunResult {
+        public bool Success,KeptOpen,ThumbnailWarning;
+        public string Ip="",Url="",Error="",Outcome="",Reason="";
+        public int WarmupCovered,WarmupTotal;
+    }
 
     public static class DolphinRunner {
         static readonly DataContractJsonSerializer JobSerializer=new DataContractJsonSerializer(typeof(UploadJob));
@@ -199,10 +205,20 @@ namespace VideoBatch {
                         if(msg.stage=="thumbnail_warning")result.ThumbnailWarning=true;
                         if(msg.ip!=null)result.Ip=msg.ip;
                         if(msg.url!=null)result.Url=msg.url;
-                        if(msg.stage=="done"){result.Success=msg.success;if(!msg.success&&string.IsNullOrWhiteSpace(result.Error))result.Error=msg.text;}
-                        if(msg.stage=="error"){result.Error=msg.error??msg.text;result.KeptOpen=msg.keptOpen;result.Success=false;}
+                        if(!string.IsNullOrWhiteSpace(msg.outcome))result.Outcome=msg.outcome.Trim();
+                        if(!string.IsNullOrWhiteSpace(msg.reason))result.Reason=msg.reason.Trim();
+                        if(msg.warmupTotal>0||msg.warmupCovered>0){result.WarmupCovered=msg.warmupCovered;result.WarmupTotal=msg.warmupTotal;}
+                        if(msg.stage=="done"){
+                            result.Success=msg.success;
+                            if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase)){
+                                if(string.IsNullOrWhiteSpace(result.Reason)&&!string.IsNullOrWhiteSpace(msg.text))result.Reason=msg.text;
+                                result.Error="";
+                            }else if(!msg.success&&string.IsNullOrWhiteSpace(result.Error))result.Error=msg.text;
+                        }
+                        if(msg.stage=="error"){result.Outcome=string.IsNullOrWhiteSpace(msg.outcome)?"error":msg.outcome;result.Error=msg.error??msg.text;result.Reason=msg.reason??result.Error;result.KeptOpen=msg.keptOpen;result.Success=false;}
                     }
                     await Task.Run(()=>process.WaitForExit()).ConfigureAwait(false);cancel.ThrowIfCancellationRequested();
+                    if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase))return result;
                     string err=await stderr.ConfigureAwait(false);
                     if(process.ExitCode!=0&&!result.Success&&string.IsNullOrWhiteSpace(result.Error))result.Error=string.IsNullOrWhiteSpace(err)?"Модуль загрузки завершился с ошибкой.":err.Trim();
                     if(!result.Success||process.ExitCode!=0||!string.IsNullOrWhiteSpace(result.Error))throw new UploadException(string.IsNullOrWhiteSpace(result.Error)?"Загрузчик не подтвердил завершение операции. Повторно не публикуйте, сначала проверьте профиль Dolphin.":result.Error,result.KeptOpen);
@@ -1556,6 +1572,22 @@ namespace VideoBatch {
             string m=(e?.Message??"").ToLowerInvariant();
             return m.Contains("target page")||m.Contains("browser has been closed")||m.Contains("context or browser")||m.Contains("connection closed");
         }
+        static string WarmupShortMessage(string text){
+            if(string.IsNullOrWhiteSpace(text)) return "";
+            text=text.Replace("\r"," ").Replace("\n"," ").Trim();
+            int cut=text.IndexOf("Call log:",StringComparison.OrdinalIgnoreCase);
+            if(cut>=0) text=text.Substring(0,cut).Trim();
+            if(text.Length>140) text=text.Substring(0,137)+"…";
+            return text;
+        }
+        static string WarmupRowStatus(UploadRunResult result){
+            if(result==null) return "Ошибка";
+            if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase))
+                return "Частично · "+result.WarmupCovered+"/"+Math.Max(result.WarmupTotal,result.WarmupCovered)+" ключей";
+            if(string.Equals(result.Outcome,"cancelled",StringComparison.OrdinalIgnoreCase)) return "Остановлено пользователем";
+            if(result.Success||string.Equals(result.Outcome,"completed",StringComparison.OrdinalIgnoreCase)) return "Выполнено ✓";
+            return "Ошибка · "+WarmupShortMessage(string.IsNullOrWhiteSpace(result.Reason)?result.Error:result.Reason);
+        }
         void DisposeUploadCancellationLocked(){
             if(uploadCts==null) return;
             try{ uploadCts.Dispose(); }catch{}
@@ -1892,10 +1924,20 @@ namespace VideoBatch {
                 warmupLikesEnabled=settings.YouTubeWarmupLikesEnabled,warmupLikePercent=settings.YouTubeWarmupLikePercent
             };
         }
-        async Task RunWarmupForChannel(string token,YouTubeChannel ch,DataGridViewRow row,CancellationToken ct){
-            await DolphinRunner.Run(BuildWarmupJob(token,ch),m=>{if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);},ct).ConfigureAwait(false);
-            Status(row,"Автопрогрев по ключам ✓");
+        async Task<UploadRunResult> RunWarmupForChannel(string token,YouTubeChannel ch,DataGridViewRow row,CancellationToken ct){
+            var result=await DolphinRunner.Run(BuildWarmupJob(token,ch),m=>{
+                if(m.stage=="warmup_journal"){
+                    string journal=m.text??"";
+                    if(m.waitMs>0||!string.IsNullOrWhiteSpace(m.waitStage))
+                        journal=(m.waitStage??"ожидание")+": "+m.waitMs+" мс · "+(m.reason??"");
+                    Write(ch.Name+": "+journal);
+                    return;
+                }
+                if(!string.IsNullOrWhiteSpace(m.text))Status(row,WarmupShortMessage(m.text));
+            },ct).ConfigureAwait(false);
+            Status(row,WarmupRowStatus(result));
             SafeSave();
+            return result;
         }
         async Task ShortsWarmup(IReadOnlyList<YouTubeChannel> channelsFilter){
             if(cancellation!=null)return;
@@ -1923,7 +1965,7 @@ namespace VideoBatch {
                 int batchTotal=(viewers.Count+batchSize-1)/batchSize;
                 Write("["+MarketLabel(marketView)+"] автопрогрев по ключам · "+viewers.Count+" акк. · 10 мин · пачки по "+batchSize+".");
                 var errors=new ConcurrentBag<string>();
-                int ok=0,interrupted=0,started=0;
+                int ok=0,partial=0,interrupted=0,started=0;
                 bool cancelled=false;
                 for(int batchStart=0;batchStart<viewers.Count&&!cancelled;batchStart+=batchSize){
                     var batch=viewers.Skip(batchStart).Take(batchSize).ToList();
@@ -1938,34 +1980,41 @@ namespace VideoBatch {
                             cancellation.Token.ThrowIfCancellationRequested();
                             System.Threading.Interlocked.Increment(ref started);launched=true;
                             Status(row,"Прогрев Shorts…");
-                            await RunWarmupForChannel(token,ch,row,cancellation.Token).ConfigureAwait(false);
-                            System.Threading.Interlocked.Increment(ref ok);
+                            var result=await RunWarmupForChannel(token,ch,row,cancellation.Token).ConfigureAwait(false);
+                            if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase))
+                                System.Threading.Interlocked.Increment(ref partial);
+                            else System.Threading.Interlocked.Increment(ref ok);
                         }catch(Exception) when(cancellation.IsCancellationRequested){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено пользователем");throw new OperationCanceledException(cancellation.Token);}
-                        catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено");throw;}
+                        catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено пользователем");throw;}
                         catch(Exception e){
                             if(cancellation.IsCancellationRequested||IsWarmupStopNoise(e)){
                                 if(launched)System.Threading.Interlocked.Increment(ref interrupted);
-                                Status(row,"Остановлено");
+                                Status(row,"Остановлено пользователем");
                                 return;
                             }
-                            errors.Add(ch.Name+": "+e.Message);
-                            Status(row,"Ошибка · "+e.Message);
+                            string shortMsg=WarmupShortMessage(e is UploadException ue?ue.Message:e.Message);
+                            errors.Add(ch.Name+": "+shortMsg);
+                            Status(row,"Ошибка · "+shortMsg);
                         }
                     })).ToArray();
                     try{await Task.WhenAll(tasks).ConfigureAwait(true);}
                     catch(OperationCanceledException){Write("Прогрев остановлен.");cancelled=true;}
                 }
                 if(cancelled||cancellation.IsCancellationRequested){
-                    string result="Остановлено пользователем. Завершено: "+ok+"; прервано: "+interrupted+"; не запущено: "+Math.Max(0,viewers.Count-started)+"; ошибок: "+errors.Count+".";
+                    string result="Остановлено пользователем. Выполнено: "+ok+"; частично: "+partial+"; прервано: "+interrupted+"; не запущено: "+Math.Max(0,viewers.Count-started)+"; ошибок: "+errors.Count+".";
                     Write(result);MessageBox.Show(this,result,"YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);
                 }else if(errors.Count>0){
-                    Write("Прогрев: "+ok+"/"+viewers.Count+" успешно, ошибок "+errors.Count+".");
-                    MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Прогрев Shorts",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                    Write("Прогрев: выполнено "+ok+", частично "+partial+", ошибок "+errors.Count+" из "+viewers.Count+".");
+                    MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Прогрев · ошибки",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                }else if(partial>0){
+                    string result="Завершено частично: "+partial+" акк., полностью: "+ok+" из "+viewers.Count+". Смотрите статус строк и журнал.";
+                    Write("["+MarketLabel(marketView)+"] "+result);
+                    MessageBox.Show(this,result,"YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);
                 }else{
                     Write("["+MarketLabel(marketView)+"] прогрев завершён: "+ok+"/"+viewers.Count+" аккаунтов.");
-                    MessageBox.Show(this,ok+" аккаунт(ов) прошли прогрев Shorts.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                    MessageBox.Show(this,ok+" аккаунт(ов) · выполнено полностью.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);
                 }
-            }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}finally{Finish();}
+            }catch(Exception e){Write("ОШИБКА: "+WarmupShortMessage(e.Message));if(!IsUploadCancellation(e))Ui.Error(this,e);}finally{Finish();}
         }
         async Task SearchOnYouTube(){if(cancellation!=null)return;string token="";try{SaveGrid();SaveSearchFields();ValidateCommon(false);var rows=Selected();
                 string keys=marketView=="EN"?settings.YouTubeSearchKeysEn:settings.YouTubeSearchKeysRu;

@@ -57,6 +57,7 @@ namespace VideoBatch {
             Directory.CreateDirectory(root);
             try { prefs = json.Deserialize<HighlightsPreferences>(File.ReadAllText(Path.Combine(root,"preferences.json"))); } catch { }
             prefs = prefs ?? new HighlightsPreferences();
+            if (string.IsNullOrWhiteSpace(prefs.Output)) prefs.Output = VideoBatchOutputPaths.Highlights;
             var layout = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=1, RowCount=4, Margin=Padding.Empty };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,76));

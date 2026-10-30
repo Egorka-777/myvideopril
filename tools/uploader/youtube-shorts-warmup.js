@@ -2,6 +2,7 @@
 
 const safety = require("./youtube-interaction-safety.js");
 const TOTAL_MS = 10 * 60 * 1000;
+const WAIT_MS = 60000;
 
 class WarmupDeadline extends Error {
   constructor() { super("Время прогрева истекло."); }
@@ -18,6 +19,26 @@ function shuffle(items, random = Math.random) {
 
 function parseKeywords(value) {
   return [...new Set(String(value || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean))];
+}
+
+function journal(report, stage, waitMs, reason) {
+  report("warmup_journal", JSON.stringify({ stage, waitMs, reason }), { waitStage: stage, waitMs, reason });
+}
+
+function buildResult(keywords, covered, count, reason) {
+  const total = keywords.length;
+  const coveredCount = covered.size;
+  const missing = keywords.filter(key => !covered.has(key));
+  const partial = missing.length > 0 || reason === "time_limit";
+  return {
+    count,
+    minutes: 10,
+    coveredKeywords: coveredCount,
+    totalKeywords: total,
+    missing,
+    partial,
+    reason: reason || (missing.length ? "keywords_remaining" : "completed")
+  };
 }
 
 function planWatch(duration, remainingSec, shorts, random = Math.random) {
@@ -93,22 +114,26 @@ async function waitForSearchResults(page, shorts) {
     if ([...search.querySelectorAll(links)].some(a => a.getClientRects().length)) return true;
     return [...search.querySelectorAll("ytd-message-renderer, ytd-background-promo-renderer")]
       .some(el => el.getClientRects().length && el.innerText.trim());
-  }, shorts, { timeout: 15000 });
+  }, shorts, { timeout: WAIT_MS });
 }
 
-async function searchKeyword(page, keyword, shorts) {
+async function searchKeyword(page, keyword, shorts, report = () => {}) {
   // Existing worker search helpers build URLs and dismiss generic overlays;
   // they are deliberately not used for this native-search-only workflow.
   // Reset the previous keyword's native filter, staying in this same tab.
   await page.goto("https://www.youtube.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
   const input = page.locator("input[name='search_query'], input#search, input.ytSearchboxComponentInput").first();
-  await input.waitFor({ state: "visible", timeout: 15000 });
+  const searchWaitStarted = Date.now();
+  await input.waitFor({ state: "visible", timeout: WAIT_MS });
+  journal(report, "search_input", Date.now() - searchWaitStarted, "поле поиска готово");
   await input.fill(keyword);
   await input.press("Enter");
+  const resultsWaitStarted = Date.now();
   await page.waitForFunction(query => {
     const u = new URL(location.href);
     return u.pathname === "/results" && u.searchParams.get("search_query") === query && !document.querySelector("ytd-search[is-loading]");
-  }, keyword, { timeout: 15000 });
+  }, keyword, { timeout: WAIT_MS });
+  journal(report, "search_results_url", Date.now() - resultsWaitStarted, "страница результатов");
   // The URL changes before ytd-search and its links have been populated.
   await waitForSearchResults(page, false);
   if (shorts) {
@@ -183,6 +208,10 @@ async function maybeLike(page, job, report, watched) {
     return;
   }
   if (await safety.isAdVisible(page) || await button.getAttribute("aria-pressed") === "true") return;
+  if (await button.isDisabled().catch(() => false)) {
+    report("youtube", "Прогрев: лайк недоступен (кнопка неактивна).");
+    return;
+  }
   await button.click({ timeout: 3000 });
   await page.locator(scope + "like-button-view-model button[aria-pressed='true']:visible").first().waitFor({ state: "visible", timeout: 3000 });
   report("youtube", "Прогрев: лайк поставлен.");
@@ -257,6 +286,7 @@ async function runShortsWarmup(rawPage, job, report = () => {}) {
   const keywords = parseKeywords(job.warmupKeywords);
   if (!keywords.length) throw new Error("Для прогрева нужны ключевые слова, по одному на строку.");
   const deadline = Date.now() + TOTAL_MS;
+  let finishReason = "completed";
   const page = deadlinePage(rawPage, deadline);
   const boundary = await safety.installPlaybackBoundary(page, report, { allowAds: true });
   // Keep the shared navigation/pop-up protection, but guard its ad helper too.
@@ -276,7 +306,7 @@ async function runShortsWarmup(rawPage, job, report = () => {}) {
         await check();
         const shorts = Math.random() < 0.5;
         const searchStarted = Date.now();
-        const results = shuffle(await searchKeyword(page, keyword, shorts));
+        const results = shuffle(await searchKeyword(page, keyword, shorts, report));
         searchSec = Math.max(searchSec, (Date.now() - searchStarted) / 1000);
         const pending = keywords.filter(key => key !== keyword && !covered.has(key)).length;
         const budget = groupBudget((deadline - Date.now()) / 1000, pending, searchSec, navigationSec);
@@ -311,14 +341,19 @@ async function runShortsWarmup(rawPage, job, report = () => {}) {
       }
     }
   } catch (error) {
-    if (!(error instanceof WarmupDeadline)) throw error;
+    if (error instanceof WarmupDeadline) finishReason = "time_limit";
+    else throw error;
   } finally {
     await boundary.dispose();
   }
-  const missing = keywords.filter(key => !covered.has(key));
-  report("youtube", "Прогрев завершён: " + count + " ролик(ов), ключей с просмотром: " + covered.size + "/" + keywords.length + ", 10 минут.");
-  if (missing.length) throw new Error("Прогрев неполный: без просмотра остались ключи: " + missing.join("; "));
-  return { count, minutes: 10, coveredKeywords: covered.size };
+  const summary = buildResult(keywords, covered, count, finishReason);
+  report("youtube", "Прогрев завершён: " + count + " ролик(ов), ключей с просмотром: " + summary.coveredKeywords + "/" + summary.totalKeywords + (summary.partial ? " · частично" : "") + ".");
+  if (summary.partial) {
+    report("warmup_journal", JSON.stringify({ stage: "finish", waitMs: TOTAL_MS, reason: summary.reason, missing: summary.missing.length }), {
+      waitStage: "finish", waitMs: TOTAL_MS, reason: summary.reason + "; осталось ключей: " + summary.missing.length
+    });
+  }
+  return summary;
 }
 
-module.exports = { runShortsWarmup, parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, searchKeyword, watchResult, maybeLike, readState, TOTAL_MS, WarmupDeadline };
+module.exports = { runShortsWarmup, parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, searchKeyword, watchResult, maybeLike, readState, buildResult, TOTAL_MS, WAIT_MS, WarmupDeadline };

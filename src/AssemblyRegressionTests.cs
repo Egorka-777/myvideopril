@@ -343,9 +343,9 @@ namespace VideoBatch {
                         Capture(window,Path.Combine(screenshots,"studio-scenes.png"));
                         using (var pool = (System.Windows.Forms.Form)Invoke(window,"CreatePoolWindow",2)) { pool.Show(window); System.Windows.Forms.Application.DoEvents(); Capture(pool,Path.Combine(screenshots,"studio-files.png")); pool.Close(); }
                         window.SetBounds(0,0,1000,700); System.Windows.Forms.Application.DoEvents();
-                        var fourth = All(window).First(c => c.Name == "SceneFiles3"); var stack = (AssemblyScrollStack)Field(window,"sceneStack");
-                        if (!fourth.Visible || fourth.Parent.Bottom > stack.ClientSize.Height) throw new Exception("Fourth scene files button is clipped at compact window size");
-                        if (All(window).First(c => c.Name=="InsertScene4").Bottom>stack.ClientSize.Height) throw new Exception("Final insertion button is clipped");
+                        var fourth = All(window).First(c => c.Name == "SceneCard3"); var strip = (AssemblyHorizontalStrip)Field(window,"sceneStack");
+                        if (!fourth.Visible || fourth.Parent.Bottom > strip.ClientSize.Height - 18) throw new Exception("Fourth scene card is clipped at compact window size");
+                        if (All(window).First(c => c.Name=="InsertScene4").Bottom>strip.ClientSize.Height - 18) throw new Exception("Final insertion button is clipped");
                         Capture(window,Path.Combine(screenshots,"studio-compact.png"));
                         var resultButton=All(window).First(c => c.Name=="Results"); var footer=(System.Windows.Forms.FlowLayoutPanel)Field(window,"footer"); if (resultButton.Right>footer.ClientSize.Width) throw new Exception("Single-line results button is clipped");
                         var number=(System.Windows.Forms.NumericUpDown)Field(window,"count"); number.Value=36; Invoke(window,"ChangeCount",1); if (number.Value!=36 || number.Maximum!=36) throw new Exception("Requested count exceeded the available combinations"); number.Value=3;

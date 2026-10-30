@@ -69,6 +69,9 @@ namespace VideoBatch {
                 Check(new AssemblyInventory(t,videos,AssemblyHistoryStore.Load(folder,AssemblyHistoryScope.Ru)).Calculate().Variants==11879,"RU capacity reflects its ledger");
                 using (var ruGate=new FileStream(AssemblyHistoryStore.PathFor(folder,AssemblyHistoryScope.Ru)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None))
                 using (var enGate=new FileStream(AssemblyHistoryStore.PathFor(folder,AssemblyHistoryScope.En)+".lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) { }
+                Check(AssemblyHistoryScope.Normalize(AssemblyProfile.Test)==AssemblyHistoryScope.Test,"TEST profile uses its own ledger scope");
+                t.HistoryScope=AssemblyProfile.Test; t.Validate();
+                Check(File.Exists(AssemblyHistoryStore.PathFor(folder,AssemblyHistoryScope.Test))||Directory.Exists(Path.Combine(folder,"markets")),"TEST ledger path is available");
                 return true;
             } finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
         }

@@ -2936,13 +2936,46 @@ async function main() {
     const { runShortsWarmup } = require("./youtube-shorts-warmup.js");
     youtubeOpened = true;
     send("youtube", "Автопрогрев по ключевым фразам · 10 минут…", { percent: 30 });
-    await runShortsWarmup(page, job, (stage, text) => send(stage || "youtube", text, { percent: 50 }));
+    const report = (stage, text, extra = {}) => send(stage || "youtube", text, Object.assign({ percent: 50 }, extra));
+    let warmup;
+    try {
+      warmup = await runShortsWarmup(page, job, report);
+    } catch (error) {
+      if (stopping) {
+        finished = true;
+        send("done", "Остановлено пользователем.", { success: false, outcome: "cancelled", reason: "user_stop", percent: 100, ip: verifiedIp });
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      send("error", message, { success: false, outcome: "error", reason: message, error: message });
+      throw error;
+    }
+    if (stopping) {
+      finished = true;
+      send("done", "Остановлено пользователем.", { success: false, outcome: "cancelled", reason: "user_stop", percent: 100, ip: verifiedIp });
+      return;
+    }
+    const partial = warmup && warmup.partial;
+    const covered = warmup ? warmup.coveredKeywords : 0;
+    const total = warmup ? warmup.totalKeywords : 0;
+    const doneText = partial
+      ? ("Завершено частично: ключи " + covered + "/" + total + ", осталось " + (warmup.missing ? warmup.missing.length : Math.max(0, total - covered)) + ".")
+      : ("Выполнено: все ключи " + covered + "/" + total + ".");
+    const doneExtra = {
+      success: !partial,
+      outcome: partial ? "partial" : "completed",
+      warmupCovered: covered,
+      warmupTotal: total,
+      reason: warmup ? warmup.reason : "completed",
+      percent: 100,
+      ip: verifiedIp
+    };
     if (job.keepProfileOpen) {
       if (page && !page.isClosed()) await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));
       await browser.close().catch(() => {});
       browser = null;
       finished = true;
-      send("done", "Автопрогрев по ключевым фразам завершён.", { success: true, keptOpen: true, ip: verifiedIp, percent: 100 });
+      send("done", doneText, Object.assign({ keptOpen: true }, doneExtra));
       return;
     }
     await browser.close().catch(() => {});
@@ -2950,7 +2983,7 @@ async function main() {
     await stopProfile();
     await pauseAfterWatch();
     finished = true;
-    send("done", "Автопрогрев по ключевым фразам завершён.", { success: true, keptOpen: false, ip: verifiedIp, percent: 100 });
+    send("done", doneText, Object.assign({ keptOpen: false }, doneExtra));
     return;
   }
 

@@ -80,13 +80,14 @@ namespace VideoBatch {
     }
 
     public static class WarmupVideoEngine {
-        public const double MaximumSeconds = 10;
-        public const int SpeechAttempts = 3;
+        /// <summary>Только защита от явно битых/бесконечных файлов, не лимит сценария.</summary>
+        public const double MaximumSeconds = 600;
         internal static readonly string[] ImageExt = { ".jpg", ".jpeg", ".png", ".webp", ".bmp" };
         internal static readonly string[] VideoExt = { ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v" };
         public static bool IsVideo(string path) => VideoExt.Contains(Path.GetExtension(path ?? "").ToLowerInvariant());
         public static bool IsBackground(string path) => IsVideo(path) || ImageExt.Contains(Path.GetExtension(path ?? "").ToLowerInvariant());
-        public static string DefaultOutputFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "VideoBatch", "Прогрев");
+        public static string DefaultOutputFolder => VideoBatchOutputPaths.WarmupRoot;
+        public static string DefaultOutputFolderFor(string market) => VideoBatchOutputPaths.WarmupMarket(market);
         static JavaScriptSerializer Json() => new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 };
         static string Number(double n) => n.ToString("0.#########", CultureInfo.InvariantCulture);
 
@@ -151,27 +152,21 @@ namespace VideoBatch {
                     string voice = voices[rnd.Next(voices.Count)], text = "";
                     string mp3 = Path.Combine(work, "speech.mp3"), wav = Path.Combine(work, "speech.wav");
                     double duration = 0; WarmupAlignment alignment = null;
-                    for (int attempt = 0; attempt < SpeechAttempts; attempt++) {
-                        if (job.UsesManualBundles) {
-                            text = manualJokes[i];
-                            log(prefix + (attempt == 0 ? "Озвучиваю ваш текст через ElevenLabs…" : "Повторная озвучка (тот же текст)…"));
-                        } else {
-                            log(prefix + (attempt == 0 ? "Придумываю короткий анекдот…" : "Сокращаю анекдот целиком, без обрезки речи…"));
-                            text = await FetchTextAsync(routerClient, job, previous, text, duration, ct).ConfigureAwait(false);
-                            log(prefix + "Озвучиваю через ElevenLabs…");
-                        }
-                        alignment = await SynthesizeAsync(elevenClient, job.ElevenLabsKey, voice, text, mp3, job.Subtitles?.Enabled == true, ct).ConfigureAwait(false);
-                        // Decode MP3 delay/padding once. The PCM sample count, not an estimated text length,
-                        // drives the video. No silence padding, speed change or speech trimming.
-                        await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-i", mp3, "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", wav }, ct, null, 30).ConfigureAwait(false);
-                        duration = await AudioDurationAsync(ffprobe, wav, ct).ConfigureAwait(false);
-                        log(prefix + "Длина озвучки: " + duration.ToString("0.00", CultureInfo.CurrentCulture) + " с");
-                        if (duration <= MaximumSeconds) break;
+                    if (job.UsesManualBundles) {
+                        text = manualJokes[i];
+                        log(prefix + "Озвучиваю ваш текст через ElevenLabs…");
+                    } else {
+                        log(prefix + "Придумываю анекдот…");
+                        text = await FetchTextAsync(routerClient, job, previous, ct).ConfigureAwait(false);
+                        log(prefix + "Озвучиваю через ElevenLabs…");
                     }
-                    if (duration > MaximumSeconds) throw new Exception(job.UsesManualBundles
-                        ? "Анекдот " + (i + 1) + " не укладывается в 10 секунд. Сократите текст. Речь не обрезана; уже готовые ролики сохранены."
-                        : "Не удалось получить озвучку до 10 секунд за 3 попытки. Упростите тему анекдота. Речь не обрезана; уже готовые ролики сохранены.");
-                    string name = "Прогрев-" + (job.Market == "EN" ? "EN" : "RU") + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".mp4";
+                    alignment = await SynthesizeAsync(elevenClient, job.ElevenLabsKey, voice, text, mp3, job.Subtitles?.Enabled == true, ct).ConfigureAwait(false);
+                    await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-i", mp3, "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", wav }, ct, null, 30).ConfigureAwait(false);
+                    duration = await AudioDurationAsync(ffprobe, wav, ct).ConfigureAwait(false);
+                    log(prefix + "Длина озвучки: " + duration.ToString("0.00", CultureInfo.CurrentCulture) + " с");
+                    if (duration <= 0 || duration > MaximumSeconds || double.IsNaN(duration))
+                        throw new Exception("Озвучка " + (i + 1) + " имеет недопустимую длительность (" + duration.ToString("0.##", CultureInfo.CurrentCulture) + " с).");
+                    string name = VideoBatchOutputPaths.WarmupVideoFileName(job.Market);
                     string output = Path.Combine(job.OutputFolder, name);
                     partial = Path.Combine(job.OutputFolder, ".processing-" + name);
                     log(prefix + "Собираю ролик по длине озвучки…");
@@ -206,7 +201,7 @@ namespace VideoBatch {
         }
 
         internal static IEnumerable<string> RenderArguments(string background, string audio, string output, double duration, List<WarmupCaption> captions = null) {
-            if (duration <= 0 || duration > MaximumSeconds || double.IsNaN(duration)) throw new Exception("Озвучка должна длиться не больше 10 секунд.");
+            if (duration <= 0 || duration > MaximumSeconds || double.IsNaN(duration)) throw new Exception("Недопустимая длительность озвучки для сборки ролика.");
             var args = new List<string> { "-v", "error", "-y", "-filter_complex_threads", "1", "-filter_threads", "1" };
             if (IsVideo(background)) args.AddRange(new[] { "-stream_loop", "-1" });
             else args.AddRange(new[] { "-loop", "1", "-framerate", "30" });
@@ -237,11 +232,10 @@ namespace VideoBatch {
                 throw new Exception("Проверка готового MP4 не пройдена: длительность или дорожки не совпадают с озвучкой.");
         }
 
-        static async Task<string> FetchTextAsync(HttpClient client, WarmupVideoJob job, List<string> previous, string tooLong, double seconds, CancellationToken ct) {
-            string prompt = "Write ONE complete short clean joke in " + (job.Market == "EN" ? "English" : "Russian") + ". Topic/instructions: " + job.Prompt.Trim()
-                + ". Aim for natural speech lasting 6–7 seconds, strictly under 10 seconds. Usually 10–16 words; fewer for long words. Keep the setup AND punchline, no explanation, no title, no stage directions. Return ONLY a JSON object {\"text\":\"the joke\"}.";
+        static async Task<string> FetchTextAsync(HttpClient client, WarmupVideoJob job, List<string> previous, CancellationToken ct) {
+            string prompt = "Write ONE complete clean joke in " + (job.Market == "EN" ? "English" : "Russian") + ". Topic/instructions: " + job.Prompt.Trim()
+                + ". Keep the setup AND punchline, no explanation, no title, no stage directions. Return ONLY a JSON object {\"text\":\"the joke\"}.";
             if (previous.Count > 0) prompt += " Do not repeat these jokes: " + Json().Serialize(previous);
-            if (!string.IsNullOrEmpty(tooLong)) prompt += " Previous joke: " + Json().Serialize(tooLong) + " took " + Number(seconds) + " seconds. Rewrite substantially shorter (aim 4–6 seconds) retaining a complete joke.";
             var payload = new { model = string.IsNullOrWhiteSpace(job.OpenRouterModel) ? "openai/gpt-4o-mini" : job.OpenRouterModel,
                 messages = new[] { new { role = "user", content = prompt } }, max_tokens = 200 };
             using (var request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions")) {

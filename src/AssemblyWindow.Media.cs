@@ -9,8 +9,8 @@ namespace VideoBatch {
         void ImageScopeMenu() {
             ShowChoices("Где показывать изображение?", packChips, new[] {
                 Tuple.Create("Эта сцена", (Action)(() => SetImageScope(false)), !globalEditing),
-                Tuple.Create("Весь ролик · без перезапуска", (Action)(() => SetImageScope(true)), globalEditing),
-                Tuple.Create(globalEditing ? "Перенести выбранный слой в сцену" : "Перенести выбранный слой на весь ролик", (Action)MoveImageScope, false)
+                Tuple.Create("Общее изображение · весь ролик", (Action)(() => SetImageScope(true)), globalEditing),
+                Tuple.Create(globalEditing ? "Перенести слой в сцену" : "Перенести слой в общее изображение", (Action)MoveImageScope, false)
             });
         }
         void SetImageScope(bool whole) { globalEditing = whole; layerIndex = EditableLayers.Count > 0 ? 0 : -1; RefreshChips(); LoadLayer(); RefreshCanvas(); }
@@ -36,7 +36,7 @@ namespace VideoBatch {
                 var body = MediaBody(form);
                 body.Controls.Add(new Label { Text = "Откуда брать основное видео", AutoSize = true, Font = Theme.FontCardTitle });
                 var scope = new ComboBox { Name = "VideoScope", DropDownStyle = ComboBoxStyle.DropDownList, Width = 560 };
-                scope.Items.AddRange(new object[] { "Отрывок для каждой сцены", "Одно непрерывное видео на весь ролик", "Только выбранная сцена (кнопка «Своё» на карточке)" });
+                scope.Items.AddRange(new object[] { "Отрывок для каждой сцены", "Одно непрерывное видео на весь ролик", "Отдельная папка у выбранной сцены" });
                 scope.SelectedIndex = template.ContinuousVideo ? 1 : SelectedScene?.VideoMode == "own" ? 2 : 0;
                 body.Controls.Add(scope);
                 var primaryCount = new Label { AutoSize = false, Width = 560, Height = 22, ForeColor = Theme.TextSecondary };
