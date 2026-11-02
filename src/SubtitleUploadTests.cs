@@ -92,8 +92,9 @@ namespace VideoBatch {
                 var copyHash = await Core.Tool(ffmpeg, new[] { "-v", "error", "-i", copy, "-map", "0:v:0", "-c", "copy", "-f", "hash", "-hash", "sha256", "pipe:1" }, CancellationToken.None, null, 30);
                 Check(sourceHash == copyHash, "metadata-only encoded video stays identical");
                 string silentHdr = Path.Combine(folder, "hdr-tagged-silent.mp4");
-                await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-i", source, "-an", "-t", "1", "-c:v", "libx264", "-threads", "1", "-color_trc", "smpte2084", "-color_primaries", "bt2020", "-colorspace", "bt2020nc", silentHdr }, CancellationToken.None, null, 30);
-                Check(VideoSdr.IsHdr(await Core.Probe(ffprobe, silentHdr, CancellationToken.None)), "HDR-tagged fixture");
+                await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=128x224:rate=25:duration=1", "-an", "-vf", "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc", "-c:v", "libx264", "-threads", "1", "-color_trc", "smpte2084", "-color_primaries", "bt2020", "-colorspace", "bt2020nc", silentHdr }, CancellationToken.None, null, 30);
+                var hdrInput=await Core.Probe(ffprobe, silentHdr, CancellationToken.None);
+                Check(VideoSdr.IsHdr(hdrInput), "HDR-tagged fixture transfer="+hdrInput.streams.First(s=>s.codec_type=="video").color_transfer);
                 settings.UploadPreparationSubtleEffects = true;
                 string hdrCopy = (await UploadPreparation.PrepareAsync("hdr", "YouTube", "hdr", new[] { silentHdr }, settings, null))[0];
                 var hdrProbe = await Core.Probe(ffprobe, hdrCopy, CancellationToken.None);
