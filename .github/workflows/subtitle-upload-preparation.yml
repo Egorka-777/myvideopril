@@ -32,6 +32,9 @@ jobs:
         run: ./scripts/Install-CiFfmpeg.ps1
       - name: Build desktop
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Install kit preserves data and verifies file hashes
+        shell: powershell
+        run: ./tests/Sync-StudioUploader.Tests.ps1
       - name: Prepare isolated portable tool layout
         shell: pwsh
         run: |

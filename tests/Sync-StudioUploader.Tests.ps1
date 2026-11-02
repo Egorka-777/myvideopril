@@ -13,7 +13,7 @@ try {
     if ([IO.File]::ReadAllText((Join-Path $dest 'worker.js')) -ne 'old-worker') { throw 'WhatIf modified installed files' }
     & (Join-Path $root 'scripts/Sync-StudioUploader.ps1') -KitRoot $kit -NodePath $node | Out-Host
     $manifest=Get-Content -LiteralPath (Join-Path $dest 'STUDIO_UPLOADER_VERSION.json') -Raw | ConvertFrom-Json
-    if ($manifest.build -ne '2026-10-22-studio-upload-recovery-v20' -or $manifest.protocolVersion -ne 2 -or $manifest.liveAccountValidation -ne 'NOT_RUN') { throw 'Invalid manifest' }
+    if ($manifest.build -ne '2026-10-23-studio-two-profiles-v21' -or $manifest.protocolVersion -ne 2 -or $manifest.liveAccountValidation -ne 'NOT_RUN') { throw 'Invalid manifest' }
     if ([IO.File]::ReadAllText((Join-Path $manifest.backup 'tools/uploader/worker.js')) -ne 'old-worker') { throw 'Worker backup missing' }
     if ([IO.File]::ReadAllText((Join-Path $manifest.backup 'VideoBatch.exe')) -ne 'old-exe') { throw 'EXE backup missing' }
     foreach ($pair in @(@('settings.xml','keep-settings'),@('tools/uploader/node.exe','keep-runtime'))) {
