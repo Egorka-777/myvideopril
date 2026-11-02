@@ -52,7 +52,7 @@ namespace VideoBatch {
                 Report(key, "queued", 0, 0, sources.Length, "", progress);
                 await slots.WaitAsync(linked.Token).ConfigureAwait(false); acquired = true;
                 return await Task.Run(async () => {
-                    if (!ToolsLocator.TryResolve(out string ffmpeg, out string ffprobe, out string reason)) throw new Exception(reason);
+                    if (!ToolsLocator.TryResolve(out string ffmpeg, out string ffprobe, out _)) throw new Exception("Для подготовки видео нужны ffmpeg.exe и ffprobe.exe в папке tools полного комплекта VideoBatch. Запустите приложение из папки установки. Исходники не изменены.");
                     string folder = Path.Combine(UploadStaging.Root(settings), "prepared", UploadStaging.SanitizeDirName(platform), UploadStaging.SanitizeDirName(account));
                     Directory.CreateDirectory(folder);
                     var random = new Random(Guid.NewGuid().GetHashCode());

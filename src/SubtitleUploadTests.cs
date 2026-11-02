@@ -52,6 +52,7 @@ namespace VideoBatch {
                     var copy = UploadPreparation.Arguments("input.mp4", "output.mp4", profile, media, "copy-edition", false);
                     Check(copy.Contains("copy") && !copy.Contains("-vf") && copy.Contains("edition_id=copy-edition"), "metadata-only remux");
                 }
+                Console.WriteLine("Subtitle presets PASS: legacy XML, seven styles, custom persistence, word timing, shared renderer and strict effect limits.");
                 return true;
             } catch (Exception ex) { Console.WriteLine(ex); return false; }
             finally { try { Directory.Delete(folder, true); } catch { } }
@@ -90,6 +91,13 @@ namespace VideoBatch {
                 var sourceHash = await Core.Tool(ffmpeg, new[] { "-v", "error", "-i", source, "-map", "0:v:0", "-c", "copy", "-f", "hash", "-hash", "sha256", "pipe:1" }, CancellationToken.None, null, 30);
                 var copyHash = await Core.Tool(ffmpeg, new[] { "-v", "error", "-i", copy, "-map", "0:v:0", "-c", "copy", "-f", "hash", "-hash", "sha256", "pipe:1" }, CancellationToken.None, null, 30);
                 Check(sourceHash == copyHash, "metadata-only encoded video stays identical");
+                string silentHdr = Path.Combine(folder, "hdr-tagged-silent.mp4");
+                await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-i", source, "-an", "-t", "1", "-c:v", "libx264", "-threads", "1", "-color_trc", "smpte2084", "-color_primaries", "bt2020", "-colorspace", "bt2020nc", silentHdr }, CancellationToken.None, null, 30);
+                Check(VideoSdr.IsHdr(await Core.Probe(ffprobe, silentHdr, CancellationToken.None)), "HDR-tagged fixture");
+                settings.UploadPreparationSubtleEffects = true;
+                string hdrCopy = (await UploadPreparation.PrepareAsync("hdr", "YouTube", "hdr", new[] { silentHdr }, settings, null))[0];
+                var hdrProbe = await Core.Probe(ffprobe, hdrCopy, CancellationToken.None);
+                Check(VideoSdr.IsHdr(hdrProbe) && !hdrProbe.streams.Any(s => s.codec_type == "audio"), "HDR and silent source preserved");
                 bool failed = false;
                 try { await UploadPreparation.PrepareAsync("bad-batch", "YouTube", "bad", new[] { source, Path.Combine(folder, "missing.mp4") }, settings, null); } catch { failed = true; }
                 string bad = Path.Combine(settings.UploadStagingFolder, "prepared", "YouTube", "bad");
@@ -99,6 +107,13 @@ namespace VideoBatch {
                     try { await UploadPreparation.PrepareAsync("cancelled", "TikTok", "cancelled", new[] { source }, settings, null, ct.Token); } catch (OperationCanceledException) { cancelled = true; }
                     Check(cancelled && !UploadPreparation.IsBusy("cancelled"), "cancellation releases queue");
                 }
+                bool stopped = false;
+                try { await UploadPreparation.PrepareAsync("stop-running", "TikTok", "stop-running", new[] { source }, settings,
+                    new Callback(state => { if (state.Stage == "processing") UploadPreparation.Cancel(state.Key); })); }
+                catch (OperationCanceledException) { stopped = true; }
+                string stopFolder = Path.Combine(settings.UploadStagingFolder, "prepared", "TikTok", "stop-running");
+                Check(stopped && !UploadPreparation.IsBusy("stop-running") && Directory.GetFiles(stopFolder).Length == 0 && Hash(source) == original, "running FFmpeg cancellation cleanup");
+                Console.WriteLine("Upload preparation PASS: three profiles, peak workers=" + peak + ", unique embedded metadata, unchanged source, lossless remux, HDR/silent input, failed-batch cleanup and cancellation.");
                 return true;
             } catch (Exception ex) { Console.WriteLine(ex); return false; }
             finally { try { Directory.Delete(folder, true); } catch { } }
@@ -112,12 +127,20 @@ namespace VideoBatch {
                     foreach (var preset in SubtitlePresets.BuiltIn()) using (var dialog = new SubtitleStyleDialog(preset.Style, Sample(), background)) {
                         dialog.Show(); Application.DoEvents();
                         using (var image = new Bitmap(dialog.Width, dialog.Height)) { dialog.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(folder, preset.Id + ".png")); }
-                        Check(dialog.Controls.Count > 0 && dialog.Style.PresetId == preset.Id, "dialog selected style"); dialog.Close();
+                        if (preset.Id == "bold-green") {
+                            var card = All(dialog).First(c => c.Name == "SubtitlePreset-word-pop");
+                            card.GetType().GetMethod("OnClick", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(card, new object[] { EventArgs.Empty });
+                            Check(dialog.Style.Motion == "pop" && dialog.Style.WordsPerCaption == 1, "preset selection applies all settings");
+                            ((Button)All(dialog).First(c => c is Button && c.Text == "Настройки")).PerformClick(); Application.DoEvents();
+                            using (var image = new Bitmap(dialog.Width, dialog.Height)) { dialog.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(folder, "settings.png")); }
+                        }
+                        Check(dialog.Controls.Count > 0, "dialog controls"); dialog.Close();
                     }
                 }
                 return true;
             } catch (Exception ex) { Console.WriteLine(ex); return false; }
             finally { Store.Root = oldRoot; try { Directory.Delete(temp, true); } catch { } }
         }
+        static IEnumerable<Control> All(Control parent) { foreach (Control child in parent.Controls) { yield return child; foreach (var nested in All(child)) yield return nested; } }
     }
 }

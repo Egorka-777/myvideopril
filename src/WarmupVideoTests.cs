@@ -18,7 +18,7 @@ namespace VideoBatch {
         static JavaScriptSerializer Json() => new JavaScriptSerializer();
         static string Reply(string joke, string finish = "stop") => Json().Serialize(new { choices = new[] { new { finish_reason = finish, message = new { content = Json().Serialize(new { text = joke }) } } } });
         sealed class FakeApi : HttpMessageHandler {
-            public byte[] Short, Long; public int TextCalls, SpeechCalls, VoiceCalls, LongCount;
+            public byte[] Short, Long; public int TextCalls, SpeechCalls, VoiceCalls;
             public bool AlwaysLong, FailAuth, CancelTts; public CancellationTokenSource Cancel;
             public string Market = "RU";
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
@@ -42,7 +42,7 @@ namespace VideoBatch {
                 Check((string)speech["model_id"] == "eleven_multilingual_v2" && ((string)speech["text"]).Contains("Number") == (Market == "EN"), "unmodified parsed joke sent to TTS");
                 if (FailAuth) return new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("SECRET fixture-eleven-key must never enter logs") };
                 if (CancelTts) { Cancel.Cancel(); ct.ThrowIfCancellationRequested(); }
-                byte[] bytes = AlwaysLong || SpeechCalls <= LongCount ? Long : Short;
+                byte[] bytes = AlwaysLong ? Long : Short;
                 if (request.RequestUri.AbsolutePath.EndsWith("/with-timestamps")) {
                     string spoken = (string)speech["text"];
                     var alignment = Alignment(spoken, .25, 1.5);
@@ -67,7 +67,8 @@ namespace VideoBatch {
                 Check(WarmupVideoEngine.ParseText(Reply("Кавычки \"да\", перенос\nстроки")) == "Кавычки \"да\", перенос\nстроки", "JSON escaping preserved");
                 bool rejected = false; try { WarmupVideoEngine.ParseText(Reply("incomplete", "length")); } catch { rejected = true; } Check(rejected, "truncated AI answer rejected before paid speech");
                 foreach (string market in new[] { "RU", "EN" }) {
-                    var api = new FakeApi { Short = File.ReadAllBytes(shortAudio), Long = File.ReadAllBytes(longAudio), LongCount = market == "RU" ? 1 : 0, Market = market };
+                    // Manual text is synthesized once. The dedicated long-audio case below covers longer speech.
+                    var api = new FakeApi { Short = File.ReadAllBytes(shortAudio), Long = File.ReadAllBytes(longAudio), Market = market };
                     string output = Path.Combine(temp, "результаты " + market); Directory.CreateDirectory(output);
                     string existing = Path.Combine(output, "warmup-RU-001.mp4"); File.WriteAllText(existing, "keep existing output");
                     int bundleCount = market == "RU" ? 2 : 1;
@@ -77,7 +78,7 @@ namespace VideoBatch {
                     using (var client = new HttpClient(api)) {
                         var files = await WarmupVideoEngine.GenerateAsync(job, _ => { }, CancellationToken.None, client, client, ffmpeg, ffprobe);
                         Check(files.Count == bundleCount && files.Distinct().Count() == bundleCount && files.All(File.Exists), "requested number, distinct names and output files");
-                        Check(api.SpeechCalls == bundleCount + api.LongCount && api.TextCalls == 0, "manual bundles skip OpenRouter");
+                        Check(api.SpeechCalls == bundleCount && api.TextCalls == 0, "manual bundles skip OpenRouter and synthesize each item once");
                         var inventory = WarmupBundleHistory.Inventory(market, jokes, backgrounds);
                         Check(inventory.Used == bundleCount && inventory.Remaining == 0, "successful pairs persist across history reload");
                         int paidCalls = api.SpeechCalls;
@@ -162,7 +163,7 @@ namespace VideoBatch {
                         }
                     }
                 }
-                Console.WriteLine("Warmup integration PASS: real photo/video render, audio clock, near-10s boundary, RU/EN payloads, shorten retry, no overwrite, invalid source, API errors and cancellation. No paid/live APIs called."); return true;
+                Console.WriteLine("Warmup integration PASS: real photo/video render, audio clock, near-10s boundary, RU/EN payloads, one TTS request per manual item, no overwrite, invalid source, API errors and cancellation. No paid/live APIs called."); return true;
             } finally { Store.Root = previousRoot; try { Directory.Delete(temp, true); } catch { } }
         }
         static WarmupAlignment Alignment(string text, double start, double length) => new WarmupAlignment {

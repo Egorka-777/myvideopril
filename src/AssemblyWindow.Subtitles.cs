@@ -11,7 +11,7 @@ namespace VideoBatch {
 
         void OpenSubtitleEditor() {
             Safe(() => {
-                if (subtitleWorkspaceActive) LeaveSubtitleWorkspace();
+                if (subtitleWorkspaceActive) { LeaveSubtitleWorkspace(); if (subtitleWorkspaceActive) return; }
                 using (var background = canvas.SubtitleBackground())
                 using (var dialog = new SubtitleStyleDialog(template.SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }, PreviewCaptionCues(), background, template.Width, template.Height, template.Captions?.Count > 0)) {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;

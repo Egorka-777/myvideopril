@@ -2,7 +2,7 @@ name: Subtitle presets and upload preparation
 on:
   push:
     branches: [feat/subtitle-presets-upload-prep-20261030, main]
-    paths: ['src/**', 'VideoBatch.csproj', '.github/workflows/subtitle-upload-preparation.yml']
+    paths: ['src/**', 'VideoBatch.csproj', 'tools/uploader/youtube-owner-publish.js', 'tests/browser/youtube-owner-publish.js', '.github/workflows/subtitle-upload-preparation.yml']
   workflow_dispatch:
 jobs:
   windows:
@@ -13,6 +13,20 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Owner publication RU EN and existing Studio flow
+        shell: pwsh
+        run: |
+          npm ci --prefix tools/uploader --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'Uploader dependencies' }
+          npx --prefix tools/uploader playwright-core install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium install' }
+          node tests/browser/youtube-owner-publish.js
+          if ($LASTEXITCODE -ne 0) { throw 'Owner publication' }
+          node tests/browser/studio-state-flow.js
+          if ($LASTEXITCODE -ne 0) { throw 'Existing Studio flow' }
       - name: Install FFmpeg
         shell: pwsh
         run: ./scripts/Install-CiFfmpeg.ps1
@@ -30,7 +44,7 @@ jobs:
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
-          foreach ($type in @('SubtitleUploadTests', 'ProcessingRegressionTests', 'AssemblyMarketTests')) {
+          foreach ($type in @('SubtitleUploadTests', 'ProcessingRegressionTests', 'AssemblyMarketTests', 'YouTubeOwnerPublishTests')) {
             $method = $asm.GetType("VideoBatch.$type").GetMethod('RunSelfTests')
             if ($method -and !$method.Invoke($null, @())) { throw "$type failed" }
           }
@@ -42,17 +56,25 @@ jobs:
           $ffprobe = [string](Get-Command ffprobe.exe).Source
           if (!$asm.GetType('VideoBatch.SubtitleUploadTests').GetMethod('RunIntegrationTests').Invoke($null, @($ffmpeg, $ffprobe))) { throw 'Upload preparation integration failed' }
           if (!$asm.GetType('VideoBatch.WarmupVideoTests').GetMethod('RunIntegrationTests').Invoke($null, @($ffmpeg, $ffprobe))) { throw 'Existing speech/video integration failed' }
+          if (!$asm.GetType('VideoBatch.AssemblyScopedRenderTests').GetMethod('Run').Invoke($null, @($ffmpeg, $ffprobe))) { throw 'Existing per-scene voice integration failed' }
       - name: Native subtitle gallery screenshots
         if: always()
         shell: powershell
         run: |
           $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
           if (!$asm.GetType('VideoBatch.SubtitleUploadTests').GetMethod('RunUiTests').Invoke($null, @([IO.Path]::GetFullPath('artifacts/subtitle-ui')))) { throw 'Subtitle UI failed' }
+          if (!$asm.GetType('VideoBatch.YouTubeOwnerPublishTests').GetMethod('RunUiTests').Invoke($null, @([IO.Path]::GetFullPath('artifacts/owner-ui')))) { throw 'Owner publication UI failed' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: Subtitle-Preset-Screenshots
           path: artifacts/subtitle-ui
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Owner-Publication-Screenshots
+          path: artifacts/owner-ui
           if-no-files-found: ignore
       - name: Package desktop update
         shell: pwsh
@@ -62,7 +84,11 @@ jobs:
           Copy-Item bin/Release/net48/VideoBatch.exe* $dest
           Copy-Item bin/Release/net48/*.dll $dest
           if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes $dest -Recurse }
+          New-Item -ItemType Directory -Force "$dest/tools/uploader", "$dest/scripts" | Out-Null
+          Copy-Item tools/uploader/*.js "$dest/tools/uploader"
+          Copy-Item scripts/Sync-StudioUploader.ps1, scripts/Collect-StudioDiagnostics.ps1 "$dest/scripts"
           Copy-Item docs/AGENT_SUBTITLE_UPLOAD_20261030_RU.md $dest
+          Copy-Item docs/AGENT_OWNER_PUBLISH_20261102_RU.md $dest
           git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
       - uses: actions/upload-artifact@v4
         with:

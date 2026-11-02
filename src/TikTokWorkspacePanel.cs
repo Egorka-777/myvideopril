@@ -719,10 +719,16 @@ namespace VideoBatch {
                     AppendLog("Добавлено видео: " + d.FileNames.Length + " → " + acc.Name);
 
                     AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
-                } catch (OperationCanceledException) { if (!IsDisposed) AppendLog(acc.Name + ": подготовка отменена. Исходники сохранены."); }
-                catch (Exception ex) { AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { AppendLog(acc.Name + ": ошибка подготовки · " + ex.Message); MessageBox.Show(this, ex.Message, "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Warning); } }
+                } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(acc, "Подготовка отменена"); AppendLog(acc.Name + ": подготовка отменена. Исходники сохранены."); } }
+                catch (Exception ex) { AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { MarkPreparationStopped(acc, "Ошибка подготовки"); AppendLog(acc.Name + ": ошибка подготовки · " + ex.Message); } }
                 finally { preparationKeys.Remove(preparationKey); if (!IsDisposed) RefreshGrid(skipSync: true); }
             }
+        }
+
+        void MarkPreparationStopped(TikTokAccount account, string status) {
+            var current = settings.TikTokAccounts.FirstOrDefault(a => a.ProfileId == account.ProfileId && a.Market == account.Market) ?? account;
+            current.Status = status; current.Enabled = false;
+            try { Store.Save(settings); } catch { }
         }
 
         async Task RunUpload(string transport) {

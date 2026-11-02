@@ -41,10 +41,16 @@ namespace VideoBatch {
                 if (!string.IsNullOrWhiteSpace(speech) && File.Exists(speech)) audioPaths.Add(speech);
             }
             if(!string.IsNullOrWhiteSpace(t.Voiceover)) {string voice=t.ResolveAudio(t.Voiceover);if(!string.IsNullOrWhiteSpace(voice)&&File.Exists(voice))audioPaths.Add(voice);}
+            if (t.HasSceneVoiceovers) foreach (var scene in t.Scenes) {
+                var options = AssemblySpeechPlan.SceneVoiceOptions(t,scene);
+                if ((scene.VoiceMode == "own" || scene.VoiceMode == "shared") && options.Count == 0)
+                    throw new Exception(scene.Name + ": нет файлов озвучки. Добавьте аудиофайлы или выберите «Без озвучки».");
+                audioPaths.AddRange(options);
+            }
             foreach (string path in audioPaths.Distinct(StringComparer.OrdinalIgnoreCase)) {
                 try { Core.AudioDuration(await Core.Probe(probe, path, ct).ConfigureAwait(false)); }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception e) { throw new Exception("Не удалось прочитать музыку «" + Path.GetFileName(path) + "»: " + e.Message, e); }
+                catch (Exception e) { throw new Exception("Не удалось прочитать аудиофайл «" + Path.GetFileName(path) + "»: " + e.Message, e); }
             }
             if (t.PackStudioVersion == 0 && !string.IsNullOrWhiteSpace(t.Music) && !File.Exists(t.Resolve(t.Music))) throw new Exception("Не найден музыкальный файл: " + t.Resolve(t.Music));
             return result;
@@ -98,7 +104,7 @@ namespace VideoBatch {
         }
         // Retained only as a reference for controlled before/after benchmarks.
         public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
-            if(t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
+            if(t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
                 await AssemblyRender.Run(t,p,ffmpeg,ffprobe,output,work,rasterize,ct,progress).ConfigureAwait(false);return;
             }
             Directory.CreateDirectory(work); var paths = new List<string>();

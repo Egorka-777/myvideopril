@@ -12,6 +12,10 @@ namespace VideoBatch {
             Check(YouTubeOwnerPublish.RenderComment("Link?start={ddMM}\n{date} {yyyy} {MM} {dd}",new DateTime(2028,2,29))=="Link?start=2902\n2028-02-29 2028 02 29","PC date, leap day, exact replacement");
             Check(YouTubeOwnerPublish.RenderComment("A\u00a0B",DateTime.Now)=="A B","copied nonbreaking spaces match browser text verification");
             Check(YouTubeOwnerPublish.RenderComment("Text 1910",new DateTime(2026,10,21))=="Text 1910","literal digits unchanged");Reject(()=>YouTubeOwnerPublish.RenderComment("{unknown}",DateTime.Now));
+            string signature="📌 Ссылка на ИИ бота: https://t.me/BinoDexAI_bot?start=t0211\nПлатформа: https://bit.ly/binodex-broker 144";
+            Check(YouTubeOwnerPublish.RenderComment(signature,new DateTime(2026,11,3))==signature.Replace("t0211","t0311"),"existing signature: only Telegram ddMM changes; content and prefix preserved");
+            Check(YouTubeOwnerPublish.RenderComment("https://t.me/bot?x=1&start=i2902&ref=2110",new DateTime(2026,12,31))=="https://t.me/bot?x=1&start=i3112&ref=2110","date tag between query parameters; leap-day template and year end");
+            Check(YouTubeOwnerPublish.RenderComment("https://example.com/?start=t0211 https://t.me/bot?start=ref0211 https://t.me/bot?start=t9913",DateTime.Now)=="https://example.com/?start=t0211 https://t.me/bot?start=ref0211 https://t.me/bot?start=t9913","unrelated links and non-date referral codes untouched");
             var item=new YouTubeItem{Title="Example",PublishedVideoId="video000001",StudioVisibility="scheduled"};
             var channel=new YouTubeChannel{Name="Owner",ProfileId="profile-1",OwnerCommentTemplate="Account one {ddMM}",Items=new List<YouTubeItem>{item}};
             var second=new YouTubeChannel{Name="Second",ProfileId="profile-2",OwnerCommentTemplate="Account two {date}",Items=new List<YouTubeItem>{new YouTubeItem{Title="Second video",PublishedUrl="https://www.youtube.com/watch?v=video000002"}}};

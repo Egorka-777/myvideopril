@@ -33,6 +33,14 @@ namespace VideoBatch {
                     default:throw new Exception("Неизвестная вставка в комментарии: "+m.Value);
                 }
             }).Replace("\r\n","\n").Replace('\u00a0',' ').Trim();
+            // Existing saved signatures use start=t0211 / start=i2110. Render
+            // today's date only in these Telegram date tags; never rewrite the
+            // stored template, other link parameters or arbitrary numbers.
+            result=Regex.Replace(result,@"(?<url>https?://(?:t\.me|telegram\.me)/[^\s?#]+\?(?:[^\s#&]+&)*start=)(?<prefix>[it])(?<stamp>\d{4})(?=&|#|\s|$)",m=>{
+                string stamp=m.Groups["stamp"].Value;int day=int.Parse(stamp.Substring(0,2)),month=int.Parse(stamp.Substring(2,2));
+                return month>=1&&month<=12&&day>=1&&day<=DateTime.DaysInMonth(2000,month)
+                    ?m.Groups["url"].Value+m.Groups["prefix"].Value+pcDate.ToString("ddMM",CultureInfo.InvariantCulture):m.Value;
+            },RegexOptions.IgnoreCase);
             if(result.Length>10000||result.Any(c=>char.IsControl(c)&&c!='\n'&&c!='\t'))throw new Exception("Комментарий: до 10 000 символов, без управляющих символов.");
             return result;
         }
@@ -87,7 +95,11 @@ namespace VideoBatch {
                 if(group.Key=="")throw new Exception("Не указан профиль Dolphin.");
                 var list=group.ToList();
                 if(list.Select(c=>c.Channel).Distinct().Count()>1)throw new Exception("Для одного профиля выбраны разные каналы. Запустите их по отдельности.");
-                foreach(var choice in list)YouTubeOwnerPublish.EnsureAttached(settings,choice);
+                foreach(var choice in list){
+                    YouTubeOwnerPublish.EnsureAttached(settings,choice);
+                    if(choice.Item.OwnerCommentState!="pending"&&!YouTubeOwnerPublish.CommentComplete(choice.Item))
+                        choice.CommentText=YouTubeOwnerPublish.RenderComment(choice.Channel.OwnerCommentTemplate,DateTime.Now);
+                }
                 var items=list.Select(YouTubeOwnerPublish.ToJob).ToArray();
                 if(items.Select(i=>i.publishedVideoId).Distinct().Count()!=items.Length)throw new Exception("Одно видео выбрано дважды.");
                 return new {Choices=list,Items=items,ProfileId=group.Key};
@@ -133,7 +145,7 @@ namespace VideoBatch {
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,280));root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(root);
             var intro=new Label{
-                Text="Шаблон на аккаунт. При «Опубликовать» подставляется дата ПК: {ddMM} (2110), {date}, {dd}, {MM}, {yyyy}. В ссылке бота: start=i{ddMM} → start=i2110. Цифры вне {…} не меняются.",
+                Text="Шаблон на аккаунт. Дата ПК: {ddMM}, {date}, {dd}, {MM}, {yyyy}. В ссылках Telegram start=t0211 / start=i2110 день и месяц также обновляются. Остальные цифры не меняются.",
                 AutoSize=true,MaximumSize=new Size(900,0),Margin=new Padding(0,0,0,12),Dock=DockStyle.Fill};
             root.Controls.Add(intro,0,0);root.SetColumnSpan(intro,2);
             var left=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=1,Margin=new Padding(0,0,12,0)};
@@ -196,7 +208,7 @@ namespace VideoBatch {
             StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
             var root=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),ColumnCount=1,RowCount=6};
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,48));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,52));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));Controls.Add(root);
-            root.Controls.Add(new Label{Text="Шаблон (сохраняется). В ссылке бота укажите start=i{ddMM} — дата подставится при каждой публикации.",AutoSize=true,Dock=DockStyle.Fill,MaximumSize=new Size(620,0),Font=Theme.FontCardTitle,Margin=new Padding(0,0,0,8)},0,0);
+            root.Controls.Add(new Label{Text="Шаблон сохраняется. Дата ПК подставляется в {ddMM} и в Telegram-ссылках start=t0211 / start=i2110. Текст и префикс ссылки остаются вашими.",AutoSize=true,Dock=DockStyle.Fill,MaximumSize=new Size(620,0),Font=Theme.FontCardTitle,Margin=new Padding(0,0,0,8)},0,0);
             text=new TextBox{Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,Text=(channel.OwnerCommentTemplate??"").Replace("\r\n","\n").Replace("\n",Environment.NewLine)};
             text.TextChanged+=(s,e)=>RefreshPreview();root.Controls.Add(text,0,1);
             root.Controls.Add(new Label{Text="Так уйдёт в YouTube сегодня ("+DateTime.Now.ToString("dd.MM.yyyy")+") · {ddMM}="+DateTime.Now.ToString("ddMM"),AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,8,0,4)},0,2);

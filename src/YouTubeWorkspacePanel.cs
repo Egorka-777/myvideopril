@@ -733,10 +733,16 @@ namespace VideoBatch {
                     await backend.AssignPreparedVideosToChannelAsync(ch, d.FileNames, progress);
                     if (!IsDisposed) { RefreshGrid(); AppendLog(ch.Name + ": подготовлено 100% · " + d.FileNames.Length + " видео."); }
                     AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
-                } catch (OperationCanceledException) { if (!IsDisposed) AppendLog(ch.Name + ": подготовка отменена. Исходники сохранены."); }
-                catch (Exception ex) { AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { AppendLog(ch.Name + ": ошибка подготовки · " + ex.Message); MessageBox.Show(this, ex.Message, "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning); } }
+                } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(ch, "Подготовка отменена"); AppendLog(ch.Name + ": подготовка отменена. Исходники сохранены."); } }
+                catch (Exception ex) { AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { MarkPreparationStopped(ch, "Ошибка подготовки"); AppendLog(ch.Name + ": ошибка подготовки · " + ex.Message); } }
                 finally { preparationKeys.Remove(preparationKey); if (!IsDisposed) RefreshGrid(); }
             }
+        }
+
+        void MarkPreparationStopped(YouTubeChannel channel, string status) {
+            var current = settings.YouTubeChannels.FirstOrDefault(c => c.ChannelId == channel.ChannelId) ?? channel;
+            current.Status = status; current.Enabled = false;
+            try { Store.Save(settings); } catch { }
         }
 
         YouTubeChannel SelectedChannel() {
