@@ -41,6 +41,7 @@ namespace VideoBatch {
             Button stylesTab = null, settingsTab = null;
             Action<bool> showStyles = value => { gallery.Visible = value; settings.Visible = !value; Theme.ApplyHeroToggleStyle(stylesTab, value); Theme.ApplyHeroToggleStyle(settingsTab, !value); };
             stylesTab = Theme.MakeHeroToggle("Стили", true, () => showStyles(true)); settingsTab = Theme.MakeHeroToggle("Настройки", false, () => showStyles(false));
+            stylesTab.Width = 100; settingsTab.Width = 130;
             switches.Controls.Add(stylesTab); switches.Controls.Add(settingsTab); tabs.Controls.Add(switches, 0, 0); tabs.Controls.Add(pages, 0, 1); root.Controls.Add(tabs, 1, 0);
             cards = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, BackColor = Theme.Card }; gallery.Controls.Add(cards);
             cards.ClientSizeChanged += (s, e) => { foreach (Control card in cards.Controls) card.Width = Math.Max(170, (cards.ClientSize.Width - 36) / 2); };
@@ -74,7 +75,7 @@ namespace VideoBatch {
             timer.Tick += (s, e) => UpdatePreview(); timer.Start();
             FormClosed += (s, e) => timer.Stop();
         }
-        static NumericUpDown Number(int min, int max) => new NumericUpDown { Minimum = min, Maximum = max, Width = 150 };
+        static NumericUpDown Number(int min, int max) => new NumericUpDown { Minimum = min, Maximum = max, Width = 150, BackColor = Theme.Card, ForeColor = Theme.TextPrimary, BorderStyle = BorderStyle.FixedSingle };
         static void Add(TableLayoutPanel fields, string label, Control control) {
             int row = fields.RowCount++; fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             fields.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(0, 8, 4, 8) }, 0, row);
