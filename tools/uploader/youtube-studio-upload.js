@@ -56,7 +56,7 @@ const L={
  ai:/altered content|synthetic content|synthetic media|AI.generated content|was AI used|use of AI|AI usage|использование ИИ|изменённый контент|измененный контент/i,
  no:/^(No(?:,.*)?|Нет(?:,.*)?)$/i, yes:/^(Yes(?:,.*)?|Да(?:,.*)?)$/i,
  private:/^(Private|Ограниченный доступ|Закрытый доступ|Скрыт)/i,
- public:/^(Public|Открытый доступ|Доступно всем|Public access)/i,
+ public:/(?:Public|Открытый доступ|Доступно всем|Public access|Для всех)/i,
  scheduled:/Scheduled|Запланирован|Публикация запланирована/i
 };
 function isShorts(item){return /^(shorts|short)$/.test(String(item.contentKind||'').trim().toLowerCase());}
@@ -382,14 +382,91 @@ async function waitSaveConfirmed(page,scope,{timeout=180000,progress=()=>{},expe
  }
  const error=new Error('Studio не показал подтверждение сохранения. Проверяю существующий ID, без повторной публикации.');error.code='STUDIO_SAVE_TIMEOUT';throw error;
 }
+async function publicRadioSelected(node){
+ if(!node)return false;
+ return node.evaluate(el=>{
+  const host=el.closest?.('tp-yt-paper-radio-button')||el;
+  const read=h=>{
+   if(typeof h.checked==='boolean')return h.checked;
+   if(h.getAttribute?.('aria-checked')==='true')return true;
+   if(h.hasAttribute?.('checked'))return true;
+   return false;
+  };
+  if(read(host))return true;
+  const input=host.shadowRoot?.querySelector('#input')||host.querySelector?.('#input');
+  return input?!!input.checked:false;
+ });
+}
+async function clickPublicRadioTarget(radio){
+ await radio.scrollIntoViewIfNeeded().catch(()=>{});
+ await radio.click({force:true,timeout:5000}).catch(async()=>{
+  await radio.evaluate(el=>{
+   const host=el.closest?.('tp-yt-paper-radio-button')||el;
+   const target=host.shadowRoot?.querySelector('#radioContainer,#input')||host.querySelector?.('#radioContainer,#input')||host;
+   target.click();
+  });
+ });
+}
+async function visibilitySubmitButton(scope){
+ const labels=/^(Publish|Опубликовать|Save|Сохранить|Done|Готово|OK|ОК)$/i;
+ for(const id of ['save-button','done-button']){
+  const btn=await one(scope.locator('#'+id).getByRole('button',{name:labels}).or(scope.locator('#'+id+' button').filter({hasText:labels})),{optional:true});
+  if(btn)return btn;
+ }
+ return one(scope.getByRole('button',{name:/^(OK|ОК|Publish|Опубликовать|Done|Готово)$/i}),{optional:true});
+}
+async function selectPublicRadio(scope,{activateSubmit=false}={}){
+ let radio=await one(scope.locator('#public-radio-button,tp-yt-paper-radio-button[name=PUBLIC],[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
+ if(radio){
+  // Studio can show aria-checked before the footer enables OK/Done. A real click on
+  // the radio circle is still required in the video editor dialog (#save-button).
+  await clickPublicRadioTarget(radio);
+  await until(async()=>publicRadioSelected(radio),10000,'Studio не выбрал «Открытый доступ»');
+  if(activateSubmit)await until(async()=>{const btn=await visibilitySubmitButton(scope);return btn&&await enabled(btn)?btn:null;},120000,'Кнопка подтверждения доступа недоступна');
+  return;
+ }
+ const picked=await scope.evaluate(()=>{
+  const norm=s=>String(s||'').replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim();
+  const isPublic=t=>/(?:^|\b)(Public|Открытый доступ|Доступно всем|Для всех)\b/i.test(norm(t));
+  const activate=host=>{
+   if(!host)return false;
+   const target=host.shadowRoot?.querySelector('#radioContainer,#input')||host.querySelector?.('#radioContainer,#input')||host;
+   target.click();return true;
+  };
+  for(const el of document.querySelectorAll('tp-yt-paper-radio-button[name=PUBLIC],#public-radio-button,[name=PUBLIC]'))
+   if(activate(el))return true;
+  for(const el of document.querySelectorAll('tp-yt-paper-radio-button,[role=radio]')){
+   const name=el.getAttribute('name')||'';
+   const text=norm(el.innerText||el.textContent||'');
+   if(name==='PUBLIC'||isPublic(text))return activate(el);
+  }
+  for(const el of document.querySelectorAll('label,div,span')){
+   const text=norm(el.innerText||el.textContent||'');
+   if(!isPublic(text)||text.length>80)continue;
+   const host=el.closest('tp-yt-paper-radio-button')||el.querySelector?.('tp-yt-paper-radio-button');
+   if(host&&activate(host))return true;
+  }
+  return false;
+ });
+ if(!picked)throw new Error('Studio: не найден режим «Открытый доступ»');
+ await until(async()=>{
+  radio=await one(scope.locator('#public-radio-button,tp-yt-paper-radio-button[name=PUBLIC],[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
+  return radio&&await publicRadioSelected(radio)?true:null;
+ },10000,'Studio не выбрал «Открытый доступ»');
+ if(activateSubmit)await until(async()=>{const btn=await visibilitySubmitButton(scope);return btn&&await enabled(btn)?btn:null;},120000,'Кнопка подтверждения доступа недоступна');
+}
+async function confirmEditorVisibility(scope){
+ await selectPublicRadio(scope,{activateSubmit:true});
+ const button=await visibilitySubmitButton(scope);
+ if(!button||!await enabled(button))throw new Error('Studio: кнопка подтверждения доступа недоступна');
+ const label=norm(await button.innerText());
+ if(L.schedule.test(label))throw new Error('Studio: вместо публикации показано планирование');
+ return button;
+}
 async function publishPublic(page,scope){
- let publicRadio=await one(scope.locator('#public-radio-button,[name=PUBLIC],tp-yt-paper-radio-button[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
- if(!publicRadio){
-  const label=await one(scope.getByText(/^(Public|Открытый доступ|Доступно всем)$/i),{optional:true});
-  if(label)await label.click();else throw new Error('Studio: не найден режим «Открытый доступ»');
- }else await publicRadio.click();
+ await selectPublicRadio(scope);
  const button=await until(async()=>{
-  const x=await actionButton(scope,'done-button',/^(Publish|Опубликовать|Save|Сохранить|Done|Готово)$/i);
+  const x=await actionButton(scope,'done-button',/^(Publish|Опубликовать|Save|Сохранить|Done|Готово|OK|ОК)$/i);
   if(!await enabled(x))return null;
   const label=norm(await x.innerText());
   if(L.schedule.test(label))return null;
@@ -636,4 +713,4 @@ async function runItems(page,pack,opts,host){
  }
  return results;
 }
-module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,publishPublic,publishSuccessVisible,confirmPublishDespiteRunningChecks,runningChecksDialog,waitSaveConfirmed,visibility,wizardState,visibilityControl,readback,runSequential,selectTaskPage,videoId,waitUpload,waitChecks,diagnostics,isImmediatePublish,isShorts};
+module.exports={fillTime,dateControl,timeControl,calendarSurface,actionButton,enabled,BUILD,L,one,until,norm,read,field,editorState,activateEditor,typeText,typingBudget,metadataBudget,tags,validateTags,setTags,question,details,showMore,uploadScope,scopeAlive,parseDate,parseTime,fillDate,offsetLabel,zoneControl,readZone,setZone,closeZoneMenu,zoneDiagnostics,wallClockUnix,scheduleValues,assertSchedule,planFor,syncClock,schedule,selectPublicRadio,publicRadioSelected,visibilitySubmitButton,confirmEditorVisibility,publishPublic,publishSuccessVisible,confirmPublishDespiteRunningChecks,runningChecksDialog,waitSaveConfirmed,visibility,wizardState,visibilityControl,readback,runSequential,selectTaskPage,videoId,waitUpload,waitChecks,diagnostics,isImmediatePublish,isShorts};

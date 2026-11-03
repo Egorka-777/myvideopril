@@ -94,9 +94,13 @@ namespace VideoBatch {
             if (SelectedScene == null) throw new Exception("Выберите сцену слева.");
             paths = PathUtil.NormalizeAll(paths);
             if (paths == null || paths.Length == 0) return;
-            string source = SelectedScene.Music;
-            AssemblyWorkspace.Import(template, ref source, Path.Combine(SelectedScene.Folder, "Аудио"), paths, AssemblyFiles.MusicExtensions, false);
-            SelectedScene.Music = source;
+            string source = SelectedScene.Voiceover;
+            int count = AssemblyWorkspace.Import(template, ref source, Path.Combine(SelectedScene.Folder, "Озвучка"), paths, AssemblyFiles.MusicExtensions, false);
+            if (count > 0) {
+                SelectedScene.Voiceover = source;
+                SelectedScene.VoiceMode = "own";
+            }
+            AssemblySpeechPlan.NormalizeSceneVoiceModes(template);
             Changed(false); Save();
         }
 
@@ -127,7 +131,7 @@ namespace VideoBatch {
             using (var form = MediaDialog("Озвучка · " + AssemblyProfile.ShortLabel(studioProfile), 620)) {
                 var body = MediaBody(form);
                 Action refresh = () => { Changed(false); Save(); RequestTimingHints(); RefreshInfo(); };
-                body.Controls.Add(new Label { Text = "Один вариант озвучки выбирается из пачки для каждого ролика. Длина видео = выбранное аудио + 1 секунда. Музыка настраивается отдельно.", Width = 560, Height = 54, ForeColor = Theme.TextSecondary });
+                body.Controls.Add(new Label { Text = "Один вариант озвучки выбирается из пачки для каждого ролика. Длина видео = выбранное аудио. Музыка настраивается отдельно.", Width = 560, Height = 54, ForeColor = Theme.TextSecondary });
                 body.Controls.Add(new Label { Text = "ОБЩАЯ ПАЧКА ОЗВУЧКИ", Width = 560, Height = 28, Font = Theme.FontCardTitle });
                 var sharedCount = AssemblySpeechPlan.SharedVoiceOptions(template).Count;
                 body.Controls.Add(new Label { Text = "Доступно вариантов: " + sharedCount + (string.IsNullOrWhiteSpace(template.Voiceover) ? " · ElevenLabs" : " · загруженные файлы"), Width = 560, Height = 32, ForeColor = Theme.TextSecondary });

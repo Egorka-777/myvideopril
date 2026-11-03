@@ -2,11 +2,11 @@
 // Publish only saved video IDs through the selected Studio profile. One author
 // comment per owned video; no likes, viewing loops, search or third-party comments.
 const S=require('./youtube-studio-upload');
-const BUILD='2026-11-02-owner-publish-public-v1';
+const BUILD='2026-11-02-owner-publish-public-v3';
 const ID=/^[A-Za-z0-9_-]{11}$/;
 const EDITOR='ytcp-video-metadata-editor,ytcp-video-details';
-const VISIBILITY='ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog';
-const SAVE=/^(Save|Сохранить|Done|Готово|Publish|Опубликовать)$/i;
+const VISIBILITY='ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,tp-yt-paper-dialog#dialog,ytcp-video-visibility-select';
+const SAVE=/^(Save|Сохранить|Done|Готово|Publish|Опубликовать|OK|ОК)$/i;
 async function visible(locator){return S.one(locator,{optional:true});}
 async function enabled(button){return S.enabled(button);}
 async function visibilityControl(page){
@@ -41,11 +41,15 @@ async function visibilityDialog(page){
  const roots=[];
  for(const root of await page.locator(VISIBILITY).all())
   if(await S.scopeAlive(root)||await root.locator('input[type=radio],tp-yt-paper-radio-button').filter({visible:true}).count())roots.push(root);
+ if(!roots.length){
+  const fallback=await visible(page.locator('[role=dialog]').filter({hasText:/Save or publish|Сохранить или опубликовать|Открытый доступ|Public/i}));
+  if(fallback)roots.push(fallback);
+ }
  if(roots.length>1)throw new Error('Studio открыл несколько окон доступа. Выбор видео неоднозначен.');
  return roots[0]||null;
 }
 async function publicRadio(scope){
- return visible(scope.locator('#public-radio-button,[name=PUBLIC],tp-yt-paper-radio-button[name=PUBLIC]').or(scope.getByRole('radio',{name:/^(Public|Открытый доступ|Доступно всем|Для всех)(?:\s|$)/i})));
+ return visible(scope.locator('#public-radio-button,[name=PUBLIC],tp-yt-paper-radio-button[name=PUBLIC]').or(scope.getByRole('radio',{name:S.L.public})));
 }
 async function expandPublish(scope){
  if(await publicRadio(scope))return;
@@ -62,19 +66,20 @@ async function persistedPublic(page){
  const dialog=await S.until(()=>visibilityDialog(page),15000,'Studio не открыл сохранённые настройки доступа.');
  await expandPublish(dialog);
  const radio=await publicRadio(dialog);
- const selected=await radio.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked'));
- await page.keyboard.press('Escape');return selected;
+ const selected=radio&&await S.publicRadioSelected(radio);
+ await page.keyboard.press('Escape');return !!selected;
 }
 async function publish(page,item,{progress=()=>{},verifyMs=30000}={}){
  const id=item.publishedVideoId;
  await editor(page,id);
  if(await readVisibility(page)==='public'){progress('owner_publish','Видео уже в открытом доступе.',{videoId:id});return;}
  const control=await visibilityControl(page);await control.click();
- const dialog=await S.until(()=>visibilityDialog(page),15000,'Studio не открыл окно изменения доступа.');
+ const dialog=await S.until(()=>visibilityDialog(page),30000,'Studio не открыл окно изменения доступа.');
  progress('owner_publish','Раскрываю «Сохранить или опубликовать / Save or publish».',{videoId:id});
  await expandPublish(dialog);
- // Stable Public radio + footer. The Schedule card is never a submit fallback.
- const button=await S.publishPublic(page,dialog);
+ progress('owner_publish','Выбираю «Открытый доступ / Public» и жду активную «ОК / Publish».',{videoId:id});
+ // Editor dialog confirms through #save-button (OK), not upload wizard #done-button.
+ const button=await S.confirmEditorVisibility(dialog);
  if(!SAVE.test(S.norm(await button.innerText())))throw new Error('Studio не показал кнопку сохранения открытого доступа.');
  progress('owner_publish','Выбран открытый доступ; подтверждаю публикацию один раз.',{videoId:id});
  await button.click();
@@ -84,8 +89,8 @@ async function publish(page,item,{progress=()=>{},verifyMs=30000}={}){
  let save=null;
  const saveDeadline=Date.now()+3000;
  do{
-  save=await S.actionButton(page,'save-button',/^(Save|Сохранить)$/i)
-   ||await S.actionButton(page,'save',/^(Save|Сохранить)$/i);
+  save=await S.actionButton(page,'save',/^(Save|Сохранить)$/i)
+   ||await S.actionButton(page,'save-bar',/^(Save|Сохранить)$/i);
   if(await enabled(save)){await save.click();break;}
   if(!save)break;
   await page.waitForTimeout(150);

@@ -15,6 +15,8 @@ namespace VideoBatch {
         public string FixedAssetHash = "", ObjectId = Guid.NewGuid().ToString("N");
         public double X = .08, Y = .35, Width = .84, Height = .25, Opacity = 1;
         public double Start = 0, End = 0; // End=0 means until the end of this scene.
+        /// <summary>all | primary | continuation — which video part shows this image.</summary>
+        public string ImagePart = "all";
         public string Font = "Arial";
         public double FontSize = 54, Radius = 28, Padding = 24;
     }
@@ -30,9 +32,17 @@ namespace VideoBatch {
         public string Text = "";
         public double Start, End;
     }
+    public class AssemblySceneVideoPack {
+        public string Source = "";
+        public bool Mix;
+    }
     public class AssemblyScene {
         public string Folder = "";
         public string Name = "Сцена", Videos = "", VideoMode = ""; // Empty mode preserves legacy folder fallback.
+        /// <summary>Second video pack: fills the scene only after the first primary clip ends.</summary>
+        public string ContinuationVideos = "";
+        public bool MixVideos;
+        public List<AssemblySceneVideoPack> VideoPacks = new List<AssemblySceneVideoPack>();
         public double Duration = 4;
         public string Music = "";
         // Empty mode keeps the old whole-roll voiceover; shared/own/none enable scene-level voiceover.
@@ -60,7 +70,8 @@ namespace VideoBatch {
         public List<string> TitleBank = new List<string>();
         public AssemblyOutputMetadata OutputMetadata = new AssemblyOutputMetadata();
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
-        public bool HasSceneVoiceovers { get { return Scenes != null && Scenes.Any(s => !string.IsNullOrWhiteSpace(s.VoiceMode)); } }
+        public bool HasSceneVoiceovers { get { return Scenes != null && Scenes.Any(s => s.VoiceMode == "own" || s.VoiceMode == "shared" || s.VoiceMode == "none"); } }
+        public bool UsesWholeRollVoiceover { get { return !HasSceneVoiceovers && (AssemblySpeechPlan.SharedVoiceOptions(this).Count > 0 || !string.IsNullOrWhiteSpace(Voiceover)); } }
         public List<AssemblyLayer> GlobalLayers = new List<AssemblyLayer>();
         public bool ContinuousVideo = false;
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
@@ -104,6 +115,7 @@ namespace VideoBatch {
         }
         public string[] PictureExtensions { get { return PackStudioVersion > 0 ? AssemblyFiles.PictureExtensions : AssemblyFiles.ImageExtensions; } }
         public void Validate() {
+            AssemblySpeechPlan.NormalizeSceneVoiceModes(this);
             if (Version != 1) throw new Exception("Неизвестная версия шаблона.");
             if (string.IsNullOrWhiteSpace(Id) || Id.Length > 100 || Id.Any(c => !char.IsLetterOrDigit(c) && c != '-')) throw new Exception("Некорректный ID шаблона.");
             if (Scenes == null || Scenes.Count > 12) throw new Exception("В студии допустимо до 12 сцен.");
@@ -300,7 +312,11 @@ namespace VideoBatch {
         public static readonly string[] RandomTransitions={"fade","zoomsoft","zoomout","pull","swipe"};
         public static double SceneSeconds(AssemblyScenePlan s) => s.ContentSeconds>0?s.ContentSeconds:s.Scene.Duration;
         public static double ContentDuration(AssemblyTemplate t,AssemblyScenePlan s) => s.ContentSeconds>0?s.ContentSeconds:(t.SceneTimingVersion>0?s.Scene.Duration:s.RenderDuration);
-        public static bool LoopInput(AssemblyTemplate t,AssemblyScenePlan s) => t.LoopShortVideos && !(t.SceneTimingVersion>0 && s.Scene.VideoMode=="own") && s.Video.Duration+.001<ContentDuration(t,s);
+        public static bool LoopInput(AssemblyTemplate t,AssemblyScenePlan s) {
+            if (s.VideoSegments != null && s.VideoSegments.Count > 0) return false;
+            if (t.SceneTimingVersion > 0 && s.ContentSeconds > 0 && s.Scene.VideoMode == "own") return false;
+            return t.LoopShortVideos && !(t.SceneTimingVersion>0 && s.Scene.VideoMode=="own") && s.Video.Duration+.001<ContentDuration(t,s);
+        }
         public static double SourceStart(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?0:s.VideoStart;
         public static string Transition(AssemblyTemplate t,AssemblyScenePlan s) => string.IsNullOrEmpty(s.TransitionOut)?(t.Transition=="random"?"fade":t.Transition):s.TransitionOut;
         public static string Padding(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?"tpad=start_mode=clone:start_duration="+Core.N(s.IncomingPad)+":stop_mode=clone:stop_duration="+Core.N(s.OutgoingPad)+",":"";
@@ -331,6 +347,8 @@ namespace VideoBatch {
     public class AssemblyScenePlan {
         public AssemblyScene Scene;
         public AssemblyVideo Video;
+        public List<AssemblySceneVideoSegment> VideoSegments = new List<AssemblySceneVideoSegment>();
+        public double PrimaryVideoEnd;
         public double VideoStart, RenderDuration, IncomingPad, OutgoingPad;
         public string TransitionOut="";
         public string Music = "", MusicHash = "";

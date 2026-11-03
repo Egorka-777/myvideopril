@@ -52,6 +52,8 @@ namespace VideoBatch {
         public async Task AssignPreparedVideosToChannelAsync(YouTubeChannel channel, string[] files, IProgress<UploadPreparationProgress> progress) {
             string[] prepared = null;
             try {
+                if (!string.IsNullOrWhiteSpace(channel.Market)) Window.SetMarketView(channel.Market);
+                files = Window.RenamePickedVideosInPlace(channel, files);
                 prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, files, settings, progress);
                 if (Window.IsDisposed) throw new OperationCanceledException();
                 Window.AssignVideosToChannel(channel, prepared, true);

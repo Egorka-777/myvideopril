@@ -26,7 +26,8 @@ namespace VideoBatch {
             if (t.Scenes.Count == 0) return new List<AssemblyVideo>();
             for (int i=0;i<t.Scenes.Count;i++) if (AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo?t.Videos:t.VideoSource(t.Scenes[i])),AssemblyFiles.VideoExtensions).Count==0) throw new Exception("Нет видео для сцены "+(i+1)+". Выбери общие видео или загрузи свои для этой сцены.");
             if(t.SplitLayout!="none" && AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions).Count==0)throw new Exception("Добавь второе видео для разделённого экрана.");
-            var paths = t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo?t.Videos:t.VideoSource(s)), AssemblyFiles.VideoExtensions)).Concat(t.SplitLayout!="none"?AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions):new List<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var paths = t.Scenes.SelectMany(s => (t.ContinuousVideo ? new List<string> { t.Videos } : AssemblySceneVideoBuilder.Packs(t,s).Select(pack => pack.Source))
+                .SelectMany(source => AssemblyFiles.Pool(t.Resolve(source), AssemblyFiles.VideoExtensions))).Concat(t.SplitLayout!="none"?AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions):new List<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (paths.Count == 0) throw new Exception("Не найдены видео. Нажми «Видео» слева и добавь хотя бы один файл.");
             var result = new List<AssemblyVideo>();
             foreach (var path in paths) {
@@ -57,16 +58,15 @@ namespace VideoBatch {
         }
         public static List<string> SceneArguments(AssemblyTemplate t, AssemblyScenePlan s, string output) {
             var args = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-filter_complex_threads", "1" };
-            if (AssemblyTimeline.LoopInput(t,s)) args.AddRange(new[] { "-stream_loop", "-1" });
-            args.AddRange(new[] { "-ss", Core.N(AssemblyTimeline.SourceStart(t,s)), "-t", Core.N(AssemblyTimeline.ContentDuration(t,s)), "-i", s.Video.Path });
-            foreach (var layer in s.Layers) args.AddRange(new[] { "-loop", "1", "-framerate", t.Fps.ToString(), "-i", layer.Raster });
             var graph = new List<string>();
-            graph.Add("[0:v:0]setpts=PTS-STARTPTS,scale=" + t.Width + ":" + t.Height + ":force_original_aspect_ratio=increase,crop=" + t.Width + ":" + t.Height + ",setsar=1,fps=" + t.Fps + ",format=yuv420p,"+(t.SceneTimingVersion>0?"tpad=stop_mode=clone:stop_duration="+Core.N(s.Scene.Duration)+",":"")+"trim=duration=" + Core.N(AssemblyTimeline.ContentDuration(t,s)) + "[base]");
+            int input = 0;
+            AssemblyRender.AppendSceneVideo(t, s, args, ref input, graph, "base");
+            int layerBase = input;
+            foreach (var layer in s.Layers) args.AddRange(new[] { "-loop", "1", "-framerate", t.Fps.ToString(), "-i", layer.Raster });
             string current = "base";
             for (int i = 0; i < s.Layers.Count; i++) {
                 var layer = s.Layers[i]; string next = "v" + i;
-                double end = layer.Layer.End == 0 || Math.Abs(layer.Layer.End-s.Scene.Duration)<.001 ? AssemblyTimeline.ContentDuration(t,s) : layer.Layer.End;
-                graph.Add("[" + current + "][" + (i + 1) + ":v:0]overlay=0:0:format=auto:enable='between(t," + Core.N(layer.Layer.Start) + "," + Core.N(end) + ")'[" + next + "]");
+                graph.Add("[" + current + "][" + (layerBase + i) + ":v:0]overlay=0:0:format=auto:enable='" + AssemblySceneVideoBuilder.LayerOverlayEnable(t, s, layer.Layer) + "'[" + next + "]");
                 current = next;
             }
             graph.Add("[" + current + "]"+AssemblyTimeline.Padding(t,s)+"format=yuv420p[out]");
@@ -99,8 +99,8 @@ namespace VideoBatch {
             args.AddRange(new[] { "-t", Core.N(t.Duration), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output });
             return args;
         }
-        public static Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress, AssemblyRenderContext context = null, Action<double> fraction = null) {
-            return AssemblyRender.Run(t, p, ffmpeg, ffprobe, output, work, rasterize, ct, progress, context, fraction);
+        public static Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress, AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null) {
+            return AssemblyRender.Run(t, p, ffmpeg, ffprobe, output, work, rasterize, ct, progress, context, fraction, catalog, segmentRandom, segmentMix);
         }
         // Retained only as a reference for controlled before/after benchmarks.
         public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
@@ -157,7 +157,7 @@ namespace VideoBatch {
                                 double renderFraction = 0;
                                 await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct,
                                     s => progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + s, 100.0 * (global + renderFraction) / t.Count)), renderContext,
-                                    f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / t.Count)); }).ConfigureAwait(false);
+                                    f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / t.Count)); }, videos, random, mix).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 // Tag and validate the private file before making it visible as a result.
                                 string chosenTitle=AssemblyOutputTags.PickTitle(t.TitleBank,random,usedTitles);

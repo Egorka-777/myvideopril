@@ -65,10 +65,11 @@ namespace VideoBatch {
             });
             sliders.Controls.Add(new Label { Text = "Ключевые фразы — по одной на строку", AutoSize = true, ForeColor = Theme.TextPrimary });
             keywords = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true, Width = 340, Height = 190,
-                Text = (settings.YouTubeWarmupKeywords ?? "").Replace("\r\n", "\n").Replace("\n", Environment.NewLine), BackColor = Theme.Background, ForeColor = Theme.TextPrimary };
+                BackColor = Theme.Background, ForeColor = Theme.TextPrimary };
             sliders.Controls.Add(keywords);
+            LoadKeywordsBox();
             keywords.TextChanged += (s, e) => {
-                settings.YouTubeWarmupKeywords = NormalizeKeywords(keywords.Text);
+                SaveKeywordsBox();
                 try { Store.Save(settings); } catch (Exception error) { AppendLog("Не удалось сохранить ключевые фразы: " + error.Message); }
             };
 
@@ -155,11 +156,13 @@ namespace VideoBatch {
         static string NormMarket(string m) => (m ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU";
 
         void SwitchMarket(string market) {
+            SaveKeywordsBox();
             SavePrefs();
             marketView = NormMarket(market);
             settings.YouTubeMarketView = marketView;
             Theme.ApplyHeroToggleStyle(marketRu, marketView == "RU");
             Theme.ApplyHeroToggleStyle(marketEn, marketView == "EN");
+            LoadKeywordsBox();
             ReloadAccounts();
             try { Store.Save(settings); } catch { }
         }
@@ -234,9 +237,25 @@ namespace VideoBatch {
             return string.Join("\n", (text ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(s => s.Trim()).Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase));
         }
+
+        public static string KeywordsFor(Preferences settings, string market) {
+            return NormalizeKeywords(NormMarket(market) == "EN" ? settings.YouTubeWarmupKeywordsEn : settings.YouTubeWarmupKeywordsRu);
+        }
+
+        static void SetKeywords(Preferences settings, string market, string text) {
+            string normalized = NormalizeKeywords(text);
+            if (NormMarket(market) == "EN") settings.YouTubeWarmupKeywordsEn = normalized;
+            else settings.YouTubeWarmupKeywordsRu = normalized;
+        }
+
+        static string KeywordsToDisplay(string stored) => (stored ?? "").Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+
+        void LoadKeywordsBox() => keywords.Text = KeywordsToDisplay(KeywordsFor(settings, marketView));
+
+        void SaveKeywordsBox() => SetKeywords(settings, marketView, keywords.Text);
         void SavePrefs() {
             settings.YouTubeWarmupMinMinutes = settings.YouTubeWarmupMaxMinutes = 10;
-            settings.YouTubeWarmupKeywords = NormalizeKeywords(keywords.Text);
+            SaveKeywordsBox();
             settings.YouTubeWarmupLikesEnabled = likesOn;
             settings.YouTubeWarmupLikePercent = (int)likePercent.Value;
             PersistChecks();
@@ -245,8 +264,8 @@ namespace VideoBatch {
 
         async Task RunWarmup() {
             SavePrefs();
-            if (string.IsNullOrWhiteSpace(settings.YouTubeWarmupKeywords)) {
-                MessageBox.Show(this, "Добавьте хотя бы одну ключевую фразу.", "Автопрогрев", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (string.IsNullOrWhiteSpace(KeywordsFor(settings, marketView))) {
+                MessageBox.Show(this, "Добавьте хотя бы одну ключевую фразу для " + marketView + ".", "Автопрогрев", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             var list = SelectedChannels();

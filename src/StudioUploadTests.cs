@@ -35,8 +35,9 @@ namespace VideoBatch {
                 }
                 string keys=YouTubeWarmupPanel.NormalizeKeywords("  трейдинг\r\nbinodex\nBINODEX\n\n бинодекс ");
                 Check(keys=="трейдинг\nbinodex\nбинодекс","warmup key normalization");
-                prefs.YouTubeWarmupKeywords=keys;Store.Save(prefs);
-                Check(Store.Load().YouTubeWarmupKeywords==keys,"warmup keys survive restart");
+                prefs.YouTubeWarmupKeywordsRu=keys;prefs.YouTubeWarmupKeywordsEn="pocket option ai";Store.Save(prefs);
+                var reloaded=Store.Load();
+                Check(YouTubeWarmupPanel.KeywordsFor(reloaded,"RU")==keys&&YouTubeWarmupPanel.KeywordsFor(reloaded,"EN")=="pocket option ai","warmup RU/EN keys survive restart");
                 var serializer=new DataContractJsonSerializer(typeof(UploadJob));
                 var warmup=new UploadJob{shortsWarmup=true,warmupKeywords=keys,warmupMinMinutes=10,warmupMaxMinutes=10,keepProfileOpen=true,warmupLikePercent=37,warmupLikesEnabled=true};
                 using(var memory=new MemoryStream()){serializer.WriteObject(memory,warmup);memory.Position=0;var round=(UploadJob)serializer.ReadObject(memory);Check(round.warmupKeywords==keys&&round.warmupMinMinutes==10&&round.warmupMaxMinutes==10&&round.keepProfileOpen&&round.warmupLikePercent==37,"warmup settings wire roundtrip");}

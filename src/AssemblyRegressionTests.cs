@@ -225,6 +225,97 @@ namespace VideoBatch {
         static System.Collections.Generic.IEnumerable<System.Windows.Forms.Control> All(System.Windows.Forms.Control c) {
             foreach (System.Windows.Forms.Control child in c.Controls) { yield return child; foreach (var nested in All(child)) yield return nested; }
         }
+        public static bool RunSceneVoiceModeTests() {
+            var t = AssemblyTemplate.Defaults();
+            t.Materials = Path.Combine(Path.GetTempPath(), "vb-scene-auto-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(t.Materials);
+            t.Scenes[0].Voiceover = Path.Combine("Сцены", "Сцена-01", "Озвучка");
+            t.Scenes[0].VoiceMode = "";
+            t.Scenes[1].VoiceMode = "";
+            Directory.CreateDirectory(t.Resolve(t.Scenes[0].Voiceover));
+            File.WriteAllText(Path.Combine(t.Resolve(t.Scenes[0].Voiceover), "a.mp3"), "voice");
+            AssemblySpeechPlan.NormalizeSceneVoiceModes(t);
+            if (t.Scenes[0].VoiceMode != "own" || t.Scenes[1].VoiceMode != "none" || !t.HasSceneVoiceovers) throw new Exception("Scene voice auto mode failed");
+            var shared = AssemblyTemplate.Defaults();
+            shared.Materials = Path.Combine(Path.GetTempPath(), "vb-shared-voice-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(shared.Materials);
+            shared.Voiceover = "Озвучка/Общая";
+            Directory.CreateDirectory(shared.Resolve(shared.Voiceover));
+            File.WriteAllText(Path.Combine(shared.Resolve(shared.Voiceover), "roll.mp3"), "voice");
+            AssemblySpeechPlan.NormalizeSceneVoiceModes(shared);
+            if (shared.HasSceneVoiceovers) throw new Exception("Shared-only voice must stay whole-roll");
+            var bind = AssemblyTemplate.Defaults();
+            bind.Materials = Path.Combine(Path.GetTempPath(), "vb-scene-bind-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(bind.Materials);
+            bind.Scenes[0].Voiceover = ""; bind.Scenes[0].VoiceMode = "";
+            bind.Scenes[1].Voiceover = ""; bind.Scenes[1].VoiceMode = "";
+            string sceneTwo = Path.Combine(bind.Scenes[1].Folder, "Озвучка-auto");
+            Directory.CreateDirectory(bind.Resolve(sceneTwo));
+            File.WriteAllText(Path.Combine(bind.Resolve(sceneTwo), "b.mp3"), "voice");
+            AssemblySpeechPlan.NormalizeSceneVoiceModes(bind);
+            if (bind.Scenes[1].VoiceMode != "own" || bind.Scenes[0].VoiceMode != "none" || bind.Scenes[1].Voiceover != sceneTwo) throw new Exception("Scene voice folder discovery failed");
+            return true;
+        }
+        public static bool RunVideoPackUiTests() {
+            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-packs-ui-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root = temp;
+                var initial = AssemblyTemplate.Defaults(); initial.Materials=Path.Combine(temp,"materials"); initial.Output=Path.Combine(temp,"output");
+                AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
+                using (var window = new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    var current=(AssemblyTemplate)Field(window,"template");
+                    current.Scenes[0].VideoMode="own";
+                    current.Scenes[0].Videos="primary";
+                    current.Scenes[0].VoiceMode="shared";
+                    Invoke(window,"RefreshInfo");
+                    var slider=All(window).Single(c=>c.Name=="SceneDurationSlider");
+                    if(slider.Enabled)throw new Exception("Voice-driven duration slider remains enabled");
+                    current.Scenes[0].VoiceMode="none"; Invoke(window,"RefreshInfo");
+                    if(!slider.Enabled)throw new Exception("Silent scene duration slider is disabled");
+                    current.Scenes[0].ContinuationVideos="old-continuation";
+                    Invoke(window,"RefreshChips");
+                    var add=All(window).OfType<System.Windows.Forms.Button>().Single(b=>b.Name=="AddVideoPack");
+                    if(add.Text!="+" || !add.Visible)throw new Exception("Video pack add button must be a visible plus");
+                    if(current.Scenes[0].VideoPacks.Count!=1 || !All(window).Any(c=>c.Name=="SceneVideoPack2"))throw new Exception("Continuation chip migration failed");
+                    using(var pool=(System.Windows.Forms.Form)typeof(AssemblyWindow).GetMethod("CreatePoolWindow",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{4})) {
+                        pool.Show(window);System.Windows.Forms.Application.DoEvents();
+                        var toggle=All(pool).OfType<System.Windows.Forms.CheckBox>().Single(c=>c.Text=="Смешивать с другими");
+                        toggle.Checked=true;
+                        if(!current.Scenes[0].VideoPacks[0].Mix)throw new Exception("Mix toggle did not apply");
+                        pool.Close();
+                    }
+                    Invoke(window,"Save");window.Close();
+                }
+                var saved=AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml"));
+                if(!saved.MarketRu.Scenes[0].VideoPacks[0].Mix)throw new Exception("Video pack settings were not persisted");
+                return true;
+            } finally { Store.Root=previous; if(Directory.Exists(temp))Directory.Delete(temp,true); }
+        }
+        public static bool RunSubtitleSettingsTests() {
+            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-subtitle-ui-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root = temp;
+                var initial = AssemblyTemplate.Defaults(); initial.Materials = Path.Combine(temp,"materials"); initial.Output = Path.Combine(temp,"output");
+                AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
+                using (var window = new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    var current = (AssemblyTemplate)Field(window,"template");
+                    current.SubtitleStyle.Enabled = true; Invoke(window,"RefreshSubtitleControls");
+                    var button = All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblySubtitles");
+                    if (!button.Visible || button.Text != "Субтитры · настройки") throw new Exception("Subtitle settings button is not visible");
+                    if (All(window).Any(c => c.Name == "SubtitlePositionSlider")) throw new Exception("Subtitle slider remains in scene controls");
+                    button.PerformClick(); System.Windows.Forms.Application.DoEvents();
+                    if (!((System.Windows.Forms.Panel)Field(window,"subtitlePanel")).Visible || ((System.Windows.Forms.TableLayoutPanel)Field(window,"sceneEditor")).Visible) throw new Exception("Subtitle settings did not open");
+                    ((System.Windows.Forms.NumericUpDown)Field(window,"subtitlePanelPosition")).Value = 63;
+                    if (current.SubtitleStyle.Position != 63) throw new Exception("Subtitle position setting did not apply");
+                    Invoke(window,"LeaveSubtitleWorkspace");
+                    if (!((System.Windows.Forms.TableLayoutPanel)Field(window,"sceneEditor")).Visible) throw new Exception("Return to scenes failed");
+                    window.Close();
+                }
+                return true;
+            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp,true); }
+        }
         public static bool RunMediaEditorTests() { return MediaEditorCheck(null); }
         public static bool WriteMediaScreenshots(string folder) { Directory.CreateDirectory(folder); return MediaEditorCheck(folder); }
         static bool MediaEditorCheck(string screenshots) {
@@ -268,7 +359,11 @@ namespace VideoBatch {
                     string speechFile=Path.Combine(temp,"sample.mp3");File.WriteAllText(speechFile,"preview fixture");
                     current.SpeechLines.Add(new AssemblySpeechLine {Text="Проверка положения субтитров",AudioPath=speechFile});
                     current.SubtitleStyle.Enabled=true;
-                    Invoke(window, "OpenSubtitleEditor"); System.Windows.Forms.Application.DoEvents();
+                    var subtitleButton = All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblySubtitles");
+                    if (!subtitleButton.Visible || subtitleButton.Text != "Субтитры · настройки") throw new Exception("Subtitle settings button is not visible or clearly labelled");
+                    if (All(window).Any(c => c.Name == "SubtitlePositionSlider")) throw new Exception("Subtitle position leaked into scene controls");
+                    subtitleButton.PerformClick(); System.Windows.Forms.Application.DoEvents();
+                    if (!((System.Windows.Forms.Panel)Field(window,"subtitlePanel")).Visible || ((System.Windows.Forms.TableLayoutPanel)Field(window,"sceneEditor")).Visible) throw new Exception("Subtitle settings button did not open its workspace");
                     var subtitleCanvas=Field(window,"canvas");
                     if(string.IsNullOrWhiteSpace((string)Field(subtitleCanvas,"subtitlePreviewText")) || Field(subtitleCanvas,"subtitleOverlay")==null)throw new Exception("Enabled subtitle formatting has no visible preview");
                     if(!((System.Windows.Forms.Label)Field(window,"subtitlePanelMessage")).Text.Contains("Нет таймкодов"))throw new Exception("Missing timing has no explanation");

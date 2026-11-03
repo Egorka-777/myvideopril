@@ -17,13 +17,26 @@ namespace VideoBatch {
             if(p.SecondaryVideo!=null) score+=Usage("secondary",p.SecondaryVideo.Hash);
             return score;
         }
+        public void Touch(string axis, string hash) {
+            if (string.IsNullOrEmpty(hash)) return;
+            Add(axis, hash);
+        }
         public void Record(AssemblyPlan p) {
             if(!string.IsNullOrWhiteSpace(p.Voiceover))Add("voice",AssemblyFiles.Hash(p.Voiceover));
             for (int i=0;i<p.Scenes.Count;i++) if(!string.IsNullOrWhiteSpace(p.Scenes[i].Voiceover)) Add("sceneVoice:"+i,AssemblyFiles.Hash(p.Scenes[i].Voiceover));
             foreach(var layer in p.GlobalLayers.Where(l => !l.Layer.Fixed)) Add("image:"+layer.Layer.ObjectId,layer.Asset.Hash);
             if(p.SecondaryVideo!=null) Add("secondary",p.SecondaryVideo.Hash);
             foreach(var scene in p.Scenes) if(!string.IsNullOrEmpty(scene.MusicHash)) Add("sceneMusic",scene.MusicHash);
-            Add("music",p.MusicHash ?? ""); for (int i=0; i<p.Scenes.Count; i++) {Add("video:"+i,p.Scenes[i].Video.Hash); foreach (var layer in p.Scenes[i].Layers.Where(l => !l.Layer.Fixed)) Add("image:"+layer.Layer.ObjectId,layer.Asset.Hash);}
+            Add("music",p.MusicHash ?? ""); for (int i=0; i<p.Scenes.Count; i++) {
+                var scene = p.Scenes[i];
+                if (scene.VideoSegments != null && scene.VideoSegments.Count > 0) {
+                    for (int si = 0; si < scene.VideoSegments.Count; si++) {
+                        var seg = scene.VideoSegments[si];
+                        Add(seg.IsContinuation ? "videoCont:" + i : "video:" + i, seg.Video.Hash);
+                    }
+                } else Add("video:"+i, scene.Video.Hash);
+                foreach (var layer in scene.Layers.Where(l => !l.Layer.Fixed)) Add("image:"+layer.Layer.ObjectId,layer.Asset.Hash);
+            }
         }
     }
     public sealed class AssemblyCapacity {
@@ -66,9 +79,12 @@ namespace VideoBatch {
             var used = new HashSet<string>(h.UsedImages);
             for (int i = 0; i < t.Scenes.Count; i++) {
                 var scene = t.Scenes[i]; double duration = RenderDuration(i);
-                var allowed = new HashSet<string>(AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo ? t.Videos : t.VideoSource(scene)),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
+                var allowed = new HashSet<string>(AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo ? t.Videos : AssemblySceneVideoBuilder.PrimarySource(t, scene)),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
                 double required = t.ContinuousVideo ? t.Duration : duration;
-                videos.Add(source.Where(v => allowed.Contains(v.Path) && (v.Duration + .001 >= required || (t.LoopShortVideos || !t.ContinuousVideo && t.SceneTimingVersion>0 && scene.VideoMode=="own") && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
+                AssemblySceneVideoBuilder.Migrate(scene);
+                bool flexibleSceneVideo = !t.ContinuousVideo && t.SceneTimingVersion > 0 && scene.VideoMode == "own"
+                    && (t.HasSceneVoiceovers && scene.VoiceMode != "none" || scene.VideoPacks.Count > 0);
+                videos.Add(source.Where(v => allowed.Contains(v.Path) && (v.Duration + .001 >= required || flexibleSceneVideo && v.Duration > 0 || (t.LoopShortVideos || !t.ContinuousVideo && t.SceneTimingVersion>0 && scene.VideoMode=="own") && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
                 sceneMusic[scene] = Assets(t.Resolve(scene.Music),AssemblyFiles.MusicExtensions).Where(a => !speechHashes.Contains(a.Hash)).ToList();
                 foreach (var l in scene.Layers.Where(l => l.Enabled)) {
                     var pool = Assets(t.Resolve(l.Source),t.PictureExtensions);
@@ -108,8 +124,13 @@ namespace VideoBatch {
             foreach (var pool in pictures.Values) total *= pool.Count;
             return total;
         }
+        static string SceneVideoSignature(AssemblyScenePlan s) {
+            if (s.VideoSegments != null && s.VideoSegments.Count > 0)
+                return string.Join(">", s.VideoSegments.Select(v => v.Video.Hash + "@" + v.Duration.ToString("0.###", Core.Inv)));
+            return s.Video.Hash;
+        }
         static string SignatureText(AssemblyPlan p) {
-            string raw = string.Join("|",p.Scenes.Select(s => s.Video.Hash + ":" + string.Join(",",s.Layers.Select(l => l.Asset.Hash))));
+            string raw = string.Join("|",p.Scenes.Select(s => SceneVideoSignature(s) + ":" + string.Join(",",s.Layers.Select(l => l.Asset.Hash))));
             if (p.GlobalLayers.Count > 0) raw += "|global:" + string.Join(",",p.GlobalLayers.Select(l => l.Asset.Hash));
             if (p.SecondaryVideo != null) raw += "|secondary:" + p.SecondaryVideo.Hash;
             return raw;

@@ -14,7 +14,7 @@ namespace VideoBatch {
         public string Caption => Stage == "queued" ? "Подготовка · в очереди" : "Подготовка · " + Percent + "% · " + Index + "/" + Total;
     }
 
-    // One shared queue across YouTube/TikTok. No UI access, no changes to source files.
+    // One shared queue across YouTube/TikTok. Callers rename picked files in place before PrepareAsync when needed.
     public static class UploadPreparation {
         static readonly SemaphoreSlim slots = new SemaphoreSlim(2, 2);
         static readonly object sync = new object();

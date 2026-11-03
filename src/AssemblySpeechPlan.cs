@@ -31,6 +31,54 @@ namespace VideoBatch {
             if (scene.VoiceMode == "shared") return SharedVoiceOptions(t);
             return new List<string>();
         }
+        public static int SceneOwnAudioCount(AssemblyTemplate t, AssemblyScene scene) {
+            if (scene == null || string.IsNullOrWhiteSpace(scene.Voiceover)) return 0;
+            return AssemblyFiles.Pool(t.Resolve(scene.Voiceover), AssemblyFiles.MusicExtensions).Count;
+        }
+        static string DiscoverSceneVoiceFolder(AssemblyTemplate t, AssemblyScene scene) {
+            if (scene == null || string.IsNullOrWhiteSpace(scene.Folder)) return "";
+            string sceneDir = t.Resolve(scene.Folder);
+            if (!Directory.Exists(sceneDir)) return "";
+            string best = "";
+            int bestCount = 0;
+            DateTime bestTime = DateTime.MinValue;
+            foreach (string dir in Directory.GetDirectories(sceneDir)) {
+                string name = Path.GetFileName(dir);
+                if (name.Length == 0 || !name.StartsWith("Озвучка", StringComparison.OrdinalIgnoreCase)) continue;
+                int count = AssemblyFiles.Pool(dir, AssemblyFiles.MusicExtensions).Count;
+                if (count == 0) continue;
+                DateTime time = Directory.GetLastWriteTimeUtc(dir);
+                if (count > bestCount || count == bestCount && time > bestTime) {
+                    best = Path.Combine(scene.Folder, name);
+                    bestCount = count;
+                    bestTime = time;
+                }
+            }
+            return best;
+        }
+        /// <summary>Re-link scene voice pools saved on disk but missing from the template XML.</summary>
+        public static void BindMissingSceneVoicePaths(AssemblyTemplate t) {
+            if (t?.Scenes == null) return;
+            foreach (var scene in t.Scenes) {
+                if (SceneOwnAudioCount(t, scene) > 0) continue;
+                string folder = DiscoverSceneVoiceFolder(t, scene);
+                if (!string.IsNullOrWhiteSpace(folder)) scene.Voiceover = folder;
+            }
+        }
+        /// <summary>If a scene has its own audio folder but VoiceMode was never set, enable per-scene voice for the project.</summary>
+        public static void NormalizeSceneVoiceModes(AssemblyTemplate t) {
+            if (t?.Scenes == null || t.Scenes.Count == 0) return;
+            BindMissingSceneVoicePaths(t);
+            bool configured = t.Scenes.Any(s => s.VoiceMode == "own" || s.VoiceMode == "shared" || s.VoiceMode == "none");
+            if (configured) {
+                foreach (var scene in t.Scenes)
+                    if (scene.VoiceMode == "") scene.VoiceMode = "none";
+                return;
+            }
+            if (!t.Scenes.Any(s => SceneOwnAudioCount(t, s) > 0)) return;
+            foreach (var scene in t.Scenes)
+                scene.VoiceMode = SceneOwnAudioCount(t, scene) > 0 ? "own" : "none";
+        }
         static string PickOption(IEnumerable<string> paths, string axis, Random random, AssemblyMixTracker mix) =>
             paths.OrderBy(f => mix.Usage(axis, AssemblyFiles.Hash(f))).ThenBy(f => random.Next()).FirstOrDefault() ?? "";
 
@@ -51,7 +99,7 @@ namespace VideoBatch {
         public static async Task Prepare(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string work, CancellationToken ct) {
             p.RenderDuration = 0;
             if (t.HasSceneVoiceovers) {
-                // Each scene gets the duration of the selected voice file + one second, not
+                // Each scene gets the duration of the selected voice file, not
                 // the longest clip in its pool. Silent scenes retain their manual duration.
                 p.Voiceover = "";
                 var captions = (t.Captions ?? new List<AssemblyCaption>()).Select(c => new WarmupCaption { Text=c.Text, Start=c.Start, End=c.End }).ToList();
@@ -65,7 +113,7 @@ namespace VideoBatch {
                         if (!File.Exists(scene.Voiceover)) throw new Exception("Не найдена озвучка сцены: " + scene.Voiceover);
                         scene.VoiceSeconds = Core.AudioDuration(await Core.Probe(probe, scene.Voiceover, ct).ConfigureAwait(false));
                         if (scene.VoiceSeconds <= 0) throw new Exception("Не удалось определить длительность озвучки: " + scene.Voiceover);
-                        scene.ContentSeconds = Math.Ceiling((scene.VoiceSeconds + 1) * t.Fps - 0.00001) / t.Fps;
+                        scene.ContentSeconds = Math.Ceiling(scene.VoiceSeconds * t.Fps - 0.00001) / t.Fps;
                         if (t.SubtitleStyle?.Enabled == true && File.Exists(scene.Voiceover + ".timing.json")) {
                             var line = AvailableLines(t).FirstOrDefault(l => string.Equals(t.Resolve(l.AudioPath), scene.Voiceover, StringComparison.OrdinalIgnoreCase));
                             foreach (var cue in CaptionsForAudio(t, scene.Voiceover, line?.Text, scene.VoiceSeconds)) {
@@ -93,7 +141,7 @@ namespace VideoBatch {
                 if (!string.IsNullOrWhiteSpace(p.Voiceover) && File.Exists(p.Voiceover)) {
                     voiceSeconds = Core.AudioDuration(await Core.Probe(probe, p.Voiceover, ct).ConfigureAwait(false));
                     if (voiceSeconds <= 0) throw new Exception("Не удалось определить длительность озвучки: " + p.Voiceover);
-                    p.RenderDuration = Math.Ceiling((voiceSeconds + 1) * t.Fps - 0.00001) / t.Fps;
+                    p.RenderDuration = Math.Ceiling(voiceSeconds * t.Fps - 0.00001) / t.Fps;
                     if (p.RenderDuration > t.Duration && p.Scenes.Count > 0) {
                         var last = p.Scenes[p.Scenes.Count - 1];
                         last.ContentSeconds = last.Scene.Duration + (p.RenderDuration - t.Duration);

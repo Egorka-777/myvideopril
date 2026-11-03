@@ -22,7 +22,7 @@ namespace VideoBatch {
         readonly System.Windows.Forms.Timer saveTimer = new System.Windows.Forms.Timer { Interval = 400 };
         NumericUpDown duration, width, count, volume, voiceoverVolume, subtitlePosition;
         bool subtitleEditing;
-        AssemblySlider subtitlePositionSlider;
+        int videoPackIndex;
         AssemblyCanvas canvas;
         AssemblyHorizontalStrip sceneStack;
         Panel header, workspace, contentHost, heroPreviewHost, subtitlePanel;
@@ -39,6 +39,13 @@ namespace VideoBatch {
         Label status, selectedCaption, capacityLabel;
         Button videoButton, musicButton, globalImagesButton, voiceToolbarButton, subsToolbarButton, formatButton, titlesButton, profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, profileTestBtn, profileRuTikTokBtn, profileEnTikTokBtn, stop, transitionButton, countButton, lessButton, moreButton, assembleButton;
         NumericUpDown splitPrimaryZoom, splitSecondaryZoom;
+        readonly Dictionary<string, double> voiceDurations = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        string VoiceRange(IEnumerable<string> paths) {
+            var files = paths.ToList();
+            if (files.Count == 0 || files.Any(p => !voiceDurations.ContainsKey(p))) return "расчёт…";
+            var seconds = files.Select(p => Math.Ceiling(voiceDurations[p] * template.Fps - .00001) / template.Fps).ToList();
+            return seconds.Min().ToString("0.#") + "–" + seconds.Max().ToString("0.#") + " с";
+        }
         double? timingAnchorDuration;
         List<WarmupCaption> previewSpeechCaptions;
         int timingVersion;
@@ -71,7 +78,7 @@ namespace VideoBatch {
             if (studioProfile == AssemblyProfile.RuTikTok || studioProfile == AssemblyProfile.EnTikTok) studioProfile = AssemblyProfile.MainProfile(studioProfile);
             AssemblyMarketProfiles.EnsureSeeded(template);
             AssemblyMarketProfiles.EnsureWorkspaceMigrated(template, templatePath);
-            AssemblyMarketProfiles.Apply(template, studioProfile); AssemblyWorkspace.Prepare(template);
+            AssemblyMarketProfiles.Apply(template, studioProfile); AssemblyWorkspace.Prepare(template); AssemblySpeechPlan.NormalizeSceneVoiceModes(template);
             Text = "Сборка роликов — моя студия"; Font = Theme.FontBody; BackColor = Theme.Background; ForeColor = Theme.TextPrimary;
             if (embedded) {
                 TopLevel = false; FormBorderStyle = FormBorderStyle.None; Dock = DockStyle.Fill; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
@@ -164,6 +171,7 @@ namespace VideoBatch {
             videoButton = CompactBarButton("VideoPool", OpenVideoEditor);
             musicButton = CompactBarButton("MusicPool", OpenAudioEditor);
             subsToolbarButton = CompactBarButton("AssemblySubtitles", OpenSubtitleEditor);
+            subsToolbarButton.MaximumSize = new Size(220, 36);
             compactBar.Controls.Add(voiceToolbarButton);
             compactBar.Controls.Add(videoButton);
             compactBar.Controls.Add(musicButton);
@@ -210,13 +218,11 @@ namespace VideoBatch {
                 if (subtitlePanelPosition != null && !subtitlePanelLoading) { subtitlePanelLoading = true; subtitlePanelPosition.Value = pos; subtitlePanelLoading = false; }
                 Changed(false); Save(); RefreshCanvas();
             });
-            var controls = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3 };
-            controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); controls.RowStyles.Add(new RowStyle(SizeType.Absolute,70)); controls.RowStyles.Add(new RowStyle(SizeType.Absolute,38)); controls.RowStyles.Add(new RowStyle(SizeType.Absolute,36));
+            var controls = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
+            controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); controls.RowStyles.Add(new RowStyle(SizeType.Absolute,70)); controls.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
             controls.Controls.Add(new AssemblySlider("Длительность",duration,"с") { Dock = DockStyle.Fill, Name = "SceneDurationSlider" },0,0);
             controls.Controls.Add(new AssemblySlider("Размер картинки",width,"%") { Dock = DockStyle.Fill, Name = "ImageSizeSlider" },1,0);
             var positions = Row(); positions.Controls.Add(Button("↑", () => NudgePlacement(-1))); positions.Controls.Add(Button("По центру", () => CenterPlacement())); positions.Controls.Add(Button("↓", () => NudgePlacement(1))); controls.Controls.Add(positions,0,1); controls.SetColumnSpan(positions,2);
-            subtitlePositionSlider = new AssemblySlider("Положение субтитров", subtitlePosition, "%") { Dock = DockStyle.Fill, Name = "SubtitlePositionSlider", Visible = false };
-            controls.Controls.Add(subtitlePositionSlider,0,2); controls.SetColumnSpan(subtitlePositionSlider,2);
             sceneEditor.Controls.Add(controls, 0, 2);
             var splitZoomRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, Visible = false, Name = "SplitZoomRow", Padding = new Padding(0, 2, 0, 0) };
             splitPrimaryZoom = Value(85, 115, 0); splitSecondaryZoom = Value(85, 115, 0);
@@ -292,8 +298,20 @@ namespace VideoBatch {
             if (EditableLayers==null) return;
             if (SelectedScene != null && !template.ContinuousVideo && SelectedScene.VideoMode == "own") {
                 int vn = Pool(SelectedScene.Videos, AssemblyFiles.VideoExtensions).Count;
-                var sceneVideo = StudioChip("Видео сцены · " + vn, () => { SetSceneVideoMode("own"); OpenPool(3); }); sceneVideo.Name = "SceneVideoPool";
+                AssemblySceneVideoBuilder.Migrate(SelectedScene);
+                var sceneVideo = StudioChip("Видео 1 · " + vn, () => { SetSceneVideoMode("own"); OpenPool(3); }); sceneVideo.Name = "SceneVideoPool";
                 packChips.Controls.Add(sceneVideo);
+                for (int pi = 0; pi < SelectedScene.VideoPacks.Count; pi++) {
+                    int at = pi; int cn = Pool(SelectedScene.VideoPacks[pi].Source, AssemblyFiles.VideoExtensions).Count;
+                    var pack = StudioChip("Видео " + (pi + 2) + " · " + cn, () => { videoPackIndex = at; OpenPool(4); });
+                    pack.Name = "SceneVideoPack" + (pi + 2); packChips.Controls.Add(pack);
+                }
+                var addPack = StudioChip("+", () => Safe(() => {
+                    var source = Path.Combine(SelectedScene.Folder,"Видео-" + Guid.NewGuid().ToString("N").Substring(0,6));
+                    Directory.CreateDirectory(template.Resolve(source));
+                    SelectedScene.VideoPacks.Add(new AssemblySceneVideoPack { Source = source });
+                    videoPackIndex = SelectedScene.VideoPacks.Count - 1; Save(); RefreshChips(); OpenPool(4);
+                })); addPack.Name = "AddVideoPack"; packChips.Controls.Add(addPack);
             }
             var scope = StudioChip(globalEditing ? "Общее изображение ▾" : "Эта сцена ▾", ImageScopeMenu); scope.Name = "ImageScope"; packChips.Controls.Add(scope);
             if (!globalEditing && SelectedScene != null && EditableLayers.Count == 0) {
@@ -301,8 +319,14 @@ namespace VideoBatch {
             }
             for (int i = 0; i < EditableLayers.Count; i++) {
                 int at=i; var l=EditableLayers[i]; int n=Pool(l.Source,AssemblyFiles.PictureExtensions).Count;
-                var b=StudioChip("Объект "+(i+1)+" · "+(n==0 ? "+ файлы" : n+" шт."),() => { SelectObject(at); OpenPool(2); }, i==layerIndex); b.Name="Object"+i;
-                var menu=Theme.MakeContextMenu(); menu.Opening+=(sender,args) => {layerIndex=at; LoadLayer(); RefreshCanvas();}; MenuAction(menu,"Загрузить изображения",() => ImportPool(2,PickFiles(2))); MenuAction(menu,"Удалить объект",() => RemoveObject(at)); b.ContextMenuStrip=menu; b.Disposed+=(sender,args) => DisposeMenuLater(menu); packChips.Controls.Add(b);
+                string partHint = l.ImagePart == "primary" ? " · 1-я часть" : l.ImagePart == "continuation" ? " · продолж." : "";
+                var b=StudioChip("Объект "+(i+1)+" · "+(n==0 ? "+ файлы" : n+" шт.")+partHint,() => { SelectObject(at); OpenPool(2); }, i==layerIndex); b.Name="Object"+i;
+                var menu=Theme.MakeContextMenu(); menu.Opening+=(sender,args) => {layerIndex=at; LoadLayer(); RefreshCanvas();};
+                MenuAction(menu,"Загрузить изображения",() => ImportPool(2,PickFiles(2)));
+                MenuAction(menu,"Картинка · вся сцена",() => SetImagePart(at,"all"));
+                MenuAction(menu,"Картинка · только 1-я пачка видео",() => SetImagePart(at,"primary"));
+                MenuAction(menu,"Картинка · только продолжение",() => SetImagePart(at,"continuation"));
+                MenuAction(menu,"Удалить объект",() => RemoveObject(at)); b.ContextMenuStrip=menu; b.Disposed+=(sender,args) => DisposeMenuLater(menu); packChips.Controls.Add(b);
             }
             if (EditableLayers.Count>6) packChips.Controls.Add(StudioChip("⋯",ObjectList));
             var add=StudioChip("+ Объект",AddObject); add.Name="AddObject"; add.Enabled=EditableLayers.Count<8; packChips.Controls.Add(add);
@@ -315,6 +339,9 @@ namespace VideoBatch {
         void RemoveObject(int index) {
             Safe(() => {EditableLayers.RemoveAt(index); previewImages.Clear(); layerIndex=EditableLayers.Count==0 ? -1 : Math.Min(index,EditableLayers.Count-1); LoadLayer(); RefreshChips(); Changed(false); Save(); status.Text="Объект убран. Его изображения остались в папке материалов.";});
         }
+        void SetImagePart(int index, string part) {
+            Safe(() => { if (EditableLayers == null || index < 0 || index >= EditableLayers.Count) return; EditableLayers[index].ImagePart = part; SelectObject(index); RefreshChips(); Changed(false); Save(); status.Text = part == "primary" ? "Картинка только на первом отрывке видео сцены." : part == "continuation" ? "Картинка только на продолжении сцены." : "Картинка на всю длительность сцены."; });
+        }
         List<string> Pool(string source, string[] extensions) { return AssemblyFiles.Pool(template.Resolve(source),extensions); }
         void RefreshInfo() {
             if (videoButton == null) return;
@@ -324,27 +351,45 @@ namespace VideoBatch {
             int speechFiles = AssemblySpeechPlan.SharedVoiceOptions(template).Count;
             int scenesWithVoice = template.Scenes.Count(scene => scene.VoiceMode == "shared" || scene.VoiceMode == "own");
             if (musicButton != null) musicButton.Text = "Музыка · " + songs;
-            if (voiceToolbarButton != null) voiceToolbarButton.Text = "Озвучка · " + (template.HasSceneVoiceovers ? scenesWithVoice + " сцен" : speechFiles + " файлов");
+            if (voiceToolbarButton != null) voiceToolbarButton.Text = "Озвучка · " + (template.HasSceneVoiceovers ? scenesWithVoice + " сцен" : speechFiles > 0 ? "весь ролик" : "нет файлов");
             double rollDuration = template.Duration; // Effective length is selected per output at render time.
             for (int i = 0; i < sceneCards.Count; i++) {
                 var scene = template.Scenes[i];
                 int images = scene.Layers.Where(l => l.Enabled).Sum(l => Pool(l.Source,AssemblyFiles.PictureExtensions).Count);
                 string detail = scene.Duration.ToString("0.##") + " с · " + (images == 0 ? "Добавь картинки" : images + " вариантов");
                 if (template.HasSceneVoiceovers) {
-                    int voices = AssemblySpeechPlan.SceneVoiceOptions(template,scene).Count;
-                    detail = voices > 0 ? "Озвучка · " + voices + " вариантов · +1 с" : detail + " · без озвучки";
+                    if (scene.VoiceMode == "none") detail = scene.Duration.ToString("0.##") + " с · без озвучки";
+                    else {
+                        int voices = AssemblySpeechPlan.SceneVoiceOptions(template,scene).Count;
+                        detail = voices > 0 ? "По озвучке · " + VoiceRange(AssemblySpeechPlan.SceneVoiceOptions(template,scene)) : "По озвучке · добавь файлы";
+                    }
                 }
                 ((AssemblySceneButton)sceneCards[i]).SetInfo(SceneLabel(scene,i), detail, i == sceneIndex, false);
             }
             selectedCaption.ForeColor = Theme.TextPrimary;
+            bool voiceTimed = SelectedScene != null && (template.HasSceneVoiceovers ? SelectedScene.VoiceMode == "own" || SelectedScene.VoiceMode == "shared" : speechFiles > 0);
+            var durationSlider = sceneEditor.Controls.Find("SceneDurationSlider",true).FirstOrDefault();
+            if (durationSlider != null) durationSlider.Enabled = !voiceTimed;
+            duration.Enabled = !voiceTimed;
+            string totalRange = "";
+            if (template.HasSceneVoiceovers) {
+                double min=0,max=0; bool ready=true;
+                foreach (var scene in template.Scenes) {
+                    var files=AssemblySpeechPlan.SceneVoiceOptions(template,scene);
+                    if(files.Any(p=>!voiceDurations.ContainsKey(p))) {ready=false;break;}
+                    min+=files.Count==0?scene.Duration:files.Min(p=>Math.Ceiling(voiceDurations[p]*template.Fps-.00001)/template.Fps);
+                    max+=files.Count==0?scene.Duration:files.Max(p=>Math.Ceiling(voiceDurations[p]*template.Fps-.00001)/template.Fps);
+                }
+                double pads=template.Transition=="cut"?0:Math.Max(0,template.Scenes.Count-1)*template.TransitionSeconds;
+                totalRange=ready?(min+pads).ToString("0.#")+"–"+(max+pads).ToString("0.#")+" с":"расчёт…";
+            } else if(speechFiles>0) totalRange=VoiceRange(AssemblySpeechPlan.SharedVoiceOptions(template));
             selectedCaption.Text = SelectedScene == null ? "Нет сцен · нажми + в ленте сцен" :
-                SceneLabel(SelectedScene,sceneIndex) + (template.HasSceneVoiceovers
-                    ? " · длительность по выбранной озвучке (+1 с)"
-                    : " · " + SelectedScene.Duration.ToString("0.#") + " с · ручная длина " + rollDuration.ToString("0.#") + " с");
+                SceneLabel(SelectedScene,sceneIndex) + (voiceTimed ? " · по озвучке " + VoiceRange(template.HasSceneVoiceovers ? AssemblySpeechPlan.SceneVoiceOptions(template,SelectedScene) : AssemblySpeechPlan.SharedVoiceOptions(template)) : " · " + SelectedScene.Duration.ToString("0.#") + " с")
+                + " · ролик " + (totalRange=="" ? (template.UsesWholeRollVoiceover ? VoiceRange(AssemblySpeechPlan.SharedVoiceOptions(template)) + " · один голос" : rollDuration.ToString("0.#") + " с") : totalRange);
             if (globalImagesButton != null) globalImagesButton.Text = "Изображения\nвесь ролик";
             if (voiceToolbarButton != null) voiceToolbarButton.ForeColor = Theme.TextPrimary;
             if (subsToolbarButton != null) {
-                subsToolbarButton.Text = "Субтитры";
+                subsToolbarButton.Text = "Субтитры · настройки";
                 subsToolbarButton.BackColor = subtitleWorkspaceActive ? Theme.Accent : Theme.Card;
                 subsToolbarButton.ForeColor = subtitleWorkspaceActive ? Color.White : Theme.TextPrimary;
             }
@@ -464,7 +509,6 @@ namespace VideoBatch {
         }
         void RefreshSubtitleControls() {
             bool show = SubtitlesPreviewActive() || (template.SubtitleStyle != null && template.SubtitleStyle.Enabled);
-            if (subtitlePositionSlider != null) subtitlePositionSlider.Visible = show;
             if (show && template.SubtitleStyle != null) { loading = true; subtitlePosition.Value = template.SubtitleStyle.Position; loading = false; }
         }
         void ChangeDuration() {
@@ -603,9 +647,9 @@ namespace VideoBatch {
             popup.Show(this);
         }
         void SetFormat(int w,int h) { template.Width = w; template.Height = h; Changed(true); Save(); status.Text = "Формат " + w + "×" + h + " сохранён для " + AssemblyProfile.ShortLabel(studioProfile) + "."; }
-        string Source(int kind) { return kind == 0 ? template.Videos : kind == 1 ? template.Music : kind == 3 ? SelectedScene.Videos : SelectedLayer.Source; }
-        string[] Extensions(int kind) { return kind == 0 || kind == 3 ? AssemblyFiles.VideoExtensions : kind == 1 ? AssemblyFiles.MusicExtensions : AssemblyFiles.PictureExtensions; }
-        void SetSource(int kind,string source) { if (kind == 0) template.Videos = source; else if (kind == 1) template.Music = source; else if (kind == 3) { SelectedScene.Videos = source; SelectedScene.VideoMode="own"; } else SelectedLayer.Source = source; }
+        string Source(int kind) { return kind == 0 ? template.Videos : kind == 1 ? template.Music : kind == 3 ? SelectedScene.Videos : kind == 4 ? SelectedScene.VideoPacks[videoPackIndex].Source : SelectedLayer.Source; }
+        string[] Extensions(int kind) { return kind == 0 || kind == 3 || kind == 4 ? AssemblyFiles.VideoExtensions : kind == 1 ? AssemblyFiles.MusicExtensions : AssemblyFiles.PictureExtensions; }
+        void SetSource(int kind,string source) { if (kind == 0) template.Videos = source; else if (kind == 1) template.Music = source; else if (kind == 3) { SelectedScene.Videos = source; SelectedScene.VideoMode="own"; } else if (kind == 4) { SelectedScene.VideoPacks[videoPackIndex].Source = source; SelectedScene.VideoMode="own"; } else SelectedLayer.Source = source; }
         string[] PickFiles(int kind) {
             using (var dialog = new OpenFileDialog { Multiselect = true, AutoUpgradeEnabled = true, Filter = "Файлы|" + string.Join(";",Extensions(kind).Select(e => "*" + e)) }) {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return null;
@@ -624,16 +668,16 @@ namespace VideoBatch {
                 }
                 if (kind==2 && SelectedLayer==null) AddObject();
                 string source = Source(kind); bool empty = Pool(source,Extensions(kind)).Count == 0;
-                string fallback = kind == 0 ? "Видео" : kind == 1 ? "Музыка" : Path.Combine(kind == 2 && globalEditing ? "Весь-ролик" : SelectedScene.Folder,kind == 3 ? "Видео" : "Изображения");
-                int added = AssemblyWorkspace.Import(template,ref source,fallback,files,Extensions(kind),replace); if (kind==3 && added==0) return; SetSource(kind,source);
+                string fallback = kind == 0 ? "Видео" : kind == 1 ? "Музыка" : Path.Combine(kind == 2 && globalEditing ? "Весь-ролик" : SelectedScene.Folder,kind == 3 ? "Видео" : kind == 4 ? "Видео-продолжение" : "Изображения");
+                int added = AssemblyWorkspace.Import(template,ref source,fallback,files,Extensions(kind),replace); if ((kind==3 || kind==4) && added==0) return; SetSource(kind,source);
                 if (kind == 2 && added > 0) { SelectedLayer.Enabled = true; var first = Pool(source,Extensions(kind)).FirstOrDefault(); if (first != null && !SelectedLayer.PlacementConfigured) FitImage(SelectedLayer,first); if (SelectedLayer.Fixed && first != null && (replace || empty && string.IsNullOrWhiteSpace(SelectedLayer.FixedAssetHash))) SelectedLayer.FixedAssetHash=AssemblyFiles.Hash(first); previewImages.Remove(SelectedLayer); {var pool=Pool(source,Extensions(kind)); SelectedLayer.Fixed=pool.Select(AssemblyFiles.Hash).Distinct().Count()==1; SelectedLayer.Unique=false; SelectedLayer.FixedAssetHash=SelectedLayer.Fixed ? AssemblyFiles.Hash(pool[0]) : "";} }
                 LoadLayer(); RefreshChips(); Changed(kind != 1); Save(); status.Text = "Добавлено вариантов: " + added + ". Расположение объекта сохранено.";
             });
         }
         void FitImage(AssemblyLayer l,string path) { l.PlacementConfigured = true; using (var image = Image.FromFile(path)) { l.Width = .84; l.Height = l.Width * template.Width * image.Height / image.Width / template.Height; if (l.Height > .78) { l.Width *= .78/l.Height; l.Height = .78; } l.Height = Math.Max(.02,l.Height); l.Width = Math.Max(.02,l.Width); l.X = (1-l.Width)/2; l.Y = (1-l.Height)/2; } }
-        void OpenPool(int kind) { Safe(() => { if ((kind==2 || kind==3) && SelectedScene==null) return; if (kind==3 && string.IsNullOrWhiteSpace(SelectedScene.Videos)) {SelectedScene.Videos=Path.Combine(SelectedScene.Folder,"Видео");Directory.CreateDirectory(template.Resolve(SelectedScene.Videos));} if (kind==2 && SelectedLayer==null) AddObject(); using (var form = CreatePoolWindow(kind)) form.ShowDialog(this); }); }
+        void OpenPool(int kind) { Safe(() => { if ((kind==2 || kind==3 || kind==4) && SelectedScene==null) return; if (kind==3 && string.IsNullOrWhiteSpace(SelectedScene.Videos)) {SelectedScene.Videos=Path.Combine(SelectedScene.Folder,"Видео");Directory.CreateDirectory(template.Resolve(SelectedScene.Videos));} if (kind==2 && SelectedLayer==null) AddObject(); using (var form = CreatePoolWindow(kind)) form.ShowDialog(this); }); }
         Form CreatePoolWindow(int kind) {
-            var form = new Form { Text = kind == 0 ? "Общие видео для сцен" : kind == 1 ? "Музыка на весь ролик" : kind == 3 ? "Видео выбранной сцены" : "Изображения · " + (globalEditing ? "Весь ролик" : SceneLabel(SelectedScene,sceneIndex)), ClientSize = new Size(680,560), MinimumSize = new Size(600,440), BackColor = Theme.Background, ForeColor = Theme.TextPrimary, Font = Theme.FontBody, StartPosition = FormStartPosition.CenterParent };
+            var form = new Form { Text = kind == 0 ? "Общие видео для сцен" : kind == 1 ? "Музыка на весь ролик" : kind == 3 ? "Видео 1 · выбранная сцена" : kind == 4 ? "Видео " + (videoPackIndex + 2) + " · выбранная сцена" : "Изображения · " + (globalEditing ? "Весь ролик" : SceneLabel(SelectedScene,sceneIndex)), ClientSize = new Size(680,560), MinimumSize = new Size(600,440), BackColor = Theme.Background, ForeColor = Theme.TextPrimary, Font = Theme.FontBody, StartPosition = FormStartPosition.CenterParent };
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 5 };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute,44)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,44)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,46)); root.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,44)); form.Controls.Add(root);
             var packs = Row(); root.Controls.Add(packs,0,0); var actions = Row(); root.Controls.Add(actions,0,1); var modes = Row(); root.Controls.Add(modes,0,2);
@@ -644,10 +688,15 @@ namespace VideoBatch {
                 foreach (Control c in packs.Controls.Cast<Control>().ToArray()) c.Dispose(); packs.Controls.Clear();
                 foreach (Control c in modes.Controls.Cast<Control>().ToArray()) c.Dispose(); modes.Controls.Clear();
                 if (kind == 1) modes.Controls.Add(new AssemblySlider("Громкость",volume,"%") { Width = 560, Height = 66 });
+                if (kind == 3 || kind == 4) {
+                    var mix = new CheckBox { Text = "Смешивать с другими", AutoSize = true, ForeColor = Theme.TextPrimary, Checked = kind == 3 ? SelectedScene.MixVideos : SelectedScene.VideoPacks[videoPackIndex].Mix };
+                    mix.CheckedChanged += (s,e) => { if (kind == 3) SelectedScene.MixVideos = mix.Checked; else SelectedScene.VideoPacks[videoPackIndex].Mix = mix.Checked; Changed(true); Save(); };
+                    modes.Controls.Add(mix);
+                }
                 if (kind==2) {
                     packs.Controls.Add(new Label {Text="Объект "+(layerIndex+1)+" · одно изображение в каждом ролике",ForeColor=Theme.TextPrimary,AutoSize=true,Margin=new Padding(0,8,0,0)});
                     modes.Controls.Add(new Label {Text="Одна картинка — постоянная. Несколько — выбирается одна на ролик.",ForeColor=Theme.TextSecondary,AutoSize=true,Margin=new Padding(0,8,0,0)});
-                } else packs.Controls.Add(new Label {Text=kind==0 ? "Фон заполняет кадр. На каждую сцену выбирается один отрывок." : kind==1 ? "Один трек на весь ролик. В следующем ролике — другой вариант." : "Свои видео используются только в этой сцене. Общий фон выбирается кнопкой у сцены.",ForeColor=Theme.TextSecondary,AutoSize=true,Margin=new Padding(0,8,0,0)});
+                } else packs.Controls.Add(new Label {Text=kind==0 ? "Фон заполняет кадр. На каждую сцену выбирается один отрывок." : kind==1 ? "Один трек на весь ролик. В следующем ролике — другой вариант." : "Без смешивания — один клип по порядку пачек. Соседние пачки со смешиванием образуют общую группу.",ForeColor=Theme.TextSecondary,AutoSize=true,Margin=new Padding(0,8,0,0),MaximumSize=new Size(640,0)});
                 foreach (Control c in filesView.Controls.Cast<Control>().ToArray()) c.Dispose(); filesView.Controls.Clear();
                 var files = Pool(Source(kind),Extensions(kind));
                 if (files.Count == 0) filesView.Controls.Add(new Label { Text = "Пока пусто. Нажми «+ Добавить файлы» или перетащи файлы сюда.\nПустая пачка картинок не мешает собрать ролик.", Width = 580, Height = 64, ForeColor = Theme.TextSecondary });
@@ -672,7 +721,7 @@ namespace VideoBatch {
             return form;
         }
         void AddPack(string[] files) {AddObject(); ImportPool(2,files);}
-        void ClearPool(int kind) { string path = (kind == 0 ? "Видео" : kind == 1 ? "Музыка" : Path.Combine(SelectedScene.Folder,kind == 3 ? "Видео" : "Изображения")) + "-" + Guid.NewGuid().ToString("N").Substring(0,6); Directory.CreateDirectory(template.Resolve(path)); SetSource(kind,path); if (kind==2 && SelectedLayer!=null) SelectedLayer.FixedAssetHash=""; previewImages.Clear(); LoadLayer(); RefreshChips(); Changed(true); Save(); status.Text = "Пачка очищена в студии. Предыдущие файлы сохранены в папке материалов."; }
+        void ClearPool(int kind) { string path = (kind == 0 ? "Видео" : kind == 1 ? "Музыка" : Path.Combine(SelectedScene.Folder,kind == 3 ? "Видео" : kind == 4 ? "Видео-продолжение" : "Изображения")) + "-" + Guid.NewGuid().ToString("N").Substring(0,6); Directory.CreateDirectory(template.Resolve(path)); SetSource(kind,path); if (kind==2 && SelectedLayer!=null) SelectedLayer.FixedAssetHash=""; previewImages.Clear(); LoadLayer(); RefreshChips(); Changed(true); Save(); status.Text = "Пачка очищена в студии. Предыдущие файлы сохранены в папке материалов."; }
         void SelectPicture(string file) { previewImages[SelectedLayer]=file; if (SelectedLayer.Fixed) SelectedLayer.FixedAssetHash=AssemblyFiles.Hash(file); Changed(false); Save(); }
         void SetImageMode(int mode) {
             SelectedLayer.ModeExplicit=true; SelectedLayer.Fixed=mode==1; SelectedLayer.Unique=mode==2; SelectedLayer.Enabled=true;
@@ -724,6 +773,14 @@ namespace VideoBatch {
             timingCancellation?.Cancel(); int version = ++timingVersion;
             var ct = new CancellationTokenSource(); timingCancellation = ct;
             try {
+                if (ToolsLocator.TryResolve(out _, out string rangeProbe, out _)) {
+                    var paths = (template.HasSceneVoiceovers ? template.Scenes.SelectMany(s => AssemblySpeechPlan.SceneVoiceOptions(template,s)) : AssemblySpeechPlan.SharedVoiceOptions(template)).Distinct(StringComparer.OrdinalIgnoreCase).Where(p => !voiceDurations.ContainsKey(p)).ToList();
+                    foreach (var path in paths) {
+                        double seconds = Core.AudioDuration(await Core.Probe(rangeProbe,path,ct.Token));
+                        if (version != timingVersion || IsDisposed) return;
+                        voiceDurations[path] = seconds;
+                    }
+                }
                 if (template.HasSceneVoiceovers) { timingAnchorDuration = null; previewSpeechCaptions = null; RefreshInfo(); RefreshCanvas(); return; }
                 if (!ToolsLocator.TryResolve(out _, out string probe, out _)) { timingAnchorDuration = null; previewSpeechCaptions = null; RefreshInfo(); return; }
                 double? total = await Task.Run(async () => await AssemblySpeechPlan.ResolveVoiceoverDurationAsync(template, probe, ct.Token).ConfigureAwait(false), ct.Token);
@@ -806,7 +863,7 @@ namespace VideoBatch {
                     var videos = await AssemblyEngine.ReadVideos(t,ffmpeg,probe,cancellation.Token); var history = AssemblyHistoryStore.Load(historyFolder,t.HistoryScope);
                     var batch = AssemblyPlanner.Create(t,videos,history,new Random(),1,null,cancellation.Token); if (batch.Plans.Count == 0) throw new Exception(batch.Limit);
                     Directory.CreateDirectory(previewFolder); string path = Path.Combine(previewFolder,"example-" + Guid.NewGuid().ToString("N") + ".mp4"), work = Path.Combine(previewFolder,"render-" + Guid.NewGuid().ToString("N"));
-                    try { await Task.Run(() => AssemblyEngine.Render(t,batch.Plans[0],ffmpeg,probe,path,work,AssemblyRaster.Save,cancellation.Token,s => ((IProgress<Update>)updates).Report(new Update(s,0)))); }
+                    try { var previewMix = new AssemblyMixTracker(); await Task.Run(() => AssemblyEngine.Render(t,batch.Plans[0],ffmpeg,probe,path,work,AssemblyRaster.Save,cancellation.Token,s => ((IProgress<Update>)updates).Report(new Update(s,0)),null,null,videos,new Random(),previewMix)); }
                     finally { if (Directory.Exists(work)) Directory.Delete(work,true); }
                     status.Text = "Пример готов. Файлы без повторов не израсходованы."; progress.Value = 1000; Ui.Open(path);
                 } else {

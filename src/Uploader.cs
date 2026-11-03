@@ -1302,6 +1302,31 @@ namespace VideoBatch {
                 }catch(Exception ex){Ui.Error(this,ex);}
             }
         }
+        /// <summary>Title-bank rename in the folder where files were picked. Does not assign items or advance the title cursor.</summary>
+        public string[] RenamePickedVideosInPlace(YouTubeChannel ch,string[] filePaths){
+            var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
+            if(paths.Length==0)return paths;
+            string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
+            string packKind=EffectiveKind(ch);
+            List<string> titles;
+            try{titles=PeekTitlesFromBank(packKind,paths.Length,m);}catch(Exception ex){throw;}
+            titles=ResolveDuplicateTitlesInBatch(titles,"«"+ch.Name+"»");
+            Write("«"+ch.Name+"»: переименование в исходной папке · "+TitleCursorLabel(packKind,m)+":");
+            var result=new string[paths.Length];
+            int renamed=0;
+            for(int i=0;i<paths.Length;i++){
+                string baseTitle=i<titles.Count?titles[i]:"";
+                if(string.IsNullOrWhiteSpace(baseTitle))throw new Exception("«"+ch.Name+"»: нет заголовка для видео "+(i+1)+"/"+paths.Length+".");
+                string finalTitle=PackTitleWithIndex(baseTitle,i+1,paths.Length);
+                ValidateTitleLength(finalTitle,"«"+ch.Name+"» ["+(i+1)+"/"+paths.Length+"]");
+                string before=paths[i];
+                result[i]=AssignVideoFile(before,baseTitle,i+1,paths.Length);
+                if(!PathsEqual(before,result[i]))renamed++;
+                Write("  "+(i+1)+". «"+MakeWindowsSafeTitle(finalTitle)+"» ← "+Path.GetFileName(before));
+            }
+            Write("  переименовано в исходной папке: "+renamed+".");
+            return result;
+        }
         void AssignVideoPackToChannel(YouTubeChannel ch,DataGridViewRow row,string[] filePaths,bool replaceConfirmed=false){
             var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
             if(!replaceConfirmed&&ch.Items!=null&&ch.Items.Any(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Video))&&
@@ -1919,7 +1944,7 @@ namespace VideoBatch {
             return new UploadJob{
                 token=token,localPort=settings.DolphinPort,profileId=ch.ProfileId,expectedIp=ch.ExpectedIp,
                 shortsWarmup=true,skipQueueDelay=true,checkOnly=false,keepProfileOpen=true,
-                warmupMinMinutes=10,warmupMaxMinutes=10,warmupKeywords=YouTubeWarmupPanel.NormalizeKeywords(settings.YouTubeWarmupKeywords),
+                warmupMinMinutes=10,warmupMaxMinutes=10,warmupKeywords=YouTubeWarmupPanel.KeywordsFor(settings,ch.Market),
                 warmupWatchMinSec=settings.YouTubeWarmupWatchMinSec,warmupWatchMaxSec=settings.YouTubeWarmupWatchMaxSec,
                 warmupLikesEnabled=settings.YouTubeWarmupLikesEnabled,warmupLikePercent=settings.YouTubeWarmupLikePercent
             };
@@ -1930,12 +1955,12 @@ namespace VideoBatch {
                     string journal=m.text??"";
                     if(m.waitMs>0||!string.IsNullOrWhiteSpace(m.waitStage))
                         journal=(m.waitStage??"ожидание")+": "+m.waitMs+" мс · "+(m.reason??"");
-                    Write(ch.Name+": "+journal);
+                    Write((ch?.Name??"Канал")+": "+journal);
                     return;
                 }
-                if(!string.IsNullOrWhiteSpace(m.text))Status(row,WarmupShortMessage(m.text));
+                if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(ch,row,WarmupShortMessage(m.text));
             },ct).ConfigureAwait(false);
-            Status(row,WarmupRowStatus(result));
+            MeshStatus(ch,row,WarmupRowStatus(result));
             SafeSave();
             return result;
         }
@@ -1958,7 +1983,9 @@ namespace VideoBatch {
                         .ToList();
                 }
                 if(viewers.Count==0)throw new Exception("Нет профилей Dolphin для прогрева.");
-                if(string.IsNullOrWhiteSpace(YouTubeWarmupPanel.NormalizeKeywords(settings.YouTubeWarmupKeywords)))throw new Exception("Добавьте ключевые фразы в настройках автопрогрева.");
+                foreach(var market in viewers.Select(v=>NormMarket(v.ch.Market)).Distinct(StringComparer.OrdinalIgnoreCase))
+                    if(string.IsNullOrWhiteSpace(YouTubeWarmupPanel.KeywordsFor(settings,market)))
+                        throw new Exception("Добавьте ключевые фразы автопрогрева для рынка "+market+".");
                 cancellation=new CancellationTokenSource();Busy(true);
                 token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 int batchSize=Math.Max(1,Math.Min(5,settings.WatchMaxParallelProfiles));
@@ -1979,22 +2006,22 @@ namespace VideoBatch {
                             await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
                             cancellation.Token.ThrowIfCancellationRequested();
                             System.Threading.Interlocked.Increment(ref started);launched=true;
-                            Status(row,"Прогрев Shorts…");
+                            MeshStatus(ch,row,"Прогрев Shorts…");
                             var result=await RunWarmupForChannel(token,ch,row,cancellation.Token).ConfigureAwait(false);
                             if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase))
                                 System.Threading.Interlocked.Increment(ref partial);
                             else System.Threading.Interlocked.Increment(ref ok);
-                        }catch(Exception) when(cancellation.IsCancellationRequested){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено пользователем");throw new OperationCanceledException(cancellation.Token);}
-                        catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);Status(row,"Остановлено пользователем");throw;}
+                        }catch(Exception) when(cancellation.IsCancellationRequested){if(launched)System.Threading.Interlocked.Increment(ref interrupted);MeshStatus(ch,row,"Остановлено пользователем");throw new OperationCanceledException(cancellation.Token);}
+                        catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);MeshStatus(ch,row,"Остановлено пользователем");throw;}
                         catch(Exception e){
                             if(cancellation.IsCancellationRequested||IsWarmupStopNoise(e)){
                                 if(launched)System.Threading.Interlocked.Increment(ref interrupted);
-                                Status(row,"Остановлено пользователем");
+                                MeshStatus(ch,row,"Остановлено пользователем");
                                 return;
                             }
                             string shortMsg=WarmupShortMessage(e is UploadException ue?ue.Message:e.Message);
                             errors.Add(ch.Name+": "+shortMsg);
-                            Status(row,"Ошибка · "+shortMsg);
+                            MeshStatus(ch,row,"Ошибка · "+shortMsg);
                         }
                     })).ToArray();
                     try{await Task.WhenAll(tasks).ConfigureAwait(true);}

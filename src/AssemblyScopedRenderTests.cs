@@ -120,6 +120,57 @@ namespace VideoBatch {
             Require(sceneVideo.HasAudio && Math.Abs(sceneVideo.VideoDuration-7.8)<.15,"Per-scene speech output duration/audio invalid");
             await AssemblySpeechPlan.Prepare(sceneSpeech,perScene,ffmpeg,probe,sceneWork,ct);
             Require(Math.Abs(perScene.RollDuration(sceneSpeech)-7.8)<.06,"Re-preparing scene voice changed duration");
+            // A continuation pack must never become the first clip of an ordered scene.
+            string chainVoice=Path.Combine(root,"chain-voice.wav");
+            await tool(ffmpeg,new List<string>{"-y","-v","error","-f","lavfi","-i","sine=frequency=440:duration=5",chainVoice});
+            var chained = new AssemblyTemplate { Materials=root, Width=240, Height=320, Fps=20, SceneTimingVersion=1, PackStudioVersion=1, Transition="cut", RenderMode="cpu" };
+            var chainedScene = new AssemblyScene { VideoMode="own", Videos=a, ContinuationVideos=b, VoiceMode="own", Voiceover=chainVoice, Duration=2 };
+            chained.Scenes.Add(chainedScene);
+            var chainPlan = AssemblyPlanner.Create(chained,videos,new AssemblyHistory(),new Random(6),1).Plans.Single();
+            Require(chainPlan.Scenes[0].Video.Path==a,"Continuation selected as the primary clip");
+            Require(chainedScene.VideoPacks.Count==1 && chainedScene.ContinuationVideos=="","Legacy continuation migration failed");
+            string chainOutput=Path.Combine(root,"chain.mp4");
+            await AssemblyRender.Run(chained,chainPlan,ffmpeg,probe,chainOutput,Path.Combine(root,"chain-work"),raster,ct,null,null,null,videos,new Random(6));
+            var segments=chainPlan.Scenes[0].VideoSegments;
+            Require(segments.Count==2 && segments[0].Video.Path==a && segments[1].Video.Path==b && Math.Abs(segments.Sum(s=>s.Duration)-5)<.06,"Ordered chain or final trim invalid");
+            // A chained scene must keep its exact voice boundary before the next
+            // scene xfade, including fractional source-frame durations.
+            var joinedSpeech = new AssemblyTemplate { Materials=root, Width=240, Height=320, Fps=30,
+                SceneTimingVersion=1, PackStudioVersion=1, Transition="fade", TransitionDuration=.24, RenderMode="cpu" };
+            joinedSpeech.Scenes.Add(new AssemblyScene { VideoMode="own", Videos=a, VoiceMode="own", Voiceover=chainVoice });
+            joinedSpeech.Scenes.Add(new AssemblyScene { VideoMode="own", Videos=b, VoiceMode="own", Voiceover=chainVoice });
+            var joinedPlan=AssemblyPlanner.Create(joinedSpeech,videos,new AssemblyHistory(),new Random(8),1).Plans.Single();
+            string joinedOutput=Path.Combine(root,"joined-scene-voices.mp4");
+            await AssemblyRender.Run(joinedSpeech,joinedPlan,ffmpeg,probe,joinedOutput,Path.Combine(root,"joined-scene-work"),raster,ct,null,null,null,videos,new Random(8));
+            var joinedInfo=Core.VideoInfo(await Core.Probe(probe,joinedOutput,ct));
+            Require(joinedPlan.Scenes.All(s=>s.VideoSegments.Count>1) && joinedInfo.HasAudio
+                && Math.Abs(joinedInfo.VideoDuration-joinedPlan.RollDuration(joinedSpeech))<.06,
+                "Chained scene transition truncated the voice-driven video");
+            foreach (double time in new[]{.5,4.5}) {
+                string frame=Path.Combine(root,"chain-"+Core.N(time)+".png");
+                await tool(ffmpeg,new List<string>{"-y","-v","error","-ss",Core.N(time),"-i",chainOutput,"-frames:v","1",frame});
+                using(var bmp=new Bitmap(frame)) {
+                    var color=bmp.GetPixel(120,160);
+                    Require(time<1 ? color.R>color.G+80 : color.G>color.R+80,"Rendered primary/continuation order invalid");
+                }
+            }
+            chained.Transition="fade"; chained.TransitionDuration=.2;
+            await AssemblyRender.Run(chained,chainPlan,ffmpeg,probe,Path.Combine(root,"chain-fade.mp4"),Path.Combine(root,"chain-fade-work"),raster,ct,null,null,null,videos,new Random(6));
+            var fadeInfo=Core.VideoInfo(await Core.Probe(probe,Path.Combine(root,"chain-fade.mp4"),ct));
+            Require(Math.Abs(fadeInfo.VideoDuration-5)<.1,"Internal transitions shortened voice-driven scene");
+            Require(File.ReadAllText(Path.Combine(root,"chain-fade-work","render.ffgraph")).Contains("xfade="),"Internal transition missing");
+            chainedScene.VideoPacks.Add(new AssemblySceneVideoPack { Source=a });
+            chainPlan.Scenes[0].ContentSeconds=10;
+            AssemblySceneVideoBuilder.EnsureSegments(chained,chainPlan,videos,new Random(1));
+            Require(chainPlan.Scenes[0].VideoSegments.Select(s=>s.Video.Path).SequenceEqual(new[]{a,b,a}),"Three strict packs lost order");
+            chainedScene.VideoPacks[0].Mix=true; chainedScene.VideoPacks[1].Mix=true;
+            Require(AssemblySceneVideoBuilder.PrimarySource(chained,chainedScene)==chainedScene.Videos,"Mixed packs changed primary source");
+            AssemblySceneVideoBuilder.EnsureSegments(chained,chainPlan,videos,new Random(1));
+            Require(chainPlan.Scenes[0].VideoSegments[0].Video.Path==a && Math.Abs(chainPlan.Scenes[0].VideoSegments.Sum(s=>s.Duration)-10)<.001,"Mixed continuation did not fill scene");
+            chainedScene.MixVideos=true;
+            chainPlan.Scenes[0].ContentSeconds=10;
+            AssemblySceneVideoBuilder.EnsureSegments(chained,chainPlan,videos,new Random(2));
+            Require(chainPlan.Scenes[0].VideoSegments[0].Video.Path==a && chainPlan.Scenes[0].VideoSegments.Any(s=>s.Video.Path==b),"Mixed fill ignored pack 2");
             var clipped=WarmupSubtitles.FitToDuration(new[]{new WarmupCaption {Text="early",Start=.5,End=1},new WarmupCaption {Text="late",Start=4,End=5}},2);
             Require(clipped.Count==1 && clipped[0].Start==.5 && clipped[0].End==1,"Subtitle timeline was accelerated to fit video");
             // Large pools use backtracking instead of enumeration; shared unique packs still reserve distinct images.

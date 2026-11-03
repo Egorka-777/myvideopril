@@ -154,7 +154,10 @@ namespace VideoBatch {
         /// <summary>YouTube | TikTok | Telegram | Studio — стартовый раздел интерфейса.</summary>
         public string AppPlatformView="";
         public int YouTubeWarmupMinMinutes=10, YouTubeWarmupMaxMinutes=10;
+        /// <summary>Legacy single list; migrated into RU/EN on load.</summary>
         public string YouTubeWarmupKeywords="бинарные опционы стратегия\nтрейдинг\nbinodex\nбинодекс\nбинарные опционы binodex\nбинарные опционы покет опшн\nбинарные опционы сигналы\nторговый бот\nтрейдинг бот binodex";
+        public string YouTubeWarmupKeywordsRu="бинарные опционы стратегия\nтрейдинг\nbinodex\nбинодекс\nбинарные опционы binodex\nбинарные опционы покет опшн\nбинарные опционы сигналы\nторговый бот\nтрейдинг бот binodex";
+        public string YouTubeWarmupKeywordsEn="";
         public int YouTubeWarmupWatchMinSec=1, YouTubeWarmupWatchMaxSec=40;
         public bool YouTubeWarmupLikesEnabled=true;
         public int YouTubeWarmupLikePercent=38;
@@ -388,6 +391,12 @@ namespace VideoBatch {
             if(p.YouTubeWarmupWatchMaxSec>40)p.YouTubeWarmupWatchMaxSec=40;
             if(p.YouTubeWarmupLikePercent<0)p.YouTubeWarmupLikePercent=0;
             if(p.YouTubeWarmupLikePercent>100)p.YouTubeWarmupLikePercent=100;
+            if(p.YouTubeWarmupKeywordsRu==null)p.YouTubeWarmupKeywordsRu="";
+            if(p.YouTubeWarmupKeywordsEn==null)p.YouTubeWarmupKeywordsEn="";
+            if(string.IsNullOrWhiteSpace(p.YouTubeWarmupKeywordsRu)&&string.IsNullOrWhiteSpace(p.YouTubeWarmupKeywordsEn)&&!string.IsNullOrWhiteSpace(p.YouTubeWarmupKeywords)){
+                p.YouTubeWarmupKeywordsRu=p.YouTubeWarmupKeywords;
+                p.YouTubeWarmupKeywordsEn=p.YouTubeWarmupKeywords;
+            }
             if(string.IsNullOrWhiteSpace(p.OpenRouterModel))p.OpenRouterModel="openai/gpt-4o-mini";
             if(string.IsNullOrWhiteSpace(p.WarmupVideoMarketView)||(p.WarmupVideoMarketView!="RU"&&p.WarmupVideoMarketView!="EN"))p.WarmupVideoMarketView="RU";
             if(p.WarmupVideoCountRu<1)p.WarmupVideoCountRu=1;

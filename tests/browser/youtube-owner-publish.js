@@ -12,11 +12,21 @@ function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotP
   document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('ytcp-video-visibility-edit-dialog')?.remove();});
   document.querySelector('#visibility').onclick=()=>{
    const el=document.createElement('ytcp-video-visibility-edit-dialog');el.style.display='contents';
-   el.innerHTML=${JSON.stringify(`<div role="dialog"><section><button id="expand-publish">${ru?'Сохранить или опубликовать':'Save or publish'}</button><div id="choices" hidden><label><input type="radio" name="PRIVATE">${ru?'Ограниченный доступ':'Private'}</label><label><input type="radio" name="UNLISTED">${ru?'Доступ по ссылке':'Unlisted'}</label><label><input type="radio" name="PUBLIC" ${state.visibility==='public'?'checked':''}>${ru?'Открытый доступ':'Public'}</label><label><input type="checkbox">${ru?'Провести премьеру сейчас':'Set as instant Premiere'}</label></div></section><section id="schedule">${ru?'Запланировать публикацию':'Schedule'}<input value="2 Nov 2026"><input value="06:16"></section><footer><button id="cancel">${ru?'Отмена':'Cancel'}</button><ytcp-button id="done-button"><button disabled>${ru?'Запланировать публикацию':'Schedule'}</button></ytcp-button></footer></div>`)};
+   el.innerHTML=${JSON.stringify(`<div role="dialog"><section><button id="expand-publish">${ru?'Сохранить или опубликовать':'Save or publish'}</button><div id="choices" hidden><tp-yt-paper-radio-button name="PRIVATE">${ru?'Ограниченный доступ':'Private'}</tp-yt-paper-radio-button><tp-yt-paper-radio-button name="UNLISTED">${ru?'Доступ по ссылке':'Unlisted'}</tp-yt-paper-radio-button><tp-yt-paper-radio-button name="PUBLIC" id="public-radio-button">${ru?'Открытый доступ':'Public'}</tp-yt-paper-radio-button><label><input type="checkbox">${ru?'Провести премьеру сейчас':'Set as instant Premiere'}</label></div></section><section id="schedule">${ru?'Запланировать публикацию':'Schedule'}<input value="2 Nov 2026"><input value="06:16"></section><footer><button id="cancel">${ru?'Отмена':'Cancel'}</button><ytcp-button id="save-button"><button disabled>${ru?'ОК':'OK'}</button></ytcp-button></footer></div>`)};
    document.body.append(el);el.querySelector('#cancel').onclick=()=>el.remove();
-   el.querySelector('#expand-publish').onclick=()=>{window.expands=(window.expands||0)+1;el.querySelector('#choices').hidden=false;el.querySelector('#schedule').hidden=true;};
-   el.querySelector('[name=PUBLIC]').onclick=()=>setTimeout(()=>{el.querySelector('#done-button button').textContent=${JSON.stringify(ru?'Опубликовать':'Publish')};el.querySelector('#done-button button').disabled=false;},150);
-   el.querySelector('#done-button').onclick=async()=>{if(!el.querySelector('[name=PUBLIC]').checked||el.querySelector('#choices').hidden)return;await fetch('/fixture/public',{method:'POST'});document.querySelector('#visibility').textContent=${JSON.stringify(ru?'Для всех':'Public')};el.remove();};
+   el.querySelectorAll('tp-yt-paper-radio-button').forEach(btn=>{
+    const sr=btn.attachShadow({mode:'open'});
+    sr.innerHTML='<div id="radioContainer" role="radio" tabindex="0" style="width:18px;height:18px;border:1px solid #888;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:8px"></div><span id="label"></span><input id="input" type="radio" hidden>';
+    sr.querySelector('#label').textContent=btn.textContent;btn.textContent='';
+    const input=sr.querySelector('#input');input.name=btn.getAttribute('name');
+    const sync=()=>{const on=input.checked;btn.setAttribute('aria-checked',on?'true':'false');sr.querySelector('#radioContainer').style.background=on?'#fff':'transparent';};
+    sr.querySelector('#radioContainer').onclick=()=>{el.querySelectorAll('tp-yt-paper-radio-button').forEach(b=>{const i=b.shadowRoot.querySelector('#input');if(i){i.checked=b===btn;}});sync();if(btn.getAttribute('name')==='PUBLIC')setTimeout(()=>{const done=el.querySelector('#save-button button');done.textContent=${JSON.stringify(ru?'Опубликовать':'Publish')};done.disabled=false;},150);};
+    btn.onclick=e=>{if(e.target===btn)e.preventDefault();};
+   });
+   const savedPublic=${JSON.stringify(state.visibility==='public')};
+   const seedPublic=()=>{if(!savedPublic)return;el.querySelector('tp-yt-paper-radio-button[name=PUBLIC]')?.shadowRoot?.querySelector('#radioContainer')?.click();};
+   el.querySelector('#expand-publish').onclick=()=>{window.expands=(window.expands||0)+1;el.querySelector('#choices').hidden=false;el.querySelector('#schedule').hidden=true;seedPublic();};
+   el.querySelector('#save-button').onclick=async()=>{const pub=el.querySelector('tp-yt-paper-radio-button[name=PUBLIC]');const ok=el.querySelector('#save-button button');if(ok.disabled||!pub?.shadowRoot?.querySelector('#input')?.checked||el.querySelector('#choices').hidden)return;await fetch('/fixture/public',{method:'POST'});document.querySelector('#visibility').textContent=${JSON.stringify(ru?'Для всех':'Public')};el.remove();};
   };
   </script></body></html>`;
  }
