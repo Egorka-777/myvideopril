@@ -195,7 +195,10 @@ namespace VideoBatch {
         static async Task<List<WarmupCaption>> EnsureCaptionsForAudioAsync(AssemblyTemplate t, string audio, string text, double duration, CancellationToken ct, Action<string> progress) {
             var cues = CachedCaptions(t, audio, text, duration);
             if (cues != null) return cues;
-            await LocalAudioTranscription.PrepareAsync(new[] { audio }, ct, progress, force: true).ConfigureAwait(false);
+            bool repair = HasTiming(audio);
+            // Another render may have completed this same audio while we waited.
+            if (repair) { cues = CachedCaptions(t, audio, text, duration); if (cues != null) return cues; }
+            await LocalAudioTranscription.PrepareAsync(new[] { audio }, ct, progress, force: repair).ConfigureAwait(false);
             return CaptionsForAudio(t, audio, null, duration);
         }
         public static async Task<List<WarmupCaption>> BuildCaptionsFromSpeechAsync(AssemblyTemplate t, string probe, CancellationToken ct) {
