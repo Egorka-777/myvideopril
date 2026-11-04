@@ -68,7 +68,7 @@ namespace VideoBatch {
             colors.Controls.Add(SubtitleButton("Цвет плашки", () => PickSubtitleColor(true)));
             stack.Controls.Add(colors);
 
-            stack.Controls.Add(new Label { Text = "Точные таймкоды берутся из озвучки ElevenLabs автоматически. Для старых файлов создайте новую озвучку.", Width = 360, Height = 52, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 4) });
+            stack.Controls.Add(new Label { Text = "Для готовых аудиофайлов нажмите «Распознать аудио» в окне субтитров. Сохранённые таймкоды используются автоматически.", Width = 360, Height = 52, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 4) });
             subtitleCaptions = new DataGridView {
                 Visible = false, Width = 360, Height = 220, AutoGenerateColumns = false, AllowUserToAddRows = true, AllowUserToDeleteRows = true,
                 BackgroundColor = Theme.Card, DefaultCellStyle = new DataGridViewCellStyle { ForeColor = Color.Black, BackColor = Color.White, WrapMode = DataGridViewTriState.True },
