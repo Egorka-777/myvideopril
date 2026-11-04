@@ -96,13 +96,21 @@ def execute(job, model_factory=None):
 
 def prepare(root, models):
     from faster_whisper.utils import download_model
-    emit("download", "Первый запуск: скачиваю модель речи small. Аудиофайлы никуда не отправляются.")
-    download_model(MODEL, cache_dir=str(models))
+    from huggingface_hub.errors import LocalEntryNotFoundError
+    try:
+        model_path = download_model(MODEL, cache_dir=str(models), local_files_only=True)
+        if not all((Path(model_path) / name).is_file() for name in ("model.bin", "config.json", "tokenizer.json")):
+            raise FileNotFoundError("Incomplete local speech model")
+        emit("loading", "Использую уже скачанную модель речи.")
+    except (LocalEntryNotFoundError, FileNotFoundError):
+        emit("download", "Первый запуск: скачиваю модель речи small. Аудиофайлы никуда не отправляются.")
+        model_path = download_model(MODEL, cache_dir=str(models))
     # Validate the native runtime before recording a ready installation.
     from faster_whisper import WhisperModel
     WhisperModel(MODEL, device="cpu", compute_type="int8", cpu_threads=2,
                  download_root=str(models), local_files_only=True)
-    atomic_json(Path(root) / "runtime.json", dict(python=sys.executable, models=str(models), version=VERSION))
+    atomic_json(Path(root) / "runtime.json", dict(python=sys.executable, models=str(models),
+                modelFile=str(Path(model_path) / "model.bin"), version=VERSION))
     emit("ready", "Распознавание речи готово. Следующие запуски работают локально.", 100)
 
 

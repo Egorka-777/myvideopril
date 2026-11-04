@@ -19,13 +19,13 @@ namespace VideoBatch {
         static string Root => Path.Combine(Store.Root, "subtitles");
         public static string CacheFile(string hash) => Path.Combine(Root, "cache", hash + ".json");
         public sealed class Runtime {
-            public string python, models, version;
+            public string python, models, modelFile, version;
         }
         static JavaScriptSerializer Json() => new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         static Runtime ReadRuntime() {
             try {
                 var runtime = Json().Deserialize<Runtime>(File.ReadAllText(Path.Combine(Root, "runtime.json")));
-                return runtime?.version == Version && File.Exists(runtime.python) && Directory.Exists(runtime.models) ? runtime : null;
+                return runtime?.version == Version && File.Exists(runtime.python) && File.Exists(runtime.modelFile) && Directory.Exists(runtime.models) ? runtime : null;
             } catch { return null; }
         }
         static string Scripts() {
@@ -35,7 +35,7 @@ namespace VideoBatch {
             }
             throw new Exception("Не найдена папка tools/subtitles. Обновите EXE вместе с этой папкой из комплекта приложения.");
         }
-        public static async Task PrepareAsync(IEnumerable<string> files, CancellationToken ct, Action<string> progress = null) {
+        public static async Task PrepareAsync(IEnumerable<string> files, CancellationToken ct, Action<string> progress = null, bool force = false) {
             // Hashing/probing a large user file must never block the WinForms thread.
             await gate.WaitAsync(ct).ConfigureAwait(false);
             try {
@@ -44,7 +44,7 @@ namespace VideoBatch {
                         ct.ThrowIfCancellationRequested();
                         if (!File.Exists(path)) throw new FileNotFoundException("Не найдена озвучка", path);
                         return new { audio = path, hash = AssemblyFiles.Hash(path) };
-                    }).GroupBy(x => x.hash).Select(g => g.First()).Where(x => !AssemblySpeechPlan.HasTiming(x.audio)).ToList(), ct).ConfigureAwait(false);
+                    }).GroupBy(x => x.hash).Select(g => g.First()).Where(x => force || !AssemblySpeechPlan.HasTiming(x.audio)).ToList(), ct).ConfigureAwait(false);
                 if (missing.Count == 0) { progress?.Invoke("Субтитры уже сохранены — повторное распознавание не требуется."); return; }
                 string scripts = Scripts();
                 var runtime = ReadRuntime();
@@ -99,12 +99,14 @@ namespace VideoBatch {
                 // Setup may own pip/Python children. Stop this task's process tree,
                 // never other app, browser or Python sessions.
                 using (ct.Register(() => {
-                    try {
-                        if (process.HasExited) return;
-                        if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
-                            using (var killer = Process.Start(new ProcessStartInfo("taskkill.exe", "/PID " + process.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true })) killer.WaitForExit(5000);
-                        } else process.Kill();
-                    } catch { }
+                    Task.Run(() => {
+                        try {
+                            if (process.HasExited) return;
+                            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                                using (var killer = Process.Start(new ProcessStartInfo("taskkill.exe", "/PID " + process.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true })) killer.WaitForExit(5000);
+                            } else process.Kill();
+                        } catch { }
+                    });
                 })) {
                     await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
                     await Task.WhenAll(output, error).ConfigureAwait(false);

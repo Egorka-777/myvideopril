@@ -80,7 +80,10 @@ namespace VideoBatch {
                 var catalog = new List<AssemblyVideo> { new AssemblyVideo { Path = video, Hash = AssemblyFiles.Hash(video), Duration = 1 } };
                 var plan = AssemblyPlanner.Create(t, catalog, new AssemblyHistory(), new Random(3), 1).Plans.Single();
                 // Exercise the renderer's automatic recognition path, not just the button.
-                File.Delete(LocalAudioTranscription.CacheFile(hashes[files[0]]));
+                string badCache = LocalAudioTranscription.CacheFile(hashes[files[0]]);
+                var invalid = new JavaScriptSerializer().Deserialize<AssemblySpeechPlan.SpeechTiming>(File.ReadAllText(badCache));
+                invalid.Alignment.character_end_times_seconds[invalid.Alignment.character_end_times_seconds.Length - 1] = enSeconds + 60;
+                File.WriteAllText(badCache, new JavaScriptSerializer().Serialize(invalid));
                 string output = Path.Combine(folder, "two-scene-subtitles.mp4");
                 await AssemblyRender.Run(t, plan, ffmpeg, probe, output, Path.Combine(folder, "work"), (a, b, c) => { throw new Exception("No image layers expected"); }, ct, report);
                 var media = Core.VideoInfo(await Core.Probe(probe, output, ct));
@@ -100,8 +103,14 @@ namespace VideoBatch {
                 bool noSpeech = false;
                 try { await LocalAudioTranscription.PrepareAsync(new[] { silence }, ct, report); } catch (Exception e) { noSpeech = e.Message.Contains("Речь не найдена"); }
                 Check(noSpeech && !AssemblySpeechPlan.HasTiming(silence), "no speech is never accepted as valid captions");
+                using (var stop = new CancellationTokenSource()) {
+                    string kept = File.ReadAllText(LocalAudioTranscription.CacheFile(hashes[files[1]])); bool cancelled = false;
+                    try { await LocalAudioTranscription.PrepareAsync(new[] { files[1] }, stop.Token, message => { if (message.StartsWith("Распознаю")) stop.Cancel(); }, force: true); }
+                    catch (OperationCanceledException) { cancelled = true; }
+                    Check(cancelled && File.ReadAllText(LocalAudioTranscription.CacheFile(hashes[files[1]])) == kept, "running cancellation preserves the previous completed timing");
+                }
                 foreach (string file in files) Check(AssemblyFiles.Hash(file) == hashes[file] && !File.Exists(file + ".timing.json"), "external sources remain unchanged");
-                Console.WriteLine("PASS real CPU ASR: MP3, M4A, WAV, RU/EN, no ElevenLabs API, no reprocessing cached audio, cut-audio repair, automatic render fallback, word styles, two scenes and silent input.");
+                Console.WriteLine("PASS real CPU ASR: MP3, M4A, WAV, RU/EN, no ElevenLabs API, no reprocessing cached audio, cut-audio repair, automatic render fallback, word styles, two scenes, silent input and running cancellation.");
                 return true;
             } finally { Store.Root = previous; }
         }
