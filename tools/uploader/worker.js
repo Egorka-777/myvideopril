@@ -26,6 +26,7 @@ let profileOwned = true;
 let taskPage = null;
 function localStatePath(name) { return path.join(path.dirname(path.dirname(jobPath)), name); }
 let finished = false;
+let stopping = false;
 let youtubeOpened = false;
 function randomDelaySeconds() { return crypto.randomInt(1, 31); }
 
@@ -2876,7 +2877,7 @@ async function uploadPackBulk(page,pack){
  const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  await studioBrowser.openStudio(page,job.channelUrl,send);
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:false,waitForChecks:true,newTabPerVideo:true,channelUrl:job.channelUrl,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true,waitForChecks:true,newTabPerVideo:true,channelUrl:job.channelUrl,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,accepted:studioAccepted,publishing:studioPublishing,confirmed:studioConfirmed,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send,{channelUrl:job.channelUrl}),
   usePage:page=>{taskPage=page;attachPageGuards(page);},
@@ -2935,7 +2936,7 @@ async function main() {
   if (job.shortsWarmup) {
     const { runShortsWarmup } = require("./youtube-shorts-warmup.js");
     youtubeOpened = true;
-    send("youtube", "Автопрогрев по ключевым фразам · 10 минут…", { percent: 30 });
+    send("youtube", "Автопрогрев по ключевым фразам · 15 минут · цель 30 роликов…", { percent: 30 });
     const report = (stage, text, extra = {}) => send(stage || "youtube", text, Object.assign({ percent: 50 }, extra));
     let warmup;
     try {
@@ -2958,11 +2959,10 @@ async function main() {
     const partial = warmup && warmup.partial;
     const covered = warmup ? warmup.coveredKeywords : 0;
     const total = warmup ? warmup.totalKeywords : 0;
-    const doneText = partial
-      ? ("Завершено частично: ключи " + covered + "/" + total + ", осталось " + (warmup.missing ? warmup.missing.length : Math.max(0, total - covered)) + ".")
-      : ("Выполнено: все ключи " + covered + "/" + total + ".");
+    const doneText = "Сеанс завершён: открыто " + warmup.opened + "/30, просмотрено " + warmup.count + "/30.";
     const doneExtra = {
-      success: !partial,
+      success: true,
+      warmupOpened: warmup.opened, warmupWatched: warmup.count, warmupTarget: warmup.target, warmupRemainingSec: 0,
       outcome: partial ? "partial" : "completed",
       warmupCovered: covered,
       warmupTotal: total,
@@ -3162,7 +3162,6 @@ async function main() {
 }
 
 if (require.main === module) {
-  let stopping = false;
   async function cancelTask() {
     if (stopping) return;
     stopping = true;

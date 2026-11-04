@@ -1,7 +1,7 @@
 "use strict";
 const assert = require("assert/strict");
 const { chromium } = require("../../tools/uploader/node_modules/playwright-core");
-const { deadlinePage, searchKeyword, watchResult, maybeLike, readState } = require("../../tools/uploader/youtube-shorts-warmup");
+const { deadlinePage, searchKeyword, watchResult, maybeLike, readState, runShortsWarmup, TOTAL_MS } = require("../../tools/uploader/youtube-shorts-warmup");
 const safety = require("../../tools/uploader/youtube-interaction-safety");
 
 (async () => {
@@ -92,5 +92,51 @@ const safety = require("../../tools/uploader/youtube-interaction-safety");
     assert.equal(context.pages().length, 1);
     assert(!raw.isClosed(), "profile page remains open");
     console.log("OK: isolated native search/filter, distinct results, playback and non-toggle like fixture (not live integration)");
+    // Full session with real Chromium navigation/clicks and an accelerated clock.
+    const sessionContext = await browser.newContext();
+    const sessionFixture = route => {
+      const u = new URL(route.request().url());
+      if (u.pathname === '/watch' || u.pathname.startsWith('/shorts/'))
+        return route.fulfill({contentType:'text/html',body:`<video style="width:320px;height:200px"></video><script>
+          const v=document.querySelector('video');let position=0;
+          Object.defineProperties(v,{duration:{get:()=>3600},readyState:{get:()=>4},paused:{get:()=>false},ended:{get:()=>false},currentTime:{get:()=>position+=.25,set:value=>position=value}});
+        </script>`});
+      const links = Array.from({length:30}, (_,i) => {
+        const id='fixture'+String(i).padStart(4,'0');
+        return '<ytd-video-renderer><a href="/watch?v='+id+'">Video '+i+'</a></ytd-video-renderer><a href="/shorts/'+id+'">Short '+i+'</a>';
+      }).join('');
+      return route.fulfill({contentType:'text/html',body:`<form action="/results"><input name="search_query"></form><ytd-search>
+        <button aria-label="Filters" onclick="document.querySelector('ytd-search-filter-renderer').hidden=false">Filters</button>
+        <ytd-search-filter-renderer hidden><a id="endpoint" href="/results?search_query=session&shorts=1">Shorts</a></ytd-search-filter-renderer>${links}</ytd-search>`});
+    };
+    const sessionPage = await sessionContext.newPage();
+    // Boundary page routes take precedence over context routes; fixture stays last.
+    const originalRoute=sessionPage.route.bind(sessionPage);
+    sessionPage.route=async(pattern,handler)=>{await originalRoute(pattern,handler);await originalRoute('**/*',sessionFixture);};
+    let clock=0;const realNow=Date.now;
+    sessionPage.waitForTimeout=async ms=>{clock+=ms;};
+    const events=[];
+    try {
+      Date.now=()=>clock;
+      const result=await runShortsWarmup(sessionPage,{warmupKeywords:'session'},(stage,text,extra)=>events.push({stage,text,...extra}));
+      assert.equal(result.opened,30);assert.equal(result.count,30);assert.equal(result.partial,false);
+      assert.equal(clock,TOTAL_MS);
+      assert(events.some(e=>e.stage==='warmup_progress'&&e.warmupOpened===30));
+      assert.equal(events.at(-1).stage,'youtube');
+      assert(!sessionPage.isClosed());
+      // Expiry during a native readiness wait is a normal partial result.
+      clock=0;
+      sessionPage.waitForFunction=async()=>{
+        clock=TOTAL_MS;
+        const error=new Error('fixture native timeout');error.name='TimeoutError';throw error;
+      };
+      const expired=await runShortsWarmup(sessionPage,{warmupKeywords:'session'},()=>{});
+      assert.equal(expired.reason,'time_limit');assert.equal(expired.opened,0);assert.equal(expired.partial,true);
+      // Browser failure before the deadline must still propagate.
+      clock=0;
+      sessionPage.waitForFunction=async()=>{throw Error('fixture browser disconnected');};
+      await assert.rejects(runShortsWarmup(sessionPage,{warmupKeywords:'session'}),/browser disconnected/);
+    } finally {Date.now=realNow;await sessionContext.close();}
+    console.log('OK: full accelerated 15-minute session, 30 distinct native clicks, counters and normal deadline completion');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -33,6 +33,20 @@ namespace VideoBatch {
     }
     public static class AssemblyRender {
         static string Fill(int width,int height,int fps) => "fps="+fps+",scale="+width+":"+height+":force_original_aspect_ratio=increase,crop="+width+":"+height+",setsar=1,format=yuv420p";
+        static IEnumerable<AssemblyVideo> SourceVideos(AssemblyPlan p) => p.Scenes.SelectMany(s => s.VideoSegments != null && s.VideoSegments.Count > 0 ? s.VideoSegments.Select(v => v.Video) : new[] { s.Video }).Concat(p.SecondaryVideo == null ? Enumerable.Empty<AssemblyVideo>() : new[] { p.SecondaryVideo });
+        static bool NativeAudio(AssemblyTemplate t, AssemblyPlan p) => t.PrimaryNativeAudio && t.PrimaryNativeVolume > 0 && p.Scenes.Any(s => (s.VideoSegments != null && s.VideoSegments.Count > 0 ? s.VideoSegments.Select(v => v.Video) : new[] { s.Video }).Any(v => v.HasAudio))
+            || t.SplitLayout != "none" && t.SecondaryNativeAudio && t.SecondaryNativeVolume > 0 && p.SecondaryVideo?.HasAudio == true;
+        static void AppendNativeAudio(AssemblyVideo video, double start, double seconds, double delay, bool loop, double volume, double roll,
+            List<string> args, ref int input, List<string> graph, List<string> audio) {
+            if (!video.HasAudio || volume <= 0 || seconds <= 0) return;
+            int index = input++;
+            if (loop) args.AddRange(new[] { "-stream_loop", "-1" });
+            args.AddRange(new[] { "-ss", Core.N(start), "-t", Core.N(seconds), "-i", video.Path });
+            string label = "native" + index;
+            graph.Add("[" + index + ":a:0]asetpts=PTS-STARTPTS,atrim=duration=" + Core.N(seconds) + ",volume=" + Core.N(volume)
+                + ",adelay=" + Math.Round(delay * 1000).ToString(Core.Inv) + ":all=1,apad,atrim=duration=" + Core.N(roll) + "[" + label + "]");
+            audio.Add(label);
+        }
         static bool HasAudio(AssemblyPlan p) => !string.IsNullOrWhiteSpace(p.Music) || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover));
         public static void AppendSceneVideo(AssemblyTemplate t, AssemblyScenePlan s, List<string> args, ref int input, List<string> graph, string outputLabel) {
             double content = AssemblyTimeline.ContentDuration(t, s);
@@ -146,8 +160,15 @@ namespace VideoBatch {
                 int pw = vertical ? t.Width : primarySpan, ph = vertical ? primarySpan : t.Height;
                 int sw = vertical ? t.Width : secondarySpan, sh = vertical ? secondarySpan : t.Height;
                 string padB = AssemblySplit.PadOffset(vertical, true, primarySpan, t.Width, t.Height);
-                graph.Add("[" + joined + "]" + AssemblySplit.Fill(pw, ph, t.Fps, t.SplitPrimaryZoom) + ",pad=" + t.Width + ":" + t.Height + ":0:0,format=yuv444p[splitA]");
-                graph.Add("[" + second + ":v:0]setpts=PTS-STARTPTS," + AssemblySplit.Fill(sw, sh, t.Fps, t.SplitSecondaryZoom) + ",tpad=stop_mode=clone:stop_duration=" + Core.N(dur) + ",pad=" + t.Width + ":" + t.Height + ":" + padB + ",format=yuv444p[splitB]");
+                double topZoom = p.SplitSwapped ? t.SplitSecondaryZoom : t.SplitPrimaryZoom;
+                double bottomZoom = p.SplitSwapped ? t.SplitPrimaryZoom : t.SplitSecondaryZoom;
+                if (p.SplitSwapped) {
+                    graph.Add("[" + second + ":v:0]setpts=PTS-STARTPTS," + AssemblySplit.Fill(pw, ph, t.Fps, topZoom) + ",tpad=stop_mode=clone:stop_duration=" + Core.N(dur) + ",pad=" + t.Width + ":" + t.Height + ":0:0,format=yuv444p[splitA]");
+                    graph.Add("[" + joined + "]" + AssemblySplit.Fill(sw, sh, t.Fps, bottomZoom) + ",pad=" + t.Width + ":" + t.Height + ":" + padB + ",format=yuv444p[splitB]");
+                } else {
+                    graph.Add("[" + joined + "]" + AssemblySplit.Fill(pw, ph, t.Fps, topZoom) + ",pad=" + t.Width + ":" + t.Height + ":0:0,format=yuv444p[splitA]");
+                    graph.Add("[" + second + ":v:0]setpts=PTS-STARTPTS," + AssemblySplit.Fill(sw, sh, t.Fps, bottomZoom) + ",tpad=stop_mode=clone:stop_duration=" + Core.N(dur) + ",pad=" + t.Width + ":" + t.Height + ":" + padB + ",format=yuv444p[splitB]");
+                }
                 string weight = AssemblySplit.BlendWeight(vertical, splitLine, feather);
                 graph.Add("[splitA][splitB]blend=all_expr='A*(1-(" + weight + "))+B*(" + weight + ")':shortest=1[split]"); joined = "split";
             }
@@ -174,6 +195,25 @@ namespace VideoBatch {
             }
             graph.Add("[" + joined + "]format=yuv420p[vout]");
             var audio=new List<string>();
+            if (t.PrimaryNativeAudio && t.PrimaryNativeVolume > 0) {
+                if (t.ContinuousVideo) AppendNativeAudio(p.Scenes[0].Video, 0, dur, 0, t.LoopShortVideos && p.Scenes[0].Video.Duration < dur, t.PrimaryNativeVolume, dur, args, ref input, graph, audio);
+                else {
+                    double position = 0;
+                    foreach (var scene in p.Scenes) {
+                        double content = AssemblyTimeline.ContentDuration(t, scene);
+                        if (scene.VideoSegments != null && scene.VideoSegments.Count > 1) {
+                            double segmentTime = 0;
+                            foreach (var segment in scene.VideoSegments) {
+                                AppendNativeAudio(segment.Video, 0, segment.Duration, position + scene.IncomingPad + segmentTime, false, t.PrimaryNativeVolume, dur, args, ref input, graph, audio);
+                                segmentTime += segment.Duration;
+                            }
+                        } else AppendNativeAudio(scene.Video, AssemblyTimeline.SourceStart(t, scene), content, position + scene.IncomingPad, AssemblyTimeline.LoopInput(t, scene), t.PrimaryNativeVolume, dur, args, ref input, graph, audio);
+                        position += AssemblyTimeline.SceneSeconds(scene) + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
+                    }
+                }
+            }
+            if (t.SplitLayout != "none" && t.SecondaryNativeAudio && p.SecondaryVideo != null)
+                AppendNativeAudio(p.SecondaryVideo, 0, dur, 0, t.LoopShortVideos && p.SecondaryVideo.Duration < dur, t.SecondaryNativeVolume, dur, args, ref input, graph, audio);
             if(!string.IsNullOrWhiteSpace(p.Music)) {
                 int index=input++;args.AddRange(new[]{"-stream_loop","-1","-i",p.Music});
                 double fade=Math.Min(.2,dur/4);
@@ -254,6 +294,11 @@ namespace VideoBatch {
                 if (p.Captions.Count > 0)
                     WarmupSubtitles.Rasterize(p.Captions, t.SubtitleStyle, work, t.Width, t.Height);
             }
+            // Plans loaded from older recipes do not contain source audio metadata.
+            foreach (var video in SourceVideos(p).GroupBy(v => v.Path).Select(g => g.First())) {
+                var media = Core.VideoInfo(await Core.Probe(probe, video.Path, ct).ConfigureAwait(false));
+                foreach (var source in SourceVideos(p).Where(v => v.Path == video.Path)) source.HasAudio = media.HasAudio;
+            }
             report.RasterSeconds = stage.Elapsed.TotalSeconds; stage.Restart();
             progress?.Invoke("Проверяю ускорение…");
             if (!context.GraphSupportChecked) {
@@ -283,7 +328,7 @@ namespace VideoBatch {
             report.EncodeSeconds = stage.Elapsed.TotalSeconds; stage.Restart(); ct.ThrowIfCancellationRequested();
             var m = Core.VideoInfo(await Core.Probe(probe, output, ct).ConfigureAwait(false));
             if (Math.Abs(m.VideoDuration - roll) > .15 || m.Width != t.Width || m.Height != t.Height) throw new Exception("Готовый ролик не прошёл проверку длительности или размера кадра.");
-            if (HasAudio(p) && !m.HasAudio) throw new Exception("В готовом ролике отсутствует звуковая дорожка.");
+            if ((HasAudio(p) || NativeAudio(t, p)) && !m.HasAudio) throw new Exception("В готовом ролике отсутствует звуковая дорожка.");
             report.ValidationSeconds = stage.Elapsed.TotalSeconds; report.TotalSeconds = total.Elapsed.TotalSeconds; context.LastReport = report;
             fraction?.Invoke(1); progress?.Invoke("Готово за " + report.TotalSeconds.ToString("0.0", Core.Inv) + " с · " + report.Encoder);
         }

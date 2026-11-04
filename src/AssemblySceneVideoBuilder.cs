@@ -62,7 +62,10 @@ namespace VideoBatch {
                 if (!chain) continue;
 
                 var packs = Packs(t, scene.Scene);
-                var primary = Pool(t, packs[0].Source, catalog);
+                var eligibleCatalog = p.SecondaryVideo == null ? catalog : catalog.Where(v => v.Hash != p.SecondaryVideo.Hash).ToList();
+                var primary = t.SplitLayout != "none" && t.SplitSharedPool
+                    ? eligibleCatalog.Where(v => t.SplitVideoPaths().Contains(v.Path)).GroupBy(v => v.Hash).Select(g => g.First()).ToList()
+                    : Pool(t, packs[0].Source, eligibleCatalog);
                 if (primary.Count == 0 || !primary.Any(v => v.Hash == scene.Video.Hash))
                     throw new Exception(scene.Scene.Name + ": первый клип не принадлежит «Видео 1».");
                 var fillGroups = new List<KeyValuePair<List<AssemblyVideo>, bool>>();
@@ -71,7 +74,7 @@ namespace VideoBatch {
                     bool mixing = packs[pi].Mix;
                     int start = pi;
                     do {
-                        group.AddRange(Pool(t, packs[pi].Source, catalog)); pi++;
+                        group.AddRange(Pool(t, packs[pi].Source, eligibleCatalog)); pi++;
                     } while (mixing && pi < packs.Count && packs[pi].Mix);
                     if (group.Count > 0) fillGroups.Add(new KeyValuePair<List<AssemblyVideo>, bool>(group.GroupBy(v => v.Hash).Select(g => g.First()).ToList(), pi - start > 1));
                 }

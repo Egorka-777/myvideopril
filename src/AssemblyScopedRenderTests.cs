@@ -16,7 +16,12 @@ namespace VideoBatch {
             try { RunAsync(ffmpeg,ffprobe,root).GetAwaiter().GetResult();return true; }
             finally {Directory.Delete(root,true);}
         }
-        static async Task RunAsync(string ffmpeg,string probe,string root) {
+        public static bool RunNativeAudioTests(string ffmpeg, string ffprobe) {
+            string root = Path.Combine(Path.GetTempPath(), "assembly-native-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            try { RunAsync(ffmpeg, ffprobe, root, true).GetAwaiter().GetResult(); return true; }
+            finally { Directory.Delete(root, true); }
+        }
+        static async Task RunAsync(string ffmpeg,string probe,string root, bool nativeOnly = false) {
             var ct=CancellationToken.None;
             Func<string,List<string>,Task> tool=async (name,args)=>{ await Core.Tool(name,args,ct,null,60).ConfigureAwait(false); };
             string a=Path.Combine(root,"a.mp4"),b=Path.Combine(root,"b.mp4"),voice=Path.Combine(root,"voice.wav");
@@ -62,6 +67,32 @@ namespace VideoBatch {
                     t.SplitSoftness=.08;
                 }
             }
+            // Native sound survives without music; each pack can be muted independently.
+            string nativeA = Path.Combine(root, "native-a.mp4"), nativeB = Path.Combine(root, "native-b.mp4");
+            await tool(ffmpeg, new List<string> { "-y", "-v", "error", "-i", a, "-i", voice, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", nativeA });
+            await tool(ffmpeg, new List<string> { "-y", "-v", "error", "-i", b, "-i", voice, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", nativeB });
+            var nativeTemplate = new AssemblyTemplate { Materials = root, Videos = nativeA, SecondaryVideos = nativeB, SplitLayout = "vertical", Width = 240, Height = 320, Fps = 20, Transition = "cut", RenderMode = "cpu" };
+            nativeTemplate.Scenes.Add(new AssemblyScene { Duration = 1 });
+            var nativeCatalog = new[] { nativeA, nativeB }.Select(path => new AssemblyVideo { Path = path, Hash = AssemblyFiles.Hash(path), Duration = 4 }).ToList();
+            for (int mode = 0; mode < 4; mode++) {
+                nativeTemplate.PrimaryNativeAudio = (mode & 1) != 0; nativeTemplate.SecondaryNativeAudio = (mode & 2) != 0;
+                var nativePlan = AssemblyPlanner.Create(nativeTemplate, nativeCatalog, new AssemblyHistory(), new Random(1), 1).Plans.Single();
+                nativePlan.SplitSwapped = mode == 2;
+                string output = Path.Combine(root, "native-" + mode + ".mp4");
+                await AssemblyRender.Run(nativeTemplate, nativePlan, ffmpeg, probe, output, Path.Combine(root, "native-work-" + mode), raster, ct, null);
+                var media = Core.VideoInfo(await Core.Probe(probe, output, ct));
+                Require(media.HasAudio == (mode != 0), "Native audio switches ignored: " + mode);
+                if (mode == 2) {
+                    string frame = Path.Combine(root, "native-swapped.png");
+                    await tool(ffmpeg, new List<string> { "-y", "-v", "error", "-ss", "0.5", "-i", output, "-frames:v", "1", frame });
+                    using (var bitmap = new Bitmap(frame)) { var top = bitmap.GetPixel(60, 80); Require(top.G > top.R + 80, "Swapped source did not move to top pane"); }
+                }
+                if (mode != 0) {
+                    string stats = await Core.Tool(ffmpeg, new[] { "-hide_banner", "-i", output, "-vn", "-af", "astats=metadata=1:reset=0,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-", "-f", "null", "NUL" }, ct, null, 30);
+                    Require(stats.Contains("lavfi.astats.Overall.RMS_level=") && !stats.Contains("RMS_level=-inf"), "Native audio is silent");
+                }
+            }
+            if (nativeOnly) return;
             // One voice variant per output, original subtitle times, and separately controlled music.
             string secondVoice=Path.Combine(root,"voice-second.wav"),music=Path.Combine(root,"music.wav");
             await tool(ffmpeg,new List<string>{"-y","-v","error","-f","lavfi","-i","sine=frequency=660:duration=1.8",secondVoice});

@@ -112,6 +112,16 @@ namespace VideoBatch {
             return (JoinTags(shuffled),description);
         }
 
+        public static string ShortsDescription(string description) {
+            string text=(description??"").Replace("\r\n","\n").Replace('\r','\n').Trim();
+            int newline=text.IndexOf('\n');
+            string first=newline<0?text:text.Substring(0,newline);
+            bool profileLink=System.Text.RegularExpressions.Regex.IsMatch(first,
+                @"ссылк\w*.*(?:профил|био|шапк)|link\s+(?:is\s+)?in\s+(?:(?:my|the|our)\s+)?(?:bio|profile)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return profileLink ? (newline<0?"":text.Substring(newline+1).TrimStart()) : text;
+        }
+
         public static string PickDescriptionBase(Preferences settings, YouTubeChannel channel, int itemIndex) {
             if (settings == null || channel == null) return "";
             string market = (channel.Market ?? "RU").Trim().ToUpperInvariant();

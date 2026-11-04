@@ -1,7 +1,8 @@
 "use strict";
 
 const safety = require("./youtube-interaction-safety.js");
-const TOTAL_MS = 10 * 60 * 1000;
+const TOTAL_MS = 15 * 60 * 1000;
+const TARGET_VIDEOS = 30;
 const WAIT_MS = 60000;
 
 class WarmupDeadline extends Error {
@@ -25,19 +26,19 @@ function journal(report, stage, waitMs, reason) {
   report("warmup_journal", JSON.stringify({ stage, waitMs, reason }), { waitStage: stage, waitMs, reason });
 }
 
-function buildResult(keywords, covered, count, reason) {
+function buildResult(keywords, covered, count, reason, opened = count) {
   const total = keywords.length;
   const coveredCount = covered.size;
   const missing = keywords.filter(key => !covered.has(key));
-  const partial = missing.length > 0 || reason === "time_limit";
+  const partial = count < TARGET_VIDEOS;
   return {
-    count,
-    minutes: 10,
+    count, opened, target: TARGET_VIDEOS,
+    minutes: 15,
     coveredKeywords: coveredCount,
     totalKeywords: total,
     missing,
     partial,
-    reason: reason || (missing.length ? "keywords_remaining" : "completed")
+    reason: reason || (partial ? "target_remaining" : "target_reached")
   };
 }
 
@@ -54,13 +55,14 @@ function planWatch(duration, remainingSec, shorts, random = Math.random) {
   return { mode, initial, seconds, seekTo };
 }
 
-function groupBudget(remainingSec, pendingKeys, searchSec, navigationSec, random = Math.random) {
-  // Reserve search, video loading, five seconds of playback and polling
-  // granularity for every unseen key.
-  const reserve = pendingKeys * (searchSec + navigationSec + 6);
-  const available = Math.max(0, remainingSec - reserve);
-  const share = remainingSec / (pendingKeys + 1) * (0.6 + random() * 0.8);
-  return Math.min(available, Math.max(navigationSec + 5, share));
+function videoBudget(remainingSec, pendingVideos, overheadSec, random = Math.random) {
+  if (pendingVideos <= 0 || remainingSec <= 0) return 0;
+  // Recalculate after search/navigation/loading. Reserve one minimum playback
+  // and estimated transition cost per remaining video, not per keyword.
+  const available = remainingSec - Math.max(0, pendingVideos - 1) * (overheadSec + 5);
+  if (available < 5) return Math.max(0, available);
+  const share = Math.max(5, remainingSec / pendingVideos - overheadSec);
+  return Math.min(available, Math.max(5, share * (0.55 + random() * 0.9)));
 }
 
 // Bound all shared-helper actions too. Unlike Promise.race alone, Playwright
@@ -74,8 +76,6 @@ function deadlinePage(page, deadline, now = Date.now) {
       const value = obj[key];
       if (typeof value !== "function") return value && typeof value === "object" ? wrap(value) : value;
       return (...input) => {
-        // Removing the protection is cleanup, not a new browser interaction.
-        if (key === "off" || key === "unroute") return value.apply(obj, input);
         // Removing the protection is cleanup, not a new browser interaction.
         if (key === "off" || key === "unroute") return value.apply(obj, input);
         const remaining = deadline - now();
@@ -117,7 +117,51 @@ async function waitForSearchResults(page, shorts) {
   }, shorts, { timeout: WAIT_MS });
 }
 
-async function searchKeyword(page, keyword, shorts, report = () => {}) {
+function extractResultsFromDom(onlyShorts) {
+  const result = [], local = new Set();
+  const selector = onlyShorts
+    ? "ytd-search a[href*='/shorts/']"
+    : "ytd-search ytd-video-renderer a[href*='/watch?v='], ytd-search yt-lockup-view-model a[href*='/watch?v='], ytd-search a[href*='/shorts/']";
+  for (const a of document.querySelectorAll(selector)) {
+    if (!a.getClientRects().length) continue;
+    if (a.closest("ytd-ad-slot-renderer, ytd-promoted-sparkles-web-renderer")) continue;
+    const u = new URL(a.href, location.href);
+    if (u.origin !== location.origin) continue;
+    const id = u.pathname.startsWith("/shorts/") ? u.pathname.split("/")[2] : u.searchParams.get("v");
+    if (!/^[\w-]{11}$/.test(id || "") || local.has(id)) continue;
+    local.add(id);
+    result.push({ id, url: u.href });
+  }
+  return result;
+}
+
+async function harvestSearchResults(page, shorts, globalSeen, report) {
+  const collected = [];
+  const batchSeen = new Set();
+  for (let pass = 0; pass < 5; pass++) {
+    const batch = await page.evaluate(extractResultsFromDom, shorts);
+    for (const item of batch) {
+      if (globalSeen.has(item.id) || batchSeen.has(item.id)) continue;
+      batchSeen.add(item.id);
+      collected.push(item);
+    }
+    if (collected.length >= 8 || pass >= 4) break;
+    await page.mouse.wheel(0, 1200 + Math.floor(Math.random() * 800));
+    await page.waitForTimeout(450 + Math.random() * 550);
+  }
+  return collected;
+}
+
+async function openVideoUrl(page, item, report) {
+  report("youtube", "Прогрев: открываю " + item.id);
+  await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForFunction(id => {
+    const u = new URL(location.href);
+    return u.searchParams.get("v") === id || u.pathname === "/shorts/" + id;
+  }, item.id, { timeout: 30000 });
+}
+
+async function searchKeyword(page, keyword, shorts, report = () => {}, globalSeen = new Set()) {
   // Existing worker search helpers build URLs and dismiss generic overlays;
   // they are deliberately not used for this native-search-only workflow.
   // Reset the previous keyword's native filter, staying in this same tab.
@@ -146,23 +190,7 @@ async function searchKeyword(page, keyword, shorts, report = () => {}) {
     await page.waitForFunction(expected => location.href === expected, filterUrl, { timeout: 10000 });
     await waitForSearchResults(page, true);
   }
-  return page.evaluate(onlyShorts => {
-    const result = [], seen = new Set();
-    const selector = onlyShorts
-      ? "ytd-search a[href*='/shorts/']"
-      : "ytd-search ytd-video-renderer a[href*='/watch?v='], ytd-search yt-lockup-view-model a[href*='/watch?v=']";
-    for (const a of document.querySelectorAll(selector)) {
-      if (!a.getClientRects().length) continue;
-      if (a.closest("ytd-ad-slot-renderer, ytd-promoted-sparkles-web-renderer")) continue;
-      const u = new URL(a.href, location.href);
-      if (u.origin !== location.origin) continue;
-      const id = u.pathname.startsWith("/shorts/") ? u.pathname.split("/")[2] : u.searchParams.get("v");
-      if (!/^[\w-]{11}$/.test(id || "") || seen.has(id)) continue;
-      seen.add(id);
-      result.push({ id, url: u.href });
-    }
-    return result;
-  }, shorts);
+  return harvestSearchResults(page, shorts, globalSeen, report);
 }
 
 // Passed to evaluate so reads, seeks and pauses always target the same
@@ -238,7 +266,8 @@ async function watchResult(page, shorts, deadline, job, report, checkBoundary, s
     return false;
   }
   // Loading consumes session time but must not exhaust the random watch slot.
-  deadline = Math.min(sessionDeadline, Date.now() + watchBudget);
+  const remainingBudget = typeof job.watchBudget === "function" ? job.watchBudget() * 1000 : watchBudget;
+  deadline = Math.min(sessionDeadline, Date.now() + remainingBudget);
   // Metadata may arrive after playback has already advanced. Start the
   // mandatory initial segment at zero, before any optional forward seek.
   if (state.current > 0) {
@@ -246,6 +275,7 @@ async function watchResult(page, shorts, deadline, job, report, checkBoundary, s
     state = await readState(page);
   }
   const plan = planWatch(state.duration, (deadline - Date.now()) / 1000, shorts);
+  if (plan && typeof job.watchBudget === "function") plan.seconds = Math.min(state.duration, (deadline - Date.now()) / 1000);
   if (!plan) return false;
   report("youtube", "Прогрев: " + (shorts ? "Shorts" : "видео") + " · " + plan.mode + " · до " + Math.round(plan.seconds) + " сек.");
   let watched = 0, previous = 0, sought = false;
@@ -291,63 +321,86 @@ async function runShortsWarmup(rawPage, job, report = () => {}) {
   const boundary = await safety.installPlaybackBoundary(page, report, { allowAds: true });
   // Keep the shared navigation/pop-up protection, but guard its ad helper too.
   // check() only runs with no visible ad: handleAd owns the native skip flow.
-  let count = 0, searchSec = 25, navigationSec = 10;
+  let count = 0, opened = 0, searchSec = 5, navigationSec = 3;
+  const seen = new Set();
+  const progress = () => report("warmup_progress", "", {
+    warmupOpened: opened, warmupWatched: count, warmupTarget: TARGET_VIDEOS,
+    warmupRemainingSec: Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+  });
+  progress();
+  const ticker = setInterval(progress, 1000);
   const covered = new Set();
   const check = async () => {
     if (Date.now() >= deadline) throw new WarmupDeadline();
     if (!(await safety.isAdVisible(page))) await boundary.check();
   };
   try {
-    report("youtube", "Прогрев по ключевым словам: 10 минут, включая поиск и переходы.");
-    while (Date.now() < deadline) {
-      let found = 0;
+    report("youtube", "Прогрев: 15 минут, цель 30 разных роликов; поиск и переходы входят во время сеанса.");
+    while (Date.now() < deadline && opened < TARGET_VIDEOS) {
+      let progressThisRound = 0;
       for (const keyword of shuffle(keywords)) {
-        if (deadline - Date.now() < 5000) break;
+        if (deadline - Date.now() < 8000 || opened >= TARGET_VIDEOS) break;
         await check();
-        const shorts = Math.random() < 0.5;
+        let shorts = Math.random() < 0.5;
         const searchStarted = Date.now();
-        const results = shuffle(await searchKeyword(page, keyword, shorts, report));
-        searchSec = Math.max(searchSec, (Date.now() - searchStarted) / 1000);
-        const pending = keywords.filter(key => key !== keyword && !covered.has(key)).length;
-        const budget = groupBudget((deadline - Date.now()) / 1000, pending, searchSec, navigationSec);
-        const maxCount = Math.min(3, results.length, Math.floor(budget / (navigationSec + 5)));
-        const selected = results.slice(0, maxCount > 0 ? 1 + Math.floor(Math.random() * maxCount) : 0);
-        const groupDeadline = Math.min(deadline, Date.now() + budget * 1000);
-        report("youtube", "Прогрев: «" + keyword + "» · " + (shorts ? "Shorts" : "видео") + " · найдено: " + results.length + " · выбрано: " + selected.length);
-        if (!results.length) { report("youtube", "Прогрев: пустая выдача, следующий ключ."); continue; }
-        if (!selected.length) { report("youtube", "Прогрев: недостаточно времени на просмотр с сохранением запаса для остальных ключей."); continue; }
-        found += selected.length;
-        for (let i = 0; i < selected.length; i++) {
-          const remainingVideos = selected.length - i;
-          const remaining = (groupDeadline - Date.now()) / 1000;
-          if (remaining < navigationSec + 5) break;
-          const videoDeadline = Math.min(groupDeadline, Date.now() + remaining / remainingVideos * 1000);
-          await check();
-          const navigationStarted = Date.now();
-          await page.goto(selected[i].url, { waitUntil: "domcontentloaded", timeout: 30000 });
-          navigationSec = Math.max(navigationSec, (Date.now() - navigationStarted) / 1000);
-          if (videoDeadline - Date.now() < 5000) continue;
-          if (await watchResult(page, shorts, videoDeadline, job, report, check, deadline)) {
-            count++;
-            covered.add(keyword);
-          }
+        let results = shuffle(await searchKeyword(page, keyword, shorts, report, seen));
+        if (!results.length) {
+          shorts = !shorts;
+          results = shuffle(await searchKeyword(page, keyword, shorts, report, seen));
+        }
+        searchSec = (searchSec + (Date.now() - searchStarted) / 1000) / 2;
+        const fresh = results.filter(item => !seen.has(item.id));
+        const selected = fresh.length ? [fresh[Math.floor(Math.random() * fresh.length)]] : [];
+        report("youtube", "Прогрев: «" + keyword + "» · " + (shorts ? "Shorts" : "видео") + " · новых: " + fresh.length + " · выбрано: " + selected.length);
+        if (!selected.length) continue;
+        progressThisRound++;
+        const item = selected[0];
+        if (deadline - Date.now() < 8000 || opened >= TARGET_VIDEOS) break;
+        await check();
+        const navigationStarted = Date.now();
+        try {
+          await openVideoUrl(page, item, report);
+        } catch (error) {
+          report("youtube", "Прогрев: не удалось открыть " + item.id + " — " + error.message);
+          continue;
+        }
+        navigationSec = (navigationSec + (Date.now() - navigationStarted) / 1000) / 2;
+        seen.add(item.id);
+        opened++;
+        progress();
+        const watchBudget = () => videoBudget((deadline - Date.now()) / 1000,
+          TARGET_VIDEOS - count, navigationSec * 2 + searchSec);
+        if (await watchResult(page, shorts, Math.min(deadline, Date.now() + watchBudget() * 1000),
+          { ...job, watchBudget }, report, check, deadline)) {
+          count++;
+          covered.add(keyword);
+          progress();
         }
       }
-      // Empty results must not become a hot search loop. Stay open for the
-      // remainder rather than repeatedly searching the same empty keywords.
-      if (!found || deadline - Date.now() < 5000) {
-        if (!found) report("youtube", "Прогрев: доступные результаты закончились; ожидание завершения 10 минут.");
-        await page.waitForTimeout(Math.max(0, deadline - Date.now()));
+      if (!progressThisRound && opened < TARGET_VIDEOS && Date.now() < deadline - 8000) {
+        report("youtube", "Прогрев: новых роликов в этом круге нет; повторяю поиск по ключам (" + opened + "/30 открыто, " + count + " просмотрено).");
       }
     }
+    if (Date.now() >= deadline || deadline - Date.now() < 5000) finishReason = "time_limit";
+    else if (opened < TARGET_VIDEOS) finishReason = "results_exhausted";
+    if (opened >= TARGET_VIDEOS) {
+      finishReason = "target_reached";
+      report("youtube", "Открыто 30/30. Ожидаю окончания 15 минут без открытия дополнительных роликов.");
+      await page.waitForTimeout(Math.max(0, deadline - Date.now()));
+    }
   } catch (error) {
-    if (error instanceof WarmupDeadline) finishReason = "time_limit";
-    else throw error;
+    if (error instanceof WarmupDeadline) {
+      if (finishReason === "completed") finishReason = "time_limit";
+    } else throw error;
   } finally {
+    clearInterval(ticker);
     await boundary.dispose();
   }
-  const summary = buildResult(keywords, covered, count, finishReason);
-  report("youtube", "Прогрев завершён: " + count + " ролик(ов), ключей с просмотром: " + summary.coveredKeywords + "/" + summary.totalKeywords + (summary.partial ? " · частично" : "") + ".");
+  // Cleanup uses the raw page: expiry must not reject the final pause.
+  await withVideo(rawPage, v => { if (v) v.pause(); });
+  progress();
+  const summary = buildResult(keywords, covered, count, finishReason, opened);
+  report("youtube", "Сеанс завершён: открыто " + opened + "/30, просмотрено " + count + "/30; ключей " + summary.coveredKeywords + "/" + summary.totalKeywords + ".");
   if (summary.partial) {
     report("warmup_journal", JSON.stringify({ stage: "finish", waitMs: TOTAL_MS, reason: summary.reason, missing: summary.missing.length }), {
       waitStage: "finish", waitMs: TOTAL_MS, reason: summary.reason + "; осталось ключей: " + summary.missing.length
@@ -356,4 +409,4 @@ async function runShortsWarmup(rawPage, job, report = () => {}) {
   return summary;
 }
 
-module.exports = { runShortsWarmup, parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, searchKeyword, watchResult, maybeLike, readState, buildResult, TOTAL_MS, WAIT_MS, WarmupDeadline };
+module.exports = { runShortsWarmup, parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, searchKeyword, watchResult, maybeLike, readState, buildResult, TOTAL_MS, TARGET_VIDEOS, WAIT_MS, WarmupDeadline };

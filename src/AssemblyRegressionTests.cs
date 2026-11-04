@@ -6,6 +6,38 @@ using System.Reflection;
 
 namespace VideoBatch {
     public static class AssemblyRegressionTests {
+        public static bool RunSplitPackTests() {
+            string root = Path.Combine(Path.GetTempPath(), "split-packs-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            try {
+                string a = Path.Combine(root, "a.mp4"), b = Path.Combine(root, "b.mp4"), copy = Path.Combine(root, "renamed.mp4");
+                File.WriteAllText(a, "one"); File.WriteAllText(b, "two"); File.Copy(a, copy);
+                var videos = new[] { a, b, copy }.Select(path => new AssemblyVideo { Path = path, Hash = AssemblyFiles.Hash(path), Duration = 10 }).ToList();
+                var t = new AssemblyTemplate { Materials = root, Videos = root, SecondaryVideos = root, SplitLayout = "vertical", AllowVideoReuse = true, Transition = "cut" };
+                t.Scenes.Add(new AssemblyScene { Duration = 2 });
+                var plans = AssemblyPlanner.Create(t, videos, new AssemblyHistory(), new Random(4), 10).Plans;
+                if (plans.Count != 2 || plans.Any(p => p.Scenes.Any(s => s.Video.Hash == p.SecondaryVideo.Hash))) throw new Exception("Duplicate clip in both panes");
+                var history = new AssemblyHistory(); history.Combinations.AddRange(plans.Select(p => p.Signature));
+                if (AssemblyPlanner.Create(t, videos, history, new Random(4), 10).Plans.Count != 0) throw new Exception("Repeated split recipe");
+                // Exercise non-enumerating search too, both with and without split.
+                foreach (bool split in new[] { false, true }) {
+                    t.SplitLayout = split ? "vertical" : "none";
+                    var many = Enumerable.Range(0, 260).Select(i => new AssemblyVideo { Path = a, Hash = "hash" + i, Duration = 10 }).ToList();
+                    t.Scenes.Add(new AssemblyScene { Duration = 2 });
+                    if (AssemblyPlanner.Create(t, many, new AssemblyHistory(), new Random(2), 2).Plans.Count != 2) throw new Exception("Large inventory search failed");
+                    t.Scenes.RemoveAt(1);
+                }
+                // A secondary-only file must also be eligible as the primary in shared mode.
+                t.SplitLayout = "vertical"; t.Videos = a; t.SecondaryVideos = b; t.SplitSharedPool = true;
+                plans = AssemblyPlanner.Create(t, videos, new AssemblyHistory(), new Random(2), 10).Plans;
+                if (plans.Count != 2 || plans.Select(p => p.Scenes[0].Video.Hash).Distinct().Count() != 2) throw new Exception("Shared pool is one-sided");
+                t.PrimaryNativeAudio = false; t.SecondaryNativeVolume = .37;
+                AssemblyMarketProfiles.Capture(t, AssemblyProfile.Ru);
+                string saved = Path.Combine(root, "template.xml"); AssemblyFiles.Save(saved, t);
+                var restored = AssemblyFiles.Load<AssemblyTemplate>(saved);
+                if (restored.PrimaryNativeAudio || Math.Abs(restored.SecondaryNativeVolume - .37) > .001) throw new Exception("Native audio settings lost");
+                return true;
+            } finally { Directory.Delete(root, true); }
+        }
         public static bool RunPlannerTests() {
             string temp = Path.Combine(Path.GetTempPath(), "assembly-tests-" + Guid.NewGuid().ToString("N"));
             try {

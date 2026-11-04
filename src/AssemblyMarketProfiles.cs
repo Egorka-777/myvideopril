@@ -17,6 +17,9 @@ namespace VideoBatch {
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
+        public bool SplitSharedPool, SplitFixHalves = true;
+        public bool PrimaryNativeAudio = true, SecondaryNativeAudio = true;
+        public double PrimaryNativeVolume = 1, SecondaryNativeVolume = 1;
         public double SplitRatio = .5, SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
@@ -165,6 +168,10 @@ namespace VideoBatch {
             slice.SpeechLines = CloneSpeechLines(t.SpeechLines);
             slice.SecondaryVideos = t.SecondaryVideos;
             slice.SplitLayout = t.SplitLayout;
+            slice.SplitSharedPool = t.SplitSharedPool;
+            slice.SplitFixHalves = t.SplitFixHalves;
+            slice.PrimaryNativeAudio = t.PrimaryNativeAudio; slice.SecondaryNativeAudio = t.SecondaryNativeAudio;
+            slice.PrimaryNativeVolume = t.PrimaryNativeVolume; slice.SecondaryNativeVolume = t.SecondaryNativeVolume;
             slice.SplitRatio = t.SplitRatio;
             slice.SplitPrimaryZoom = t.SplitPrimaryZoom;
             slice.SplitSecondaryZoom = t.SplitSecondaryZoom;
@@ -193,6 +200,10 @@ namespace VideoBatch {
             t.SpeechLines = CloneSpeechLines(slice.SpeechLines);
             t.SecondaryVideos = slice.SecondaryVideos;
             t.SplitLayout = slice.SplitLayout;
+            t.SplitSharedPool = slice.SplitSharedPool;
+            t.SplitFixHalves = slice.SplitFixHalves;
+            t.PrimaryNativeAudio = slice.PrimaryNativeAudio; t.SecondaryNativeAudio = slice.SecondaryNativeAudio;
+            t.PrimaryNativeVolume = slice.PrimaryNativeVolume; t.SecondaryNativeVolume = slice.SecondaryNativeVolume;
             t.SplitRatio = slice.SplitRatio <= 0 ? .5 : slice.SplitRatio;
             t.SplitPrimaryZoom = slice.SplitPrimaryZoom <= 0 ? 1 : slice.SplitPrimaryZoom;
             t.SplitSecondaryZoom = slice.SplitSecondaryZoom <= 0 ? 1 : slice.SplitSecondaryZoom;

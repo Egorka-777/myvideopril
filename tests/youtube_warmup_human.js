@@ -1,13 +1,14 @@
 "use strict";
 const assert = require("assert/strict");
-const { parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, TOTAL_MS, WAIT_MS, WarmupDeadline, runShortsWarmup, watchResult, buildResult } = require("../tools/uploader/youtube-shorts-warmup");
+const { parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, TOTAL_MS, WAIT_MS, WarmupDeadline, runShortsWarmup, watchResult, buildResult } = require("../tools/uploader/youtube-shorts-warmup");
 
 (async () => {
-  assert.equal(TOTAL_MS, 600000);
+  assert.equal(TOTAL_MS, 900000);
   assert.equal(WAIT_MS, 60000);
   const partial = buildResult(["a", "b", "c"], new Set(["a"]), 2, "time_limit");
   assert(partial.partial && partial.coveredKeywords === 1 && partial.totalKeywords === 3 && partial.missing.length === 2);
-  assert.equal(buildResult(["x"], new Set(["x"]), 1, "completed").partial, false);
+  assert.equal(buildResult(["x"], new Set(["x"]), 30, "time_limit").partial, false);
+  assert.equal(buildResult(["x"], new Set(["x"]), 29, "time_limit").partial, true);
   assert.deepEqual(parseKeywords(" one\r\n two \n\n one\nthree;four"), ["one", "two", "three;four"]);
   const input = [1, 2, 3, 4];
   assert.deepEqual(shuffle(input, () => 0), [2, 3, 4, 1]);
@@ -32,30 +33,23 @@ const { parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, TOTAL_MS, 
   assert.equal(planWatch(NaN, 20, false), null);
   assert.equal(planWatch(60, 100, false, () => 0.99).seconds, 60);
   assert.equal(planWatch(60, 20, false, () => 0.99).seconds, 20);
-  // Nine keys fit with search/navigation costs, including random-sized groups.
-  const groupSizes = new Set();
+  // Thirty slots fit the session with variable playback and transition costs.
+  const lengths = new Set();
   for (let seed = 1; seed <= 100; seed++) {
-    let state = seed, remaining = 600;
+    let state = seed, remaining = 900;
     const random = () => { state = (state * 1664525 + 1013904223) >>> 0; return state / 4294967296; };
-    for (let pending = 8; pending >= 0; pending--) {
-      remaining -= 25;
-      const budget = groupBudget(remaining, pending, 25, 10, random);
-      assert(budget <= remaining - pending * 40 + 0.000001);
-      const max = Math.min(3, Math.floor(budget / 15));
-      assert(max >= 1, "every key retains a load and minimum viewing time");
-      const size = 1 + Math.floor(random() * max);
-      groupSizes.add(size);
-      const perVideo = budget / size;
-      for (let i = 0; i < size; i++) {
-        const plan = planWatch(7200, perVideo - 10, false, random);
-        assert(plan && plan.seconds >= 5);
-        remaining -= 10 + plan.seconds;
-      }
+    for (let pending = 30; pending > 0; pending--) {
+      remaining -= 8;
+      const budget = videoBudget(remaining, pending, 8, random);
+      assert(budget >= 5, 'each remaining video retains minimum playback');
+      assert(budget <= remaining - (pending - 1) * 13 + .000001);
+      lengths.add(Math.round(budget));
+      remaining -= budget;
     }
-    assert(remaining >= 0);
+    assert(remaining >= -.000001);
   }
-  assert.deepEqual([...groupSizes].sort(), [1, 2, 3]);
-  assert.equal(groupBudget(100, 8, 25, 10), 0);
+  assert(lengths.size > 10, 'durations vary rather than fixed thirty-second watches');
+  assert.equal(videoBudget(3, 1, 8), 3);
   let now = 0, calls = [], cleanup = 0;
   const locator = { click: async options => calls.push(options), waitFor: async options => calls.push(options) };
   const raw = {
@@ -107,5 +101,5 @@ const { parseKeywords, shuffle, planWatch, groupBudget, deadlinePage, TOTAL_MS, 
     assert.equal(clock, 12000, 'session limit bounds loading wait');
     assert(messages.some(t => /пропуск без засчитанного просмотра/.test(t)));
   } finally { Date.now = realNow; }
-  console.log("OK: random groups, nine-key budget, delayed playback readiness, 60s skip and session deadline tests");
+  console.log("OK: 30-video randomized budget, delayed playback readiness, 60s skip and session deadline tests");
 })().catch(error => { console.error(error); process.exitCode = 1; });

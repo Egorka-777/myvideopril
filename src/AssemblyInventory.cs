@@ -79,7 +79,7 @@ namespace VideoBatch {
             var used = new HashSet<string>(h.UsedImages);
             for (int i = 0; i < t.Scenes.Count; i++) {
                 var scene = t.Scenes[i]; double duration = RenderDuration(i);
-                var allowed = new HashSet<string>(AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo ? t.Videos : AssemblySceneVideoBuilder.PrimarySource(t, scene)),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
+                var allowed = new HashSet<string>(Split && t.SplitSharedPool ? t.SplitVideoPaths() : AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo ? t.Videos : AssemblySceneVideoBuilder.PrimarySource(t, scene)),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
                 double required = t.ContinuousVideo ? t.Duration : duration;
                 AssemblySceneVideoBuilder.Migrate(scene);
                 bool flexibleSceneVideo = !t.ContinuousVideo && t.SceneTimingVersion > 0 && scene.VideoMode == "own"
@@ -104,8 +104,13 @@ namespace VideoBatch {
                 else if (l.Unique) pool = pool.Where(a => !used.Contains(a.Hash)).ToList();
                 pictures.Add(l,pool);
             }
-            var secondaryPaths = new HashSet<string>(AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
-            secondary = Split ? source.Where(v => secondaryPaths.Contains(v.Path) && v.Duration > 0 && (t.LoopShortVideos || v.Duration + .001 >= t.Duration)).GroupBy(v => v.Hash).Select(g => g.First()).ToList() : new List<AssemblyVideo>();
+            if (Split && t.SplitSharedPool) {
+                var sharedPaths = new HashSet<string>(t.SplitVideoPaths(), StringComparer.OrdinalIgnoreCase);
+                secondary = source.Where(v => sharedPaths.Contains(v.Path) && v.Duration > 0 && (t.LoopShortVideos || v.Duration + .001 >= t.Duration)).GroupBy(v => v.Hash).Select(g => g.First()).ToList();
+            } else {
+                var secondaryPaths = new HashSet<string>(AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
+                secondary = Split ? source.Where(v => secondaryPaths.Contains(v.Path) && v.Duration > 0 && (t.LoopShortVideos || v.Duration + .001 >= t.Duration)).GroupBy(v => v.Hash).Select(g => g.First()).ToList() : new List<AssemblyVideo>();
+            }
             music = Assets(t.Resolve(t.Music),AssemblyFiles.MusicExtensions).Where(a => !string.IsNullOrWhiteSpace(a.Path) && !speechHashes.Contains(a.Hash)).ToList();
         }
         static List<AssemblyAsset> Assets(string path,string[] extensions) {
@@ -120,7 +125,7 @@ namespace VideoBatch {
         BigInteger RawBound() {
             BigInteger total = 1;
             foreach (var v in (template.ContinuousVideo ? videos.Take(1) : videos)) total *= v.Count;
-            if (Split) total *= secondary.Count;
+            if (Split) total *= secondary.Count * (template.SplitFixHalves ? 1 : 2);
             foreach (var pool in pictures.Values) total *= pool.Count;
             return total;
         }
@@ -130,10 +135,38 @@ namespace VideoBatch {
             return s.Video.Hash;
         }
         static string SignatureText(AssemblyPlan p) {
+            if (p.SplitSwapped && p.Scenes.Count == 1 && p.SecondaryVideo != null && (p.Scenes[0].VideoSegments == null || p.Scenes[0].VideoSegments.Count == 0)) {
+                string swapped = p.SecondaryVideo.Hash + ":" + string.Join(",", p.Scenes[0].Layers.Select(l => l.Asset.Hash));
+                if (p.GlobalLayers.Count > 0) swapped += "|global:" + string.Join(",", p.GlobalLayers.Select(l => l.Asset.Hash));
+                return swapped + "|secondary:" + p.Scenes[0].Video.Hash;
+            }
             string raw = string.Join("|",p.Scenes.Select(s => SceneVideoSignature(s) + ":" + string.Join(",",s.Layers.Select(l => l.Asset.Hash))));
             if (p.GlobalLayers.Count > 0) raw += "|global:" + string.Join(",",p.GlobalLayers.Select(l => l.Asset.Hash));
             if (p.SecondaryVideo != null) raw += "|secondary:" + p.SecondaryVideo.Hash;
+            if (p.SplitSwapped) raw += "|splitSwap:1";
             return raw;
+        }
+        List<AssemblyVideo> SecondaryOptions(AssemblyPlan plan) {
+            if (!Split) return new List<AssemblyVideo> { null };
+            var used = new HashSet<string>(plan.Scenes.Select(s => s.Video.Hash));
+            return secondary.Where(v => !used.Contains(v.Hash)).ToList();
+        }
+        void TryAddSplit(AssemblyPlan plan, List<AssemblyPlan> output) {
+            foreach (var second in SecondaryOptions(plan)) {
+                plan.SecondaryVideo = second;
+                int swaps = !template.SplitFixHalves ? 2 : 1;
+                for (int swap = 0; swap < swaps; swap++) {
+                    plan.SplitSwapped = swap == 1;
+                    string raw = SignatureText(plan); Sign(plan);
+                    if (CombinationBlocked(raw)) continue;
+                    var copy = new AssemblyPlan {
+                        Signature = plan.Signature, UniqueImages = new List<string>(plan.UniqueImages),
+                        GlobalLayers = new List<AssemblyLayerPlan>(plan.GlobalLayers), SecondaryVideo = second, SplitSwapped = plan.SplitSwapped
+                    };
+                    copy.Scenes = plan.Scenes.Select(s => new AssemblyScenePlan { Scene = s.Scene, Video = s.Video, RenderDuration = s.RenderDuration, Layers = new List<AssemblyLayerPlan>(s.Layers) }).ToList();
+                    output.Add(copy);
+                }
+            }
         }
         static string VisualSignature(string raw) { return AssemblyFiles.HashText(raw); }
         void Sign(AssemblyPlan p) { p.Signature = VisualSignature(SignatureText(p)); }
@@ -162,13 +195,14 @@ namespace VideoBatch {
             if (index == videos.Count) {
                 var global = new AssemblyScenePlan { Layers=plan.GlobalLayers };
                 WalkLayers(0,template.GlobalLayers.Where(l => l.Enabled && pictures.ContainsKey(l)).ToList(),global,plan,selectedImage,() => {
-                    foreach (var second in Split ? secondary : new List<AssemblyVideo> { null }) {
-                        plan.SecondaryVideo=second;
+                    if (Split) TryAddSplit(plan, output);
+                    else {
                         string raw = SignatureText(plan); Sign(plan);
-                        if (CombinationBlocked(raw)) continue;
-                        var copy = new AssemblyPlan { Signature=plan.Signature,UniqueImages=new List<string>(plan.UniqueImages),GlobalLayers=new List<AssemblyLayerPlan>(plan.GlobalLayers),SecondaryVideo=second };
-                        copy.Scenes = plan.Scenes.Select(s => new AssemblyScenePlan { Scene=s.Scene,Video=s.Video,RenderDuration=s.RenderDuration,Layers=new List<AssemblyLayerPlan>(s.Layers) }).ToList();
-                        output.Add(copy);
+                        if (!CombinationBlocked(raw)) {
+                            var copy = new AssemblyPlan { Signature = plan.Signature, UniqueImages = new List<string>(plan.UniqueImages), GlobalLayers = new List<AssemblyLayerPlan>(plan.GlobalLayers) };
+                            copy.Scenes = plan.Scenes.Select(s => new AssemblyScenePlan { Scene = s.Scene, Video = s.Video, RenderDuration = s.RenderDuration, Layers = new List<AssemblyLayerPlan>(s.Layers) }).ToList();
+                            output.Add(copy);
+                        }
                     }
                 });
                 return;
@@ -212,7 +246,8 @@ namespace VideoBatch {
             return batch;
         }
         string LimitReason() {
-            if (videos.Any(v => v.Count==0) || Split && secondary.Count==0) return "Нет подходящего видео для одной из сцен. Добавь фон или уменьши длительность.";
+            if (videos.Any(v => v.Count == 0) || Split && secondary.Count == 0) return "Нет подходящего видео для одной из сцен. Добавь фон или уменьши длительность.";
+            if (Split && template.SplitSharedPool && secondary.Count < 2) return "Для общей пачки нужно минимум 2 разных видео.";
             return pictures.Any(p => p.Key.Unique) ? "Закончились новые связки или материалы без повторов." : "Исчерпаны разные сочетания материалов.";
         }
         public AssemblyPlanBatch Take(List<AssemblyPlan> candidates,Random random,int count,AssemblyMixTracker mix = null,CancellationToken ct = default(CancellationToken)) {
@@ -273,12 +308,21 @@ namespace VideoBatch {
                 if (i==videos.Count) {
                     if (reserve>0) {var after=new HashSet<string>(used); after.UnionWith(plan.UniqueImages); if (UniqueLimit(after)<reserve) return false;}
                     return layers(0,template.GlobalLayers.Where(l => l.Enabled && pictures.ContainsKey(l)).ToList(),plan.GlobalLayers,() => {
-                        foreach (var second in (Split ? secondary : new List<AssemblyVideo> {null}).OrderBy(v => v == null ? 0 : mix.Usage("secondary",v.Hash)).ThenBy(v => random.Next())) {
-                            plan.SecondaryVideo=second;
-                            string raw = SignatureText(plan); Sign(plan);
-                            if (combinations.Contains(plan.Signature) || CombinationBlocked(raw)) continue;
-                            if (reserve>0) {var after=new HashSet<string>(used);after.UnionWith(plan.UniqueImages);if(UniqueLimit(after)<reserve)continue;}
-                            found=plan; return true;
+                        foreach (var second in SecondaryOptions(plan).OrderBy(v => v == null ? 0 : mix.Usage("secondary", v.Hash)).ThenBy(v => random.Next())) {
+                            plan.SecondaryVideo = second;
+                            int swaps = !template.SplitFixHalves ? 2 : 1;
+                            for (int swap = 0; swap < swaps; swap++) {
+                                plan.SplitSwapped = swap == 1;
+                                string raw = SignatureText(plan); Sign(plan);
+                                if (combinations.Contains(plan.Signature) || CombinationBlocked(raw)) continue;
+                                if (reserve > 0) { var after = new HashSet<string>(used); after.UnionWith(plan.UniqueImages); if (UniqueLimit(after) < reserve) continue; }
+                                found = new AssemblyPlan {
+                                    Signature = plan.Signature, UniqueImages = new List<string>(plan.UniqueImages),
+                                    GlobalLayers = new List<AssemblyLayerPlan>(plan.GlobalLayers), SecondaryVideo = second, SplitSwapped = plan.SplitSwapped
+                                };
+                                found.Scenes = plan.Scenes.Select(s => new AssemblyScenePlan { Scene = s.Scene, Video = s.Video, RenderDuration = s.RenderDuration, Layers = new List<AssemblyLayerPlan>(s.Layers) }).ToList();
+                                return true;
+                            }
                         }
                         return false;
                     });
@@ -321,10 +365,13 @@ namespace VideoBatch {
                 bool disjoint=videos.SelectMany(v => v.Select(a => a.Hash)).GroupBy(h => h).All(g => g.Count()==1);
                 bool same = videos.All(v => new HashSet<string>(v.Select(a => a.Hash)).SetEquals(videos[0].Select(a => a.Hash)));
                 bool noSharedUnique = pictures.Where(p => p.Key.Unique).SelectMany(p => p.Value.Select(a => a.Hash)).GroupBy(h => h).All(g => g.Count()==1);
-                if ((template.ContinuousVideo || disjoint || same && (template.AllowVideoReuse || videos[0].Count >= videos.Count)) && noSharedUnique) {
+                if ((template.ContinuousVideo || disjoint || same && (template.AllowVideoReuse || videos[0].Count >= videos.Count)) && noSharedUnique && (!Split || !secondary.Any(v => videos.Any(pool => pool.Any(a => a.Hash == v.Hash))))) {
                     int n=videos[0].Count; BigInteger count=template.ContinuousVideo?n:1;
                     if (!template.ContinuousVideo) for (int i=0; i<videos.Count; i++) count *= disjoint ? videos[i].Count : (i<n ? n-i : n);
-                    if (Split) count*=secondary.Count;
+                    if (Split) {
+                        count *= secondary.Count;
+                        if (!template.SplitFixHalves) count *= 2;
+                    }
                     foreach (var pool in pictures.Values) count *= pool.Count;
                     result.Variants=count; result.Exact=true;
                     SubtractHistory(result);
@@ -370,7 +417,8 @@ namespace VideoBatch {
         bool Compatible(AssemblyPlan plan) {
             if (plan.Scenes.Count!=videos.Count) return false;
             var used=new HashSet<string>(); var images=new HashSet<string>();
-            if(Split && (plan.SecondaryVideo==null || !secondary.Any(v => v.Hash==plan.SecondaryVideo.Hash)) || !Split && plan.SecondaryVideo!=null) return false;
+            if(Split && (plan.SecondaryVideo==null || !secondary.Any(v => v.Hash==plan.SecondaryVideo.Hash) || plan.Scenes.Any(s => s.Video.Hash == plan.SecondaryVideo.Hash)) || !Split && plan.SecondaryVideo!=null) return false;
+            if (plan.SplitSwapped && (!Split || template.SplitFixHalves)) return false;
             var globals=template.GlobalLayers.Where(l => l.Enabled && pictures.ContainsKey(l)).ToList();
             if(globals.Count!=plan.GlobalLayers.Count)return false;
             for(int j=0;j<globals.Count;j++) {var l=globals[j];string hash=plan.GlobalLayers[j].Asset.Hash;if(!pictures[l].Any(a => a.Hash==hash) || l.Unique && !images.Add(hash))return false;}

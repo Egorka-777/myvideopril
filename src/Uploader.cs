@@ -138,11 +138,12 @@ namespace VideoBatch {
         [DataMember]public bool success,keptOpen;
         [DataMember]public string outcome,reason,waitStage;
         [DataMember]public int warmupCovered,warmupTotal,waitMs;
+        [DataMember]public int warmupOpened,warmupWatched,warmupTarget,warmupRemainingSec;
     }
     public class UploadRunResult {
         public bool Success,KeptOpen,ThumbnailWarning;
         public string Ip="",Url="",Error="",Outcome="",Reason="";
-        public int WarmupCovered,WarmupTotal;
+        public int WarmupCovered,WarmupTotal,WarmupOpened,WarmupWatched,WarmupTarget;
     }
 
     public static class DolphinRunner {
@@ -208,6 +209,7 @@ namespace VideoBatch {
                         if(!string.IsNullOrWhiteSpace(msg.outcome))result.Outcome=msg.outcome.Trim();
                         if(!string.IsNullOrWhiteSpace(msg.reason))result.Reason=msg.reason.Trim();
                         if(msg.warmupTotal>0||msg.warmupCovered>0){result.WarmupCovered=msg.warmupCovered;result.WarmupTotal=msg.warmupTotal;}
+                        if(msg.warmupTarget>0){result.WarmupOpened=msg.warmupOpened;result.WarmupWatched=msg.warmupWatched;result.WarmupTarget=msg.warmupTarget;}
                         if(msg.stage=="done"){
                             result.Success=msg.success;
                             if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase)){
@@ -1137,6 +1139,7 @@ namespace VideoBatch {
             finally{Interlocked.Decrement(ref operationsInFlight);}
         }
         public event Action<string> LogLine;
+        public event Action<string,UploadMessage> WarmupProgress;
         public void ReloadFromSettings(){
             workspaceKindView=NormKind(settings.YouTubeKindView);
             LoadGrid();LoadSearchFieldsForMarket();RefreshMarketUi();
@@ -1607,6 +1610,8 @@ namespace VideoBatch {
         }
         static string WarmupRowStatus(UploadRunResult result){
             if(result==null) return "Ошибка";
+            if(result.WarmupTarget>0&&(result.Success||result.Outcome=="partial"))
+                return "Завершено · открыто "+result.WarmupOpened+"/"+result.WarmupTarget+" · просмотрено "+result.WarmupWatched;
             if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase))
                 return "Частично · "+result.WarmupCovered+"/"+Math.Max(result.WarmupTotal,result.WarmupCovered)+" ключей";
             if(string.Equals(result.Outcome,"cancelled",StringComparison.OrdinalIgnoreCase)) return "Остановлено пользователем";
@@ -1944,13 +1949,17 @@ namespace VideoBatch {
             return new UploadJob{
                 token=token,localPort=settings.DolphinPort,profileId=ch.ProfileId,expectedIp=ch.ExpectedIp,
                 shortsWarmup=true,skipQueueDelay=true,checkOnly=false,keepProfileOpen=true,
-                warmupMinMinutes=10,warmupMaxMinutes=10,warmupKeywords=YouTubeWarmupPanel.KeywordsFor(settings,ch.Market),
+                warmupMinMinutes=15,warmupMaxMinutes=15,warmupKeywords=YouTubeWarmupPanel.KeywordsFor(settings,ch.Market),
                 warmupWatchMinSec=settings.YouTubeWarmupWatchMinSec,warmupWatchMaxSec=settings.YouTubeWarmupWatchMaxSec,
                 warmupLikesEnabled=settings.YouTubeWarmupLikesEnabled,warmupLikePercent=settings.YouTubeWarmupLikePercent
             };
         }
         async Task<UploadRunResult> RunWarmupForChannel(string token,YouTubeChannel ch,DataGridViewRow row,CancellationToken ct){
             var result=await DolphinRunner.Run(BuildWarmupJob(token,ch),m=>{
+                if(m.stage=="warmup_progress"||m.stage=="done"&&m.warmupTarget>0){
+                    WarmupProgress?.Invoke(ch.ProfileId,m);
+                    if(m.stage=="warmup_progress")return;
+                }
                 if(m.stage=="warmup_journal"){
                     string journal=m.text??"";
                     if(m.waitMs>0||!string.IsNullOrWhiteSpace(m.waitStage))
@@ -1990,7 +1999,7 @@ namespace VideoBatch {
                 token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 int batchSize=Math.Max(1,Math.Min(5,settings.WatchMaxParallelProfiles));
                 int batchTotal=(viewers.Count+batchSize-1)/batchSize;
-                Write("["+MarketLabel(marketView)+"] автопрогрев по ключам · "+viewers.Count+" акк. · 10 мин · пачки по "+batchSize+".");
+                Write("["+MarketLabel(marketView)+"] автопрогрев по ключам · "+viewers.Count+" акк. · 15 мин · цель 30 роликов · пачки по "+batchSize+".");
                 var errors=new ConcurrentBag<string>();
                 int ok=0,partial=0,interrupted=0,started=0;
                 bool cancelled=false;

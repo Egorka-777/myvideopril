@@ -77,6 +77,12 @@ namespace VideoBatch {
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
+        /// <summary>Обе половины экрана выбираются из общего набора видео (основная пачка + второе видео).</summary>
+        public bool SplitSharedPool;
+        /// <summary>Верх/низ (или лево/право) не меняются местами между связками.</summary>
+        public bool SplitFixHalves = true;
+        public bool PrimaryNativeAudio = true, SecondaryNativeAudio = true;
+        public double PrimaryNativeVolume = 1, SecondaryNativeVolume = 1;
         /// <summary>Доля первой половины (верх/слева), 0.25–0.75.</summary>
         public double SplitRatio = .5;
         public double SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
@@ -113,6 +119,26 @@ namespace VideoBatch {
             if (PackStudioVersion > 0 && AssemblyFiles.Pool(Resolve(scene.Videos), AssemblyFiles.VideoExtensions).Count == 0) return Videos;
             return scene.Videos;
         }
+        public List<string> SplitVideoPaths() {
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (ContinuousVideo) {
+                foreach (var p in AssemblyFiles.Pool(Resolve(Videos), AssemblyFiles.VideoExtensions)) paths.Add(p);
+            } else foreach (var scene in Scenes) {
+                foreach (var p in AssemblyFiles.Pool(Resolve(VideoSource(scene)), AssemblyFiles.VideoExtensions)) paths.Add(p);
+            }
+            foreach (var p in AssemblyFiles.Pool(Resolve(SecondaryVideos), AssemblyFiles.VideoExtensions)) paths.Add(p);
+            return paths.ToList();
+        }
+        public int SplitPoolFileCount() {
+            if (SplitLayout == "none") return 0;
+            if (!SplitSharedPool) {
+                int primary = ContinuousVideo
+                    ? AssemblyFiles.Pool(Resolve(Videos), AssemblyFiles.VideoExtensions).Count
+                    : Scenes.Sum(s => AssemblyFiles.Pool(Resolve(VideoSource(s)), AssemblyFiles.VideoExtensions).Count);
+                return primary + AssemblyFiles.Pool(Resolve(SecondaryVideos), AssemblyFiles.VideoExtensions).Count;
+            }
+            return SplitVideoPaths().Count;
+        }
         public string[] PictureExtensions { get { return PackStudioVersion > 0 ? AssemblyFiles.PictureExtensions : AssemblyFiles.ImageExtensions; } }
         public void Validate() {
             AssemblySpeechPlan.NormalizeSceneVoiceModes(this);
@@ -130,6 +156,8 @@ namespace VideoBatch {
             Check(SplitSoftness, 0, .5, "Мягкость границы"); Check(SplitRatio, .25, .75, "Доля первой половины");
             Check(SplitPrimaryZoom, .85, 1.15, "Масштаб первой половины"); Check(SplitSecondaryZoom, .85, 1.15, "Масштаб второй половины");
             Check(VoiceoverVolume, 0, 2, "Громкость озвучки");
+            Check(PrimaryNativeVolume, 0, 2, "Родной звук первой пачки");
+            Check(SecondaryNativeVolume, 0, 2, "Родной звук второй пачки");
             if (GlobalLayers == null) GlobalLayers = new List<AssemblyLayer>();
             if (Captions == null) Captions = new List<AssemblyCaption>();
             if (SubtitleStyle == null) SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
@@ -342,7 +370,7 @@ namespace VideoBatch {
         public List<AssemblyHistoryRecord> Records = new List<AssemblyHistoryRecord>();
     }
     public class AssemblyAsset { public string Path, Hash; }
-    public class AssemblyVideo { public string Path, Hash; public double Duration; }
+    public class AssemblyVideo { public string Path, Hash; public double Duration; public bool HasAudio; }
     public class AssemblyLayerPlan { public AssemblyLayer Layer; public AssemblyAsset Asset; public string Raster; }
     public class AssemblyScenePlan {
         public AssemblyScene Scene;
@@ -364,6 +392,8 @@ namespace VideoBatch {
         /// <summary>Effective duration for the selected voice file(s), with one second of visual tail.</summary>
         public double RenderDuration;
         public AssemblyVideo SecondaryVideo;
+        /// <summary>Вторая половина экрана показывает основное видео сцены, первая — второе видео.</summary>
+        public bool SplitSwapped;
         public List<AssemblyLayerPlan> GlobalLayers = new List<AssemblyLayerPlan>();
         public List<WarmupCaption> Captions = new List<WarmupCaption>();
         public double RollDuration(AssemblyTemplate t) => RenderDuration > 0 ? RenderDuration : t.Duration;

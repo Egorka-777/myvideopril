@@ -25,16 +25,20 @@ namespace VideoBatch {
         public static async Task<List<AssemblyVideo>> ReadVideos(AssemblyTemplate t, string ffmpeg, string probe, CancellationToken ct) {
             if (t.Scenes.Count == 0) return new List<AssemblyVideo>();
             for (int i=0;i<t.Scenes.Count;i++) if (AssemblyFiles.Pool(t.Resolve(t.ContinuousVideo?t.Videos:t.VideoSource(t.Scenes[i])),AssemblyFiles.VideoExtensions).Count==0) throw new Exception("Нет видео для сцены "+(i+1)+". Выбери общие видео или загрузи свои для этой сцены.");
-            if(t.SplitLayout!="none" && AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions).Count==0)throw new Exception("Добавь второе видео для разделённого экрана.");
+            if (t.SplitLayout != "none") {
+                if (t.SplitSharedPool) {
+                    if (t.SplitVideoPaths().Count < 2) throw new Exception("Для общей пачки при делении экрана нужно минимум 2 разных видео.");
+                } else if (AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos), AssemblyFiles.VideoExtensions).Count == 0) throw new Exception("Добавь второе видео для разделённого экрана.");
+            }
             var paths = t.Scenes.SelectMany(s => (t.ContinuousVideo ? new List<string> { t.Videos } : AssemblySceneVideoBuilder.Packs(t,s).Select(pack => pack.Source))
-                .SelectMany(source => AssemblyFiles.Pool(t.Resolve(source), AssemblyFiles.VideoExtensions))).Concat(t.SplitLayout!="none"?AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions):new List<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                .SelectMany(source => AssemblyFiles.Pool(t.Resolve(source), AssemblyFiles.VideoExtensions))).Concat(t.SplitLayout != "none" ? (t.SplitSharedPool ? t.SplitVideoPaths() : AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos), AssemblyFiles.VideoExtensions)) : new List<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (paths.Count == 0) throw new Exception("Не найдены видео. Нажми «Видео» слева и добавь хотя бы один файл.");
             var result = new List<AssemblyVideo>();
             foreach (var path in paths) {
                 ct.ThrowIfCancellationRequested();
                 string ready = await VideoSdr.EnsureReady(ffmpeg, probe, path, ct).ConfigureAwait(false);
                 var m = Core.VideoInfo(await Core.Probe(probe, ready, ct).ConfigureAwait(false));
-                result.Add(new AssemblyVideo { Path = ready, Duration = m.VideoDuration, Hash = AssemblyFiles.Hash(ready) });
+                result.Add(new AssemblyVideo { Path = ready, Duration = m.VideoDuration, HasAudio = m.HasAudio, Hash = AssemblyFiles.Hash(ready) });
             }
             var audioPaths=AssemblyFiles.Pool(t.Resolve(t.Music),AssemblyFiles.MusicExtensions).Concat(t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(s.Music),AssemblyFiles.MusicExtensions))).ToList();
             foreach (var line in t.SpeechLines ?? new List<AssemblySpeechLine>()) {

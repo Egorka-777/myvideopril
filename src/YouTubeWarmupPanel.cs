@@ -15,6 +15,7 @@ namespace VideoBatch {
         readonly DataGridView grid;
         readonly RichTextBox log;
         readonly Button marketRu, marketEn, likesToggle;
+        readonly Dictionary<string, UploadMessage> progressByProfile = new Dictionary<string, UploadMessage>();
         string marketView = "RU";
         bool likesOn = true;
 
@@ -60,7 +61,7 @@ namespace VideoBatch {
                 foreach (Control child in sliders.Controls) child.Width = w;
             };
             sliders.Controls.Add(new Label {
-                Text = "10 минут на аккаунт: поиск по ключам, обычные видео и Shorts. На запрос 2–5 разных роликов; просмотр от 5 секунд, иногда до конца или с перемоткой.",
+                Text = "15 минут на аккаунт, цель — 30 разных роликов. Поиск, реклама и переходы входят в сеанс. Длительность просмотра случайная с пересчётом по оставшемуся времени. Открытия и просмотры учитываются отдельно.",
                 ForeColor = Theme.TextMuted, AutoSize = false, Width = 340, Height = 84, Margin = new Padding(0, 0, 0, 10)
             });
             sliders.Controls.Add(new Label { Text = "Ключевые фразы — по одной на строку", AutoSize = true, ForeColor = Theme.TextPrimary });
@@ -127,6 +128,7 @@ namespace VideoBatch {
             grid.Columns.Add(onCol);
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "channel", HeaderText = "Канал", ReadOnly = true, FillWeight = 200 });
             grid.Columns["channel"].DefaultCellStyle.Font = new Font(Theme.FontBody.FontFamily, 10f, FontStyle.Bold);
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "session", HeaderText = "Осталось · открыто · просмотрено", ReadOnly = true, FillWeight = 220 });
             grid.CellValueChanged += (s, e) => { if (e.ColumnIndex == 0) PersistChecks(); };
             grid.CurrentCellDirtyStateChanged += (s, e) => { if (grid.IsCurrentCellDirty) grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
             accLayout.Controls.Add(grid, 0, 2);
@@ -146,6 +148,8 @@ namespace VideoBatch {
             root.Controls.Add(bottom, 0, 1);
 
             backend.LogLine += line => AppendLog(line);
+            backend.WarmupProgress += UpdateProgress;
+            Disposed += (s, e) => backend.WarmupProgress -= UpdateProgress;
             ReloadAccounts();
         }
 
@@ -191,12 +195,26 @@ namespace VideoBatch {
             }
         }
 
+        void UpdateProgress(string profile, UploadMessage message) {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke(new Action<string, UploadMessage>(UpdateProgress), profile, message); return; }
+            progressByProfile[profile] = message;
+            foreach (DataGridViewRow row in grid.Rows)
+                if (row.Tag is YouTubeChannel ch && ch.ProfileId == profile) row.Cells["session"].Value = ProgressText(message);
+        }
+
+        static string ProgressText(UploadMessage message) {
+            string time = TimeSpan.FromSeconds(message.warmupRemainingSec).ToString(@"mm\:ss");
+            return (message.stage == "done" ? "Завершено" : time) + " · " + message.warmupOpened + "/" + message.warmupTarget + " · " + message.warmupWatched;
+        }
+
         public void ReloadAccounts() {
             grid.Rows.Clear();
             foreach (var ch in settings.YouTubeChannels.Where(c => c != null && !string.IsNullOrWhiteSpace(c.ProfileId) && NormMarket(c.Market) == marketView)
                 .OrderBy(c => c.Name)) {
                 int i = grid.Rows.Add(ch.Enabled, ch.Name ?? "Канал");
                 grid.Rows[i].Tag = ch;
+                grid.Rows[i].Cells["session"].Value = progressByProfile.TryGetValue(ch.ProfileId, out UploadMessage message) ? ProgressText(message) : "— · 0/30 · 0";
                 grid.Rows[i].Cells["channel"].ToolTipText = (ch.Name ?? "") + "\nProfile " + (ch.ProfileId ?? "");
             }
         }
@@ -254,7 +272,7 @@ namespace VideoBatch {
 
         void SaveKeywordsBox() => SetKeywords(settings, marketView, keywords.Text);
         void SavePrefs() {
-            settings.YouTubeWarmupMinMinutes = settings.YouTubeWarmupMaxMinutes = 10;
+            settings.YouTubeWarmupMinMinutes = settings.YouTubeWarmupMaxMinutes = 15;
             SaveKeywordsBox();
             settings.YouTubeWarmupLikesEnabled = likesOn;
             settings.YouTubeWarmupLikePercent = (int)likePercent.Value;

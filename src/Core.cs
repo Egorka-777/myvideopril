@@ -615,7 +615,7 @@ namespace VideoBatch {
         public static string BundledYouTubeTitleBanksPath(){
             return Path.Combine(AppPaths.UploaderRoot,"youtube-title-banks.json");
         }
-        public const int CurrentYouTubeTitleBanksBundleRevision=3;
+        public const int CurrentYouTubeTitleBanksBundleRevision=4;
         [DataContract] class YouTubeTitleBanksDto {
             [DataMember] public int BundleRevision;
             [DataMember] public string[] TitleBankLongRu;
@@ -633,8 +633,17 @@ namespace VideoBatch {
                 return dto.BundleRevision>0?dto.BundleRevision:CurrentYouTubeTitleBanksBundleRevision;
             }catch{return 0;}
         }
-        static List<string> CleanTitleList(IEnumerable<string> src){
-            return (src??Enumerable.Empty<string>()).Select(x=>(x??"").Trim()).Where(x=>x.Length>0).Select(x=>x.Length>100?x.Substring(0,100).Trim():x).ToList();
+        static List<string> CleanTitleList(IEnumerable<string> src, bool english){
+            var tags = english ? new[] { "#trading", "#crypto", "#pocketoption" } : new[] { "#трейдинг", "#крипта", "#binodex" };
+            var orders = new[] { new[] { 0, 1, 2 }, new[] { 1, 2, 0 }, new[] { 2, 0, 1 }, new[] { 0, 2, 1 }, new[] { 2, 1, 0 }, new[] { 1, 0, 2 } };
+            return (src??Enumerable.Empty<string>()).Select(x=>(x??"").Trim()).Where(x=>x.Length>0).Select((text,index)=>{
+                foreach(var tag in tags) text=System.Text.RegularExpressions.Regex.Replace(text,System.Text.RegularExpressions.Regex.Escape(tag)+@"\b","",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                text=System.Text.RegularExpressions.Regex.Replace(text,@"\s+"," ").Trim();
+                string suffix=" "+string.Join(" ",orders[index%orders.Length].Select(i=>tags[i]));
+                int available=100-suffix.Length;
+                if(text.Length>available){int space=text.LastIndexOf(' ',available);text=text.Substring(0,space>0?space:available).TrimEnd(' ','|',':','-');}
+                return text+suffix;
+            }).ToList();
         }
         public static int ClampTitleCursor(int cursor,int bankCount){
             if(bankCount<=0)return 0;
@@ -649,10 +658,10 @@ namespace VideoBatch {
                 YouTubeTitleBanksDto dto;
                 using(var f=File.OpenRead(path))dto=(YouTubeTitleBanksDto)new DataContractJsonSerializer(typeof(YouTubeTitleBanksDto)).ReadObject(f);
                 if(dto==null)return false;
-                var longRu=CleanTitleList(dto.TitleBankLongRu);
-                var longEn=CleanTitleList(dto.TitleBankLongEn);
-                var shortRu=CleanTitleList(dto.TitleBankShortsRu);
-                var shortEn=CleanTitleList(dto.TitleBankShortsEn);
+                var longRu=CleanTitleList(dto.TitleBankLongRu, false);
+                var longEn=CleanTitleList(dto.TitleBankLongEn, true);
+                var shortRu=CleanTitleList(dto.TitleBankShortsRu, false);
+                var shortEn=CleanTitleList(dto.TitleBankShortsEn, true);
                 if(longRu.Count+longEn.Count+shortRu.Count+shortEn.Count==0)return false;
                 if(overwrite||p.TitleBankLongRu.Count==0)p.TitleBankLongRu=longRu;
                 if(overwrite||p.TitleBankLongEn.Count==0)p.TitleBankLongEn=longEn;

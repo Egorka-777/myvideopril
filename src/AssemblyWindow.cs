@@ -393,8 +393,10 @@ namespace VideoBatch {
                 subsToolbarButton.BackColor = subtitleWorkspaceActive ? Theme.Accent : Theme.Card;
                 subsToolbarButton.ForeColor = subtitleWorkspaceActive ? Color.White : Theme.TextPrimary;
             }
-            if (template.SplitLayout != "none" && Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Count == 0)
-                videoButton.ForeColor = Theme.Error;
+            if (template.SplitLayout != "none") {
+                bool splitBad = template.SplitSharedPool ? template.SplitVideoPaths().Count < 2 : Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Count == 0;
+                videoButton.ForeColor = splitBad ? Theme.Error : Theme.TextPrimary;
+            }
             else if (videoButton != null) videoButton.ForeColor = Theme.TextPrimary;
             var splitZoomRow = previewColumn?.Controls.Find("SplitZoomRow", true).FirstOrDefault() as Control;
             bool splitOn = template.SplitLayout != "none";
@@ -812,7 +814,10 @@ namespace VideoBatch {
                 if (!ToolsLocator.TryResolve(out string ffmpeg,out string probe,out string hint)) { status.Text = hint; return; }
                 int w = template.Width, h = template.Height; Directory.CreateDirectory(previewFolder); string file = Path.Combine(previewFolder,Guid.NewGuid().ToString("N") + ".jpg");
                 try {
-                    var second = Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions);
+                    var second = template.SplitSharedPool ? template.SplitVideoPaths() : Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions);
+                    string firstVideo = files[0];
+                    string firstHash = AssemblyFiles.Hash(firstVideo);
+                    second = second.Where(path => AssemblyFiles.Hash(path) != firstHash).ToList();
                     if (template.SplitLayout != "none" && second.Count > 0) {
                         bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
                         AssemblySplit.PaneSizes(template, out int primarySpan, out int secondarySpan, out int splitLine, out int feather);
@@ -821,7 +826,7 @@ namespace VideoBatch {
                         string padB = AssemblySplit.PadOffset(vertical, true, primarySpan, w, h);
                         string weight = AssemblySplit.BlendWeight(vertical, splitLine, feather);
                         string graph = "[0:v]" + AssemblySplit.Fill(pw, ph, template.Fps, template.SplitPrimaryZoom) + ",pad=" + w + ":" + h + ":0:0,format=yuv444p[a];[1:v]" + AssemblySplit.Fill(sw2, sh2, template.Fps, template.SplitSecondaryZoom) + ",pad=" + w + ":" + h + ":" + padB + ",format=yuv444p[b];[a][b]blend=all_expr='A*(1-(" + weight + "))+B*(" + weight + ")'[preview]";
-                        await Core.Tool(ffmpeg,new[] { "-v","error","-y","-i",files[0],"-i",second[0],"-filter_complex_threads","1","-filter_complex",graph,"-map","[preview]","-frames:v","1","-threads","1",file },ct.Token,null,60);
+                        await Core.Tool(ffmpeg,new[] { "-v","error","-y","-i",firstVideo,"-i",second[0],"-filter_complex_threads","1","-filter_complex",graph,"-map","[preview]","-frames:v","1","-threads","1",file },ct.Token,null,60);
                     } else await Core.Tool(ffmpeg,new[] { "-v","error","-y","-i",files[0],"-frames:v","1","-vf","scale="+w+":"+h+":force_original_aspect_ratio=increase,crop="+w+":"+h,"-threads","1",file },ct.Token,null,60);
                     if (version == previewVersion && !IsDisposed) using (var img = Image.FromFile(file)) canvas.SetBackground(new Bitmap(img));
                 } finally { if (File.Exists(file)) File.Delete(file); }
@@ -839,7 +844,7 @@ namespace VideoBatch {
             try {
                 var t=Store.Clone(template); string scope=AssemblyHistoryScope.Normalize(t.HistoryScope);
                 var files=t.Scenes.SelectMany(scene => Pool(t.VideoSource(scene),AssemblyFiles.VideoExtensions).Concat(Pool(scene.Music,AssemblyFiles.MusicExtensions)).Concat(scene.Layers.Where(l => l.Enabled).SelectMany(l => Pool(l.Source,t.PictureExtensions)))).Concat(Pool(t.Music,AssemblyFiles.MusicExtensions)).Concat(Pool(t.SecondaryVideos,AssemblyFiles.VideoExtensions)).Concat(t.GlobalLayers.Where(l => l.Enabled).SelectMany(l => Pool(l.Source,t.PictureExtensions))).Distinct().ToList();
-                string key=AssemblyFiles.HashText(t.ContinuousVideo+"|"+t.SecondaryVideos+"|"+t.SplitLayout+"|"+string.Join(";",t.GlobalLayers.Select(l => l.Source+":"+l.Enabled+":"+l.Fixed+":"+l.FixedAssetHash+":"+l.Unique))+"|"+t.Id+"|"+scope+"|"+t.LoopShortVideos+"|"+t.AllowVideoReuse+"|"+t.Transition+"|"+t.TransitionDuration+"|"+string.Join("|",t.Scenes.Select(scene => scene.Duration+":"+t.VideoSource(scene)+":"+string.Join(",",scene.Layers.Select(l => l.Enabled+":"+l.Source+":"+l.Unique+":"+l.Fixed+":"+l.FixedAssetHash))))+"|"+string.Join("|",files.Select(file => {var info=new FileInfo(file); return file+":"+info.Length+":"+info.LastWriteTimeUtc.Ticks;}))+"|"+HistoryLedgerFingerprint(historyFolder,scope));
+                string key=AssemblyFiles.HashText(t.ContinuousVideo+"|"+t.SecondaryVideos+"|"+t.SplitLayout+"|"+t.SplitSharedPool+"|"+t.SplitFixHalves+"|"+string.Join(";",t.GlobalLayers.Select(l => l.Source+":"+l.Enabled+":"+l.Fixed+":"+l.FixedAssetHash+":"+l.Unique))+"|"+t.Id+"|"+scope+"|"+t.LoopShortVideos+"|"+t.AllowVideoReuse+"|"+t.Transition+"|"+t.TransitionDuration+"|"+string.Join("|",t.Scenes.Select(scene => scene.Duration+":"+t.VideoSource(scene)+":"+string.Join(",",scene.Layers.Select(l => l.Enabled+":"+l.Source+":"+l.Unique+":"+l.Fixed+":"+l.FixedAssetHash))))+"|"+string.Join("|",files.Select(file => {var info=new FileInfo(file); return file+":"+info.Length+":"+info.LastWriteTimeUtc.Ticks;}))+"|"+HistoryLedgerFingerprint(historyFolder,scope));
                 if (key==capacityKey) return; capacityKey=key; capacityCancellation?.Cancel(); int version=++capacityVersion;
                 var ct=new CancellationTokenSource(); capacityCancellation=ct; capacityLabel.Text="Считаю новые связки…"; batchMaximum=0; UpdateCountControls();
                 try {
@@ -871,7 +876,7 @@ namespace VideoBatch {
                     var result = await Task.Run(() => AssemblyEngine.Run(t,ffmpeg,probe,historyFolder,AssemblyRaster.Save,updates,cancellation.Token));
                     ShowAssemblyBatchResult(result, "Сборка · " + AssemblyProfile.ShortLabel(studioProfile));
                 }
-            } catch (OperationCanceledException) { status.Text = "Сборка остановлена."; } catch (Exception e) { AppDiagnostics.Write("Сборка",studioProfile,"","error",e.Message,"error"); status.Text = e.Message; if (throwErrors) throw; Ui.Error(this,e); }
+            } catch (OperationCanceledException) { status.Text = "Сборка остановлена."; } catch (Exception e) { AppDiagnostics.Write("Сборка",studioProfile,"","error",e.ToString(),"error"); status.Text = e.Message; if (throwErrors) throw; Ui.Error(this,e); }
             finally { cancellation?.Dispose(); cancellation = null; Busy(false); capacityKey=null; RequestCapacity(); if (closeAfter) Close(); }
         }
         void ShowAssemblyBatchResult(BatchResult result, string title) {
@@ -888,7 +893,7 @@ namespace VideoBatch {
             string details = "Готовых роликов: " + result.Outputs.Count + "\n\n" + string.Join("\n\n", result.Errors);
             MessageBox.Show(this, details, title, MessageBoxButtons.OK, result.Outputs.Count == 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
         }
-        void Safe(Action action) { try { action(); } catch (Exception e) { AppDiagnostics.Write("Сборка",studioProfile,"","error",e.Message,"error"); if (throwErrors) throw; if (status != null) status.Text = e.Message; Ui.Error(this,e); } }
+        void Safe(Action action) { try { action(); } catch (Exception e) { AppDiagnostics.Write("Сборка",studioProfile,"","error",e.ToString(),"error"); if (throwErrors) throw; if (status != null) status.Text = e.Message; Ui.Error(this,e); } }
         protected override void Dispose(bool disposing) { if (disposing) { saveTimer.Dispose(); previewCancellation?.Cancel(); capacityCancellation?.Cancel(); cancellation?.Cancel(); } base.Dispose(disposing); }
     }
     public sealed class AssemblySceneRow : Panel {

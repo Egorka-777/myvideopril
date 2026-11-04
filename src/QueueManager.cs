@@ -76,8 +76,9 @@ namespace VideoBatch {
                 job.studioPaidPromotion=settings.YouTubeStudioPaidPromotion;job.studioAlteredContent=settings.YouTubeStudioAlteredContent;
                 for(int i=0;i<Items.Count;i++){
                     var meta=YouTubeMetadata.Build(settings,Channel,i+1);job.items[i].tags=meta.tags;
-                    // Studio uploads leave the channel's existing/default description untouched.
-                    job.items[i].description=null;
+                    // Only Shorts receive saved captions; Long retains the channel default.
+                    job.items[i].description=job.items[i].contentKind=="shorts"
+                        ? YouTubeMetadata.ShortsDescription(meta.description) : null;
                 }
             }
             return job;

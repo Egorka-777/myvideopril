@@ -33,6 +33,17 @@ namespace VideoBatch {
                     Check(item.scheduledUnixSeconds==new DateTimeOffset(slot).ToUnixTimeSeconds(),"PC instant");
                     Check(item.scheduledUtcOffsetMinutes==(int)TimeZoneInfo.Local.GetUtcOffset(slot).TotalMinutes,"offset at planned date");
                 }
+                Check(YouTubeMetadata.ShortsDescription("Ссылка в профиле\n\nПодпись\n#трейдинг")=="Подпись\n#трейдинг","RU profile header removed");
+                Check(YouTubeMetadata.ShortsDescription("Link in bio\r\n\r\nCaption")=="Caption","EN profile header removed");
+                Check(YouTubeMetadata.ShortsDescription("Обычная первая строка\nСсылка в профиле")=="Обычная первая строка\nСсылка в профиле","non-header text preserved");
+                foreach(string market in new[]{"RU","EN"}) {
+                    channel.Market=market;
+                    batch.Items[0].Kind="shorts";
+                    var mixed=batch.ToUploadJob("not-saved",3001,prefs);
+                    Check(!string.IsNullOrWhiteSpace(mixed.items[0].description),"Shorts caption restored "+market);
+                    Check(mixed.items.Skip(1).All(it=>it.description==null),"Long descriptions untouched in mixed batch");
+                }
+                channel.Market="RU";batch.Items[0].Kind="long";
                 string keys=YouTubeWarmupPanel.NormalizeKeywords("  трейдинг\r\nbinodex\nBINODEX\n\n бинодекс ");
                 Check(keys=="трейдинг\nbinodex\nбинодекс","warmup key normalization");
                 prefs.YouTubeWarmupKeywordsRu=keys;prefs.YouTubeWarmupKeywordsEn="pocket option ai";Store.Save(prefs);

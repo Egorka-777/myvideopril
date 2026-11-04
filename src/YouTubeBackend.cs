@@ -9,6 +9,7 @@ namespace VideoBatch {
         readonly Preferences settings;
         public UploadWindow Window { get; }
         public event Action<string> LogLine;
+        public event Action<string, UploadMessage> WarmupProgress;
 
         public YouTubeBackend(Preferences settings) {
             this.settings = settings;
@@ -20,6 +21,7 @@ namespace VideoBatch {
             Window.Size = new System.Drawing.Size(1, 1);
             Window.Opacity = 0;
             Window.LogLine += s => LogLine?.Invoke(s);
+            Window.WarmupProgress += (profile, message) => WarmupProgress?.Invoke(profile, message);
             var _ = Window.Handle;
         }
 
