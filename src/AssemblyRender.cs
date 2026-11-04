@@ -272,7 +272,7 @@ namespace VideoBatch {
             Directory.CreateDirectory(work);
             string cache = context.CacheDirectory ?? Path.Combine(work, "raster-cache"); Directory.CreateDirectory(cache);
             progress?.Invoke("Готовлю озвучку и субтитры…");
-            await AssemblySpeechPlan.Prepare(t, p, ffmpeg, probe, work, ct).ConfigureAwait(false);
+            await AssemblySpeechPlan.Prepare(t, p, ffmpeg, probe, work, ct, progress).ConfigureAwait(false);
             if (catalog != null && catalog.Count > 0)
                 AssemblySceneVideoBuilder.EnsureSegments(t, p, catalog, segmentRandom ?? new Random(), segmentMix);
             double roll = p.RollDuration(t);

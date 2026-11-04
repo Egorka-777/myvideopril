@@ -9,7 +9,7 @@ using System.Web.Script.Serialization;
 namespace VideoBatch {
     public static class AssemblySpeechPlan {
         public sealed class SpeechTiming {
-            public string AudioHash, Text;
+            public string AudioHash, Text, Source;
             public WarmupAlignment Alignment;
         }
         public static void SaveTiming(string audio, string text, WarmupAlignment alignment) {
@@ -96,7 +96,7 @@ namespace VideoBatch {
                 .Concat((t.Scenes ?? new List<AssemblyScene>()).SelectMany(s => SceneVoiceOptions(t, s)));
             return new HashSet<string>(paths.Select(AssemblyFiles.Hash));
         }
-        public static async Task Prepare(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string work, CancellationToken ct) {
+        public static async Task Prepare(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string work, CancellationToken ct, Action<string> progress = null) {
             p.RenderDuration = 0;
             if (t.HasSceneVoiceovers) {
                 // Each scene gets the duration of the selected voice file, not
@@ -114,9 +114,9 @@ namespace VideoBatch {
                         scene.VoiceSeconds = Core.AudioDuration(await Core.Probe(probe, scene.Voiceover, ct).ConfigureAwait(false));
                         if (scene.VoiceSeconds <= 0) throw new Exception("Не удалось определить длительность озвучки: " + scene.Voiceover);
                         scene.ContentSeconds = Math.Ceiling(scene.VoiceSeconds * t.Fps - 0.00001) / t.Fps;
-                        if (t.SubtitleStyle?.Enabled == true && File.Exists(scene.Voiceover + ".timing.json")) {
+                        if (t.SubtitleStyle?.Enabled == true) {
                             var line = AvailableLines(t).FirstOrDefault(l => string.Equals(t.Resolve(l.AudioPath), scene.Voiceover, StringComparison.OrdinalIgnoreCase));
-                            foreach (var cue in CaptionsForAudio(t, scene.Voiceover, line?.Text, scene.VoiceSeconds)) {
+                            foreach (var cue in await EnsureCaptionsForAudioAsync(t, scene.Voiceover, line?.Text, scene.VoiceSeconds, ct, progress).ConfigureAwait(false)) {
                                 cue.Start += start;
                                 cue.End += start;
                                 foreach (var word in cue.Words) { word.Start += start; word.End += start; }
@@ -150,7 +150,7 @@ namespace VideoBatch {
                 }
                 if (t.SubtitleStyle?.Enabled == true && !string.IsNullOrWhiteSpace(p.Voiceover)) {
                     var line = AvailableLines(t).FirstOrDefault(l => string.Equals(t.Resolve(l.AudioPath), p.Voiceover, StringComparison.OrdinalIgnoreCase));
-                    p.Captions = CaptionsForAudio(t, p.Voiceover, line?.Text, voiceSeconds);
+                    p.Captions = await EnsureCaptionsForAudioAsync(t, p.Voiceover, line?.Text, voiceSeconds, ct, progress).ConfigureAwait(false);
                 }
             }
             p.Captions = t.SubtitleStyle?.Enabled == true
@@ -170,19 +170,61 @@ namespace VideoBatch {
             return longest;
         }
         public static List<WarmupCaption> CaptionsForAudio(AssemblyTemplate t, string audio, string text, double duration) {
-            string file = audio + ".timing.json";
-            if (!File.Exists(file)) throw new Exception("У озвучки «" + Path.GetFileName(audio) + "» нет точных таймкодов. Создайте новую озвучку в ElevenLabs или отключите субтитры. Старые MP3 автоматически в API не отправляются.");
-            var timing = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Deserialize<SpeechTiming>(File.ReadAllText(file));
-            if (timing == null || timing.AudioHash != AssemblyFiles.Hash(audio) || text != null && timing.Text != text)
-                throw new Exception("Текст или аудиофайл изменились после генерации таймкодов. Создайте новую озвучку для синхронных субтитров.");
-            return WarmupSubtitles.Cues(timing.Alignment, duration, t.SubtitleStyle?.WordsPerCaption ?? 3);
+            var cues = CachedCaptions(t, audio, text, duration);
+            if (cues != null) return cues;
+            throw new Exception("У озвучки «" + Path.GetFileName(audio) + "» ещё нет субтитров. Нажмите «Субтитры → Распознать аудио». При сборке речь также распознаётся автоматически; повторная генерация в ElevenLabs не нужна.");
+        }
+        internal static List<WarmupCaption> CachedCaptions(AssemblyTemplate t, string audio, string text, double duration) {
+            if (string.IsNullOrWhiteSpace(audio) || !File.Exists(audio)) return null;
+            string hash = AssemblyFiles.Hash(audio);
+            foreach (string file in new[] { audio + ".timing.json", LocalAudioTranscription.CacheFile(hash) }) {
+                if (!File.Exists(file)) continue;
+                try {
+                    var timing = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Deserialize<SpeechTiming>(File.ReadAllText(file));
+                    if (timing?.AudioHash != hash || timing.Alignment == null) continue;
+                    if (timing.Source != "faster-whisper/small" && text != null && timing.Text != text) continue;
+                    double length = duration > 0 ? duration : (timing.Alignment.character_end_times_seconds ?? new double[0]).DefaultIfEmpty(0).Max();
+                    return WarmupSubtitles.Cues(timing.Alignment, length, t.SubtitleStyle?.WordsPerCaption ?? 3);
+                } catch (IOException) { } catch (ArgumentException) { } catch (InvalidOperationException) { } catch (Exception e) {
+                    AppDiagnostics.Write("Субтитры", "", "speech", "cache", "Таймкоды не подходят к аудио: " + Path.GetFileName(audio) + " · " + e.Message);
+                }
+            }
+            return null;
+        }
+        public static bool HasTiming(string audio) => CachedCaptions(new AssemblyTemplate(), audio, null, 0) != null;
+        static async Task<List<WarmupCaption>> EnsureCaptionsForAudioAsync(AssemblyTemplate t, string audio, string text, double duration, CancellationToken ct, Action<string> progress) {
+            var cues = CachedCaptions(t, audio, text, duration);
+            if (cues != null) return cues;
+            bool repair = HasTiming(audio);
+            // Another render may have completed this same audio while we waited.
+            if (repair) { cues = CachedCaptions(t, audio, text, duration); if (cues != null) return cues; }
+            await LocalAudioTranscription.PrepareAsync(new[] { audio }, ct, progress, force: repair).ConfigureAwait(false);
+            return CaptionsForAudio(t, audio, null, duration);
         }
         public static async Task<List<WarmupCaption>> BuildCaptionsFromSpeechAsync(AssemblyTemplate t, string probe, CancellationToken ct) {
+            if (t.HasSceneVoiceovers) {
+                var result = new List<WarmupCaption>(); double offset = 0;
+                foreach (var scene in t.Scenes) {
+                    ct.ThrowIfCancellationRequested();
+                    string source = SceneVoiceOptions(t, scene).FirstOrDefault(); double seconds = scene.Duration;
+                    if (source != null) {
+                        double duration = Core.AudioDuration(await Core.Probe(probe, source, ct).ConfigureAwait(false));
+                        seconds = Math.Ceiling(duration * t.Fps - .00001) / t.Fps;
+                        foreach (var cue in CachedCaptions(t, source, null, duration) ?? new List<WarmupCaption>()) {
+                            cue.Start += offset; cue.End += offset;
+                            foreach (var word in cue.Words) { word.Start += offset; word.End += offset; }
+                            result.Add(cue);
+                        }
+                    }
+                    offset += seconds + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
+                }
+                return result;
+            }
             string audio = await ResolveVoiceoverAsync(t, "", probe, "", ct).ConfigureAwait(false);
             var line = AvailableLines(t).FirstOrDefault(l => string.Equals(t.Resolve(l.AudioPath), audio, StringComparison.OrdinalIgnoreCase));
-            if (string.IsNullOrWhiteSpace(audio) || !File.Exists(audio + ".timing.json")) return new List<WarmupCaption>();
+            if (string.IsNullOrWhiteSpace(audio)) return new List<WarmupCaption>();
             double length = Core.AudioDuration(await Core.Probe(probe, audio, ct).ConfigureAwait(false));
-            return CaptionsForAudio(t, audio, line?.Text, length);
+            return CachedCaptions(t, audio, line?.Text, length) ?? new List<WarmupCaption>();
         }
     }
 }

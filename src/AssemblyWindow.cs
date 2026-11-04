@@ -447,12 +447,18 @@ namespace VideoBatch {
             if (sceneIndex < 0 || sceneIndex >= template.Scenes.Count) return 0;
             double t = 0;
             for (int i = 0; i < sceneIndex; i++) {
-                t += template.Scenes[i].Duration;
+                t += SubtitlePreviewSceneSeconds(template.Scenes[i]);
                 if (template.SceneTimingVersion > 0 && template.Transition != "cut") t += template.TransitionSeconds;
             }
             var scene = template.Scenes[sceneIndex];
-            t += Math.Max(.05, Math.Min(scene.Duration * .4, Math.Max(0, scene.Duration - .05)));
+            double seconds = SubtitlePreviewSceneSeconds(scene);
+            t += Math.Max(.05, Math.Min(seconds * .4, Math.Max(0, seconds - .05)));
             return t;
+        }
+        double SubtitlePreviewSceneSeconds(AssemblyScene scene) {
+            string audio = template.HasSceneVoiceovers ? AssemblySpeechPlan.SceneVoiceOptions(template, scene).FirstOrDefault() : null;
+            return audio != null && voiceDurations.TryGetValue(audio, out double seconds)
+                ? Math.Ceiling(seconds * template.Fps - .00001) / template.Fps : scene.Duration;
         }
         List<WarmupCaption> PreviewCaptionCues() {
             if (previewSpeechCaptions != null && previewSpeechCaptions.Count > 0) return previewSpeechCaptions;
@@ -784,7 +790,12 @@ namespace VideoBatch {
                         voiceDurations[path] = seconds;
                     }
                 }
-                if (template.HasSceneVoiceovers) { timingAnchorDuration = null; previewSpeechCaptions = null; RefreshInfo(); RefreshCanvas(); return; }
+                if (template.HasSceneVoiceovers) {
+                    var captions = ToolsLocator.TryResolve(out _, out string sceneProbe, out _)
+                        ? await Task.Run(() => AssemblySpeechPlan.BuildCaptionsFromSpeechAsync(template, sceneProbe, ct.Token), ct.Token) : null;
+                    if (version == timingVersion && !IsDisposed) { timingAnchorDuration = null; previewSpeechCaptions = captions; RefreshInfo(); RefreshCanvas(); UpdateSubtitleTimingMessage(); }
+                    return;
+                }
                 if (!ToolsLocator.TryResolve(out _, out string probe, out _)) { timingAnchorDuration = null; previewSpeechCaptions = null; RefreshInfo(); return; }
                 double? total = await Task.Run(async () => await AssemblySpeechPlan.ResolveVoiceoverDurationAsync(template, probe, ct.Token).ConfigureAwait(false), ct.Token);
                 List<WarmupCaption> speechCaptions = null;

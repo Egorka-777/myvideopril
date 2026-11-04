@@ -19,8 +19,9 @@ namespace VideoBatch {
         bool loading;
         public WarmupSubtitleStyle Style { get; private set; }
         public bool EditCaptions { get; private set; }
+        public bool RecognizeAudio { get; private set; }
 
-        public SubtitleStyleDialog(WarmupSubtitleStyle current, IEnumerable<WarmupCaption> captions = null, Image background = null, int canvasWidth = 1080, int canvasHeight = 1920, bool canEditCaptions = false) {
+        public SubtitleStyleDialog(WarmupSubtitleStyle current, IEnumerable<WarmupCaption> captions = null, Image background = null, int canvasWidth = 1080, int canvasHeight = 1920, bool canEditCaptions = false, bool canRecognizeAudio = false) {
             Style = (current ?? new WarmupSubtitleStyle()).Copy(); Style.Normalize();
             cues = (captions ?? Enumerable.Empty<WarmupCaption>()).Where(c => c != null).ToList();
             if (cues.Count == 0) cues.Add(new WarmupCaption { Text = "Твой стиль — твои слова", Start = 0, End = 3,
@@ -43,6 +44,7 @@ namespace VideoBatch {
             stylesTab = Theme.MakeHeroToggle("Стили", true, () => showStyles(true)); settingsTab = Theme.MakeHeroToggle("Настройки", false, () => showStyles(false));
             stylesTab.Width = 100; settingsTab.Width = 130;
             switches.Controls.Add(stylesTab); switches.Controls.Add(settingsTab); tabs.Controls.Add(switches, 0, 0); tabs.Controls.Add(pages, 0, 1); root.Controls.Add(tabs, 1, 0);
+            if (canRecognizeAudio) switches.Controls.Add(Theme.MakeButton("Распознать аудио", ghost: true, action: () => { RecognizeAudio = true; DialogResult = DialogResult.OK; Close(); }));
             cards = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, BackColor = Theme.Card }; gallery.Controls.Add(cards);
             cards.ClientSizeChanged += (s, e) => { foreach (Control card in cards.Controls) card.Width = Math.Max(170, (cards.ClientSize.Width - 36) / 2); };
             var fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Padding = new Padding(0, 0, 12, 0) };
