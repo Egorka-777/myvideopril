@@ -97,6 +97,11 @@ namespace VideoBatch {
                 Check(Path.GetDirectoryName(renamed)==root,"rename does not create a staging copy");
                 Check(File.ReadAllText(occupied)=="existing bytes"&&File.ReadAllText(renamed)=="source bytes","collision keeps both files intact");
                 Check(UploadWindow.RenameVideoFile(renamed,"Новый заголовок",1,1)==renamed,"reselecting same title is idempotent");
+                string preparedCopy=Path.Combine(root,"prepared-copy.mp4");File.WriteAllText(preparedCopy,"prepared");
+                string keptBecauseAssigned=Path.Combine(root,"still-assigned.mp4");File.WriteAllText(keptBecauseAssigned,"shared");
+                prefs.YouTubeChannels=new List<YouTubeChannel>{new YouTubeChannel{Items=new List<YouTubeItem>{new YouTubeItem{Video=keptBecauseAssigned}}}};
+                Check(UploadPreparation.ConsumeSources(new[]{renamed,keptBecauseAssigned},new[]{preparedCopy},path=>UploadPreparation.IsAssignedVideo(prefs,path))==1,"taken source leaves the shared folder");
+                Check(!File.Exists(renamed)&&File.Exists(keptBecauseAssigned)&&File.Exists(preparedCopy),"only unreferenced originals are removed");
                 foreach(var stage in new[]{"studio_date","studio_zone","studio_time","metadata_title","metadata_description","metadata_options","metadata_tags","studio_steps","studio_schedule","studio_publish","studio_close","studio_checks","studio_verify"})
                     Check(TaskQueueStore.MapStage(stage)==TaskQueueStatus.Scheduling,"Studio phase remains active: "+stage);
                 Check(TaskQueueStore.MapStage("upload_transfer")==TaskQueueStatus.Uploading,"upload transfer keeps active queue status");

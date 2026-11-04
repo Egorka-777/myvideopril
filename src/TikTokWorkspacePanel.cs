@@ -716,7 +716,7 @@ namespace VideoBatch {
 
                     RefreshGrid(skipSync: true);
 
-                    AppendLog("Добавлено видео: " + d.FileNames.Length + " → " + acc.Name);
+                    AppendLog("Добавлено видео: " + d.FileNames.Length + " → " + acc.Name + ". Исходники убраны из общей папки.");
 
                     AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
                 } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(acc, "Подготовка отменена"); AppendLog(acc.Name + ": подготовка отменена. Исходники сохранены."); } }

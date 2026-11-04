@@ -24,6 +24,37 @@ namespace VideoBatch {
         public static string YouTubeKey(YouTubeChannel channel) => Key("YouTube", string.IsNullOrWhiteSpace(channel.ChannelId) ? channel.ProfileId : channel.ChannelId, channel.Market);
         public static string TikTokKey(TikTokAccount account) => Key("TikTok", account.ProfileId, account.Market);
         public static void DeleteOutputs(IEnumerable<string> files) { foreach (string file in files ?? Enumerable.Empty<string>()) try { if (File.Exists(file)) File.Delete(file); } catch { } }
+        /// <summary>Removes taken originals from the shared folder after a prepared copy is assigned. Keeps any path still referenced elsewhere.</summary>
+        public static int ConsumeSources(IEnumerable<string> sources, IEnumerable<string> keep, Func<string, bool> stillReferenced = null) {
+            var preserve = new HashSet<string>((keep ?? Enumerable.Empty<string>()).Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => Path.GetFullPath(p)), StringComparer.OrdinalIgnoreCase);
+            int removed = 0;
+            foreach (string file in sources ?? Enumerable.Empty<string>()) {
+                if (string.IsNullOrWhiteSpace(file)) continue;
+                string path = Path.GetFullPath(file);
+                if (preserve.Contains(path)) continue;
+                if (stillReferenced != null && stillReferenced(path)) continue;
+                try { if (File.Exists(path)) { File.Delete(path); removed++; } } catch { }
+            }
+            return removed;
+        }
+        public static bool IsAssignedVideo(Preferences prefs, string path) {
+            if (prefs == null || string.IsNullOrWhiteSpace(path)) return false;
+            string full;
+            try { full = Path.GetFullPath(path); } catch { return false; }
+            foreach (var channel in prefs.YouTubeChannels ?? new List<YouTubeChannel>()) {
+                if (SamePath(channel.Video, full)) return true;
+                foreach (var item in channel.Items ?? new List<YouTubeItem>()) if (item != null && SamePath(item.Video, full)) return true;
+            }
+            foreach (var account in prefs.TikTokAccounts ?? new List<TikTokAccount>())
+                foreach (var item in account.Items ?? new List<TikTokItem>()) if (item != null && SamePath(item.Video, full)) return true;
+            return false;
+        }
+        public static bool IsAssignedVideo(string path) => IsAssignedVideo(Store.Load(), path);
+        static bool SamePath(string left, string right) {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+            try { return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
         public static bool IsBusy(string key) { lock (sync) return jobs.ContainsKey(key); }
         public static UploadPreparationProgress State(string key) { lock (sync) { states.TryGetValue(key, out UploadPreparationProgress state); return state; } }
         public static void Cancel(string key) { lock (sync) if (jobs.TryGetValue(key, out CancellationTokenSource job)) job.Cancel(); }

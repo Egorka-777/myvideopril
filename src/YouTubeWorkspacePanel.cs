@@ -731,7 +731,7 @@ namespace VideoBatch {
                         AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare", state.Caption + " · " + state.File);
                     });
                     await backend.AssignPreparedVideosToChannelAsync(ch, d.FileNames, progress);
-                    if (!IsDisposed) { RefreshGrid(); AppendLog(ch.Name + ": подготовлено 100% · " + d.FileNames.Length + " видео."); }
+                    if (!IsDisposed) { RefreshGrid(); AppendLog(ch.Name + ": подготовлено 100% · " + d.FileNames.Length + " видео. Исходники убраны из общей папки."); }
                     AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
                 } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(ch, "Подготовка отменена"); AppendLog(ch.Name + ": подготовка отменена. Исходники сохранены."); } }
                 catch (Exception ex) { AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { MarkPreparationStopped(ch, "Ошибка подготовки"); AppendLog(ch.Name + ": ошибка подготовки · " + ex.Message); } }

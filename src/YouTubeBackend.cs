@@ -53,12 +53,15 @@ namespace VideoBatch {
         public void AssignVideosToChannel(YouTubeChannel channel, string[] files) { Window.AssignVideosToChannel(channel, files); }
         public async Task AssignPreparedVideosToChannelAsync(YouTubeChannel channel, string[] files, IProgress<UploadPreparationProgress> progress) {
             string[] prepared = null;
+            string[] sources = null;
             try {
                 if (!string.IsNullOrWhiteSpace(channel.Market)) Window.SetMarketView(channel.Market);
-                files = Window.RenamePickedVideosInPlace(channel, files);
-                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, files, settings, progress);
+                sources = Window.RenamePickedVideosInPlace(channel, files);
+                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, sources, settings, progress);
                 if (Window.IsDisposed) throw new OperationCanceledException();
                 Window.AssignVideosToChannel(channel, prepared, true);
+                int removed = UploadPreparation.ConsumeSources(sources, prepared, path => UploadPreparation.IsAssignedVideo(settings, path));
+                if (removed > 0) LogLine?.Invoke("«" + channel.Name + "»: исходники убраны из общей папки · " + removed + ".");
             } catch { UploadPreparation.DeleteOutputs(prepared); throw; }
         }
         public void SelectChannel(YouTubeChannel channel) { Window.SelectChannel(channel); }
@@ -110,6 +113,8 @@ namespace VideoBatch {
                 prepared = await UploadPreparation.PrepareAsync(UploadPreparation.TikTokKey(account), "TikTok", account.ProfileId, files, settings, progress);
                 if (Window.IsDisposed) throw new OperationCanceledException();
                 Window.AssignVideosToProfile(account.ProfileId, account.Market, prepared, true);
+                int removed = UploadPreparation.ConsumeSources(files, prepared, path => UploadPreparation.IsAssignedVideo(settings, path));
+                if (removed > 0) LogLine?.Invoke("«" + account.Name + "»: исходники убраны из общей папки · " + removed + ".");
             } catch { UploadPreparation.DeleteOutputs(prepared); throw; }
         }
 
