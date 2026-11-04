@@ -114,6 +114,28 @@ namespace VideoBatch {
                         }
                     }
                 }
+                var scaled=new AssemblyLayer{Source=image,X=.1,Y=.2,Width=1,Height=.15};
+                double before=AssemblyRaster.ImageScalePercent(t,scaled);
+                if(before>=100) throw new Exception("Legacy hidden box reported as full image");
+                AssemblyRaster.SetImageScale(t,scaled,100);
+                var single=AssemblyRaster.LayerImageBounds(t,scaled,new Size(40,20));
+                if(Math.Abs(single.Width-t.Width)>.01 || Math.Abs(AssemblyRaster.ImageScalePercent(t,scaled)-100)>.01) throw new Exception("Single image cannot reach frame width");
+                scaled.Source=temp;
+                AssemblyRaster.SetImageScale(t,scaled,100);
+                foreach(var size in sizes) {
+                    var bounds=AssemblyRaster.LayerImageBounds(t,scaled,size);
+                    if(bounds.Left<-.01 || bounds.Top<-.01 || bounds.Right>t.Width+.01 || bounds.Bottom>t.Height+.01) throw new Exception("Pack image escaped frame");
+                    if(Math.Abs(bounds.Width/size.Width-single.Width/40)<.01) throw new Exception("Pack scale did not account for larger images");
+                }
+                var small=AssemblyRaster.LayerImageBounds(t,scaled,new Size(40,20));
+                var large=AssemblyRaster.LayerImageBounds(t,scaled,new Size(80,40));
+                if(Math.Abs(large.Width-small.Width*2)>.01) throw new Exception("Relative image sizes lost");
+                AssemblyRaster.SetImageScale(t,scaled,50);
+                if(Math.Abs(AssemblyRaster.ImageScalePercent(t,scaled)-50)>.01) throw new Exception("Pack slider roundtrip");
+                using(var bitmap=AssemblyRaster.Create(t,new AssemblyLayerPlan{Layer=scaled,Asset=new AssemblyAsset{Path=image}})) {
+                    var bounds=AssemblyRaster.LayerImageBounds(t,scaled,new Size(40,20));
+                    if(bitmap.GetPixel((int)(bounds.X+bounds.Width/2),(int)(bounds.Y+bounds.Height/2)).A<200) throw new Exception("Scaled raster disagrees with preview geometry");
+                }
                 return true;
             } finally { Directory.Delete(temp, true); }
         }

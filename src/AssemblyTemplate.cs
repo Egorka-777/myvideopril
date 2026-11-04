@@ -13,6 +13,7 @@ namespace VideoBatch {
         public string Name = "Изображение", Source = "";
         public bool Enabled = true, Unique = false, Fixed = false, PlacementConfigured = false, ModeExplicit = false;
         public string FixedAssetHash = "", ObjectId = Guid.NewGuid().ToString("N");
+        public bool UniformImageScale;
         public double X = .08, Y = .35, Width = .84, Height = .25, Opacity = 1;
         public double Start = 0, End = 0; // End=0 means until the end of this scene.
         /// <summary>all | primary | continuation — which video part shows this image.</summary>

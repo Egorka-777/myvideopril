@@ -283,7 +283,7 @@ namespace VideoBatch {
         }
         void SelectScene(int index) { ShowSceneWorkspace(); globalEditing = false; sceneIndex = template.Scenes.Count==0 ? -1 : Math.Max(0,Math.Min(index,template.Scenes.Count - 1)); layerIndex = SelectedScene==null ? -1 : 0; loading = true; duration.Enabled=SelectedScene!=null; if (SelectedScene!=null) duration.Value = (decimal)SelectedScene.Duration; loading = false; canvas.SetBackground(null); LoadLayer(); RefreshChips(); RefreshCanvas(); RefreshInfo(); RequestBackground(); }
         void LoadLayer() {
-            loading=true; width.Enabled=SelectedLayer!=null; if (SelectedLayer!=null) width.Value=(decimal)(SelectedLayer.Width*100); loading=false;
+            loading=true; width.Enabled=SelectedLayer!=null; if (SelectedLayer!=null) width.Value=Math.Max(width.Minimum,Math.Min(width.Maximum,(decimal)AssemblyRaster.ImageScalePercent(template,SelectedLayer))); loading=false;
         }
         void SelectObject(int index) { layerIndex=index; LoadLayer(); RefreshChips(); RefreshCanvas(); }
         void OpenSceneImages() {
@@ -520,10 +520,9 @@ namespace VideoBatch {
             Changed(false);
         }
         void ChangeSize() {
-            if (loading || SelectedLayer == null) return; var l = SelectedLayer; double next = (double)width.Value / 100;
-            double maximum = Math.Min(1, l.Width / l.Height);
-            next = Math.Min(next, maximum);
-            l.PlacementConfigured = true; l.Height = l.Height * next / l.Width; l.Width = next; l.X = Math.Min(l.X,1 - l.Width); l.Y = Math.Min(l.Y,1 - l.Height); LoadLayer(); Changed(false);
+            if (loading || SelectedLayer == null) return;
+            AssemblyRaster.SetImageScale(template,SelectedLayer,(double)width.Value);
+            LoadLayer(); Changed(false);
         }
         void Place(double at) { if (SelectedLayer == null) return; var l = SelectedLayer; l.PlacementConfigured = true; l.X = (1 - l.Width)/2; l.Y = at == -1 ? (1 - l.Height)/2 : at == -2 ? Math.Max(0,.92 - l.Height) : Math.Min(at,1 - l.Height); Changed(false); }
         void Changed(bool background) { RefreshInfo(); RefreshCanvas(); saveTimer.Stop(); saveTimer.Start(); if (background) RequestBackground(); RequestTimingHints(); }
@@ -669,10 +668,12 @@ namespace VideoBatch {
                     catch (Exception e) { throw new Exception("Не удалось открыть картинку «" + Path.GetFileName(file) + "». Проверь файл или загрузи другую картинку.",e); }
                 }
                 if (kind==2 && SelectedLayer==null) AddObject();
+                double imagePercent=kind==2 && SelectedLayer.UniformImageScale ? AssemblyRaster.ImageScalePercent(template,SelectedLayer) : 0;
                 string source = Source(kind); bool empty = Pool(source,Extensions(kind)).Count == 0;
                 string fallback = kind == 0 ? "Видео" : kind == 1 ? "Музыка" : Path.Combine(kind == 2 && globalEditing ? "Весь-ролик" : SelectedScene.Folder,kind == 3 ? "Видео" : kind == 4 ? "Видео-продолжение" : "Изображения");
                 int added = AssemblyWorkspace.Import(template,ref source,fallback,files,Extensions(kind),replace); if ((kind==3 || kind==4) && added==0) return; SetSource(kind,source);
                 if (kind == 2 && added > 0) { SelectedLayer.Enabled = true; var first = Pool(source,Extensions(kind)).FirstOrDefault(); if (first != null && !SelectedLayer.PlacementConfigured) FitImage(SelectedLayer,first); if (SelectedLayer.Fixed && first != null && (replace || empty && string.IsNullOrWhiteSpace(SelectedLayer.FixedAssetHash))) SelectedLayer.FixedAssetHash=AssemblyFiles.Hash(first); previewImages.Remove(SelectedLayer); {var pool=Pool(source,Extensions(kind)); SelectedLayer.Fixed=pool.Select(AssemblyFiles.Hash).Distinct().Count()==1; SelectedLayer.Unique=false; SelectedLayer.FixedAssetHash=SelectedLayer.Fixed ? AssemblyFiles.Hash(pool[0]) : "";} }
+                if(kind==2 && imagePercent>0) AssemblyRaster.SetImageScale(template,SelectedLayer,imagePercent);
                 LoadLayer(); RefreshChips(); Changed(kind != 1); Save(); status.Text = "Добавлено вариантов: " + added + ". Расположение объекта сохранено.";
             });
         }
@@ -1017,6 +1018,7 @@ namespace VideoBatch {
         RectangleF Box(AssemblyLayer l) {
             var f = Frame;
             var box = new RectangleF(f.X + (float)l.X * f.Width, f.Y + (float)l.Y * f.Height, (float)l.Width * f.Width, (float)l.Height * f.Height);
+            if(l.UniformImageScale) return box;
             return sourceSizes.TryGetValue(l, out Size size) ? AssemblyRaster.FitImageBounds(box, size) : box;
         }
         protected override void OnPaint(PaintEventArgs e) {

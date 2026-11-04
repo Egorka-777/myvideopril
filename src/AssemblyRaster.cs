@@ -12,6 +12,49 @@ namespace VideoBatch {
             float width = imageSize.Width * ratio, height = imageSize.Height * ratio;
             return new RectangleF(box.X + (box.Width - width) / 2, box.Y + (box.Height - height) / 2, width, height);
         }
+        public static Size ImageEnvelope(AssemblyTemplate t, AssemblyLayer layer) {
+            int width=0,height=0;
+            foreach(var file in AssemblyFiles.Pool(t.Resolve(layer.Source),AssemblyFiles.PictureExtensions)) {
+                if(Path.GetExtension(file).Equals(".txt",StringComparison.OrdinalIgnoreCase)) continue;
+                using(var image=Image.FromFile(file)) { width=Math.Max(width,image.Width); height=Math.Max(height,image.Height); }
+            }
+            return new Size(width,height);
+        }
+        public static RectangleF LayerImageBounds(AssemblyTemplate t, AssemblyLayer layer, Size imageSize) {
+            var box=new RectangleF((float)(layer.X*t.Width),(float)(layer.Y*t.Height),(float)(layer.Width*t.Width),(float)(layer.Height*t.Height));
+            if(!layer.UniformImageScale) return FitImageBounds(box,imageSize);
+            var envelope=ImageEnvelope(t,layer);
+            if(envelope.IsEmpty) return FitImageBounds(box,imageSize);
+            float scale=Math.Min(box.Width/envelope.Width,box.Height/envelope.Height);
+            float width=imageSize.Width*scale,height=imageSize.Height*scale;
+            return new RectangleF(box.X+(box.Width-width)/2,box.Y+(box.Height-height)/2,width,height);
+        }
+        public static double ImageScalePercent(AssemblyTemplate t,AssemblyLayer layer) {
+            var envelope=ImageEnvelope(t,layer);
+            if(envelope.IsEmpty) return Math.Max(layer.Width,layer.Height)*100;
+            if(layer.UniformImageScale) return Math.Max(layer.Width,layer.Height)*100;
+            double maximum=0;
+            var box=new RectangleF(0,0,(float)(layer.Width*t.Width),(float)(layer.Height*t.Height));
+            foreach(var file in AssemblyFiles.Pool(t.Resolve(layer.Source),AssemblyFiles.PictureExtensions)) {
+                if(Path.GetExtension(file).Equals(".txt",StringComparison.OrdinalIgnoreCase)) continue;
+                using(var image=Image.FromFile(file)) {
+                    var bounds=FitImageBounds(box,image.Size);
+                    maximum=Math.Max(maximum,Math.Max(bounds.Width/t.Width,bounds.Height/t.Height));
+                }
+            }
+            return maximum*100;
+        }
+        public static void SetImageScale(AssemblyTemplate t,AssemblyLayer layer,double percent) {
+            var size=ImageEnvelope(t,layer);
+            double w=layer.Width,h=layer.Height;
+            if(!size.IsEmpty) { w=(double)size.Width/t.Width; h=(double)size.Height/t.Height; layer.UniformImageScale=true; }
+            double factor=percent/100/Math.Max(w,h);
+            double cx=layer.X+layer.Width/2,cy=layer.Y+layer.Height/2;
+            layer.Width=w*factor; layer.Height=h*factor;
+            layer.X=Math.Max(0,Math.Min(1-layer.Width,cx-layer.Width/2));
+            layer.Y=Math.Max(0,Math.Min(1-layer.Height,cy-layer.Height/2));
+            layer.PlacementConfigured=true;
+        }
         public static Bitmap Create(AssemblyTemplate t, AssemblyLayerPlan plan) {
             var bitmap = new Bitmap(t.Width, t.Height, PixelFormat.Format32bppArgb);
             try {
@@ -44,7 +87,7 @@ namespace VideoBatch {
                         }
                     } else {
                         using (var image = Image.FromFile(plan.Asset.Path)) {
-                            var target = FitImageBounds(box, image.Size);
+                            var target = LayerImageBounds(t, l, image.Size);
                             using (var attrs = new ImageAttributes()) {
                                 var matrix = new ColorMatrix(); matrix.Matrix33 = (float)l.Opacity; attrs.SetColorMatrix(matrix);
                                 g.DrawImage(image, new[] { new PointF(target.Left,target.Top), new PointF(target.Right,target.Top), new PointF(target.Left,target.Bottom) }, new RectangleF(0, 0, image.Width, image.Height), GraphicsUnit.Pixel, attrs);
