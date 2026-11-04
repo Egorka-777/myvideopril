@@ -127,8 +127,8 @@ namespace VideoBatch {
         static IEnumerable<Control> Descendants(Control root) { foreach (Control c in root.Controls) { yield return c; foreach (var child in Descendants(c)) yield return child; } }
         static void Capture(Form form, string file) {
             form.Show(); Application.DoEvents();
-            foreach (Control c in Descendants(form).Where(c => c.Visible && !(c.Parent is ScrollableControl scroll && scroll.AutoScroll))) Check(c.Right <= c.Parent.ClientSize.Width + 2 && c.Bottom <= c.Parent.ClientSize.Height + 2, "clipped control: " + c.Text);
             using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(file); }
+            foreach (Control c in Descendants(form).Where(c => c.Visible && !(c.Parent is ScrollableControl scroll && scroll.AutoScroll))) Check(c.Right <= c.Parent.ClientSize.Width + 2 && c.Bottom <= c.Parent.ClientSize.Height + 2, "clipped control: " + c.Text + " " + c.Bounds + " parent=" + c.Parent.ClientSize);
         }
     }
 }

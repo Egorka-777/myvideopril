@@ -45,6 +45,11 @@ jobs:
         run: ./scripts/Install-CiFfmpeg.ps1
       - name: Build desktop
         run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Native subtitle recognition UI
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          if (!$asm.GetType('VideoBatch.AudioSubtitleTests').GetMethod('RunUiTests').Invoke($null,@([IO.Path]::GetFullPath('artifacts/audio-subtitle-ui')))) { throw 'Subtitle UI failed' }
       - name: Prepare actual local speech installation without Ollama
         shell: powershell
         run: |
@@ -67,12 +72,6 @@ jobs:
           $ffprobe = [string](Get-Command ffprobe.exe).Source
           $fixtures = [IO.Path]::GetFullPath('artifacts/audio-fixtures')
           if (!$asm.GetType('VideoBatch.AudioSubtitleTests').GetMethod('RunIntegrationTests').Invoke($null,[object[]]@($ffmpeg,$ffprobe,$fixtures,[string]$env:AUDIO_SUBTITLE_TEST_ROOT))) { throw 'Imported audio integration failed' }
-      - name: Native subtitle recognition UI
-        if: always()
-        shell: powershell
-        run: |
-          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
-          if (!$asm.GetType('VideoBatch.AudioSubtitleTests').GetMethod('RunUiTests').Invoke($null,@([IO.Path]::GetFullPath('artifacts/audio-subtitle-ui')))) { throw 'Subtitle UI failed' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

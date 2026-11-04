@@ -29,7 +29,7 @@ namespace VideoBatch {
             } catch { return null; }
         }
         static string Scripts() {
-            foreach (string root in new[] { AppDomain.CurrentDomain.BaseDirectory }.Concat(AppPaths.CandidateInstallRoots())) {
+            foreach (string root in new[] { Path.GetDirectoryName(typeof(LocalAudioTranscription).Assembly.Location), AppDomain.CurrentDomain.BaseDirectory }.Concat(AppPaths.CandidateInstallRoots())) {
                 string folder = Path.Combine(root, "tools", "subtitles");
                 if (File.Exists(Path.Combine(folder, "worker.py")) && File.Exists(Path.Combine(folder, "prepare.ps1"))) return folder;
             }
@@ -130,7 +130,7 @@ namespace VideoBatch {
             BackColor = Theme.Background; ForeColor = Theme.TextPrimary; Font = Theme.FontBody; StartPosition = FormStartPosition.CenterParent;
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 4 };
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); Controls.Add(layout);
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 66)); Controls.Add(layout);
             layout.Controls.Add(new Label { Text = "Файлов озвучки: " + files.Length + ". Распознавание на вашем ПК.\nПервый запуск скачает модель речи; нужны интернет и Python 3.11 x64.\nОзвучка никуда не отправляется. Готовые субтитры используются повторно.", AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 12) }, 0, 0);
             status = new Label { Text = "Язык определяется автоматически. Текст распознавания можно проверить в предпросмотре.", Dock = DockStyle.Fill, AutoEllipsis = true }; layout.Controls.Add(status, 0, 1);
             progress = new ProgressBar { Dock = DockStyle.Fill, Visible = false, Style = ProgressBarStyle.Marquee }; layout.Controls.Add(progress, 0, 2);
