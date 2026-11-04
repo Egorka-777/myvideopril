@@ -10,15 +10,25 @@ namespace VideoBatch {
         void LeaveSubtitleWorkspaceIfOpen() { if (subtitleWorkspaceActive) LeaveSubtitleWorkspace(); }
 
         void OpenSubtitleEditor() {
+            bool recognize = false;
             Safe(() => {
                 if (subtitleWorkspaceActive) { LeaveSubtitleWorkspace(); if (subtitleWorkspaceActive) return; }
                 using (var background = canvas.SubtitleBackground())
-                using (var dialog = new SubtitleStyleDialog(template.SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }, PreviewCaptionCues(), background, template.Width, template.Height, template.Captions?.Count > 0)) {
+                using (var dialog = new SubtitleStyleDialog(template.SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }, PreviewCaptionCues(), background, template.Width, template.Height, template.Captions?.Count > 0, true)) {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;
                     template.SubtitleStyle = dialog.Style.Copy();
                     loading = true; subtitlePosition.Value = template.SubtitleStyle.Position; loading = false;
                     Changed(false); Save(); ApplySubtitlePreview(); RequestTimingHints(); RefreshInfo();
                     if (dialog.EditCaptions) { EnterSubtitleWorkspace(); subtitleCaptions.Visible = true; }
+                    recognize = dialog.RecognizeAudio;
+                }
+            });
+            if (recognize) Safe(() => {
+                var audio = (template.HasSceneVoiceovers ? template.Scenes.SelectMany(s => AssemblySpeechPlan.SceneVoiceOptions(template, s)) : AssemblySpeechPlan.SharedVoiceOptions(template)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (audio.Count == 0) throw new Exception("Сначала добавьте файлы озвучки: общую папку или озвучку отдельных сцен.");
+                using (var dialog = new AudioSubtitleProgressDialog(audio)) if (dialog.ShowDialog(this) == DialogResult.OK) {
+                    template.SubtitleStyle.Enabled = true; Save(); RequestTimingHints(); RefreshInfo();
+                    status.Text = "Субтитры готовы. Оформление можно изменить кнопкой «Субтитры».";
                 }
             });
         }
@@ -179,12 +189,9 @@ namespace VideoBatch {
 
         void UpdateSubtitleTimingMessage() {
             if (!subtitleWorkspaceActive || subtitlePanelMessage == null) return;
-            var lines = AssemblySpeechPlan.AvailableLines(template);
-            bool missing = lines.Any(l => !System.IO.File.Exists(template.Resolve(l.AudioPath) + ".timing.json"));
             subtitlePanelMessage.Text = template.SubtitleStyle?.Enabled != true ? "Субтитры отключены." :
-                missing ? "Нет таймкодов: создайте озвучку заново. В превью — только образец оформления." :
-                PreviewCaptionCues().Count > 0 ? "Точные таймкоды озвучки загружены." : "Нужна озвучка с таймкодами ElevenLabs.";
-            subtitlePanelMessage.ForeColor = missing ? Theme.Error : Theme.TextSecondary;
+                PreviewCaptionCues().Count > 0 ? "Таймкоды озвучки загружены. При замене аудио распознавание обновится." : "Добавьте озвучку и нажмите «Распознать аудио». При сборке распознавание запускается автоматически.";
+            subtitlePanelMessage.ForeColor = Theme.TextSecondary;
         }
 
         void PickSubtitleColor(bool plate) {

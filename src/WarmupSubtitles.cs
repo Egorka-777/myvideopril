@@ -50,13 +50,13 @@ namespace VideoBatch {
         // Build complete words using the provider's character alignment. No estimated reading speed.
         public static List<WarmupCaption> Cues(WarmupAlignment alignment, double duration, int wordsPerCaption) {
             if (alignment == null || alignment.characters == null || alignment.character_start_times_seconds == null || alignment.character_end_times_seconds == null || alignment.characters.Length != alignment.character_start_times_seconds.Length || alignment.characters.Length != alignment.character_end_times_seconds.Length)
-                throw new Exception("ElevenLabs не вернул таймкоды субтитров. Повторите запрос или отключите субтитры.");
+                throw new Exception("Нет таймкодов субтитров. Для загруженной озвучки нажмите «Распознать аудио».");
             var words = new List<WarmupCaption>(); var word = new StringBuilder(); double start = 0, end = 0, lastStart = -1;
             Action finish = () => { if (word.Length > 0) { words.Add(new WarmupCaption { Text = word.ToString(), Start = start, End = end }); word.Clear(); } };
             for (int i = 0; i < alignment.characters.Length; i++) {
                 double a = alignment.character_start_times_seconds[i], b = alignment.character_end_times_seconds[i];
                 if (double.IsNaN(a) || double.IsNaN(b) || double.IsInfinity(a) || double.IsInfinity(b) || a < 0 || b < a || a < lastStart || b > duration + .15)
-                    throw new Exception("ElevenLabs вернул некорректные таймкоды субтитров.");
+                    throw new Exception("Некорректные таймкоды субтитров. Повторите распознавание озвучки.");
                 lastStart = a;
                 string chars = alignment.characters[i] ?? "";
                 foreach (char c in chars) {

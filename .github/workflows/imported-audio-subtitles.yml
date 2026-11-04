@@ -1,0 +1,99 @@
+name: Imported audio subtitles
+on:
+  push:
+    branches: [feat/imported-audio-subtitles-20261104, main]
+    paths: ['src/LocalAudioTranscription.cs', 'src/AudioSubtitleTests.cs', 'src/AssemblySpeechPlan.cs', 'src/AssemblyRender.cs', 'src/AssemblyWindow*', 'src/SubtitleStyleDialog.cs', 'src/WarmupSubtitles.cs', 'tools/subtitles/**', 'tests/audio_subtitles_test.py', 'tests/make_audio_subtitle_fixtures.py', 'VideoBatch.csproj', '.github/workflows/imported-audio-subtitles.yml']
+  workflow_dispatch:
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Timestamp, batch and silence unit tests
+        run: python tests/audio_subtitles_test.py
+      - name: Make public English and synthetic Russian speech
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg espeak-ng
+          python tests/make_audio_subtitle_fixtures.py artifacts/audio-fixtures
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Imported-Audio-Fixtures
+          path: artifacts/audio-fixtures
+  windows:
+    needs: fixtures
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: Imported-Audio-Fixtures
+          path: artifacts/audio-fixtures
+      - name: Install pinned FFmpeg
+        shell: pwsh
+        run: ./scripts/Install-CiFfmpeg.ps1
+      - name: Build desktop
+        run: dotnet build VideoBatch.csproj -c Release -p:ApplicationIcon=
+      - name: Prepare actual local speech installation without Ollama
+        shell: powershell
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP 'ImportedAudioSubtitles'
+          New-Item -ItemType Directory -Force $testRoot | Out-Null
+          ./tools/subtitles/prepare.ps1 -Root (Join-Path $testRoot 'subtitles')
+          "AUDIO_SUBTITLE_TEST_ROOT=$testRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Cache and legacy ElevenLabs compatibility
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          foreach ($type in @('AudioSubtitleTests','SubtitleUploadTests')) {
+            if (!$asm.GetType("VideoBatch.$type").GetMethod('RunSelfTests').Invoke($null,@())) { throw "$type failed" }
+          }
+      - name: Real desktop to CPU ASR to MP4 with scene subtitles
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          $ffmpeg = [string](Get-Command ffmpeg.exe).Source
+          $ffprobe = [string](Get-Command ffprobe.exe).Source
+          $fixtures = [IO.Path]::GetFullPath('artifacts/audio-fixtures')
+          if (!$asm.GetType('VideoBatch.AudioSubtitleTests').GetMethod('RunIntegrationTests').Invoke($null,[object[]]@($ffmpeg,$ffprobe,$fixtures,[string]$env:AUDIO_SUBTITLE_TEST_ROOT))) { throw 'Imported audio integration failed' }
+      - name: Native subtitle recognition UI
+        if: always()
+        shell: powershell
+        run: |
+          $asm = [Reflection.Assembly]::LoadFrom((Resolve-Path bin/Release/net48/VideoBatch.exe).Path)
+          if (!$asm.GetType('VideoBatch.AudioSubtitleTests').GetMethod('RunUiTests').Invoke($null,@([IO.Path]::GetFullPath('artifacts/audio-subtitle-ui')))) { throw 'Subtitle UI failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Imported-Audio-Evidence
+          path: |
+            artifacts/audio-subtitle-ui
+            ${{ env.AUDIO_SUBTITLE_TEST_ROOT }}/integration/two-scene-subtitles.mp4
+            ${{ env.AUDIO_SUBTITLE_TEST_ROOT }}/subtitles/cache/*.json
+          if-no-files-found: ignore
+      - name: Package update
+        shell: pwsh
+        run: |
+          $dest = 'artifacts/VideoBatch-Imported-Audio-Update'
+          New-Item -ItemType Directory -Force "$dest/tools/subtitles" | Out-Null
+          Copy-Item bin/Release/net48/VideoBatch.exe* $dest
+          Copy-Item bin/Release/net48/*.dll $dest
+          if (Test-Path bin/Release/net48/runtimes) { Copy-Item bin/Release/net48/runtimes $dest -Recurse }
+          Copy-Item tools/subtitles/* "$dest/tools/subtitles" -Exclude __pycache__
+          Copy-Item docs/AGENT_IMPORTED_AUDIO_SUBTITLES_20261104_RU.md $dest
+          git rev-parse HEAD | Set-Content "$dest/SOURCE_COMMIT.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoBatch-Imported-Audio-Update
+          path: artifacts/VideoBatch-Imported-Audio-Update
