@@ -72,8 +72,8 @@ namespace VideoBatch {
                 double cutSeconds = Core.AudioDuration(await Core.Probe(probe, cut, ct));
                 Check(AssemblySpeechPlan.CaptionsForAudio(template, cut, null, cutSeconds).All(c => c.End <= cutSeconds), "new timestamps fit cut audio");
                 string video = Path.Combine(folder, "background.mp4");
-                await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=navy:s=128x224:r=20:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", video }, ct, null, 30);
-                var t = new AssemblyTemplate { Materials = folder, Videos = video, Width = 128, Height = 224, Fps = 20, SceneTimingVersion = 1, PackStudioVersion = 1,
+                await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=navy:s=240x320:r=20:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", video }, ct, null, 30);
+                var t = new AssemblyTemplate { Materials = folder, Videos = video, Width = 240, Height = 320, Fps = 20, SceneTimingVersion = 1, PackStudioVersion = 1,
                     AllowVideoReuse = true, LoopShortVideos = true, Transition = "cut", RenderMode = "cpu", SubtitleStyle = SubtitlePresets.BuiltIn().First(p => p.Id == "bold-green").Style.Copy() };
                 t.Scenes.Add(new AssemblyScene { Duration = 1, VoiceMode = "own", Voiceover = files[0] });
                 t.Scenes.Add(new AssemblyScene { Duration = 1, VoiceMode = "own", Voiceover = files[2] });
