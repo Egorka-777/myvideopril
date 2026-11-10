@@ -65,12 +65,12 @@ namespace VideoBatch {
             var graph = new List<string>();
             int input = 0;
             AssemblyRender.AppendSceneVideo(t, s, args, ref input, graph, "base");
-            int layerBase = input;
-            foreach (var layer in s.Layers) args.AddRange(new[] { "-loop", "1", "-framerate", t.Fps.ToString(), "-i", layer.Raster });
             string current = "base";
             for (int i = 0; i < s.Layers.Count; i++) {
                 var layer = s.Layers[i]; string next = "v" + i;
-                graph.Add("[" + current + "][" + (layerBase + i) + ":v:0]overlay=0:0:format=auto:enable='" + AssemblySceneVideoBuilder.LayerOverlayEnable(t, s, layer.Layer) + "'[" + next + "]");
+                AssemblySceneVideoBuilder.LayerOverlayRange(t, s, layer.Layer, out double start, out double end);
+                AssemblyRender.AppendLayerOverlay(t, layer, start, end, AssemblySceneVideoBuilder.LayerOverlayEnable(t, s, layer.Layer),
+                    current, next, "auto", args, ref input, graph);
                 current = next;
             }
             graph.Add("[" + current + "]"+AssemblyTimeline.Padding(t,s)+"format=yuv420p[out]");
@@ -103,12 +103,15 @@ namespace VideoBatch {
             args.AddRange(new[] { "-t", Core.N(t.Duration), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output });
             return args;
         }
-        public static Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress, AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null) {
-            return AssemblyRender.Run(t, p, ffmpeg, ffprobe, output, work, rasterize, ct, progress, context, fraction, catalog, segmentRandom, segmentMix);
+        public static async Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress, AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null) {
+            bool insertions = t.Insertions != null && t.Insertions.Count > 0;
+            string main = insertions ? Path.Combine(work, "main-before-insertions.mp4") : output;
+            await AssemblyRender.Run(t, p, ffmpeg, ffprobe, main, work, rasterize, ct, progress, context, fraction, catalog, segmentRandom, segmentMix).ConfigureAwait(false);
+            if (insertions) await AssemblyInsertions.Apply(t, ffmpeg, ffprobe, main, output, ct, segmentRandom ?? new Random(), progress).ConfigureAwait(false);
         }
         // Retained only as a reference for controlled before/after benchmarks.
         public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
-            if(t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
+            if(p.Scenes.SelectMany(s => s.Layers).Any(l => AssemblyOverlayMedia.IsAnimated(l.Asset.Path)) || t.DurationByVideo || t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
                 await AssemblyRender.Run(t,p,ffmpeg,ffprobe,output,work,rasterize,ct,progress).ConfigureAwait(false);return;
             }
             Directory.CreateDirectory(work); var paths = new List<string>();
@@ -144,12 +147,13 @@ namespace VideoBatch {
                     var history = AssemblyHistoryStore.Load(historyFolder, historyScope);
                     progress.Report(new Update("Проверяю материалы…", 0));
                     var videos = await ReadVideos(t, ffmpeg, ffprobe, ct).ConfigureAwait(false);
+                    int targetCount = t.Count;
                     var random=new Random(); var mix=new AssemblyMixTracker();
                     var usedTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var renderContext = new AssemblyRenderContext { CacheDirectory = Path.Combine(work, "raster-cache") };
-                    while (result.Outputs.Count<t.Count) {
+                    while (result.Outputs.Count<targetCount) {
                         ct.ThrowIfCancellationRequested();
-                        var batch = AssemblyPlanner.Create(t, videos, history, random, Math.Min(256,t.Count-result.Outputs.Count),mix,ct);
+                        var batch = AssemblyPlanner.Create(t, videos, history, random, Math.Min(256,targetCount-result.Outputs.Count),mix,ct);
                         if (batch.Plans.Count == 0) { if (result.Outputs.Count==0) throw new Exception(batch.Limit); limitNote=batch.Limit; break; }
                         for (int i = 0; i < batch.Plans.Count; i++) {
                             int global=result.Outputs.Count;
@@ -160,9 +164,11 @@ namespace VideoBatch {
                             try {
                                 double renderFraction = 0;
                                 await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct,
-                                    s => progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + s, 100.0 * (global + renderFraction) / t.Count)), renderContext,
-                                    f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + t.Count + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / t.Count)); }, videos, random, mix).ConfigureAwait(false);
+                                    s => progress.Report(new Update("Ролик " + (global + 1) + " из " + targetCount + " · " + s, 100.0 * (global + renderFraction) / targetCount)), renderContext,
+                                    f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + targetCount + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / targetCount)); }, videos, random, mix).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
+                                progress.Report(new Update("Ролик " + (global + 1) + " · обработка изображения и звука…", 100.0 * global / targetCount));
+                                await AssemblyProcessing.Apply(t, ffmpeg, ffprobe, partial, random, ct).ConfigureAwait(false);
                                 // Tag and validate the private file before making it visible as a result.
                                 string chosenTitle=AssemblyOutputTags.PickTitle(t.TitleBank,random,usedTitles);
                                 destination = AssemblyFiles.SafeImportDestination(t.Output, Path.Combine(t.Output, VideoBatchOutputPaths.AssemblyVideoFileName(t, global, chosenTitle)));
@@ -190,9 +196,11 @@ namespace VideoBatch {
                             } catch (OperationCanceledException) { throw; }
                             catch (Exception e) { result.Errors.Add("Ролик " + (global + 1) + ": " + e.Message); break; }
                         }
-                        if (batch.Limit != "") { limitNote = " Запрошено " + t.Count + ": " + batch.Limit; break; }
+                        if (batch.Limit != "") { limitNote = " Запрошено " + targetCount + ": " + batch.Limit; break; }
                         if (result.Errors.Count>0) break;
                     }
+                    if (t.DurationByVideo && result.Outputs.Count < targetCount && result.Errors.Count == 0)
+                        result.Errors.Add("Обработано " + result.Outputs.Count + " из " + targetCount + " запрошенных роликов. " + limitNote);
                 }
             } catch (OperationCanceledException) { result.Cancelled = true; }
             catch (IOException e) { result.Errors.Add("Не удалось открыть файлы или историю. Проверьте, не запущена ли другая сборка этого шаблона. " + e.Message); }

@@ -228,7 +228,7 @@ namespace VideoBatch {
             AddPanel(statsPanel);
             AddPanel(settingsPanel);
             Console.WriteLine("UI startup: HighlightsPanel");
-            highlightsPanel = new HighlightsPanel();
+            highlightsPanel = new HighlightsPanel(settings);
             AddPanel(highlightsPanel);
             Console.WriteLine("UI startup: TelegramPanel");
             telegramPanel = new TelegramPanel(preferences:()=>settings);

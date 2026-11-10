@@ -24,7 +24,7 @@ async function bounded(work, timeout, message) {
   })]); } finally { clearTimeout(timer); }
 }
 function isStudioUpload(job) {
-  return !['checkOnly','recheckOnly','searchOnly','watchMesh','watchDirectLinks','shortsWarmup','openTodayOnly'].some(k => job[k]);
+  return !['checkOnly','recheckOnly','searchOnly','watchMesh','watchDirectLinks','shortsWarmup','openTodayOnly','highlightsSearch'].some(k => job[k]);
 }
 async function handleUploadDialog(dialog,report){
   if(dialog.type()==='beforeunload'){

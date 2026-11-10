@@ -24,18 +24,104 @@ namespace VideoBatch {
         public static string YouTubeKey(YouTubeChannel channel) => Key("YouTube", string.IsNullOrWhiteSpace(channel.ChannelId) ? channel.ProfileId : channel.ChannelId, channel.Market);
         public static string TikTokKey(TikTokAccount account) => Key("TikTok", account.ProfileId, account.Market);
         public static void DeleteOutputs(IEnumerable<string> files) { foreach (string file in files ?? Enumerable.Empty<string>()) try { if (File.Exists(file)) File.Delete(file); } catch { } }
-        /// <summary>Removes taken originals from the shared folder after a prepared copy is assigned. Keeps any path still referenced elsewhere.</summary>
-        public static int ConsumeSources(IEnumerable<string> sources, IEnumerable<string> keep, Func<string, bool> stillReferenced = null) {
-            var preserve = new HashSet<string>((keep ?? Enumerable.Empty<string>()).Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => Path.GetFullPath(p)), StringComparer.OrdinalIgnoreCase);
-            int removed = 0;
-            foreach (string file in sources ?? Enumerable.Empty<string>()) {
-                if (string.IsNullOrWhiteSpace(file)) continue;
-                string path = Path.GetFullPath(file);
-                if (preserve.Contains(path)) continue;
-                if (stillReferenced != null && stillReferenced(path)) continue;
-                try { if (File.Exists(path)) { File.Delete(path); removed++; } } catch { }
+        public sealed class ClaimedSource {
+            public string OriginalDirectory, ClaimedPath, FileName;
+        }
+        /// <summary>Moves picked files out of the shared folder immediately, before preparation finishes.</summary>
+        public static List<ClaimedSource> ClaimFromSharedFolder(IEnumerable<string> sources, string claimFolder) {
+            if (string.IsNullOrWhiteSpace(claimFolder)) throw new Exception("Не задана папка для забранных исходников.");
+            Directory.CreateDirectory(claimFolder);
+            var claimed = new List<ClaimedSource>();
+            var failed = new List<string>();
+            foreach (string file in (sources ?? Enumerable.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase)) {
+                string path = FullPathSafe(file);
+                if (path == "" || !File.Exists(path)) { failed.Add(Path.GetFileName(file ?? "") + " (не найден)"); continue; }
+                string origin = Path.GetDirectoryName(path) ?? "";
+                Exception last = null;
+                string dest = null;
+                for (int attempt = 0; attempt < 8; attempt++) {
+                    try {
+                        dest = AssemblyFiles.SafeImportDestination(claimFolder, path);
+                        File.Move(path, dest);
+                        claimed.Add(new ClaimedSource { OriginalDirectory = origin, ClaimedPath = dest, FileName = Path.GetFileName(dest) });
+                        last = null; break;
+                    } catch (Exception ex) {
+                        last = ex;
+                        Thread.Sleep(80 + attempt * 70);
+                    }
+                }
+                if (last != null) failed.Add(Path.GetFileName(path) + " (" + last.Message + ")");
             }
-            return removed;
+            if (failed.Count > 0) {
+                RestoreClaimed(claimed);
+                throw new Exception("Не удалось сразу убрать исходники из общей папки: " + string.Join("; ", failed));
+            }
+            return claimed;
+        }
+        public static void RestoreClaimed(IEnumerable<ClaimedSource> claimed) {
+            foreach (var item in claimed ?? Enumerable.Empty<ClaimedSource>()) {
+                if (item == null || string.IsNullOrWhiteSpace(item.ClaimedPath) || !File.Exists(item.ClaimedPath)) continue;
+                try {
+                    string folder = string.IsNullOrWhiteSpace(item.OriginalDirectory) ? Path.GetDirectoryName(item.ClaimedPath) : item.OriginalDirectory;
+                    Directory.CreateDirectory(folder);
+                    string dest = AssemblyFiles.SafeImportDestination(folder, item.ClaimedPath);
+                    File.Move(item.ClaimedPath, dest);
+                } catch { try { File.Delete(item.ClaimedPath); } catch { } }
+            }
+        }
+        public static void DiscardClaimed(IEnumerable<ClaimedSource> claimed) {
+            foreach (var item in claimed ?? Enumerable.Empty<ClaimedSource>()) {
+                if (item == null || string.IsNullOrWhiteSpace(item.ClaimedPath)) continue;
+                try { if (File.Exists(item.ClaimedPath)) File.Delete(item.ClaimedPath); } catch { }
+            }
+        }
+        public sealed class ConsumeResult {
+            public int Removed;
+            public readonly List<string> KeptAssigned = new List<string>();
+            public readonly List<string> Failed = new List<string>();
+            public string Summary {
+                get {
+                    if (Failed.Count > 0) return "убрано " + Removed + ", не удалось: " + string.Join("; ", Failed);
+                    if (KeptAssigned.Count > 0) return "убрано " + Removed + ", оставлены ещё назначенные: " + KeptAssigned.Count;
+                    return "убрано " + Removed;
+                }
+            }
+        }
+        /// <summary>Moves taken originals out of the shared folder after a prepared copy is assigned. Keeps any path still referenced elsewhere.</summary>
+        public static int ConsumeSources(IEnumerable<string> sources, IEnumerable<string> keep, Func<string, bool> stillReferenced = null, string takenRoot = null) {
+            return ConsumeSourcesDetailed(sources, keep, stillReferenced, takenRoot).Removed;
+        }
+        public static ConsumeResult ConsumeSourcesDetailed(IEnumerable<string> sources, IEnumerable<string> keep, Func<string, bool> stillReferenced = null, string takenRoot = null) {
+            var preserve = new HashSet<string>((keep ?? Enumerable.Empty<string>()).Where(p => !string.IsNullOrWhiteSpace(p)).Select(FullPathSafe).Where(p => p != ""), StringComparer.OrdinalIgnoreCase);
+            var result = new ConsumeResult();
+            string sink = string.IsNullOrWhiteSpace(takenRoot) ? Path.Combine(Path.GetTempPath(), "VideoBatch-taken") : takenRoot;
+            foreach (string file in (sources ?? Enumerable.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase)) {
+                if (string.IsNullOrWhiteSpace(file)) continue;
+                string path = FullPathSafe(file);
+                if (path == "" || preserve.Contains(path)) continue;
+                if (stillReferenced != null && stillReferenced(path)) { result.KeptAssigned.Add(Path.GetFileName(path)); continue; }
+                if (!File.Exists(path)) { result.Removed++; continue; }
+                Exception last = null;
+                for (int attempt = 0; attempt < 8; attempt++) {
+                    try {
+                        Directory.CreateDirectory(sink);
+                        string dest = Path.Combine(sink, Path.GetFileName(path));
+                        dest = AssemblyFiles.SafeImportDestination(sink, dest);
+                        File.Move(path, dest);
+                        try { File.Delete(dest); } catch { /* moved out of the shared folder is enough */ }
+                        result.Removed++; last = null; break;
+                    } catch (Exception ex) {
+                        last = ex;
+                        try { File.Delete(path); result.Removed++; last = null; break; } catch (Exception del) { last = del; }
+                        Thread.Sleep(80 + attempt * 70);
+                    }
+                }
+                if (last != null && File.Exists(path)) result.Failed.Add(Path.GetFileName(path) + " (" + last.Message + ")");
+            }
+            return result;
+        }
+        static string FullPathSafe(string path) {
+            try { return string.IsNullOrWhiteSpace(path) ? "" : Path.GetFullPath(path); } catch { return ""; }
         }
         public static bool IsAssignedVideo(Preferences prefs, string path) {
             if (prefs == null || string.IsNullOrWhiteSpace(path)) return false;

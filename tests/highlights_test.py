@@ -89,13 +89,31 @@ class HighlightsTests(unittest.TestCase):
                 self.assertLess(time.monotonic()-start,3)
             finally:timer.join();w.CANCEL=None
 
+    def test_confident_speech_survives_no_speech_probability_and_old_cache_refreshes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            (folder/'transcript.json').write_text(json.dumps(dict(version=w.VERSION, model='small', words=[])), encoding='utf8')
+            segment = types.SimpleNamespace(no_speech_prob=.60449, avg_logprob=-.26548,
+                end=2, words=[types.SimpleNamespace(start=1, end=2, word=' Речь.')])
+            model = types.SimpleNamespace(model=types.SimpleNamespace(device='cuda'),
+                transcribe=lambda *args, **kwargs: (iter([segment]), types.SimpleNamespace(language='ru')))
+            job = dict(source='fixture', root=temp, ffmpeg='ffmpeg')
+            with patch.object(w, 'run'), patch.dict(sys.modules, {'whisper_runtime':
+                    types.SimpleNamespace(create_model=lambda *args: model)}):
+                words = w.transcribe(job, dict(audio=True, duration=3), folder, temp)
+            self.assertEqual(' Речь.', words[0]['text'])
+            saved = json.loads((folder/'transcript.json').read_text(encoding='utf8'))
+            self.assertEqual(w.SPEECH_VERSION, saved['speech_version'])
+            with patch.dict(sys.modules, {'whisper_runtime': None}):
+                self.assertEqual(words, w.transcribe(job, dict(audio=True, duration=3), folder, temp))
+
     @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'),'FFmpeg required')
     def test_audio_offset_is_preserved(self):
         with tempfile.TemporaryDirectory() as temp:
             folder=Path(temp);source=folder/'delayed.mp4'
             subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=navy:s=128x72:r=10:d=12','-itsoffset','5','-f','lavfi','-i','sine=frequency=440:duration=6','-c:v','libx264','-c:a','aac',str(source)],check=True)
             class Model:
-                def __init__(self,*args,**kwargs):pass
+                def __init__(self,*args,**kwargs):self.model=types.SimpleNamespace(device='cpu')
                 def transcribe(self,path,**kwargs):
                     with wave.open(path) as audio:
                         rate=audio.getframerate()
@@ -105,7 +123,7 @@ class HighlightsTests(unittest.TestCase):
                     assert max(abs(v) for v in later)>100,'Sound missing'
                     return iter([]),types.SimpleNamespace(language='en')
             job=dict(source=str(source),root=str(folder),mode='speech',ffmpeg=shutil.which('ffmpeg'))
-            with patch.dict(sys.modules,{'faster_whisper':types.SimpleNamespace(WhisperModel=Model)}):
+            with patch.dict(sys.modules,{'whisper_runtime':types.SimpleNamespace(create_model=lambda *args: Model())}):
                 self.assertEqual([],w.transcribe(job,dict(audio=True,duration=12),folder,temp))
 
     @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'),'FFmpeg required')

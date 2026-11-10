@@ -135,9 +135,9 @@ async function run(){
   const wrong=await setup(browser,'en',dir,{privateSave:true});await assert.rejects(S.runSequential(wrong.page,wrong.pack,{titleDelay:1,descriptionDelay:1,verifyPersisted:true},wrong.host),/Открытый доступ/);assert.equal(wrong.stages.filter(s=>s.stage==='item_confirmed').length,0);assert.equal((await wrong.page.evaluate(()=>stats)).closes,0);await wrong.ctx.close();
   // Known pending server IDs are rechecked, without transferring the file again.
   const retry=await setup(browser,'ru',dir);const item=retry.pack[0],id='video000001';retry.saved.set(id,{...item,id,tags:[],paid:false,ai:false,scheduled:false,visibility:'public',date:'2030-01-02',time:'14:45',zone:'Asia/Krasnoyarsk'});
-  const out=await S.runSequential(retry.page,[{...item,studioPending:true,studioVideoId:id}],{titleDelay:1,descriptionDelay:1},retry.host);assert.equal(out.length,1);assert.equal((await retry.page.evaluate(()=>stats)).selected.length,0);
+  const out=await S.runSequential(retry.page,[{...item,studioPending:true,studioVideoId:id}],{titleDelay:1,descriptionDelay:1},retry.host);assert.equal(out.length,1);assert.equal(retry.telemetry.filter(e=>e.type==='file').length,0);
   const stale=await setup(browser,'ru',dir);
-  await assert.rejects(S.runSequential(stale.page,[{...stale.pack[0],studioPending:true}],{titleDelay:1,descriptionDelay:1},stale.host),/Контент нужный черновик/);
+  await assert.rejects(S.runSequential(stale.page,[{...stale.pack[0],studioPending:true}],{titleDelay:1,descriptionDelay:1},stale.host),/Повторная загрузка заблокирована/);
   assert.equal(stale.saved.size,0);await stale.ctx.close();
   const checks=await setup(browser,'ru',dir,{checksWarning:true,warningCloseDelay:900,warningEnableDelay:300});
   const warned=await S.runSequential(checks.page,checks.pack.slice(0,1),{titleDelay:1,descriptionDelay:1},checks.host);

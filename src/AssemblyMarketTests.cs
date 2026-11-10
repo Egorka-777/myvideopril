@@ -119,6 +119,68 @@ namespace VideoBatch {
             }
         }
 
+        public static bool RunCustomProfileTests() {
+            string root = Path.Combine(Path.GetTempPath(), "assembly-custom-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(root);
+                var t = AssemblyTemplate.Defaults(); t.Materials = Path.Combine(root, "materials");
+                AssemblyWorkspace.Prepare(t); AssemblyMarketProfiles.EnsureSeeded(t);
+                SetEditorSettings(t, 2); t.Count = 17;
+                AssemblyMarketProfiles.Capture(t, AssemblyProfile.Ru);
+                var a = AssemblyMarketProfiles.AddEmpty(t, "Опыт / один");
+                var b = AssemblyMarketProfiles.AddEmpty(t, "Опыт / один");
+                Check(a.Id != b.Id && AssemblyProfile.Normalize(" " + a.Id.ToUpperInvariant() + " ") == a.Id, "Custom IDs are stable, canonical and independent of duplicate/unsafe display names");
+                Check(AssemblyProfile.ShortLabel(a.Id, t) == a.Name, "Custom display name resolved from template");
+                foreach (var custom in new[] { a, b }) {
+                    AssemblyMarketProfiles.Apply(t, custom.Id); AssemblyWorkspace.Prepare(t); t.Validate();
+                    Check(t.Scenes.Count == 0 && t.Videos == "" && t.Music == "" && t.GlobalLayers.Count == 0, "Custom profile starts empty after workspace preparation");
+                    Check(t.Count == 1 && t.Width == 1080 && t.Height == 1920 && t.Fps == 30 && t.Transition == "fade", "Custom profile gets defaults, not active editor settings");
+                    Check(t.SecondaryVideos == "" && t.Voiceover == "" && t.Speech.Text == "" && t.Captions.Count == 0 && t.TitleBank.Count == 0, "No secondary media, speech, captions or titles inherited");
+                    Check(t.Materials == custom.Settings.Materials && t.Materials != t.MarketRu.Materials, "Custom materials have a separate filesystem root");
+                }
+                Check(a.Settings.Output != b.Settings.Output && a.Settings.Output != t.MarketRu.Output, "Custom default output folders are unique");
+                AssemblyMarketProfiles.Apply(t, a.Id);
+                AssemblyWorkspace.Insert(t, 0); SetEditorSettings(t, 4); t.Count = 3; t.Output = Path.Combine(root, "custom-output");
+                t.Scenes[0].Layers[0].GreenScreen = true; t.Scenes[0].Layers[0].UniformImageScale = true;
+                AssemblyMarketProfiles.Capture(t, a.Id);
+                t.Scenes[0].Layers[0].Source = "not captured";
+                AssemblyMarketProfiles.Apply(t, b.Id); t.Count = 2; AssemblyMarketProfiles.Capture(t, b.Id);
+                string path = Path.Combine(root, "assembly-template.xml");
+                AssemblyFiles.Save(path, t); t = AssemblyFiles.Load<AssemblyTemplate>(path); t.Validate();
+                AssemblyMarketProfiles.EnsureSeeded(t); AssemblyMarketProfiles.EnsureWorkspaceMigrated(t, path);
+                AssemblyMarketProfiles.MigrateLegacyOutputPaths(t);
+                Check(t.CustomProfiles.Count == 2 && t.CustomProfiles[0].Id == a.Id && t.CustomProfiles[0].Name == a.Name, "Custom profile IDs and names survive XML and migrations");
+                AssemblyMarketProfiles.Apply(t, a.Id); CheckEditorSettings(t, 4);
+                Check(t.Count == 3 && t.Output == Path.Combine(root, "custom-output") && t.HistoryScope == a.Id, "Custom output/count/history survive migrations");
+                Check(t.Scenes[0].Layers[0].GreenScreen && t.Scenes[0].Layers[0].UniformImageScale, "Overlay settings survive custom capture/apply");
+                AssemblyMarketProfiles.Apply(t, AssemblyProfile.Ru); CheckEditorSettings(t, 2);
+                Check(t.Count == 17 && t.Materials == Path.Combine(root, "materials"), "Existing profile remains unchanged with original material root");
+                AssemblyMarketProfiles.Apply(t, AssemblyProfile.En);
+                Check(t.Scenes.Count == 4 && t.GlobalLayers.Count == 0, "Existing sibling profile not contaminated");
+                AssemblyMarketProfiles.Apply(t, b.Id);
+                Check(t.Scenes.Count == 0 && t.Videos == "" && t.Count == 2, "Second custom remains empty and independently configured");
+                string historyRoot = Path.Combine(root, "history");
+                var history = AssemblyHistoryStore.Load(historyRoot, a.Id); history.Combinations.Add("custom-only"); AssemblyHistoryStore.Save(historyRoot, history, a.Id);
+                Check(AssemblyHistoryStore.Load(historyRoot, a.Id).Combinations.Single() == "custom-only", "Custom history persisted");
+                foreach (string other in AssemblyProfile.All.Concat(new[] { b.Id, AssemblyHistoryScope.Shared })) {
+                    Check(AssemblyHistoryStore.PathFor(historyRoot, a.Id) != AssemblyHistoryStore.PathFor(historyRoot, other), "Unique custom ledger path " + other);
+                    Check(AssemblyHistoryStore.Load(historyRoot, other).Combinations.Count == 0, "Custom history does not contaminate " + other);
+                }
+                var fresh = AssemblyTemplate.Defaults(); fresh.Materials = Path.Combine(root, "fresh"); fresh.Output = Path.Combine(root, "fresh-output");
+                AssemblyMarketProfiles.ResetWorkspace(t, b.Id, fresh);
+                AssemblyFiles.Save(path, t); t = AssemblyFiles.Load<AssemblyTemplate>(path);
+                Check(t.CustomProfiles.Count == 2, "New studio/save retains custom list");
+                AssemblyMarketProfiles.Apply(t, a.Id); CheckEditorSettings(t, 4);
+                AssemblyMarketProfiles.Apply(t, AssemblyProfile.Ru); CheckEditorSettings(t, 2);
+                AssemblyMarketProfiles.Apply(t, b.Id);
+                Check(t.Scenes.Count == 4 && t.Materials == fresh.Materials, "New studio only resets selected custom workspace");
+                AssemblyMarketProfiles.ResetWorkspace(t, AssemblyProfile.Ru, fresh);
+                AssemblyMarketProfiles.Apply(t, a.Id); CheckEditorSettings(t, 4);
+                Check(!AssemblyMarketProfiles.Contains(t, "custom-" + Guid.NewGuid().ToString("N")), "Missing custom preference can be detected without routing to RU");
+                return true;
+            } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        }
+
         public static bool RunLegacyEditorMigrationTests() {
             var t = AssemblyTemplate.Defaults();
             AssemblyMarketProfiles.EnsureSeeded(t);
@@ -143,6 +205,7 @@ namespace VideoBatch {
         }
 
         public static bool RunSelfTests() {
+            RunCustomProfileTests();
             RunInitializationTests();
             RunPersistenceIsolationTests();
             RunLegacyEditorMigrationTests();

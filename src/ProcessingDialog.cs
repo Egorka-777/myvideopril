@@ -18,7 +18,7 @@ namespace VideoBatch {
         TabControl tabs;
         readonly Random random = new Random();
 
-        public ProcessingDialog(ProcessingSettings source, bool metadataOnly = false) : base(metadataOnly ? "Метаданные роликов" : "Фильтры и эффекты", 690) {
+        public ProcessingDialog(ProcessingSettings source, bool metadataOnly = false, bool assemblyOutput = false) : base(metadataOnly ? "Метаданные роликов" : "Фильтры и эффекты", 690) {
             ClientSize = new Size(850, 690); MinimumSize = new Size(800, 580);
             Settings = Store.Clone(source ?? new ProcessingSettings()); Settings.Validate();
             var layout = Ui.Table(); layout.RowCount = 3;
@@ -34,14 +34,17 @@ namespace VideoBatch {
             tabs = new TabControl { Dock = DockStyle.Fill }; layout.Controls.Add(tabs, 0, 2);
             var filters = Page(tabs, "Фильтры"); var ft = RangeTable(filters);
             Add(ft, "Обрезка с каждой стороны, %", s => s.Crop, 0, 15);
-            Add(ft, "Подрезка по времени — суммарно, %", s => s.Trim, 0, 15);
-            Add(ft, "Поворот, °", s => s.Rotation, -180, 180);
+            if (!assemblyOutput) {
+                Add(ft, "Подрезка по времени — суммарно, %", s => s.Trim, 0, 15);
+                Add(ft, "Поворот, °", s => s.Rotation, -180, 180);
+            }
             Add(ft, "Скорость · 100 = исходная, %", s => s.Speed, 50, 200);
             Add(ft, "Яркость · 0 = исходная, %", s => s.Brightness, -50, 50);
             Add(ft, "Контраст · 100 = исходный, %", s => s.Contrast, 50, 150);
             Add(ft, "Резкость · 0 = исходная, %", s => s.Sharpness, -50, 50);
             Add(ft, "Зернистость / шум, %", s => s.Noise, 0, 100);
-            Hint(filters, "Подрезка случайно распределяется между началом и концом. На горизонтальных роликах поворот не больше ±0,2° (едва заметный наклон, без больших чёрных углов). Включённые обрезка, скорость, яркость и контраст заменяют соответствующие значения прежних настроек.");
+            if (assemblyOutput) Hint(filters, "Обработка готового ролика. Подрезка начала/конца и повороты исключены. Значения эффектов выбираются заново для каждого результата.");
+            else Hint(filters, "Подрезка случайно распределяется между началом и концом. На горизонтальных роликах поворот не больше ±0,2° (едва заметный наклон, без больших чёрных углов). Включённые обрезка, скорость, яркость и контраст заменяют соответствующие значения прежних настроек.");
             var audio = Page(tabs, "Аудио"); var at = RangeTable(audio);
             Add(at, "Громкость · 100 = текущая, %", s => s.Volume, 0, 200);
             Add(at, "Высота тона · 100 = исходная, %", s => s.Pitch, 50, 200);
@@ -90,11 +93,22 @@ namespace VideoBatch {
             captureDate.CheckedChanged += (a, b) => { days.Enabled = randomTime.Enabled = captureDate.Checked; };
             if (metadataOnly) { tabs.TabPages.Remove(filters.Parent as TabPage); tabs.TabPages.Remove(audio.Parent as TabPage); tabs.TabPages.Remove(effects.Parent as TabPage); }
             LoadValues(); StandardButtons(Read);
+            ApplyAsphalt(this);
+            tabs.DrawMode = TabDrawMode.OwnerDrawFixed;
+            tabs.ItemSize = new Size(140, 36);
+            tabs.SizeMode = TabSizeMode.Fixed;
+            tabs.DrawItem += DrawTab;
             if (metadataOnly) {
-                ApplyAsphalt(this);
                 tabs.Appearance=TabAppearance.FlatButtons; tabs.SizeMode=TabSizeMode.Fixed;
                 tabs.ItemSize=new Size(1,1); // One page: the window title already names this section.
             }
+        }
+        void DrawTab(object sender, DrawItemEventArgs e) {
+            bool active = e.Index == tabs.SelectedIndex;
+            using (var brush = new SolidBrush(active ? Theme.Card : Theme.Background)) e.Graphics.FillRectangle(brush, e.Bounds);
+            TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, Theme.FontBody, e.Bounds,
+                active ? Theme.TextPrimary : Theme.TextSecondary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            if (active) using (var pen = new Pen(Theme.Accent, 3)) e.Graphics.DrawLine(pen, e.Bounds.Left + 10, e.Bounds.Bottom - 2, e.Bounds.Right - 10, e.Bounds.Bottom - 2);
         }
         void ApplyAsphalt(Control control) {
             control.BackColor=control is TextBox || control is NumericUpDown ? Theme.Elevated : Theme.Background;

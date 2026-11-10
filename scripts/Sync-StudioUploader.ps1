@@ -3,7 +3,7 @@ param(
     [string]$KitRoot='D:\VideoBatch\VideoBatch',
     [string]$NodePath='',
     [string]$BinaryRoot='',
-    [string]$ExpectedBuild='2026-10-23-studio-two-profiles-v21'
+    [string]$ExpectedBuild='2026-11-06-studio-manual-public-v24'
 )
 $ErrorActionPreference='Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Run this script on the Windows PC containing the installed kit.' }
@@ -45,6 +45,12 @@ $files.Add(@{source=$exe;relative='VideoBatch.exe'})
 foreach ($file in $js) { $files.Add(@{source=$file.FullName;relative=('tools/uploader/'+$file.Name)}) }
 foreach ($file in @(Get-ChildItem -LiteralPath $binaryRoot -File | Where-Object { $_.Extension -eq '.dll' -or $_.Name -eq 'VideoBatch.exe.config' })) {
     $files.Add(@{source=$file.FullName;relative=$file.Name})
+}
+$highlightsRoot=Join-Path $sourceRoot 'tools/highlights'
+if (Test-Path -LiteralPath $highlightsRoot) {
+    foreach ($file in Get-ChildItem -LiteralPath $highlightsRoot -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' -and $_.Extension -ne '.pyc' }) {
+        $files.Add(@{source=$file.FullName;relative=('tools/highlights/'+$file.FullName.Substring($highlightsRoot.Length+1).Replace('\','/'))})
+    }
 }
 $runtimeRoot=Join-Path $binaryRoot 'runtimes'
 if (Test-Path -LiteralPath $runtimeRoot) {

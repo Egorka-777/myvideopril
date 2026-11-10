@@ -15,6 +15,7 @@ namespace VideoBatch {
         public static string Normalize(string scope) {
             if (string.IsNullOrWhiteSpace(scope)) return Shared;
             scope = scope.Trim();
+            if (AssemblyProfile.IsCustom(scope)) return AssemblyProfile.Normalize(scope);
             if (scope.Equals(Ru, StringComparison.OrdinalIgnoreCase)) return Ru;
             if (scope.Equals(En, StringComparison.OrdinalIgnoreCase)) return En;
             if (scope.Equals(RuInst, StringComparison.OrdinalIgnoreCase) || scope.Equals("RU Inst", StringComparison.OrdinalIgnoreCase)) return RuInst;
@@ -35,6 +36,7 @@ namespace VideoBatch {
             if (scope == RuTikTok) return "RU TikTok";
             if (scope == EnTikTok) return "EN TikTok";
             if (scope == Test) return "ТЕСТ · отдельная вкладка";
+            if (AssemblyProfile.IsCustom(scope)) return AssemblyProfile.ShortLabel(scope);
             return "Общий · все каналы";
         }
 
@@ -47,6 +49,7 @@ namespace VideoBatch {
             if (scope == RuTikTok) return "RU TikTok";
             if (scope == EnTikTok) return "EN TikTok";
             if (scope == Test) return "ТЕСТ";
+            if (AssemblyProfile.IsCustom(scope)) return AssemblyProfile.ShortLabel(scope);
             return "Общий";
         }
     }

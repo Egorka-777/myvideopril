@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -32,15 +33,21 @@ namespace VideoBatch {
         public int Mode { get; set; }
         public int Count { get; set; } = 10;
         public string Output { get; set; } = "";
+        public string YouTubeEntries { get; set; } = "";
+        public string YouTubeSourceMode { get; set; } = "keywords";
+        public string YouTubeProfileId { get; set; } = "";
+        public string YouTubePeriod { get; set; } = "today";
+        public string YouTubeDuration { get; set; } = "medium";
+        public int YouTubeVideoCount { get; set; } = 3;
         /// <summary>original | vertical_916 (Shorts, TikTok, Reels)</summary>
         public string ExportFormat { get; set; } = "vertical_916";
     }
-    public sealed class HighlightsPanel : UserControl {
+    public sealed partial class HighlightsPanel : UserControl {
         static readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64*1024*1024 };
         readonly string root = Path.Combine(Store.Root,"highlights");
         readonly HighlightsPreferences prefs;
         readonly Label sourceLabel, status;
-        readonly Button load, find, setup, stop, export, results;
+        readonly Button load, find, setup, stop, export, results, youtube;
         readonly ComboBox mode, exportFormat;
         readonly NumericUpDown count;
         readonly ProgressBar progress;
@@ -52,7 +59,9 @@ namespace VideoBatch {
         string cancellation;
         bool busy, stopping;
         public bool HasWork => busy;
-        public HighlightsPanel() {
+        public HighlightsPanel() : this(null) { }
+        public HighlightsPanel(Preferences settings) {
+            youtubeSettings=settings;
             Dock = DockStyle.Fill; BackColor = Theme.Background; ForeColor = Theme.TextPrimary; Font = Theme.FontBody;
             Directory.CreateDirectory(root);
             try { prefs = json.Deserialize<HighlightsPreferences>(File.ReadAllText(Path.Combine(root,"preferences.json"))); } catch { }
@@ -66,7 +75,10 @@ namespace VideoBatch {
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,74));
             Controls.Add(layout);
             var intro = new FlowLayoutPanel { Dock=DockStyle.Fill, FlowDirection=FlowDirection.TopDown, WrapContents=false, Margin=Padding.Empty };
-            intro.Controls.Add(new Label {Text="Сильные моменты из длинного видео", AutoSize=true, Font=Theme.FontCardTitle, Margin=new Padding(0,4,0,8)});
+            var heading=new FlowLayoutPanel {AutoSize=true,WrapContents=false,Margin=Padding.Empty};
+            heading.Controls.Add(new Label {Text="Сильные моменты из длинного видео", AutoSize=true, Font=Theme.FontCardTitle, Margin=new Padding(0,8,16,0)});
+            youtube=Theme.MakeButton("YouTube · свежие видео",accent:true,action:ShowYouTube);heading.Controls.Add(youtube);
+            intro.Controls.Add(heading);
             intro.Controls.Add(new Label {Text="Законченные мысли и события · 20–40 сек · выберите соотношение сторон для просмотра и экспорта", AutoSize=true, ForeColor=Theme.TextSecondary, MaximumSize=new Size(900,0)});
             layout.Controls.Add(intro,0,0);
             toolbar = new FlowLayoutPanel { Dock=DockStyle.Fill, WrapContents=true, Margin=Padding.Empty };
@@ -124,7 +136,7 @@ namespace VideoBatch {
             throw new Exception("Не найдена папка tools/highlights рядом с приложением. Агент должен скопировать её из новой ветки.");
         }
         void SetBusy(bool value) {
-            busy=value;stopping=false;toolbar.Enabled=!value;cards.Enabled=!value;export.Enabled=!value&&analysis?.clips?.Count>0;stop.Enabled=value;stop.Visible=value;results.Enabled=!value&&Directory.Exists(prefs.Output);progress.Visible=value;
+            busy=value;stopping=false;youtube.Enabled=!value;toolbar.Enabled=!value;cards.Enabled=!value;export.Enabled=!value&&analysis?.clips?.Count>0;stop.Enabled=value;stop.Visible=value;results.Enabled=!value&&Directory.Exists(prefs.Output);progress.Visible=value;
             progress.Style=value?ProgressBarStyle.Marquee:ProgressBarStyle.Continuous;if(!value)progress.Value=0;
         }
         void OnUi(Action action) {if(!IsDisposed && IsHandleCreated)try{BeginInvoke(action);}catch(InvalidOperationException){}}
@@ -132,8 +144,8 @@ namespace VideoBatch {
             try {
                 var record=json.Deserialize<Dictionary<string,object>>(line);
                 string message=Convert.ToString(record["message"]), stage=Convert.ToString(record["stage"]);
-                OnUi(()=>{status.Text=message;if(record.ContainsKey("percent")&&record["percent"]!=null){progress.Style=ProgressBarStyle.Continuous;progress.Value=Math.Max(0,Math.Min(100,Convert.ToInt32(record["percent"])));}});
-                AppDiagnostics.Write("Нарезка","","highlights",stage,message,stage=="error"?"error":"info");
+                OnUi(()=>{status.Text=message;youtubeProgress?.Invoke(message);if(record.ContainsKey("percent")&&record["percent"]!=null){progress.Style=ProgressBarStyle.Continuous;progress.Value=Math.Max(0,Math.Min(100,Convert.ToInt32(record["percent"])));}});
+                AppDiagnostics.Write("Нарезка","","highlights",stage,message,stage=="error"||stage=="source_error"?"error":"info");
             }catch {AppDiagnostics.Write("Нарезка","","highlights","worker",line);}
         }
         async Task<HighlightsResult> Worker(string action, List<HighlightClip> clips=null, string output=null) {
@@ -162,6 +174,10 @@ namespace VideoBatch {
         async Task<int> RunProcess(string exe,string[] args,bool protocol) {
             var start=new ProcessStartInfo(exe,string.Join(" ",args.Select(Core.Quote))) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
             start.EnvironmentVariables["PYTHONUTF8"]="1";
+            if(youtubeBatch) {
+                start.EnvironmentVariables["VIDEOBATCH_OPENROUTER_KEY"]=WindowsSupport.Unprotect(youtubeSettings.ProtectedOpenRouterKey);
+                start.EnvironmentVariables["VIDEOBATCH_HTTP_PROXY"]=WindowsSupport.Unprotect(youtubeSettings.ProtectedWarmupHttpProxy);
+            }
             using(var process=new Process{StartInfo=start}) {
                 active=process; var errors=new StringBuilder();
                 Action<string> line=text=>{if(string.IsNullOrWhiteSpace(text))return;if(protocol)ProgressLine(text);else OnUi(()=>status.Text=text);};
@@ -224,25 +240,27 @@ namespace VideoBatch {
             catch(OperationCanceledException){status.Text="Сохранение остановлено. Готовые фрагменты остались в папке результатов.";}catch(Exception ex){ShowError(ex);}finally{SetBusy(false);}
         }
         void ShowSetup() {
-            using(var dialog=new Form {Text="Первый запуск нарезки",ClientSize=new Size(580,320),StartPosition=FormStartPosition.CenterParent,BackColor=Theme.Background,ForeColor=Theme.TextPrimary,Font=Theme.FontBody,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false}) {
-                var body=new Label {Text="Всё работает на вашем ПК, без подписки и платного API.\n\nОдин раз установите Python 3.11 (64-bit) и Ollama, затем нажмите «Подготовить». Скачаются модели для речи и анализа кадров — несколько ГБ. Нужен интернет; после скачивания файлы никуда не отправляются.\n\nНа слабом ПК анализ может быть долгим. Для локальной модели желательно 8–16 ГБ свободной памяти. Качество отбора проверяйте в просмотре.",Dock=DockStyle.Fill,Padding=new Padding(22)};
+            using(var dialog=new Form {Text="Первый запуск нарезки",ClientSize=new Size(680,360),StartPosition=FormStartPosition.CenterParent,BackColor=Theme.Background,ForeColor=Theme.TextPrimary,Font=Theme.FontBody,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false}) {
+                var body=new Label {Text="Установите Python 3.11 (64-bit).\n\n«Для YouTube» — устанавливает загрузчик и локальный Whisper. Видео и звук остаются на ПК; расшифровка отправляется в OpenRouter для отбора законченных фрагментов. Нужны ключ и баланс OpenRouter из настроек приложения.\n\n«Локальный анализ» — дополнительно требует Ollama и скачивает модель для анализа речи и кадров, несколько ГБ. Этот режим работает без внешнего API.\n\nСкачивание любого видео не гарантируется: платные, приватные и защищённые ролики могут быть недоступны.",Dock=DockStyle.Fill,Padding=new Padding(22)};
                 var actions=new FlowLayoutPanel {Dock=DockStyle.Bottom,Height=62,Padding=new Padding(16,8,0,0),WrapContents=false};
                 actions.Controls.Add(Theme.MakeButton("Python",ghost:true,action:()=>Process.Start("https://www.python.org/downloads/windows/")));
                 actions.Controls.Add(Theme.MakeButton("Ollama",ghost:true,action:()=>Process.Start("https://ollama.com/download/windows")));
-                actions.Controls.Add(Theme.MakeButton("Подготовить",accent:true,action:()=>{dialog.DialogResult=DialogResult.OK;dialog.Close();}));
+                actions.Controls.Add(Theme.MakeButton("Для YouTube",accent:true,action:()=>{dialog.Tag=true;dialog.DialogResult=DialogResult.OK;dialog.Close();}));
+                actions.Controls.Add(Theme.MakeButton("Локальный анализ",ghost:true,action:()=>{dialog.Tag=false;dialog.DialogResult=DialogResult.OK;dialog.Close();}));
                 dialog.Controls.Add(body);dialog.Controls.Add(actions);
                 if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+                Prepare(dialog.Tag is bool && (bool)dialog.Tag);
             }
-            Prepare();
         }
-        async void Prepare() {
+        async void Prepare(bool speechOnly=false) {
             SetBusy(true);status.Text="Подготавливаю модели. Скачивание может занять время…";
-            try {await RunProcess("powershell.exe",new[]{"-NoProfile","-ExecutionPolicy","Bypass","-File",Path.Combine(Scripts(),"prepare.ps1"),"-Root",root},false);status.Text=stopping?"Подготовка остановлена":"Всё готово. Выберите видео и нажмите «Найти моменты».";}
+            try {var args=new List<string>{"-NoProfile","-ExecutionPolicy","Bypass","-File",Path.Combine(Scripts(),"prepare.ps1"),"-Root",root};if(speechOnly)args.Add("-SpeechOnly");await RunProcess("powershell.exe",args.ToArray(),false);status.Text=stopping?"Подготовка остановлена":speechOnly?"Готово. Откройте «YouTube · свежие видео».":"Всё готово. Выберите видео и нажмите «Найти моменты».";}
             catch(Exception ex){if(!stopping)ShowError(ex);}finally{SetBusy(false);}
         }
         public async Task StopBeforeClose() {CancelWork();while(busy)await Task.Delay(100);}
         public async void CancelWork() {
             if(!busy || stopping)return;stopping=true;stop.Enabled=false;status.Text="Останавливаю…";
+            youtubeCancellation?.Cancel();
             if(cancellation!=null)try{File.WriteAllText(cancellation,"");}catch{}
             var process=active;
             await Task.Delay(2500);

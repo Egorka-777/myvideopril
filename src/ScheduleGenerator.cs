@@ -123,19 +123,19 @@ namespace VideoBatch {
         public static int RandomGapForKind(string kind, Preferences prefs) {
             bool shorts = !string.Equals((kind ?? "").Trim(), "long", StringComparison.OrdinalIgnoreCase);
             if (shorts) {
-                int minM = Math.Max(1, prefs?.YouTubeScheduleMinMinutes ?? 15);
-                int maxM = Math.Max(minM, prefs?.YouTubeScheduleMaxMinutes ?? 20);
+                int minM = Math.Max(1, prefs?.YouTubeScheduleMinMinutes ?? 2);
+                int maxM = Math.Max(minM, prefs?.YouTubeScheduleMaxMinutes ?? 5);
                 return Rng.Next(minM, maxM + 1);
             }
-            int lmin = Math.Max(1, prefs?.YouTubeScheduleLongMinMinutes ?? 1);
+            int lmin = Math.Max(1, prefs?.YouTubeScheduleLongMinMinutes ?? 2);
             int lmax = Math.Max(lmin, prefs?.YouTubeScheduleLongMaxMinutes ?? 5);
             return Rng.Next(lmin, lmax + 1);
         }
 
         static int RandomGapSecondsForKind(string kind, Preferences prefs) {
             bool shorts = !string.Equals((kind ?? "").Trim(), "long", StringComparison.OrdinalIgnoreCase);
-            int min = Math.Max(1, shorts ? prefs?.YouTubeScheduleMinMinutes ?? 15 : prefs?.YouTubeScheduleLongMinMinutes ?? 1);
-            int max = Math.Max(min, shorts ? prefs?.YouTubeScheduleMaxMinutes ?? 20 : prefs?.YouTubeScheduleLongMaxMinutes ?? 5);
+            int min = Math.Max(1, shorts ? prefs?.YouTubeScheduleMinMinutes ?? 2 : prefs?.YouTubeScheduleLongMinMinutes ?? 2);
+            int max = Math.Max(min, shorts ? prefs?.YouTubeScheduleMaxMinutes ?? 5 : prefs?.YouTubeScheduleLongMaxMinutes ?? 5);
             return Rng.Next(min * 60, max * 60 + 1);
         }
 
@@ -218,7 +218,7 @@ namespace VideoBatch {
         /// <summary>Общее расписание запланированных роликов (режим network — сеть аккаунтов на период ПК).</summary>
         public static void AssignCrossBatchSchedule(IList<PreparedProfileBatch> batches, Preferences prefs = null, bool forceFromFloor = false, bool allScheduled = false, bool studioLongOnly = false) {
             if (batches == null || batches.Count == 0) return;
-            string mode = (prefs?.YouTubeScheduleMode ?? "network").Trim().ToLowerInvariant();
+            string mode = (prefs?.YouTubeScheduleMode ?? "random").Trim().ToLowerInvariant();
             if (mode == "network") {
                 AssignNetworkSchedule(batches, prefs, allScheduled, studioLongOnly);
                 return;
@@ -240,7 +240,7 @@ namespace VideoBatch {
                         it.ScheduleDate="";it.ScheduleTime="";
                         continue;
                     }
-                    if (prev != DateTime.MinValue) cursor = prev.AddSeconds(RandomGapSecondsForKind(kind, prefs));
+                    if (prev != DateTime.MinValue) cursor = prev.AddMinutes(RandomGapForKind(kind, prefs));
                     var slot = MakeSlot(cursor, prev);
                     it.ScheduleDate = slot.date;
                     it.ScheduleTime = slot.time;
@@ -450,6 +450,20 @@ namespace VideoBatch {
                 if (cross[0].Items[0].ScheduleDate == null) return false;
                 if (!TryParseSlot(cross[0].Items[0].ScheduleDate, cross[0].Items[0].ScheduleTime, out var firstAt)) return false;
                 if (firstAt < DateTime.Now.AddMinutes(ResolveLeadMinutes(prefs) - 1)) return false;
+                var intervals = new Preferences { YouTubeScheduleMinMinutes=2, YouTubeScheduleMaxMinutes=5,
+                    YouTubeScheduleLongMinMinutes=7, YouTubeScheduleLongMaxMinutes=9 };
+                var scheduled = new List<PreparedProfileBatch> { new PreparedProfileBatch {
+                    Items=Enumerable.Range(0,40).Select(i=>new PreparedUploadItem { Kind=i%2==0?"shorts":"long" }).ToList()
+                }};
+                AssignCrossBatchSchedule(scheduled, intervals, allScheduled:true);
+                for(int i=1;i<scheduled[0].Items.Count;i++) {
+                    var current=scheduled[0].Items[i];var previous=scheduled[0].Items[i-1];
+                    double gap=(ParseSlot(current.ScheduleDate,current.ScheduleTime)-ParseSlot(previous.ScheduleDate,previous.ScheduleTime)).TotalMinutes;
+                    if(current.Kind=="long"?(gap<7||gap>9):(gap<2||gap>5))return false;
+                }
+                if(!EnsureValidYouTubeSchedule(new List<PreparedProfileBatch> { new PreparedProfileBatch {
+                    Items=new List<PreparedUploadItem> { new PreparedUploadItem {Kind="shorts"} }
+                }},intervals,allScheduled:true))return false;
                 var networkPrefs = new Preferences {
                     YouTubeScheduleMode = "network",
                     YouTubeScheduleNetworkPeriodMinutes = 480,

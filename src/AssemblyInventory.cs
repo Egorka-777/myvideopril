@@ -84,7 +84,7 @@ namespace VideoBatch {
                 AssemblySceneVideoBuilder.Migrate(scene);
                 bool flexibleSceneVideo = !t.ContinuousVideo && t.SceneTimingVersion > 0 && scene.VideoMode == "own"
                     && (t.HasSceneVoiceovers && scene.VoiceMode != "none" || scene.VideoPacks.Count > 0);
-                videos.Add(source.Where(v => allowed.Contains(v.Path) && (v.Duration + .001 >= required || flexibleSceneVideo && v.Duration > 0 || (t.LoopShortVideos || !t.ContinuousVideo && t.SceneTimingVersion>0 && scene.VideoMode=="own") && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
+                videos.Add(source.Where(v => allowed.Contains(v.Path) && (t.DurationByVideo && v.Duration > 0 || v.Duration + .001 >= required || flexibleSceneVideo && v.Duration > 0 || (t.LoopShortVideos || !t.ContinuousVideo && t.SceneTimingVersion>0 && scene.VideoMode=="own") && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
                 sceneMusic[scene] = Assets(t.Resolve(scene.Music),AssemblyFiles.MusicExtensions).Where(a => !speechHashes.Contains(a.Hash)).ToList();
                 foreach (var l in scene.Layers.Where(l => l.Enabled)) {
                     var pool = Assets(t.Resolve(l.Source),t.PictureExtensions);
@@ -251,7 +251,8 @@ namespace VideoBatch {
             return pictures.Any(p => p.Key.Unique) ? "Закончились новые связки или материалы без повторов." : "Исчерпаны разные сочетания материалов.";
         }
         public AssemblyPlanBatch Take(List<AssemblyPlan> candidates,Random random,int count,AssemblyMixTracker mix = null,CancellationToken ct = default(CancellationToken)) {
-            mix=mix ?? new AssemblyMixTracker(); var batch=new AssemblyPlanBatch(); var used=new HashSet<string>(history.UsedImages);
+            mix=mix ?? new AssemblyMixTracker();
+            var batch=new AssemblyPlanBatch(); var used=new HashSet<string>(history.UsedImages);
             for (int i=candidates.Count-1; i>0; i--) { int j=random.Next(i+1); var p=candidates[i]; candidates[i]=candidates[j]; candidates[j]=p; }
             int target=Math.Min(count,Math.Min(candidates.Count,UniqueLimit(used)));
             while (batch.Plans.Count<target) {
@@ -267,13 +268,15 @@ namespace VideoBatch {
                 }
                 if (best==null) best=candidates.Where(p => !p.UniqueImages.Any(used.Contains)).OrderBy(mix.Score).FirstOrDefault();
                 if (best==null) break;
-                candidates.Remove(best); used.UnionWith(best.UniqueImages); Complete(best,random,mix); batch.Plans.Add(best);
+                candidates.Remove(best);
+                used.UnionWith(best.UniqueImages); Complete(best,random,mix); batch.Plans.Add(best);
             }
             if (batch.Plans.Count<count) batch.Limit=LimitReason();
             return batch;
         }
         void Complete(AssemblyPlan p,Random random,AssemblyMixTracker mix) {
             AssemblyTimeline.Complete(template,p,random);
+            AssemblyTimeline.ApplyVideoDuration(template,p);
             AssignMusic(p,random,mix);
             double time=0;
             foreach(var scene in p.Scenes) {

@@ -708,8 +708,22 @@ namespace VideoBatch {
                 if (int.TryParse(shortsMax.Text, out var v) && v >= settings.YouTubeScheduleMinMinutes && v <= 1440) { settings.YouTubeScheduleMaxMinutes = v; save(); }
                 shortsMax.Text = settings.YouTubeScheduleMaxMinutes.ToString();
             };
-            Add(Labeled("Shorts · минимум, мин", shortsMin));
-            Add(Labeled("Shorts · максимум, мин", shortsMax));
+            Add(Labeled("Shorts · интервал от, мин (Studio / HTTP)", shortsMin));
+            Add(Labeled("Shorts · интервал до, мин", shortsMax));
+            var longMin = Theme.MakeSearchBox();
+            longMin.Text = settings.YouTubeScheduleLongMinMinutes.ToString(); longMin.Width = 80;
+            var longMax = Theme.MakeSearchBox();
+            longMax.Text = settings.YouTubeScheduleLongMaxMinutes.ToString(); longMax.Width = 80;
+            longMin.Leave += (s, e) => {
+                if (int.TryParse(longMin.Text, out var v) && v >= 1 && v <= settings.YouTubeScheduleLongMaxMinutes) { settings.YouTubeScheduleLongMinMinutes = v; save(); }
+                longMin.Text = settings.YouTubeScheduleLongMinMinutes.ToString();
+            };
+            longMax.Leave += (s, e) => {
+                if (int.TryParse(longMax.Text, out var v) && v >= settings.YouTubeScheduleLongMinMinutes && v <= 1440) { settings.YouTubeScheduleLongMaxMinutes = v; save(); }
+                longMax.Text = settings.YouTubeScheduleLongMaxMinutes.ToString();
+            };
+            Add(Labeled("Long · интервал от, мин (Studio / HTTP)", longMin));
+            Add(Labeled("Long · интервал до, мин", longMax));
             Add(new Label { Text = "Отложенные Shorts используют время и часовой пояс этого ПК. Ранее созданные отложенные ролики не меняются.",
                 ForeColor = Theme.TextSecondary, AutoSize = true, MaximumSize = new Size(760, 0), Margin = new Padding(0, 4, 0, 4) });
 

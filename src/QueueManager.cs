@@ -43,8 +43,9 @@ namespace VideoBatch {
                 items=Items.Select(it=>{
                     string kind=QueueManager.NormKindPublic(it.Kind??Channel?.Kind);
                     bool shorts=kind=="shorts";
+                    bool immediate=it.Source.StudioRetryImmediate||it.Source.StudioPending||!string.IsNullOrWhiteSpace(it.Source.StudioVideoId);
                     long unix=0;int offsetMin=0;
-                    if(!shorts&&!string.IsNullOrWhiteSpace(it.ScheduleDate)&&!string.IsNullOrWhiteSpace(it.ScheduleTime)){
+                    if(!string.IsNullOrWhiteSpace(it.ScheduleDate)&&!string.IsNullOrWhiteSpace(it.ScheduleTime)){
                         var slot=ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime);
                         unix=new DateTimeOffset(slot).ToUnixTimeSeconds();
                         offsetMin=(int)TimeZoneInfo.Local.GetUtcOffset(slot).TotalMinutes;
@@ -56,10 +57,10 @@ namespace VideoBatch {
                     scheduledUnixSeconds=unix,
                     scheduledUtcOffsetMinutes=offsetMin,
                     contentKind=kind,
-                    publishMode=shorts?"immediate":"scheduled",
+                    publishMode=immediate?"immediate":"scheduled",
                     thumbnail=shorts?null:YouTubeThumbnailSync.ForItem(Channel,it.Source,it.Index-1),
-                    scheduleDate=shorts?null:it.ScheduleDate,
-                    scheduleTime=shorts?null:NormalizeScheduleTime(it.ScheduleTime),
+                    scheduleDate=it.ScheduleDate,
+                    scheduleTime=NormalizeScheduleTime(it.ScheduleTime),
                     publishedVideoId=it.Source.PublishedVideoId??"",
                     publishedUrl=it.Source.PublishedUrl??""
                 };}).ToArray(),

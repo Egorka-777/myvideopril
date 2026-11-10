@@ -4,16 +4,24 @@ using System.IO;
 using System.Linq;
 
 namespace VideoBatch {
+    public class AssemblyCustomProfile {
+        public string Id = "", Name = "";
+        public AssemblyMarketSettings Settings = new AssemblyMarketSettings();
+    }
+
     public class AssemblyMarketSettings {
+        public string Materials = "";
         public bool Configured;
         public bool WorkspaceConfigured;
         public bool EditorSettingsConfigured;
         public int Fps = 30;
         public double MusicVolume = .8, TransitionDuration = .35;
         public string Transition = "fade", RenderMode = "auto";
-        public bool RandomVideoStart, LoopShortVideos, AllowVideoReuse;
+        public bool RandomVideoStart, LoopShortVideos, AllowVideoReuse, DurationByVideo;
         public List<AssemblyLayer> GlobalLayers = new List<AssemblyLayer>();
+        public List<AssemblyInsertion> Insertions = new List<AssemblyInsertion>();
         public bool ContinuousVideo;
+        public double BaseVideoX = 0, BaseVideoY = 0, BaseVideoWidth = 1, BaseVideoHeight = 1;
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
@@ -33,16 +41,40 @@ namespace VideoBatch {
         public string Music = "";
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
         public AssemblyOutputMetadata OutputMetadata;
+        public ProcessingSettings OutputProcessing;
     }
 
     public static class AssemblyMarketProfiles {
-        public static string NormMarket(string market) => AssemblyProfile.MainProfile(market);
+        public static string NormMarket(string market) => AssemblyProfile.IsCustom(market) ? AssemblyProfile.Normalize(market) : AssemblyProfile.MainProfile(market);
 
         public static string DefaultOutput(string profile) => VideoBatchOutputPaths.AssemblyFolder(profile);
 
+        public static AssemblyCustomProfile AddEmpty(AssemblyTemplate t, string name) {
+            name = (name ?? "").Trim();
+            if (name.Length == 0) throw new Exception("Введите название студии.");
+            EnsureSeeded(t);
+            string id = "custom-" + Guid.NewGuid().ToString("N");
+            var custom = new AssemblyCustomProfile {
+                Id = id, Name = name,
+                Settings = new AssemblyMarketSettings {
+                    Configured = true, WorkspaceConfigured = true, EditorSettingsConfigured = true,
+                    Count = 1, FormatWidth = 1080, FormatHeight = 1920,
+                    Materials = Path.Combine(t.Materials, id), Output = DefaultOutput(id),
+                    OutputMetadata = AssemblyOutputMetadata.Default()
+                }
+            };
+            t.CustomProfiles.Add(custom);
+            return custom;
+        }
+
+        public static bool Contains(AssemblyTemplate t, string profile) {
+            profile = AssemblyProfile.Normalize(profile);
+            return !AssemblyProfile.IsCustom(profile) || (t.CustomProfiles != null && t.CustomProfiles.Any(p => p.Id == profile));
+        }
+
         public static void MigrateLegacyOutputPaths(AssemblyTemplate t) {
             if (t == null) return;
-            foreach (string profile in AssemblyProfile.All) {
+            foreach (string profile in AssemblyProfile.All.Concat((t.CustomProfiles ?? new List<AssemblyCustomProfile>()).Select(p => p.Id))) {
                 var slice = Slice(t, profile);
                 if (!string.IsNullOrWhiteSpace(slice.Output))
                     slice.Output = VideoBatchOutputPaths.RemapAssemblyOutput(slice.Output, profile);
@@ -53,6 +85,11 @@ namespace VideoBatch {
 
         static AssemblyMarketSettings Slice(AssemblyTemplate t, string profile) {
             profile = AssemblyProfile.Normalize(profile);
+            if (AssemblyProfile.IsCustom(profile)) {
+                var custom = t.CustomProfiles?.Find(p => p.Id == profile);
+                if (custom == null) throw new Exception("Студия не найдена: " + profile);
+                return custom.Settings;
+            }
             if (profile == AssemblyProfile.En) return t.MarketEn ?? (t.MarketEn = new AssemblyMarketSettings());
             if (profile == AssemblyProfile.RuInst) return t.MarketRuInst ?? (t.MarketRuInst = new AssemblyMarketSettings());
             if (profile == AssemblyProfile.EnInst) return t.MarketEnInst ?? (t.MarketEnInst = new AssemblyMarketSettings());
@@ -60,6 +97,21 @@ namespace VideoBatch {
             if (profile == AssemblyProfile.EnTikTok) return t.MarketEnTikTok ?? (t.MarketEnTikTok = new AssemblyMarketSettings());
             if (profile == AssemblyProfile.Test) return t.MarketTest ?? (t.MarketTest = new AssemblyMarketSettings());
             return t.MarketRu ?? (t.MarketRu = new AssemblyMarketSettings());
+        }
+
+        public static void ResetWorkspace(AssemblyTemplate t, string profile, AssemblyTemplate fresh) {
+            var slice = Slice(t, profile);
+            slice.TitleBank = AssemblyOutputTags.NormalizeBank(fresh.TitleBank);
+            slice.Output = fresh.Output;
+            slice.Count = fresh.Count;
+            slice.FormatWidth = fresh.Width;
+            slice.FormatHeight = fresh.Height;
+            slice.OutputMetadata = CloneMetadata(fresh.OutputMetadata);
+            slice.OutputProcessing = Store.Clone(fresh.OutputProcessing ?? AssemblyProcessing.Defaults());
+            CaptureWorkspace(fresh, slice);
+            CaptureEditorSettings(fresh, slice);
+            slice.Configured = true;
+            Apply(t, profile);
         }
 
         // Retained for existing callers: only initial migration may seed sibling workspaces.
@@ -98,6 +150,15 @@ namespace VideoBatch {
                 Opacity = l.Opacity,
                 Start = l.Start,
                 End = l.End,
+                AppearanceTransition = l.AppearanceTransition,
+                AppearanceDuration = l.AppearanceDuration,
+                PlaybackMode = l.PlaybackMode,
+                RepeatPause = l.RepeatPause,
+                PhotoDuration = l.PhotoDuration,
+                ExitTransition = l.ExitTransition,
+                ExitDuration = l.ExitDuration,
+                GreenScreen = l.GreenScreen,
+                UniformImageScale = l.UniformImageScale,
                 ImagePart = l.ImagePart,
                 Font = l.Font,
                 FontSize = l.FontSize,
@@ -162,8 +223,12 @@ namespace VideoBatch {
             slice.RandomVideoStart = t.RandomVideoStart;
             slice.LoopShortVideos = t.LoopShortVideos;
             slice.AllowVideoReuse = t.AllowVideoReuse;
+            slice.DurationByVideo = t.DurationByVideo;
             slice.GlobalLayers = CloneLayers(t.GlobalLayers);
+            slice.Insertions = AssemblyInsertions.Copy(t.Insertions);
             slice.ContinuousVideo = t.ContinuousVideo;
+            slice.BaseVideoX = t.BaseVideoX; slice.BaseVideoY = t.BaseVideoY;
+            slice.BaseVideoWidth = t.BaseVideoWidth; slice.BaseVideoHeight = t.BaseVideoHeight;
             slice.Speech = CloneSpeech(t.Speech);
             slice.SpeechLines = CloneSpeechLines(t.SpeechLines);
             slice.SecondaryVideos = t.SecondaryVideos;
@@ -194,8 +259,12 @@ namespace VideoBatch {
             t.RandomVideoStart = slice.RandomVideoStart;
             t.LoopShortVideos = slice.LoopShortVideos;
             t.AllowVideoReuse = slice.AllowVideoReuse;
+            t.DurationByVideo = slice.DurationByVideo;
             t.GlobalLayers = CloneLayers(slice.GlobalLayers);
+            t.Insertions = AssemblyInsertions.Copy(slice.Insertions);
             t.ContinuousVideo = slice.ContinuousVideo;
+            t.BaseVideoX = slice.BaseVideoX; t.BaseVideoY = slice.BaseVideoY;
+            t.BaseVideoWidth = slice.BaseVideoWidth; t.BaseVideoHeight = slice.BaseVideoHeight;
             t.Speech = CloneSpeech(slice.Speech);
             t.SpeechLines = CloneSpeechLines(slice.SpeechLines);
             t.SecondaryVideos = slice.SecondaryVideos;
@@ -215,6 +284,7 @@ namespace VideoBatch {
         }
 
         static void CaptureWorkspace(AssemblyTemplate t, AssemblyMarketSettings slice) {
+            slice.Materials = t.Materials ?? "";
             slice.Videos = t.Videos ?? "";
             slice.Music = t.Music ?? "";
             slice.Scenes = CloneScenes(t.Scenes);
@@ -223,6 +293,7 @@ namespace VideoBatch {
 
         static void ApplyWorkspace(AssemblyTemplate t, AssemblyMarketSettings slice) {
             if (!slice.WorkspaceConfigured) CaptureWorkspace(t, slice);
+            if (!string.IsNullOrWhiteSpace(slice.Materials)) t.Materials = slice.Materials;
             t.Videos = slice.Videos ?? "";
             t.Music = slice.Music ?? "";
             t.Scenes = CloneScenes(slice.Scenes);
@@ -293,6 +364,7 @@ namespace VideoBatch {
 
         public static void EnsureSeeded(AssemblyTemplate t) {
             if (t == null) return;
+            if (t.CustomProfiles == null) t.CustomProfiles = new List<AssemblyCustomProfile>();
             if (t.MarketRu == null) t.MarketRu = new AssemblyMarketSettings();
             if (t.MarketEn == null) t.MarketEn = new AssemblyMarketSettings();
             if (t.MarketRuInst == null) t.MarketRuInst = new AssemblyMarketSettings();
@@ -300,6 +372,10 @@ namespace VideoBatch {
             if (t.MarketRuTikTok == null) t.MarketRuTikTok = new AssemblyMarketSettings();
             if (t.MarketEnTikTok == null) t.MarketEnTikTok = new AssemblyMarketSettings();
             if (t.MarketTest == null) t.MarketTest = new AssemblyMarketSettings();
+            foreach (string profile in AssemblyProfile.All) {
+                var slice = Slice(t, profile);
+                if (string.IsNullOrWhiteSpace(slice.Materials)) slice.Materials = t.Materials;
+            }
             if (t.AssemblyMarketsSeeded) {
                 foreach (string profile in AssemblyProfile.All) {
                     var slice = Slice(t, profile);
@@ -358,6 +434,7 @@ namespace VideoBatch {
             slice.FormatWidth = t.Width;
             slice.FormatHeight = t.Height;
             slice.OutputMetadata = CloneMetadata(t.OutputMetadata);
+            slice.OutputProcessing = Store.Clone(t.OutputProcessing ?? AssemblyProcessing.Defaults());
             CaptureWorkspace(t, slice);
             CaptureEditorSettings(t, slice);
             slice.Configured = true;
@@ -393,6 +470,7 @@ namespace VideoBatch {
                 t.Height = slice.FormatHeight;
             }
             t.OutputMetadata = CloneMetadata(slice.OutputMetadata);
+            t.OutputProcessing = Store.Clone(slice.OutputProcessing ?? AssemblyProcessing.Defaults());
             ApplyWorkspace(t, slice);
             ApplyEditorSettings(t, slice);
         }

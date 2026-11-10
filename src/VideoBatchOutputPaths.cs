@@ -47,7 +47,7 @@ namespace VideoBatch {
             string scope = (t?.HistoryScope ?? "").Trim();
             if (scope.Length == 0 || scope.Equals(AssemblyHistoryScope.Shared, StringComparison.OrdinalIgnoreCase) || scope.Equals("Общий", StringComparison.OrdinalIgnoreCase))
                 return "Общий";
-            return AssemblyProfile.ShortLabel(AssemblyProfile.Normalize(scope));
+            return AssemblyProfile.ShortLabel(AssemblyProfile.Normalize(scope), t);
         }
 
         public static string AssemblyVideoFileName(AssemblyTemplate t, int index, string titleHint = null) {

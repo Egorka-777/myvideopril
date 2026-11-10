@@ -16,7 +16,7 @@ namespace VideoBatch {
             int width=0,height=0;
             foreach(var file in AssemblyFiles.Pool(t.Resolve(layer.Source),AssemblyFiles.PictureExtensions)) {
                 if(Path.GetExtension(file).Equals(".txt",StringComparison.OrdinalIgnoreCase)) continue;
-                using(var image=Image.FromFile(file)) { width=Math.Max(width,image.Width); height=Math.Max(height,image.Height); }
+                var size=AssemblyOverlayMedia.Size(file); width=Math.Max(width,size.Width); height=Math.Max(height,size.Height);
             }
             return new Size(width,height);
         }
@@ -37,10 +37,8 @@ namespace VideoBatch {
             var box=new RectangleF(0,0,(float)(layer.Width*t.Width),(float)(layer.Height*t.Height));
             foreach(var file in AssemblyFiles.Pool(t.Resolve(layer.Source),AssemblyFiles.PictureExtensions)) {
                 if(Path.GetExtension(file).Equals(".txt",StringComparison.OrdinalIgnoreCase)) continue;
-                using(var image=Image.FromFile(file)) {
-                    var bounds=FitImageBounds(box,image.Size);
-                    maximum=Math.Max(maximum,Math.Max(bounds.Width/t.Width,bounds.Height/t.Height));
-                }
+                var bounds=FitImageBounds(box,AssemblyOverlayMedia.Size(file));
+                maximum=Math.Max(maximum,Math.Max(bounds.Width/t.Width,bounds.Height/t.Height));
             }
             return maximum*100;
         }
@@ -86,7 +84,7 @@ namespace VideoBatch {
                             }
                         }
                     } else {
-                        using (var image = Image.FromFile(plan.Asset.Path)) {
+                        using (var image = AssemblyOverlayMedia.LoadFrame(plan.Asset.Path, 0, l.GreenScreen)) {
                             var target = LayerImageBounds(t, l, image.Size);
                             using (var attrs = new ImageAttributes()) {
                                 var matrix = new ColorMatrix(); matrix.Matrix33 = (float)l.Opacity; attrs.SetColorMatrix(matrix);

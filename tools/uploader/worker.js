@@ -6,8 +6,10 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 /** Меняется при каждом деплое — сверяйте в журнале загрузки. */
-const WORKER_BUILD = "2026-10-23-studio-two-profiles-v21";
+const WORKER_BUILD = "2026-11-06-studio-manual-public-v24";
 const studioBrowser = require('./studio-browser');
+// Highlights is read-only discovery, never an upload (including older Studio classifiers).
+function isStudioUploadJob(value) { return !value.highlightsSearch && studioBrowser.isStudioUpload(value); }
 const studioAcks=new Map();
 async function durableCheckpoint(stage,item,packIndex,extra={}){
  if(!item.localJobId)throw new Error("Studio: нет постоянного ID задания. Обновите приложение вместе с worker.");
@@ -82,7 +84,7 @@ function assertPageOpen(page) {
 }
 
 function attachPageGuards(page) {
-  if(studioBrowser.isStudioUpload(job)){
+  if(isStudioUploadJob(job)){
     studioBrowser.installUploadDialogGuard(page.context(),send);
     return;
   }
@@ -194,18 +196,18 @@ const { loginWithToken } = require("./dolphin-local-auth");
 
 async function startOrConnectProfile() {
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
-  const studioUpload=studioBrowser.isStudioUpload(job);
+  const studioUpload=isStudioUploadJob(job);
   await loginWithToken(job, apiRaw, text => send("dolphin", text));
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
-    { onAttached: () => { profileOwned = false; }, ...(studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:false}:{}) }
+    { onAttached: () => { profileOwned = false; }, ...(job.highlightsSearch?{maxAttempts:1,allowStopRestart:false}:studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:false}:{}) }
   );
   profileStarted = true;
   return endpoint;
 }
 
 async function connectBrowser(endpoint) {
-  if (studioBrowser.isStudioUpload(job)) return studioBrowser.connect(chromium, endpoint, send);
+  if (isStudioUploadJob(job) || job.highlightsSearch) return studioBrowser.connect(chromium, endpoint, send);
   send("dolphin", "Подключение к браузеру…", { percent: 12 });
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -354,7 +356,7 @@ async function closeProfileSafely(page) {
   if (page && !page.isClosed()) await releaseTaskPage(page);
   if (browser) await browser.close(); // Disconnect CDP; Dolphin owns the browser.
   browser = null;
-  await stopProfile({ completedUpload: studioBrowser.isStudioUpload(job) });
+  await stopProfile({ completedUpload: isStudioUploadJob(job) });
 }
 
 async function fetchText(url, timeoutMs = 20000) {
@@ -2877,7 +2879,7 @@ async function uploadPackBulk(page,pack){
  const selected=pack.map((item,index)=>hydrateStudioItem({...item,_packIndex:index+1})).filter(item=>!item.publishedVideoId&&!item.publishedUrl);
  await studioBrowser.openStudio(page,job.channelUrl,send);
  const studio=require('./youtube-studio-upload');
- return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true,waitForChecks:true,newTabPerVideo:true,channelUrl:job.channelUrl,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
+ return studio.runSequential(page,selected,{paidPromotion:job.studioPaidPromotion===true,alteredContent:job.studioAlteredContent===true,writeTags:false,writeDescription:true,waitForChecks:false,newTabPerVideo:true,channelUrl:job.channelUrl,diagnosticsDir:path.join(path.dirname(path.dirname(jobPath)),'diagnostics'),profileId:job.profileId},{
   progress:(stage,text,extra={})=>send(stage,text,extra),checkpoint:studioCheckpoint,accepted:studioAccepted,publishing:studioPublishing,confirmed:studioConfirmed,
   openFile:(page,file,checkpoint)=>studioBrowser.openFile(page,file,checkpoint,send,{channelUrl:job.channelUrl}),
   usePage:page=>{taskPage=page;attachPageGuards(page);},
@@ -2893,19 +2895,20 @@ async function main() {
   if (!Number.isInteger(job.localPort) || job.localPort < 1 || job.localPort > 65535) throw new Error("Некорректный порт Dolphin.");
   send("start", "Worker " + WORKER_BUILD, { profileId: job.profileId });
   send('studio_runtime','uploader='+__dirname+'; node='+process.execPath+'; EXE protocol='+(job.studioProtocolVersion||0));
-  if(studioBrowser.isStudioUpload(job)&&!job.studioPublishExisting&&!job.draftOnly&&job.studioProtocolVersion!==2)throw new Error('Studio v20: требуется обновить VideoBatch.exe и uploader одним комплектом. Текущий EXE не поддерживает сохранение черновиков; профиль и файл не открывались.');
-  if(studioBrowser.isStudioUpload(job)){studioBrowser.assertRuntimePackage(WORKER_BUILD);if(require('./youtube-studio-upload').BUILD!==WORKER_BUILD)throw new Error('Studio: версии worker и сборщика различаются. Установите полный комплект.');}
+  if(isStudioUploadJob(job)&&!job.studioPublishExisting&&!job.draftOnly&&job.studioProtocolVersion!==2)throw new Error('Studio v20: требуется обновить VideoBatch.exe и uploader одним комплектом. Текущий EXE не поддерживает сохранение черновиков; профиль и файл не открывались.');
+  if(isStudioUploadJob(job)){studioBrowser.assertRuntimePackage(WORKER_BUILD);if(require('./youtube-studio-upload').BUILD!==WORKER_BUILD)throw new Error('Studio: версии worker и сборщика различаются. Установите полный комплект.');}
 
-  if (!job.searchOnly && !job.watchMesh && !job.watchDirectLinks && !job.shortsWarmup && !job.skipQueueDelay) await waitBetweenProfiles();
+  if (job.highlightsSearch) require('./youtube-highlight-sources').validateOptions(job);
+  if (!job.highlightsSearch && !job.searchOnly && !job.watchMesh && !job.watchDirectLinks && !job.shortsWarmup && !job.skipQueueDelay) await waitBetweenProfiles();
   let endpoint = await startOrConnectProfile();
   browser = await connectBrowser(endpoint);
   let context = browser.contexts()[0];
   if (!context) throw new Error("Не удалось подключиться к окну профиля Dolphin.");
-  if(studioBrowser.isStudioUpload(job)){
+  if(isStudioUploadJob(job)){
     context.setDefaultTimeout(10000);
     context.setDefaultNavigationTimeout(35000);
   }
-  let page = studioBrowser.isStudioUpload(job)
+  let page = isStudioUploadJob(job)
     ? await require('./youtube-studio-upload').selectTaskPage(context,(job.items||[]).filter(item=>!item.publishedVideoId&&!item.publishedUrl),send)
     : await context.newPage();
   taskPage = page;
@@ -2915,11 +2918,23 @@ async function main() {
   const playback = require("./youtube-playback.js");
   // IP не блокируем: прокси уже в Dolphin. Только пишем в лог, если удалось узнать.
   let verifiedIp = "";
-  if (!studioBrowser.isStudioUpload(job) && !job.openTodayOnly && !job.watchMesh) try {
+  if (!isStudioUploadJob(job) && !job.highlightsSearch && !job.openTodayOnly && !job.watchMesh) try {
     const ip = await publicIp(page);
     verifiedIp = ip || "";
     if (ip) send("ip", `IP профиля: ${ip}`, { ip, percent: 20 });
   } catch (_) {}
+
+  if (job.highlightsSearch) {
+    youtubeOpened = true;
+    const candidates = await require('./youtube-highlight-sources').discoverSources(page, job, send);
+    await releaseTaskPage(page);
+    await browser.close();
+    browser = null;
+    send('highlight_sources', 'Найдено видео по выбранным фильтрам: ' + candidates.length, { sourcesJson: JSON.stringify(candidates) });
+    finished = true;
+    send('done', 'Поиск источников Highlights завершён.', { success: true, keptOpen: true, percent: 100 });
+    return;
+  }
 
   if (job.studioPublishExisting) {
     youtubeOpened=true;
@@ -3167,7 +3182,7 @@ if (require.main === module) {
     stopping = true;
     send("cancel", "Задание остановлено; профиль Dolphin остаётся открытым.");
     try {
-      if (taskPage && !taskPage.isClosed() && !(job&&studioBrowser.isStudioUpload(job))) await studioBrowser.bounded(()=>releaseTaskPage(taskPage),1000,'Вкладка не ответила на закрытие.');
+      if (taskPage && !taskPage.isClosed() && !(job&&isStudioUploadJob(job))) await studioBrowser.bounded(()=>releaseTaskPage(taskPage),1000,'Вкладка не ответила на закрытие.');
     } catch (e) { send("diagnostic", "Не удалось освободить вкладку задания: " + e.message); }
     if(browser)await studioBrowser.bounded(()=>browser.close(),1000,'CDP отключается при завершении worker.').catch(()=>{});
     process.exit(130);
@@ -3178,10 +3193,10 @@ if (require.main === module) {
   input.on("line", line => { if (line.trim() === "cancel") cancelTask();
     else if(line.startsWith("ack:")){const id=line.trim().slice(4);const ack=studioAcks.get(id);if(ack){studioAcks.delete(id);ack();}} });
   main().then(() => { input.close(); }).catch(async e => {
-    if(job&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.shortsWarmup&&!job.openTodayOnly&&taskPage){
+    if(job&&!job.highlightsSearch&&!job.checkOnly&&!job.searchOnly&&!job.watchMesh&&!job.watchDirectLinks&&!job.shortsWarmup&&!job.openTodayOnly&&taskPage){
       try{const diagnosticFile=await studioBrowser.bounded(()=>require('./youtube-studio-upload').diagnostics(taskPage,e,path.join(path.dirname(path.dirname(jobPath)),'diagnostics')),12000,'Вкладка не ответила на диагностику');send('diagnostic','Диагностика Studio сохранена: '+diagnosticFile,{diagnosticFile});}catch(error){send('diagnostic','Часть диагностики не получена: '+error.message);} }
 
-    const keepStudioOpen=job&&studioBrowser.isStudioUpload(job)&&profileStarted;
+    const keepStudioOpen=job&&isStudioUploadJob(job)&&profileStarted;
     await studioBrowser.disconnect(browser,send);browser=null;
     if(keepStudioOpen)send('diagnostic','CDP отключён; профиль и незавершённый мастер Studio сохранены без перезагрузки.',{keptOpen:true});
     fail(e,{keptOpen:keepStudioOpen||profileStarted});
@@ -3190,6 +3205,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  isStudioUploadJob,
   releaseTaskPage, automationEndpoint, advance, automaticSchedule, resolveSchedule, randomDelaySeconds, waitBetweenProfiles,
   setSchedule, publish, waitEnabled, enrichWatchTarget, buildCatalogPlan,
   buildMeshCatalogPlan, findWatchLinkOnVideosTab, openMeshLongFromVideosTab

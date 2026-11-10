@@ -126,7 +126,8 @@ namespace VideoBatch {
         public int TikTokMaxParallelUploads=1;
         public int TikTokUploadStaggerMinMinutes=2;
         public int TikTokUploadStaggerMaxMinutes=20;
-        public int WatchMaxParallelProfiles=4;
+        public int WatchMaxParallelProfiles=3;
+        public bool WarmupParallelThree20261109;
         public bool MeshParallelProfilesMigrated20260929;
         /// <summary>Min pause between Dolphin profile start requests (ms).</summary>
         public int ProfileLaunchStaggerMinMs=3000;
@@ -140,14 +141,15 @@ namespace VideoBatch {
         public List<string> TikTokSyncExcludedProfiles=new List<string>();
         public bool KeepDolphinProfileOpenAfterUpload=true;
         /// <summary>random | period</summary>
-        public string YouTubeScheduleMode="network";
-        public int YouTubeScheduleMinMinutes=15, YouTubeScheduleMaxMinutes=20;
+        public string YouTubeScheduleMode="random";
+        public int YouTubeScheduleMinMinutes=2, YouTubeScheduleMaxMinutes=5;
+        public bool YouTubeScheduledIntervals20261107Migrated;
         /// <summary>Длительность «круга» сети публикаций (мин), время ПК.</summary>
         public int YouTubeScheduleNetworkPeriodMinutes=480;
         public int YouTubeScheduleNetworkMinMinutes=3, YouTubeScheduleNetworkMaxMinutes=15;
         public bool YouTubeShortSchedule20260922Migrated;
         public int YouTubeScheduleLeadMinutes=30;
-        public int YouTubeScheduleLongMinMinutes=1, YouTubeScheduleLongMaxMinutes=5;
+        public int YouTubeScheduleLongMinMinutes=2, YouTubeScheduleLongMaxMinutes=5;
         public int YouTubeSchedulePeriodMinGapMinutes=10;
         public string YouTubeScheduleFirstPublish="";
         public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
@@ -355,9 +357,16 @@ namespace VideoBatch {
                 if(p.YouTubeScheduleMinMinutes==10&&p.YouTubeScheduleMaxMinutes==60){p.YouTubeScheduleMinMinutes=15;p.YouTubeScheduleMaxMinutes=20;}
                 p.YouTubeShortSchedule20260922Migrated=true;
             }
-            if(p.YouTubeScheduleMinMinutes<1)p.YouTubeScheduleMinMinutes=15;
+            if(!p.YouTubeScheduledIntervals20261107Migrated){
+                p.YouTubeScheduleMode="random";
+                p.YouTubeScheduleMinMinutes=2;p.YouTubeScheduleMaxMinutes=5;
+                p.YouTubeScheduleLongMinMinutes=2;p.YouTubeScheduleLongMaxMinutes=5;
+                p.YouTubeHttpPublishMode="scheduled";p.YouTubeHttpLongPublishMode="scheduled";
+                p.YouTubeScheduledIntervals20261107Migrated=true;
+            }
+            if(p.YouTubeScheduleMinMinutes<1)p.YouTubeScheduleMinMinutes=2;
             if(p.YouTubeScheduleMaxMinutes<p.YouTubeScheduleMinMinutes)p.YouTubeScheduleMaxMinutes=p.YouTubeScheduleMinMinutes;
-            if(p.YouTubeScheduleLongMinMinutes<1)p.YouTubeScheduleLongMinMinutes=1;
+            if(p.YouTubeScheduleLongMinMinutes<1)p.YouTubeScheduleLongMinMinutes=2;
             if(p.YouTubeScheduleLongMaxMinutes<p.YouTubeScheduleLongMinMinutes)p.YouTubeScheduleLongMaxMinutes=5;
             if(p.YouTubeScheduleLeadMinutes<ScheduleGenerator.PreflightMinLeadMinutes)p.YouTubeScheduleLeadMinutes=ScheduleGenerator.DefaultLeadMinutes;
             if(string.IsNullOrWhiteSpace(p.HttpWorkerPreset))p.HttpWorkerPreset="normal";
@@ -377,6 +386,10 @@ namespace VideoBatch {
             if(!p.MeshParallelProfilesMigrated20260929){
                 if(p.WatchMaxParallelProfiles<=1)p.WatchMaxParallelProfiles=4;
                 p.MeshParallelProfilesMigrated20260929=true;
+            }
+            if(!p.WarmupParallelThree20261109){
+                if(p.WatchMaxParallelProfiles==4)p.WatchMaxParallelProfiles=3;
+                p.WarmupParallelThree20261109=true;
             }
             if(p.WatchMaxParallelProfiles<1)p.WatchMaxParallelProfiles=1;
             if(p.WatchMaxParallelProfiles>5)p.WatchMaxParallelProfiles=5;

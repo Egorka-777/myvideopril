@@ -28,7 +28,7 @@ namespace VideoBatch {
             var l = p.Layer;
             return AssemblyFiles.HashText(string.Join("|", t.Width, t.Height, l.ObjectId, p.Asset.Hash, Path.GetFullPath(p.Asset.Path),
                 Core.N(l.X), Core.N(l.Y), Core.N(l.Width), Core.N(l.Height), Core.N(l.Opacity), l.Font,
-                Core.N(l.FontSize), Core.N(l.Radius), Core.N(l.Padding)));
+                Core.N(l.FontSize), Core.N(l.Radius), Core.N(l.Padding), l.GreenScreen));
         }
     }
     public static class AssemblyRender {
@@ -59,7 +59,7 @@ namespace VideoBatch {
                 args.AddRange(new[] { "-threads", "1", "-ss", Core.N(AssemblyTimeline.SourceStart(t, s)), "-t", Core.N(content), "-i", segments[0].Video.Path });
                 graph.Add("[" + video + ":v:0]setpts=PTS-STARTPTS," + Fill(t.Width, t.Height, t.Fps) + ","
                     + (t.SceneTimingVersion > 0 || s.ContentSeconds > 0 ? "tpad=stop_mode=clone:stop_duration=" + Core.N(content) + "," : "")
-                    + "trim=duration=" + Core.N(content) + "[" + outputLabel + "]");
+                    + "trim=duration=" + Core.N(content) + AssemblyVideoPlacement.Filter(t) + "[" + outputLabel + "]");
                 return;
             }
             bool blend = t.Transition != "cut" && t.TransitionSeconds > 0;
@@ -87,7 +87,7 @@ namespace VideoBatch {
             // Fractional source durations and xfade frame rounding must not leave
             // the scene shorter than its voice-driven boundary for the next xfade.
             graph.Add("[" + chainLabel + "]fps=" + t.Fps + ",tpad=stop_mode=clone:stop_duration=" + Core.N(content)
-                + ",trim=duration=" + Core.N(content) + ",settb=1/" + t.Fps + ",setpts=PTS-STARTPTS[" + outputLabel + "]");
+                + ",trim=duration=" + Core.N(content) + AssemblyVideoPlacement.Filter(t) + ",settb=1/" + t.Fps + ",setpts=PTS-STARTPTS[" + outputLabel + "]");
         }
         static bool BurnCaptions(AssemblyTemplate t, AssemblyPlan p) => t.SubtitleStyle?.Enabled == true && p.Captions != null && p.Captions.Count > 0;
         public static List<string> EncoderArguments(string encoder, int threads) {
@@ -99,8 +99,114 @@ namespace VideoBatch {
             args.AddRange(new[] { "-pix_fmt", "yuv420p" });
             return args;
         }
-        // Image inputs contain one frame. overlay repeats that frame, so PNG is not
-        // decoded 30 times per second. All layers are composited BEFORE the transition.
+        static readonly Random AppearanceRandom = new Random();
+        // Decode each PNG once. Only its short entrance is animated; overlay holds
+        // the final frame afterwards. The background never enters this transition.
+        public static void AppendLayerOverlay(AssemblyTemplate t, AssemblyLayerPlan layer, double start, double end,
+            string enable, string current, string next, string format, List<string> args, ref int input, List<string> graph) {
+            if (end <= start) { graph.Add("[" + current + "]null[" + next + "]"); return; }
+            double playback = AssemblyOverlayMedia.PlaybackLength(layer.Layer, layer.Asset.Path, end - start);
+            double period = playback + layer.Layer.RepeatPause;
+            int count = layer.Layer.PlaybackMode == "repeat" ? (int)Math.Ceiling((end-start)/period) : 1;
+            for (int cycle=0; cycle<count; cycle++) {
+                double from = start + cycle*period, until = Math.Min(end, from+playback);
+                string output = cycle == count-1 ? next : next + "Cycle" + cycle;
+                AppendLayerCycle(t, layer, from, until, "(" + enable + ")*gte(t," + Core.N(from) + ")*lt(t," + Core.N(until) + ")", current, output, format, args, ref input, graph);
+                current = output;
+            }
+        }
+        static void AppendLayerCycle(AssemblyTemplate t, AssemblyLayerPlan layer, double start, double end,
+            string enable, string current, string next, string format, List<string> args, ref int input, List<string> graph) {
+            if (AssemblyOverlayMedia.IsAnimated(layer.Asset.Path)) {
+                AppendAnimatedLayerOverlay(t, layer, start, end, enable, current, next, format, args, ref input, graph);
+                return;
+            }
+            int picture = input++;
+            args.AddRange(new[] { "-threads", "1", "-framerate", t.Fps.ToString(), "-i", layer.Raster });
+            string source = picture + ":v:0";
+            string effect = (layer.Layer.AppearanceTransition ?? "cut").Trim().ToLowerInvariant();
+            double duration = Math.Min(layer.Layer.AppearanceDuration, end - start);
+            if (effect != "cut" && effect != "" && duration > 0) {
+                if (effect == "random") {
+                    lock (AppearanceRandom) effect = AssemblyTimeline.RandomTransitions[AppearanceRandom.Next(AssemblyTimeline.RandomTransitions.Length)];
+                }
+                string animated = next + "Entrance";
+                string seconds = Core.N(duration), length = Core.N(duration + 2.0 / t.Fps);
+                string loop = "loop=loop=-1:size=1:start=0,trim=duration=" + length + ",setpts=N/(" + t.Fps + "*TB)";
+                if (effect == "fade") {
+                    graph.Add("[" + source + "]format=rgba," + loop + ",fade=t=in:st=0:d=" + seconds
+                        + ":alpha=1,setpts=PTS+" + Core.N(start) + "/TB[" + animated + "]");
+                } else {
+                    // xfade handles all four gbrap planes. Premultiplication prevents
+                    // the transparent input from darkening semitransparent PNG edges.
+                    string blank = next + "Blank", image = next + "Image";
+                    graph.Add("color=c=black@0:s=" + t.Width + "x" + t.Height + ":r=" + t.Fps + ":d=" + length
+                        + ",format=gbrap,settb=1/" + t.Fps + "[" + blank + "]");
+                    graph.Add("[" + source + "]format=gbrap," + loop + ",settb=1/" + t.Fps + ",premultiply=inplace=1[" + image + "]");
+                    graph.Add("[" + blank + "][" + image + "]xfade=" + AssemblyEngine.TransitionFilter(effect) + ":duration=" + seconds
+                        + ":offset=0,unpremultiply=inplace=1,format=rgba,setpts=PTS+" + Core.N(start) + "/TB[" + animated + "]");
+                }
+                source = animated;
+            }
+            if (layer.Layer.ExitTransition == "fade") {
+                string exiting = next + "Exit";
+                double fade = Math.Min(layer.Layer.ExitDuration, end-start);
+                graph.Add("[" + source + "]format=rgba," + (source == picture + ":v:0" ? "loop=loop=-1:size=1:start=0,setpts=N/(" + t.Fps + "*TB)+" + Core.N(start) + "/TB," : "tpad=stop_mode=clone:stop_duration=" + Core.N(end-start) + ",")
+                    + "trim=end=" + Core.N(end) + ",fade=t=out:st=" + Core.N(end-fade) + ":d=" + Core.N(fade) + ":alpha=1[" + exiting + "]");
+                source = exiting;
+            }
+            graph.Add("[" + current + "][" + source + "]overlay=0:0:format=" + format
+                + ":repeatlast=1:eof_action=repeat:enable='" + enable + "'[" + next + "]");
+        }
+        static void AppendAnimatedLayerOverlay(AssemblyTemplate t, AssemblyLayerPlan layer, double start, double end,
+            string enable, string current, string next, string format, List<string> args, ref int input, List<string> graph) {
+            double length = Math.Max(1.0 / t.Fps, end - start);
+            int media = input++;
+            if (layer.Layer.PlaybackMode == "continuous") args.AddRange(new[] { "-stream_loop", "-1" });
+            args.AddRange(new[] { "-threads", "1" });
+            if (Path.GetExtension(layer.Asset.Path).Equals(".gif", StringComparison.OrdinalIgnoreCase)) args.AddRange(new[] { "-ignore_loop", "1" });
+            args.AddRange(AssemblyOverlayMedia.DecoderArguments(layer.Asset.Path));
+            args.AddRange(new[] { "-t", Core.N(length), "-i", layer.Asset.Path });
+            var bounds = AssemblyRaster.LayerImageBounds(t, layer.Layer, AssemblyOverlayMedia.Size(layer.Asset.Path));
+            int width = Math.Max(1, (int)Math.Round(bounds.Width)), height = Math.Max(1, (int)Math.Round(bounds.Height));
+            int x = (int)Math.Round(bounds.X), y = (int)Math.Round(bounds.Y);
+            int padX = Math.Max(0, x), padY = Math.Max(0, y), cropX = Math.Max(0, -x), cropY = Math.Max(0, -y);
+            int canvasWidth = Math.Max(t.Width + cropX, width + padX), canvasHeight = Math.Max(t.Height + cropY, height + padY);
+            string image = next + "Media", source = next + "Motion";
+            graph.Add("[" + media + ":v:0]setpts=PTS-STARTPTS,fps=" + t.Fps + ",trim=duration=" + Core.N(length)
+                + ",format=rgba," + (layer.Layer.GreenScreen ? AssemblyOverlayMedia.GreenScreenFilter(next + "Key") + "," : "")
+                + "scale=" + width + ":" + height + ",setsar=1,colorchannelmixer=aa=" + Core.N(layer.Layer.Opacity)
+                + ",pad=" + canvasWidth + ":" + canvasHeight + ":" + padX + ":" + padY + ":color=black@0"
+                + (canvasWidth != t.Width || canvasHeight != t.Height ? ",crop=" + t.Width + ":" + t.Height + ":" + cropX + ":" + cropY : "")
+                + ",settb=1/" + t.Fps + ",setpts=N[" + image + "]");
+            string effect = (layer.Layer.AppearanceTransition ?? "cut").Trim().ToLowerInvariant();
+            double duration = Math.Min(layer.Layer.AppearanceDuration, end - start);
+            if (effect == "random" && duration > 0) {
+                lock (AppearanceRandom) effect = AssemblyTimeline.RandomTransitions[AppearanceRandom.Next(AssemblyTimeline.RandomTransitions.Length)];
+            }
+            if (effect != "cut" && effect != "" && duration > 0) {
+                if (effect == "fade") {
+                    graph.Add("[" + image + "]fade=t=in:st=0:d=" + Core.N(duration) + ":alpha=1,setpts=PTS+" + Core.N(start) + "/TB[" + source + "]");
+                } else {
+                    string blank = next + "Blank", premultiplied = next + "Premultiplied";
+                    graph.Add("color=c=black@0:s=" + t.Width + "x" + t.Height + ":r=" + t.Fps + ":d=" + Core.N(duration + 2.0 / t.Fps)
+                        + ",format=gbrap,settb=1/" + t.Fps + "[" + blank + "]");
+                    graph.Add("[" + image + "]format=gbrap,premultiply=inplace=1[" + premultiplied + "]");
+                    graph.Add("[" + blank + "][" + premultiplied + "]xfade=" + AssemblyEngine.TransitionFilter(effect) + ":duration=" + Core.N(duration)
+                        + ":offset=0,unpremultiply=inplace=1,format=rgba,trim=duration=" + Core.N(length) + ",setpts=PTS+" + Core.N(start) + "/TB[" + source + "]");
+                }
+            } else graph.Add("[" + image + "]setpts=PTS+" + Core.N(start) + "/TB[" + source + "]");
+            if (layer.Layer.ExitTransition == "fade") {
+                string exiting = next + "Exit";
+                double fade = Math.Min(layer.Layer.ExitDuration, length);
+                graph.Add("[" + source + "]fade=t=out:st=" + Core.N(end-fade) + ":d=" + Core.N(fade) + ":alpha=1[" + exiting + "]");
+                source = exiting;
+            }
+            graph.Add("[" + current + "][" + source + "]overlay=0:0:format=" + format
+                + ":repeatlast=0:eof_action=pass:enable='" + enable + "'[" + next + "]");
+        }
+        // Cut layers retain the single-frame optimized overlay path. Scene layers
+        // are still composited before the separate scene-to-scene transition.
         public static List<string> Arguments(AssemblyTemplate t, AssemblyPlan p, string encoder, string script, string output, AssemblyRenderContext context) {
             if (p.Scenes.Count == 0) throw new Exception("Добавь хотя бы одну сцену перед сборкой.");
             double dur = p.RollDuration(t);
@@ -113,7 +219,7 @@ namespace VideoBatch {
                 continuous=input++; var video=p.Scenes[0].Video;
                 if(t.LoopShortVideos && video.Duration+.001<dur)args.AddRange(new[]{"-stream_loop","-1"});
                 args.AddRange(new[]{"-threads","1","-t",Core.N(dur),"-i",video.Path});
-                graph.Add("["+continuous+":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+",tpad=stop_mode=clone:stop_duration="+Core.N(dur)+",trim=duration="+Core.N(dur)+"[continuous]");
+                graph.Add("["+continuous+":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+",tpad=stop_mode=clone:stop_duration="+Core.N(dur)+",trim=duration="+Core.N(dur)+AssemblyVideoPlacement.Filter(t)+"[continuous]");
             }
             for (int i = 0; i < p.Scenes.Count; i++) {
                 var s = p.Scenes[i]; string current = "base" + i;
@@ -123,10 +229,11 @@ namespace VideoBatch {
                     AppendSceneVideo(t, s, args, ref input, graph, videoOut);
                 }
                 for (int j = 0; j < s.Layers.Count; j++) {
-                    var layer = s.Layers[j]; int picture = input++;
-                    args.AddRange(new[] { "-threads", "1", "-framerate", t.Fps.ToString(), "-i", layer.Raster });
-                    string next = "overlay" + i + "_" + j;
-                    graph.Add("[" + current + "][" + picture + ":v:0]overlay=0:0:format="+(transparentScenes?"auto":"yuv420")+":repeatlast=1:eof_action=repeat:enable='" + AssemblySceneVideoBuilder.LayerOverlayEnable(t, s, layer.Layer) + "'[" + next + "]"); current = next;
+                    var layer = s.Layers[j]; string next = "overlay" + i + "_" + j;
+                    AssemblySceneVideoBuilder.LayerOverlayRange(t, s, layer.Layer, out double start, out double end);
+                    AppendLayerOverlay(t, layer, start, end, AssemblySceneVideoBuilder.LayerOverlayEnable(t, s, layer.Layer),
+                        current, next, transparentScenes ? "auto" : "yuv420", args, ref input, graph);
+                    current = next;
                 }
                 graph.Add("[" + current + "]"+AssemblyTimeline.Padding(t,s)+"settb=1/" + t.Fps + ",setpts=PTS-STARTPTS,format=" + (transparentScenes ? "yuva444p" : transitions ? "yuv444p" : "yuv420p") + "[s" + i + "]");
                 if(split && !t.ContinuousVideo)graph.Add("[videoBase"+i+"]"+AssemblyTimeline.Padding(t,s)+"settb=1/"+t.Fps+",setpts=PTS-STARTPTS,format="+(transitions?"yuv444p":"yuv420p")+"[videoScene"+i+"]");
@@ -174,11 +281,10 @@ namespace VideoBatch {
             }
             if(sceneOverlay!=null) {graph.Add("["+joined+"]["+sceneOverlay+"]overlay=0:0:format=yuv420:shortest=1[sceneComposited]");joined="sceneComposited";}
             for(int j=0;j<p.GlobalLayers.Count;j++) {
-                var layer=p.GlobalLayers[j];int picture=input++;
-                args.AddRange(new[]{"-threads","1","-framerate",t.Fps.ToString(),"-i",layer.Raster});
-                string next="global"+j;
-                double end=layer.Layer.End==0?dur:Math.Min(layer.Layer.End,dur);
-                graph.Add("["+joined+"]["+picture+":v:0]overlay=0:0:format=yuv420:repeatlast=1:eof_action=repeat:enable='gte(t,"+Core.N(layer.Layer.Start)+")*lt(t,"+Core.N(end)+")'["+next+"]");joined=next;
+                var layer=p.GlobalLayers[j]; string next="global"+j;
+                double start=Math.Max(0,layer.Layer.Start),end=layer.Layer.End==0?dur:Math.Min(layer.Layer.End,dur);
+                AppendLayerOverlay(t,layer,start,end,"gte(t,"+Core.N(start)+")*lt(t,"+Core.N(end)+")",
+                    joined,next,"yuv420",args,ref input,graph);joined=next;
             }
             string captionTrack = BurnCaptions(t,p) ? p.Captions[0].TrackPath : null;
             if (!string.IsNullOrEmpty(captionTrack)) {
@@ -279,7 +385,9 @@ namespace VideoBatch {
             report.Duration = roll;
             progress?.Invoke("Готовлю изображения…");
             foreach (var layer in p.Scenes.SelectMany(scene => scene.Layers).Concat(p.GlobalLayers)) {
-                ct.ThrowIfCancellationRequested(); string key = AssemblyRenderContext.RasterKey(t, layer);
+                ct.ThrowIfCancellationRequested();
+                if (AssemblyOverlayMedia.IsAnimated(layer.Asset.Path)) { layer.Raster = null; continue; }
+                string key = AssemblyRenderContext.RasterKey(t, layer);
                 if (context.Rasters.TryGetValue(key, out string cached) && File.Exists(cached)) { layer.Raster = cached; report.RasterCacheHits++; continue; }
                 string path = Path.Combine(cache, key + ".png");
                 try { rasterize(t, layer, path); } catch (Exception e) { throw new Exception("Не удалось прочитать картинку «" + Path.GetFileName(layer.Asset.Path) + "»: " + e.Message, e); }

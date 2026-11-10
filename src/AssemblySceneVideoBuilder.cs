@@ -100,23 +100,23 @@ namespace VideoBatch {
             }
         }
 
-        public static string LayerOverlayEnable(AssemblyTemplate t, AssemblyScenePlan scene, AssemblyLayer layer) {
+        public static void LayerOverlayRange(AssemblyTemplate t, AssemblyScenePlan scene, AssemblyLayer layer, out double start, out double end) {
             double content = AssemblyTimeline.ContentDuration(t, scene);
-            double start = Math.Max(0, layer.Start);
-            double end = layer.End == 0 || Math.Abs(layer.End - scene.Scene.Duration) < .001 ? content : Math.Min(layer.End, content);
+            start = Math.Max(0, layer.Start);
+            end = layer.End == 0 || Math.Abs(layer.End - scene.Scene.Duration) < .001 ? content : Math.Min(layer.End, content);
             string part = (layer.ImagePart ?? "").Trim().ToLowerInvariant();
-            if (part == "" || part == "all") return "between(t," + Core.N(start) + "," + Core.N(end) + ")";
             double split = scene.PrimaryVideoEnd > 0 ? scene.PrimaryVideoEnd : content;
             if (part == "primary") {
                 end = Math.Min(end, split);
                 if (end <= start) end = split;
-                return "between(t," + Core.N(start) + "," + Core.N(end) + ")";
             }
             if (part == "continuation") {
                 start = Math.Max(start, split);
                 if (end <= start) end = content;
-                return "between(t," + Core.N(start) + "," + Core.N(end) + ")";
             }
+        }
+        public static string LayerOverlayEnable(AssemblyTemplate t, AssemblyScenePlan scene, AssemblyLayer layer) {
+            LayerOverlayRange(t, scene, layer, out double start, out double end);
             return "between(t," + Core.N(start) + "," + Core.N(end) + ")";
         }
     }

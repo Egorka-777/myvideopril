@@ -80,6 +80,19 @@ module.exports=function({until,norm,read,typingBudget}){
   const end=Date.now()+timeoutMs;let last=null,dismissed=false;
   const left=()=>{check(signal,end);return Math.max(1,end-Date.now());};
   try{
+   // Blur hashtag suggestions with Tab. Escape also reaches Studio's upload
+   // dialog and closes the draft, even while a suggestions popup is visible.
+   for(const popup of await box.page().locator('ytcp-social-suggestions-dropdown').all()){
+    if(await popup.isVisible()){
+     check(signal,end);
+     await box.page().keyboard.press('Tab');
+     onState('suggestions','Убираю фокус с подсказок хештегов перед выбором поля '+name+'.');
+     try{
+      await until(async()=>!await popup.isVisible(),Math.min(5000,left()),'Studio не скрыл подсказки хештегов.');
+     }catch(_){/* не блокируем поле, если подсказки висят дольше */}
+     break;
+    }
+   }
    await box.scrollIntoViewIfNeeded({timeout:Math.min(4000,left())});
    await until(async()=>{
     check(signal,end);last=await editorState(box);
@@ -110,14 +123,16 @@ module.exports=function({until,norm,read,typingBudget}){
    await activateEditor(box,{timeoutMs:activationMs,name,onState,signal});
    await box.press('Control+A',{timeout:3000});
    await box.press('Delete',{timeout:3000});
-   // Keep combining marks, variation selectors and joined emoji in one input
-   // event: splitting them can break Studio's social-suggestions selection.
-   const segments=new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(String(text??'').replace(/\r\n?/g,'\n'));
-   for(const {segment:char} of segments){
+   // Insert each complete line as one native transaction. Studio's social
+   // suggestions can invalidate their Range during character-by-character
+   // warning/link input. Shift+Enter preserves exact contenteditable newlines
+   // (multiline insertText creates DIV paragraphs with extra innerText breaks).
+   const lines=String(text??'').replace(/\r\n?/g,'\n').split('\n');
+   for(let i=0;i<lines.length;i++){
     check(signal);
-    if(char==='\n')await box.press('Shift+Enter',{timeout:3000});
-    else await box.page().keyboard.insertText(char);
-    if(delay>0)await new Promise(resolve=>setTimeout(resolve,delay));
+    if(i)await box.press('Shift+Enter',{timeout:3000});
+    check(signal);
+    if(lines[i])await box.page().keyboard.insertText(lines[i]);
    }
    check(signal);
    await box.press('Tab',{timeout:3000});

@@ -45,7 +45,7 @@ namespace VideoBatch {
             scroll.ClientSizeChanged += (s, e) => stack.Width = Math.Max(280, scroll.ClientSize.Width - 20);
             root.Controls.Add(scroll, 0, 0);
 
-            stack.Controls.Add(new Label { Text = "Субтитры · " + AssemblyProfile.ShortLabel(studioProfile), Font = Theme.FontCardTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 0, 0, 8) });
+            stack.Controls.Add(new Label { Text = "Субтитры · " + AssemblyProfile.ShortLabel(studioProfile, template), Font = Theme.FontCardTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 0, 0, 8) });
             stack.Controls.Add(new Label { Text = "Слева — крупное превью ролика. Тяните плашку субтитров или двигайте положение.", Width = 360, Height = 36, ForeColor = Theme.TextSecondary });
             subtitleEnabled = new CheckBox { AutoSize = true, Text = "Показывать субтитры в ролике", Margin = new Padding(0, 6, 0, 4) };
             stack.Controls.Add(subtitleEnabled);
@@ -144,7 +144,7 @@ namespace VideoBatch {
                 sceneEditor.Visible = true;
                 canvas.SetSubtitleEditing(false);
                 RefreshCanvas(); RefreshInfo(); RequestTimingHints();
-                status.Text = "Субтитры сохранены · " + AssemblyProfile.ShortLabel(studioProfile) + ".";
+                status.Text = "Субтитры сохранены · " + AssemblyProfile.ShortLabel(studioProfile, template) + ".";
             });
         }
 

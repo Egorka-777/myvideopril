@@ -4,7 +4,7 @@ const {chromium}=require('../../tools/uploader/node_modules/playwright-core');
 const O=require('../../tools/uploader/youtube-owner-publish');
 const S=require('../../tools/uploader/youtube-studio-upload');
 const IDS=['video000001','video000002'];
-function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotPicker=false,unknownLabel=false}={}){
+function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotPicker=false,unknownLabel=false,inertPublicHost=false}={}){
  const ru=lang==='ru',label=unknownLabel?'Visibility updated':state.visibility==='public'?(ru?(screenshotPicker?'Для всех':'Открытый доступ'):'Public'):(ru?(screenshotPicker?'Отложенная публ...':'Запланировано'):'Scheduled');
  if(screenshotPicker){
   return `<html lang="${lang}"><body><ytcp-video-metadata-editor><textarea name="title">Original title</textarea><button id="visibility">${label}</button></ytcp-video-metadata-editor>
@@ -19,6 +19,8 @@ function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotP
     sr.innerHTML='<div id="radioContainer" role="radio" tabindex="0" style="width:18px;height:18px;border:1px solid #888;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:8px"></div><span id="label"></span><input id="input" type="radio" hidden>';
     sr.querySelector('#label').textContent=btn.textContent;btn.textContent='';
     const input=sr.querySelector('#input');input.name=btn.getAttribute('name');
+    if(${inertPublicHost}){btn.style.cssText='display:block;width:500px;height:40px';if(input.name==='PUBLIC'){input.checked=true;btn.setAttribute('aria-checked','true');}}
+    sr.querySelector('#radioContainer').addEventListener('click',e=>{if(e.isTrusted)window.trustedRadioClicks=(window.trustedRadioClicks||0)+1;});
     const sync=()=>{const on=input.checked;btn.setAttribute('aria-checked',on?'true':'false');sr.querySelector('#radioContainer').style.background=on?'#fff':'transparent';};
     sr.querySelector('#radioContainer').onclick=()=>{el.querySelectorAll('tp-yt-paper-radio-button').forEach(b=>{const i=b.shadowRoot.querySelector('#input');if(i){i.checked=b===btn;}});sync();if(btn.getAttribute('name')==='PUBLIC')setTimeout(()=>{const done=el.querySelector('#save-button button');done.textContent=${JSON.stringify(ru?'Опубликовать':'Publish')};done.disabled=false;},150);};
     btn.onclick=e=>{if(e.target===btn)e.preventDefault();};
@@ -67,6 +69,20 @@ async function fixture(browser,lang,options={}){
 }
 (async()=>{
  const browser=await chromium.launch({headless:true});try{
+  for(const lang of ['ru','en']){
+   const f=await fixture(browser,lang,{screenshotPicker:true,inertPublicHost:true});
+   await f.page.goto('https://studio.youtube.com/video/'+IDS[0]+'/edit');await f.page.locator('#visibility').click();await f.page.locator('#expand-publish').click();
+   const dialog=f.page.locator('ytcp-video-visibility-edit-dialog');
+   await S.selectPublicRadio(dialog);
+   await S.until(()=>f.page.locator('#save-button button').isEnabled(),1500,'Public circle must enable Publish even when aria-checked was already true');
+   assert.equal(await f.page.evaluate(()=>window.trustedRadioClicks),1,'one real pointer click on shadow radio circle');
+   await O.runSequential(f.page,[{publishedVideoId:IDS[0],commentText:'Author comment 0511'}],{typingDelay:1,progress:()=>{},checkpoint:async()=>{}});
+   assert.deepEqual(f.counts(),{publishCalls:1,commentCalls:1});
+   assert.deepEqual(f.log,['public:'+IDS[0],'comment:'+IDS[0]]);
+   assert.equal(f.state.get(IDS[0]).comments[0].text,'Author comment 0511');
+   await f.ctx.close();
+   console.log('PASS',lang,'already checked Public + inert host: trusted circle click enables Publish, then one publication and author comment');
+  }
   assert.equal(O.parseVisibility('Отложенная публикация'),'scheduled');assert.equal(O.parseVisibility('Отложенная публ...'),'scheduled');assert.equal(O.parseVisibility('Для всех'),'public');assert.equal(O.parseVisibility('Visibility: Public'),'public');
   for(const lang of ['ru','en']){
    const f=await fixture(browser,lang,{screenshotPicker:true}),events=[];

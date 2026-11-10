@@ -22,6 +22,11 @@ namespace VideoBatch {
             return Store.IsValidYouTubeVideoId(id)?id:"";
         }
         public static bool CommentComplete(YouTubeItem item)=>item?.OwnerCommentState=="confirmed"||item?.OwnerCommentState=="confirmed_manual";
+        /// <summary>Дата для подписи: слот отложки видео, иначе текущий момент (или переданный fallback).</summary>
+        public static DateTime CommentDateForItem(YouTubeItem item,DateTime? fallback=null){
+            if(item!=null&&ScheduleGenerator.TryParseSlot(item.ScheduleDate,item.ScheduleTime,out var at))return at;
+            return fallback??DateTime.Now;
+        }
         public static string RenderComment(string template,DateTime pcDate){
             string result=Regex.Replace(template??"",@"\{([^{}]+)\}",m=>{
                 switch(m.Groups[1].Value){
@@ -33,10 +38,10 @@ namespace VideoBatch {
                     default:throw new Exception("Неизвестная вставка в комментарии: "+m.Value);
                 }
             }).Replace("\r\n","\n").Replace('\u00a0',' ').Trim();
-            // Existing saved signatures use start=t0211 / start=i2110. Render
-            // today's date only in these Telegram date tags; never rewrite the
+            // Existing saved signatures use account prefixes t/i/trpr/max/m/bar/aleks.
+            // Render today's date only in these Telegram date tags; never rewrite the
             // stored template, other link parameters or arbitrary numbers.
-            result=Regex.Replace(result,@"(?<url>https?://(?:t\.me|telegram\.me)/[^\s?#]+\?(?:[^\s#&]+&)*start=)(?<prefix>[it])(?<stamp>\d{4})(?=&|#|\s|$)",m=>{
+            result=Regex.Replace(result,@"(?<url>https?://(?:t\.me|telegram\.me)/[^\s?#]+\?(?:[^\s#&]+&)*start=)(?<prefix>trpr|max|bar|aleks|[itm])(?<stamp>\d{4})(?=&|#|\s|$)",m=>{
                 string stamp=m.Groups["stamp"].Value;int day=int.Parse(stamp.Substring(0,2)),month=int.Parse(stamp.Substring(2,2));
                 return month>=1&&month<=12&&day>=1&&day<=DateTime.DaysInMonth(2000,month)
                     ?m.Groups["url"].Value+m.Groups["prefix"].Value+pcDate.ToString("ddMM",CultureInfo.InvariantCulture):m.Value;
@@ -44,13 +49,15 @@ namespace VideoBatch {
             if(result.Length>10000||result.Any(c=>char.IsControl(c)&&c!='\n'&&c!='\t'))throw new Exception("Комментарий: до 10 000 символов, без управляющих символов.");
             return result;
         }
-        public static List<OwnerPublishSelection> Candidates(IEnumerable<YouTubeChannel> channels,DateTime pcDate){
+        public static List<OwnerPublishSelection> Candidates(IEnumerable<YouTubeChannel> channels,DateTime? asOf=null){
+            var fallback=asOf??DateTime.Now;
             var result=new List<OwnerPublishSelection>();
             foreach(var channel in channels??Enumerable.Empty<YouTubeChannel>()){
                 if(channel==null)continue;
                 foreach(var item in channel.Items??new List<YouTubeItem>()){
                     if(item==null||item.StudioPending||VideoId(item)=="")continue;
-                    result.Add(new OwnerPublishSelection{Channel=channel,Item=item,CommentText=(item.OwnerCommentState=="pending"||CommentComplete(item))?item.OwnerCommentText:RenderComment(channel.OwnerCommentTemplate,pcDate)});
+                    var commentDate=CommentDateForItem(item,fallback);
+                    result.Add(new OwnerPublishSelection{Channel=channel,Item=item,CommentText=(item.OwnerCommentState=="pending"||CommentComplete(item))?item.OwnerCommentText:RenderComment(channel.OwnerCommentTemplate,commentDate)});
                 }
             }
             return result;
@@ -98,7 +105,7 @@ namespace VideoBatch {
                 foreach(var choice in list){
                     YouTubeOwnerPublish.EnsureAttached(settings,choice);
                     if(choice.Item.OwnerCommentState!="pending"&&!YouTubeOwnerPublish.CommentComplete(choice.Item))
-                        choice.CommentText=YouTubeOwnerPublish.RenderComment(choice.Channel.OwnerCommentTemplate,DateTime.Now);
+                        choice.CommentText=YouTubeOwnerPublish.RenderComment(choice.Channel.OwnerCommentTemplate,YouTubeOwnerPublish.CommentDateForItem(choice.Item));
                 }
                 var items=list.Select(YouTubeOwnerPublish.ToJob).ToArray();
                 if(items.Select(i=>i.publishedVideoId).Distinct().Count()!=items.Length)throw new Exception("Одно видео выбрано дважды.");
@@ -145,7 +152,7 @@ namespace VideoBatch {
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,280));root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(root);
             var intro=new Label{
-                Text="Шаблон на аккаунт. Дата ПК: {ddMM}, {date}, {dd}, {MM}, {yyyy}. В ссылках Telegram start=t0211 / start=i2110 день и месяц также обновляются. Остальные цифры не меняются.",
+                Text="Шаблон на аккаунт. В {ddMM}, {date} и в Telegram start=trpr2910 подставляется дата публикации ролика (слот отложки), иначе — сегодня. Остальные цифры в ссылках не меняются.",
                 AutoSize=true,MaximumSize=new Size(900,0),Margin=new Padding(0,0,0,12),Dock=DockStyle.Fill};
             root.Controls.Add(intro,0,0);root.SetColumnSpan(intro,2);
             var left=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=1,Margin=new Padding(0,0,12,0)};
@@ -159,7 +166,7 @@ namespace VideoBatch {
             var right=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4};
             right.RowStyles.Add(new RowStyle(SizeType.AutoSize));right.RowStyles.Add(new RowStyle(SizeType.Percent,55));right.RowStyles.Add(new RowStyle(SizeType.AutoSize));right.RowStyles.Add(new RowStyle(SizeType.Percent,45));
             right.Controls.Add(hint,0,0);right.Controls.Add(template,0,1);
-            right.Controls.Add(new Label{Text="Так уйдёт в YouTube сегодня ("+DateTime.Now.ToString("dd.MM.yyyy")+")",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,8,0,4)},0,2);
+            right.Controls.Add(new Label{Text="Пример для сегодня ("+DateTime.Now.ToString("dd.MM.yyyy")+"); у каждого видео — своя дата слота",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,8,0,4)},0,2);
             right.Controls.Add(preview,0,3);
             root.Controls.Add(left,0,1);root.Controls.Add(right,1,1);
             var buttons=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,Margin=new Padding(0,12,0,0)};
@@ -208,10 +215,10 @@ namespace VideoBatch {
             StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
             var root=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),ColumnCount=1,RowCount=6};
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,48));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,52));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));Controls.Add(root);
-            root.Controls.Add(new Label{Text="Шаблон сохраняется. Дата ПК подставляется в {ddMM} и в Telegram-ссылках start=t0211 / start=i2110. Текст и префикс ссылки остаются вашими.",AutoSize=true,Dock=DockStyle.Fill,MaximumSize=new Size(620,0),Font=Theme.FontCardTitle,Margin=new Padding(0,0,0,8)},0,0);
+            root.Controls.Add(new Label{Text="Шаблон сохраняется. В {ddMM} и start=trpr2910 подставляется дата публикации ролика (отложка), иначе — сегодня.",AutoSize=true,Dock=DockStyle.Fill,MaximumSize=new Size(620,0),Font=Theme.FontCardTitle,Margin=new Padding(0,0,0,8)},0,0);
             text=new TextBox{Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.FixedSingle,Text=(channel.OwnerCommentTemplate??"").Replace("\r\n","\n").Replace("\n",Environment.NewLine)};
             text.TextChanged+=(s,e)=>RefreshPreview();root.Controls.Add(text,0,1);
-            root.Controls.Add(new Label{Text="Так уйдёт в YouTube сегодня ("+DateTime.Now.ToString("dd.MM.yyyy")+") · {ddMM}="+DateTime.Now.ToString("ddMM"),AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,8,0,4)},0,2);
+            root.Controls.Add(new Label{Text="Пример для сегодня ("+DateTime.Now.ToString("dd.MM.yyyy")+") · {ddMM}="+DateTime.Now.ToString("ddMM"),AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,8,0,4)},0,2);
             preview=new TextBox{ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextSecondary,BorderStyle=BorderStyle.FixedSingle};root.Controls.Add(preview,0,3);
             root.Controls.Add(new Label{Text="Пустой шаблон — без комментария. Тот же текст виден в окне «Опубликовать» перед отправкой.",AutoSize=true,Dock=DockStyle.Fill,MaximumSize=new Size(620,0),ForeColor=Theme.TextSecondary,Padding=new Padding(0,8,0,0)},0,4);
             var buttons=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft};var cancel=Theme.MakeButton("Отмена",ghost:true,action:()=>{DialogResult=DialogResult.Cancel;Close();});
@@ -244,7 +251,7 @@ namespace VideoBatch {
             foreach(var c in candidates){int i=videos.Rows.Add(c.Item.StudioVisibility=="scheduled"&&c.Item.OwnerCommentState!="pending",c.Channel.Name,c.Item.Title,State(c));videos.Rows[i].Tag=c;}
             videos.SelectionChanged+=(s,e)=>ShowPreview();videos.CellMouseDown+=(s,e)=>{if(e.RowIndex>=0&&e.Button==MouseButtons.Right){videos.CurrentCell=videos.Rows[e.RowIndex].Cells["title"];var c=(OwnerPublishSelection)videos.Rows[e.RowIndex].Tag;var menu=Theme.MakeContextMenu();menu.Items.Add("Открыть видео",null,(a,b)=>Ui.Open("https://www.youtube.com/watch?v="+c.VideoId));if(c.Item.OwnerCommentState=="pending"){
                 menu.Items.Add("Проверил: комментарий уже есть",null,(a,b)=>Reconcile(c,e.RowIndex,true));menu.Items.Add("Проверил: комментария нет — разрешить повтор",null,(a,b)=>Reconcile(c,e.RowIndex,false));}menu.Show(Cursor.Position);}};
-            root.Controls.Add(videos,0,1);root.Controls.Add(new Label{Text="Комментарий под выбранным видео (уже с датой ПК)",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,12,0,6)},0,2);
+            root.Controls.Add(videos,0,1);root.Controls.Add(new Label{Text="Комментарий под выбранным видео (дата — слот отложки этого ролика)",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,12,0,6)},0,2);
             preview=new TextBox{ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=Theme.Card,ForeColor=Theme.TextPrimary,BorderStyle=BorderStyle.None,Font=Theme.FontBody};root.Controls.Add(preview,0,3);
             var buttons=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,Margin=new Padding(0,12,0,0)};
             var cancel=Theme.MakeButton("Отмена",ghost:true,action:()=>{DialogResult=DialogResult.Cancel;Close();});
@@ -252,13 +259,21 @@ namespace VideoBatch {
             buttons.Controls.Add(cancel);buttons.Controls.Add(publish);root.Controls.Add(buttons,0,4);CancelButton=cancel;Shown+=(s,e)=>ShowPreview();ShowPreview();
         }
         static string State(OwnerPublishSelection c)=>c.Item.OwnerCommentState=="pending"?"Комментарий: проверить":c.Item.OwnerCommentState=="confirmed_manual"?"Проверено вручную":YouTubeOwnerPublish.CommentComplete(c.Item)?"Комментарий сохранён":c.Item.StudioVisibility=="public"?"Открытый доступ":c.Item.StudioVisibility=="scheduled"?"Запланировано":"Проверить доступ";
-        void ShowPreview(){if(preview==null)return;var c=(videos.CurrentRow?.Tag??(videos.Rows.Count>0?videos.Rows[0].Tag:null)) as OwnerPublishSelection;preview.Text=c==null?"Нет сохранённых видео. Сначала загрузите ролик через Studio.":"https://www.youtube.com/watch?v="+c.VideoId+Environment.NewLine+Environment.NewLine+(string.IsNullOrWhiteSpace(c.CommentText)?"Без комментария. Задайте шаблон: кнопка «Комментарии» или ПКМ по аккаунту → Комментарий автора.":c.CommentText.Replace("\r\n","\n").Replace("\n",Environment.NewLine));}
+        void ShowPreview(){
+            if(preview==null)return;
+            var c=(videos.CurrentRow?.Tag??(videos.Rows.Count>0?videos.Rows[0].Tag:null)) as OwnerPublishSelection;
+            if(c==null){preview.Text="Нет сохранённых видео. Сначала загрузите ролик через Studio.";return;}
+            if(c.Item.OwnerCommentState!="pending"&&!YouTubeOwnerPublish.CommentComplete(c.Item))
+                c.CommentText=YouTubeOwnerPublish.RenderComment(c.Channel.OwnerCommentTemplate,YouTubeOwnerPublish.CommentDateForItem(c.Item));
+            string when=YouTubeOwnerPublish.CommentDateForItem(c.Item).ToString("dd.MM.yyyy");
+            preview.Text="https://www.youtube.com/watch?v="+c.VideoId+" · дата подписи "+when+Environment.NewLine+Environment.NewLine+(string.IsNullOrWhiteSpace(c.CommentText)?"Без комментария. Задайте шаблон: кнопка «Комментарии» или ПКМ по аккаунту → Комментарий автора.":c.CommentText.Replace("\r\n","\n").Replace("\n",Environment.NewLine));
+        }
         void Reconcile(OwnerPublishSelection c,int index,bool exists){
             if(MessageBox.Show(this,exists?"Вы проверили страницу видео, и этот комментарий уже опубликован?":"Вы проверили страницу видео, и комментария точно нет? Следующий запуск сможет отправить его снова.","Проверка комментария",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             string oldState=c.Item.OwnerCommentState,oldText=c.Item.OwnerCommentText,oldId=c.Item.OwnerCommentId,oldPreview=c.CommentText;
             try{
                 c.Item.OwnerCommentState=exists?"confirmed_manual":"";
-                if(!exists){c.Item.OwnerCommentText="";c.Item.OwnerCommentId="";c.CommentText=YouTubeOwnerPublish.RenderComment(c.Channel.OwnerCommentTemplate,DateTime.Now);}
+                if(!exists){c.Item.OwnerCommentText="";c.Item.OwnerCommentId="";c.CommentText=YouTubeOwnerPublish.RenderComment(c.Channel.OwnerCommentTemplate,YouTubeOwnerPublish.CommentDateForItem(c.Item));}
                 Store.Save(settings);videos.Rows[index].Cells["state"].Value=State(c);ShowPreview();
             }catch(Exception e){c.Item.OwnerCommentState=oldState;c.Item.OwnerCommentText=oldText;c.Item.OwnerCommentId=oldId;c.CommentText=oldPreview;MessageBox.Show(this,"Не удалось сохранить проверку: "+e.Message,"YouTube");}
         }

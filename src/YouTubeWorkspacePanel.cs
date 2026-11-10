@@ -433,7 +433,7 @@ namespace VideoBatch {
                     + (publish == "scheduled" ? "отложено" : publish == "immediate" ? "сразу" : publish) + " · ПК";
             }
             return "HTTP · " + (kindView == "long" ? "Long" : "Shorts") + ": "
-                + (publish == "scheduled" ? settings.YouTubeScheduleMinMinutes + "–" + settings.YouTubeScheduleMaxMinutes + " мин" : publish)
+                + (publish == "scheduled" ? (kindView == "long" ? settings.YouTubeScheduleLongMinMinutes + "–" + settings.YouTubeScheduleLongMaxMinutes : settings.YouTubeScheduleMinMinutes + "–" + settings.YouTubeScheduleMaxMinutes) + " мин" : publish)
                 + " · ПК";
         }
 
@@ -731,10 +731,13 @@ namespace VideoBatch {
                         AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare", state.Caption + " · " + state.File);
                     });
                     await backend.AssignPreparedVideosToChannelAsync(ch, d.FileNames, progress);
-                    if (!IsDisposed) { RefreshGrid(); AppendLog(ch.Name + ": подготовлено 100% · " + d.FileNames.Length + " видео. Исходники убраны из общей папки."); }
+                    if (!IsDisposed) { RefreshGrid(); AppendLog(ch.Name + ": подготовлено 100% · " + d.FileNames.Length + " видео."); }
                     AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
-                } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(ch, "Подготовка отменена"); AppendLog(ch.Name + ": подготовка отменена. Исходники сохранены."); } }
-                catch (Exception ex) { AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { MarkPreparationStopped(ch, "Ошибка подготовки"); AppendLog(ch.Name + ": ошибка подготовки · " + ex.Message); } }
+                } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(ch, "Подготовка отменена"); AppendLog(ch.Name + ": подготовка отменена. Исходники возвращены в общую папку."); } }
+                catch (Exception ex) {
+                    AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error");
+                    if (!IsDisposed) { MarkPreparationStopped(ch, "Ошибка подготовки"); AppendLog(ch.Name + ": ошибка подготовки · " + ex.Message); }
+                }
                 finally { preparationKeys.Remove(preparationKey); if (!IsDisposed) RefreshGrid(); }
             }
         }

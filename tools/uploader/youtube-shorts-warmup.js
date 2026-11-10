@@ -3,7 +3,7 @@
 const safety = require("./youtube-interaction-safety.js");
 const TOTAL_MS = 15 * 60 * 1000;
 const TARGET_VIDEOS = 30;
-const WAIT_MS = 60000;
+const WAIT_MS = 120000;
 
 class WarmupDeadline extends Error {
   constructor() { super("Время прогрева истекло."); }
@@ -109,9 +109,10 @@ function deadlinePage(page, deadline, now = Date.now) {
 async function waitForSearchResults(page, shorts) {
   await page.waitForFunction(onlyShorts => {
     const search = document.querySelector("ytd-search");
-    if (!search || search.hasAttribute("is-loading")) return false;
+    if (!search) return false;
     const links = onlyShorts ? "a[href*='/shorts/']" : "a[href*='/watch?v='], a[href*='/shorts/']";
     if ([...search.querySelectorAll(links)].some(a => a.getClientRects().length)) return true;
+    if (search.hasAttribute("is-loading")) return false;
     return [...search.querySelectorAll("ytd-message-renderer, ytd-background-promo-renderer")]
       .some(el => el.getClientRects().length && el.innerText.trim());
   }, shorts, { timeout: WAIT_MS });
@@ -154,18 +155,18 @@ async function harvestSearchResults(page, shorts, globalSeen, report) {
 
 async function openVideoUrl(page, item, report) {
   report("youtube", "Прогрев: открываю " + item.id);
-  await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: WAIT_MS });
   await page.waitForFunction(id => {
     const u = new URL(location.href);
     return u.searchParams.get("v") === id || u.pathname === "/shorts/" + id;
-  }, item.id, { timeout: 30000 });
+  }, item.id, { timeout: WAIT_MS });
 }
 
 async function searchKeyword(page, keyword, shorts, report = () => {}, globalSeen = new Set()) {
   // Existing worker search helpers build URLs and dismiss generic overlays;
   // they are deliberately not used for this native-search-only workflow.
   // Reset the previous keyword's native filter, staying in this same tab.
-  await page.goto("https://www.youtube.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.goto("https://www.youtube.com/", { waitUntil: "domcontentloaded", timeout: WAIT_MS });
   const input = page.locator("input[name='search_query'], input#search, input.ytSearchboxComponentInput").first();
   const searchWaitStarted = Date.now();
   await input.waitFor({ state: "visible", timeout: WAIT_MS });
@@ -175,7 +176,12 @@ async function searchKeyword(page, keyword, shorts, report = () => {}, globalSee
   const resultsWaitStarted = Date.now();
   await page.waitForFunction(query => {
     const u = new URL(location.href);
-    return u.pathname === "/results" && u.searchParams.get("search_query") === query && !document.querySelector("ytd-search[is-loading]");
+    if (u.pathname !== "/results" || u.searchParams.get("search_query") !== query) return false;
+    const search = document.querySelector("ytd-search");
+    if (!search) return false;
+    const links = search.querySelectorAll("a[href*='/watch?v='], a[href*='/shorts/']");
+    if ([...links].some(a => a.getClientRects().length)) return true;
+    return !search.hasAttribute("is-loading");
   }, keyword, { timeout: WAIT_MS });
   journal(report, "search_results_url", Date.now() - resultsWaitStarted, "страница результатов");
   // The URL changes before ytd-search and its links have been populated.
@@ -248,8 +254,8 @@ async function maybeLike(page, job, report, watched) {
 async function watchResult(page, shorts, deadline, job, report, checkBoundary, sessionDeadline = deadline) {
   let state;
   const watchBudget = Math.max(0, deadline - Date.now());
-  const metadataDeadline = Math.min(sessionDeadline, Date.now() + 60000);
-  report("youtube", "Прогрев: ожидаю готовность видео, до 60 секунд в пределах времени сессии.");
+  const metadataDeadline = Math.min(sessionDeadline, Date.now() + WAIT_MS);
+  report("youtube", "Прогрев: ожидаю готовность видео, до 2 минут в пределах времени сессии.");
   while (Date.now() < metadataDeadline) {
     if (await handleAd(page, report)) continue;
     state = await readState(page);

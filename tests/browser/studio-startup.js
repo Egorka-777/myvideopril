@@ -58,20 +58,32 @@ const S=require('../../tools/uploader/youtube-studio-upload');
    await status.evaluate((e,text)=>e.textContent=text,lang==='ru'?'Проверка завершена. На контент заявлены права.':'Checks complete. Copyright-protected content found.');
    await waiting;assert(completed);
    await status.evaluate(e=>e.textContent='Uploaded: 100%');
-   await assert.rejects(S.waitChecks(page,{timeout:250}),/не подтвердил окончание проверки/);
+   await assert.rejects(S.waitChecks(page,{timeout:250,soft:false}),/не подтвердил окончание проверки/);
   }
   const {setup}=require('./studio-shorts-queue');
   const fixture=await setup(browser,'ru',temp,{count:1});
-  let waited=false;
-  const result=await S.runSequential(fixture.page,fixture.pack,{writeDescription:false,waitForChecks:true,titleDelay:1,checksTimeout:5000},{...fixture.host,waitUpload:async p=>{
+  let skipped=false;
+  const result=await S.runSequential(fixture.page,fixture.pack,{writeDescription:false,titleDelay:1},{...fixture.host,waitUpload:async p=>{
    await S.waitUpload(p);
-   await p.locator('ytcp-video-upload-progress').evaluate(e=>{e.textContent='Проверка: 5 %';setTimeout(()=>{window.checksFinished=true;e.textContent='Проверка завершена. На контент заявлены права.';},1000);});
-  },progress:(stage,text,extra)=>{if(stage==='studio_checks')waited=true;fixture.host.progress(stage,text,extra);}});
-  assert.equal(result.length,1);assert(waited);assert(await fixture.page.evaluate(()=>window.checksFinished));
+   await p.locator('ytcp-video-upload-progress').evaluate(e=>{e.textContent='Проверка: 5 %';});
+  },progress:(stage,text,extra)=>{if(stage==='studio_checks'&&/не ожидаю/.test(text))skipped=true;fixture.host.progress(stage,text,extra);}});
+  assert.equal(result.length,1);assert(skipped,'Background checks must not gate publication');
+  assert.equal((await fixture.page.evaluate(()=>stats)).publishes,1);
+  assert.equal((await fixture.page.evaluate(()=>stats)).escapes,0);
   assert.equal(fixture.saved.get('video000001').description,'Old default','Studio description must remain untouched');
   assert(!fixture.stages.some(s=>s.stage==='metadata_description'));
   await fixture.ctx.close();
+  // A normal modal backdrop must never trigger Escape (which closes Studio).
+  await page.setContent(`<style>ytcp-uploads-dialog{display:block;position:fixed;inset:40px;background:white;z-index:2}tp-yt-iron-overlay-backdrop{display:block;position:fixed;inset:0;background:#0008;z-index:1}</style><tp-yt-iron-overlay-backdrop opened class="opened"></tp-yt-iron-overlay-backdrop><ytcp-uploads-dialog><label><input type="radio" name="PUBLIC">Public</label><button id="done-button">Publish</button></ytcp-uploads-dialog><script>window.escapes=0;window.clicks=0;document.addEventListener('keydown',e=>{if(e.key==='Escape'){escapes++;document.querySelector('ytcp-uploads-dialog')?.remove();}});document.querySelector('input').onclick=()=>clicks++;</script>`);
+  await S.publishPublic(page,page.locator('ytcp-uploads-dialog'));
+  assert.equal(await page.evaluate(()=>escapes),0);assert.equal(await page.evaluate(()=>clicks),1);
+  // Readiness probes survive a temporary blocker and replacement of the radio.
+  await page.evaluate(()=>{document.querySelector('input').checked=false;const cover=document.createElement('div');cover.id='cover';cover.style.cssText='position:fixed;inset:0;z-index:3';document.body.append(cover);setTimeout(()=>{const old=document.querySelector('input');const fresh=old.cloneNode();old.replaceWith(fresh);fresh.onclick=()=>clicks++;cover.remove();},400);});
+  await S.publishPublic(page,page.locator('ytcp-uploads-dialog'));
+  assert.equal(await page.evaluate(()=>clicks),2);assert.equal(await page.evaluate(()=>escapes),0);
+  await page.evaluate(()=>document.querySelector('ytcp-uploads-dialog').remove());
+  await assert.rejects(S.publishPublic(page,page.locator('ytcp-uploads-dialog')),/закрыл окно доступа/);
   await context.close();
-  console.log('PASS no navigation wait on loading resources, active dialog, no false pending, bounded diagnostics; RU/EN checks awaited, copyright completion accepted, transfer alone rejected');
+  console.log('PASS ready controls with loading resources; background checks do not block publication; modal backdrop, replaced radio, closed wizard; explicit diagnostic checks remain strict');
  }finally{await browser.close();fs.rmSync(temp,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -6,6 +6,38 @@ using System.Reflection;
 
 namespace VideoBatch {
     public static class AssemblyRegressionTests {
+        public static bool RunImageAppearanceTests() {
+            string root = Path.Combine(Path.GetTempPath(), "image-timing-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            try {
+                string video = Path.Combine(root, "one.mp4"); File.WriteAllText(video, "video");
+                string other = Path.Combine(root, "two.mp4"); File.WriteAllText(other, "other");
+                string images = Path.Combine(root, "images"); Directory.CreateDirectory(images);
+                string image = Path.Combine(images, "badge.png"); File.WriteAllText(image, "image");
+                File.WriteAllText(Path.Combine(images, "second.png"), "second image");
+                var layer = new AssemblyLayer { Source=images, Start=8, AppearanceTransition="swipe", AppearanceDuration=.5, GreenScreen=true, PlaybackMode="repeat", RepeatPause=120, PhotoDuration=4.5, ExitTransition="fade", ExitDuration=.7 };
+                var t = new AssemblyTemplate { Materials=root, Videos=root, DurationByVideo=true, Transition="cut", RandomVideoStart=true };
+                t.Scenes.Add(new AssemblyScene { Duration=4, Layers=new System.Collections.Generic.List<AssemblyLayer> {layer} });
+                var videos = new[] { new AssemblyVideo { Path=video, Hash="a", Duration=.6 }, new AssemblyVideo { Path=other, Hash="b", Duration=71.25 } };
+                var mix = new AssemblyMixTracker();
+                var history = new AssemblyHistory();
+                var capacity = new AssemblyInventory(t,videos,history).Calculate();
+                if (capacity.BatchLimit != 4 || capacity.Variants != 4) throw new Exception("Source-length mode capped combinations by video count");
+                var batch = AssemblyPlanner.Create(t,videos,history,new Random(2),3,mix);
+                if (batch.Plans.Count != 3 || batch.Plans.Any(p => p.RollDuration(t) != p.Scenes[0].Video.Duration || p.Scenes[0].VideoStart != 0)) throw new Exception("Requested count or source duration failed");
+                history.Combinations.AddRange(batch.Plans.Select(p=>p.Signature));
+                string ledger = Path.Combine(root,"history.xml"); AssemblyFiles.Save(ledger,history); history=AssemblyFiles.Load<AssemblyHistory>(ledger);
+                var remaining = AssemblyPlanner.Create(t,videos,history,new Random(3),10,mix);
+                if (remaining.Plans.Count != 1 || remaining.Plans.Any(p=>history.Combinations.Contains(p.Signature))) throw new Exception("Combination history was not preserved");
+                history.Combinations.Add(remaining.Plans[0].Signature);
+                if (new AssemblyInventory(t,videos,history).Calculate().BatchLimit != 0) throw new Exception("Used combinations still available");
+                AssemblyMarketProfiles.Capture(t, AssemblyProfile.Ru);
+                string path = Path.Combine(root,"settings.xml"); AssemblyFiles.Save(path,t);
+                var copy = AssemblyFiles.Load<AssemblyTemplate>(path); AssemblyMarketProfiles.Apply(copy,AssemblyProfile.Ru);
+                var restored = copy.Scenes[0].Layers[0];
+                if (!copy.DurationByVideo || restored.Start != 8 || restored.AppearanceTransition != "swipe" || restored.AppearanceDuration != .5 || !restored.GreenScreen || restored.PlaybackMode!="repeat" || restored.RepeatPause!=120 || restored.PhotoDuration!=4.5 || restored.ExitTransition!="fade" || restored.ExitDuration!=.7) throw new Exception("Timing settings lost in profile/XML");
+                return true;
+            } finally { Directory.Delete(root,true); }
+        }
         public static bool RunSplitPackTests() {
             string root = Path.Combine(Path.GetTempPath(), "split-packs-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try {
@@ -310,6 +342,47 @@ namespace VideoBatch {
             if (bind.Scenes[1].VoiceMode != "own" || bind.Scenes[0].VoiceMode != "none" || bind.Scenes[1].Voiceover != sceneTwo) throw new Exception("Scene voice folder discovery failed");
             return true;
         }
+        public static bool RunImageAppearanceUiTests() {
+            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "appearance-ui-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root = temp;
+                var initial = AssemblyTemplate.Defaults(); initial.Scenes.RemoveRange(1,3);
+                initial.Materials=Path.Combine(temp,"materials"); initial.Output=Path.Combine(temp,"output");
+                AssemblyWorkspace.Prepare(initial); AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
+                using (var window = new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    var current=(AssemblyTemplate)Field(window,"template");
+                    var toggle=All(window).OfType<System.Windows.Forms.CheckBox>().Single(c=>c.Name=="DurationByVideo");
+                    var slider=All(window).Single(c=>c.Name=="SceneDurationSlider");
+                    if (!toggle.Visible || !All(window).Any(c=>c.Name=="ObjectAppearance" && c.Visible)) throw new Exception("Timing controls are not visible");
+                    toggle.Checked=true; System.Windows.Forms.Application.DoEvents();
+                    if (!current.DurationByVideo || slider.Enabled) throw new Exception("Source duration toggle did not apply");
+                    Invoke(window,"ApplyCapacity",new AssemblyCapacity {Exact=true,Variants=90,BatchLimit=90});
+                    var quantity=All(window).OfType<System.Windows.Forms.Button>().Single(c=>c.Name=="AssemblyCount");
+                    var value=(System.Windows.Forms.NumericUpDown)Field(window,"count");
+                    if (!quantity.Enabled || value.Maximum != 90) throw new Exception("Count selection disabled or capped in source-length mode");
+                    value.Value=37;
+                    Invoke(window,"Save");
+                    if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Count != 37) throw new Exception("Requested count not saved");
+                    if (!AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).DurationByVideo) throw new Exception("Duration mode not saved");
+                    toggle.Checked=false;
+                    if (!slider.Enabled) throw new Exception("Manual duration did not restore");
+                    using (var pool=(System.Windows.Forms.Form)typeof(AssemblyWindow).GetMethod("CreatePoolWindow",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{2})) {
+                        pool.Show(window); System.Windows.Forms.Application.DoEvents();
+                        var green=All(pool).OfType<System.Windows.Forms.CheckBox>().Single(c=>c.Name=="ObjectGreenScreen");
+                        if (green.Checked) throw new Exception("Green screen must be opt-in");
+                        green.Checked=true;
+                        if (!current.Scenes[0].Layers[0].GreenScreen) throw new Exception("Green screen toggle did not apply");
+                        pool.Close();
+                    }
+                    Invoke(window,"Save");
+                    var saved=AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml"));
+                    if (!saved.MarketRu.Scenes[0].Layers[0].GreenScreen) throw new Exception("Green screen toggle not saved in profile");
+                    window.Close();
+                }
+                return true;
+            } finally { Store.Root=previous; if(Directory.Exists(temp))Directory.Delete(temp,true); }
+        }
         public static bool RunVideoPackUiTests() {
             string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-packs-ui-" + Guid.NewGuid().ToString("N"));
             try {
@@ -370,6 +443,68 @@ namespace VideoBatch {
                 return true;
             } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp,true); }
         }
+        public static bool RunCustomProfileUiTests() {
+            string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-profile-ui-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root = temp;
+                var initial = AssemblyTemplate.Defaults(); initial.Materials = Path.Combine(temp, "materials"); initial.Output = Path.Combine(temp, "output");
+                AssemblyFiles.Save(Path.Combine(temp, "assembly-template.xml"), initial);
+                string firstId;
+                using (var window = new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    var current = (AssemblyTemplate)Field(window, "template");
+                    int originalScenes = current.Scenes.Count;
+                    for (int i = 0; i < 2; i++) {
+                        Exception dialogFailure = null;
+                        using (var timer = new System.Windows.Forms.Timer { Interval = 50 }) {
+                            timer.Tick += (s,e) => {
+                                var dialog = System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().FirstOrDefault(f => f.Name == "AssemblyProfileNameDialog");
+                                if (dialog == null) return;
+                                timer.Stop();
+                                try {
+                                    var name = All(dialog).OfType<System.Windows.Forms.TextBox>().Single(c => c.Name == "AssemblyProfileName");
+                                    var create = All(dialog).OfType<System.Windows.Forms.Button>().Single(c => c.Name == "AssemblyCreateProfile");
+                                    if (create.Enabled) throw new Exception("Empty name enables Create");
+                                    name.Text = "Тест студии " + (i + 1);
+                                    create.PerformClick();
+                                } catch (Exception ex) { dialogFailure = ex; dialog.DialogResult = System.Windows.Forms.DialogResult.Cancel; }
+                            };
+                            timer.Start();
+                            All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblyAddProfile").PerformClick();
+                        }
+                        if (dialogFailure != null) throw dialogFailure;
+                        System.Windows.Forms.Application.DoEvents();
+                        if (current.CustomProfiles.Count != i + 1 || current.Scenes.Count != 0 || current.Videos != "" || current.Count != 1) throw new Exception("Plus/name/create did not activate an empty persisted profile");
+                    }
+                    firstId = current.CustomProfiles[0].Id;
+                    var secondId = current.CustomProfiles[1].Id;
+                    var tabs = (System.Windows.Forms.FlowLayoutPanel)Field(window, "profileTabs");
+                    if (tabs.Height > 64 || tabs.AutoScroll || tabs.WrapContents || !(tabs is AssemblyHorizontalStrip)) throw new Exception("Profile tabs must use one compact horizontal strip without native scrollbars");
+                    All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblyProfileRu").PerformClick();
+                    if (current.Scenes.Count != originalScenes || current.Materials != initial.Materials) throw new Exception("RU scenes/materials changed while creating profiles");
+                    All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblyCustomProfile-" + firstId).PerformClick();
+                    current.MusicVolume = .37; Invoke(window, "Save");
+                    All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblyCustomProfile-" + secondId).PerformClick();
+                    if (current.Count != 1 || current.Scenes.Count != 0) throw new Exception("First custom data contaminated second custom");
+                    All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblyCustomProfile-" + firstId).PerformClick();
+                    if (Math.Abs(current.MusicVolume - .37) > .001 || Store.Load().AssemblyStudioProfile != firstId) throw new Exception("Switch did not persist custom editor or preference");
+                    window.Close();
+                }
+                using (var reopened = new AssemblyWindow(true)) {
+                    reopened.Show(); System.Windows.Forms.Application.DoEvents();
+                    var current = (AssemblyTemplate)Field(reopened, "template");
+                    if ((string)Field(reopened, "studioProfile") != firstId || Math.Abs(current.MusicVolume - .37) > .001 || current.Scenes.Count != 0 || current.CustomProfiles.Count != 2) throw new Exception("Reopen did not restore active custom profile: active=" + Field(reopened, "studioProfile") + ", expected=" + firstId + ", count=" + current.Count + ", scenes=" + current.Scenes.Count + ", profiles=" + current.CustomProfiles.Count);
+                    if (All(reopened).Count(c => c.Name.StartsWith("AssemblyCustomProfile-")) != 2) throw new Exception("Custom tabs missing after reopen");
+                    reopened.Close();
+                }
+                var prefs = Store.Load(); prefs.AssemblyStudioProfile = "custom-" + Guid.NewGuid().ToString("N"); Store.Save(prefs);
+                using (var reopened = new AssemblyWindow(true)) {
+                    if ((string)Field(reopened, "studioProfile") != AssemblyProfile.Ru || Store.Load().AssemblyStudioProfile != AssemblyProfile.Ru) throw new Exception("Missing saved profile preference was not repaired");
+                    reopened.Close();
+                }
+                return true;
+            } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+        }
         public static bool RunMediaEditorTests() { return MediaEditorCheck(null); }
         public static bool WriteMediaScreenshots(string folder) { Directory.CreateDirectory(folder); return MediaEditorCheck(folder); }
         static bool MediaEditorCheck(string screenshots) {
@@ -380,6 +515,20 @@ namespace VideoBatch {
                 AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
                 using (var window = new AssemblyWindow(true)) {
                     window.Show(); System.Windows.Forms.Application.DoEvents();
+                    foreach (var size in new[] { new Size(1180,790), new Size(980,660) }) {
+                        window.ClientSize = size; System.Windows.Forms.Application.DoEvents();
+                        var bar = All(window).Single(c => c.Name == "AssemblyCompactBar");
+                        foreach (System.Windows.Forms.Control button in bar.Controls)
+                            if (!bar.ClientRectangle.Contains(button.Bounds)) throw new Exception("Material action is clipped at " + size + ": " + button.Name);
+                        var actions = All(window).Single(c => c.Name == "Assemble").Parent;
+                        foreach (System.Windows.Forms.Control button in actions.Controls)
+                            if (button.Visible && !actions.ClientRectangle.Contains(button.Bounds)) throw new Exception("Output action is clipped at " + size + ": " + button.Name);
+                        if (screenshots != null) Capture(window,Path.Combine(screenshots,"studio-" + size.Width + ".png"));
+                    }
+                    window.ClientSize = new Size(1180,790); System.Windows.Forms.Application.DoEvents();
+                    Invoke(window,"Busy",true);
+                    if (!All(window).Single(c => c.Text == "■ Стоп").Enabled || All(window).Single(c => c.Name == "Assemble").Enabled) throw new Exception("Busy state must leave Stop enabled and disable assembly");
+                    Invoke(window,"Busy",false);
                     if (screenshots != null) Capture(window,Path.Combine(screenshots,"studio-four-profiles.png"));
                     var labels = All(window).OfType<System.Windows.Forms.Button>().Where(b => b.Name.StartsWith("AssemblyProfile")).Select(b => b.Text).ToArray();
                     if (labels.Length != 5 || !labels.SequenceEqual(new[] {"RU YT","EN YT","RU INS","EN INS","ТЕСТ"})) throw new Exception("Visible studio tabs do not match agreed names.");
@@ -404,27 +553,49 @@ namespace VideoBatch {
                     var preview=(System.Windows.Forms.Panel)Field(window,"heroPreviewHost");
                     var settings=(System.Windows.Forms.Panel)Field(window,"contentHost");
                     if(preview.PointToScreen(Point.Empty).X >= settings.PointToScreen(Point.Empty).X || preview.Height<400) throw new Exception("Large preview is not on the left");
-                    Invoke(window,"OpenAudioEditor");System.Windows.Forms.Application.DoEvents();
-                    if(!preview.Visible || ((System.Windows.Forms.TableLayoutPanel)Field(window,"sceneEditor")).Visible)throw new Exception("Music section hides preview or overlaps scene controls");
-                    if(screenshots!=null)Capture(window,Path.Combine(screenshots,"studio-music.png"));
-                    Invoke(window,"OpenVoiceWorkspace");System.Windows.Forms.Application.DoEvents();
-                    if(!preview.Visible)throw new Exception("Voice section hides preview");
-                    if(screenshots!=null)Capture(window,Path.Combine(screenshots,"studio-voice-settings.png"));
+                    foreach (var editor in new[] { "OpenAudioEditor", "OpenVoiceWorkspace" }) {
+                        Exception dialogFailure = null;
+                        using (var timer = new System.Windows.Forms.Timer { Interval = 100 }) {
+                            timer.Tick += (s,e) => {
+                                var dialog = window.OwnedForms.FirstOrDefault(f => f.Modal);
+                                if (dialog == null) return;
+                                timer.Stop();
+                                try {
+                                    if (!preview.Visible) throw new Exception("Media dialog hides preview");
+                                    if (screenshots != null) Capture(dialog,Path.Combine(screenshots,editor + ".png"));
+                                } catch (Exception ex) { dialogFailure = ex; }
+                                finally { dialog.Close(); }
+                            };
+                            timer.Start(); Invoke(window,editor);
+                        }
+                        if (dialogFailure != null) throw dialogFailure;
+                        if (!((System.Windows.Forms.TableLayoutPanel)Field(window,"sceneEditor")).Visible) throw new Exception("Closing media dialog did not preserve scene controls");
+                    }
                     string speechFile=Path.Combine(temp,"sample.mp3");File.WriteAllText(speechFile,"preview fixture");
                     current.SpeechLines.Add(new AssemblySpeechLine {Text="Проверка положения субтитров",AudioPath=speechFile});
                     current.SubtitleStyle.Enabled=true;
                     var subtitleButton = All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblySubtitles");
                     if (!subtitleButton.Visible || subtitleButton.Text != "Субтитры · настройки") throw new Exception("Subtitle settings button is not visible or clearly labelled");
                     if (All(window).Any(c => c.Name == "SubtitlePositionSlider")) throw new Exception("Subtitle position leaked into scene controls");
-                    subtitleButton.PerformClick(); System.Windows.Forms.Application.DoEvents();
+                    bool subtitleDialogOpened = false;
+                    using (var timer = new System.Windows.Forms.Timer { Interval = 100 }) {
+                        timer.Tick += (s,e) => {
+                            var dialog = window.OwnedForms.OfType<SubtitleStyleDialog>().FirstOrDefault();
+                            if (dialog == null) return;
+                            timer.Stop(); subtitleDialogOpened = true; dialog.Close();
+                        };
+                        timer.Start(); subtitleButton.PerformClick();
+                    }
+                    if (!subtitleDialogOpened) throw new Exception("Subtitle settings button did not open its dialog");
+                    Invoke(window,"EnterSubtitleWorkspace"); System.Windows.Forms.Application.DoEvents();
                     if (!((System.Windows.Forms.Panel)Field(window,"subtitlePanel")).Visible || ((System.Windows.Forms.TableLayoutPanel)Field(window,"sceneEditor")).Visible) throw new Exception("Subtitle settings button did not open its workspace");
                     var subtitleCanvas=Field(window,"canvas");
                     if(string.IsNullOrWhiteSpace((string)Field(subtitleCanvas,"subtitlePreviewText")) || Field(subtitleCanvas,"subtitleOverlay")==null)throw new Exception("Enabled subtitle formatting has no visible preview");
-                    if(!((System.Windows.Forms.Label)Field(window,"subtitlePanelMessage")).Text.Contains("Нет таймкодов"))throw new Exception("Missing timing has no explanation");
+                    if(!((System.Windows.Forms.Label)Field(window,"subtitlePanelMessage")).Text.Contains("Распознать аудио"))throw new Exception("Missing timing has no explanation");
                     var enabled=(System.Windows.Forms.CheckBox)Field(window,"subtitleEnabled");enabled.Checked=false;
                     if(Field(subtitleCanvas,"subtitleOverlay")!=null)throw new Exception("Disabled subtitles remain visible");
                     enabled.Checked=true;
-                    if(((System.Windows.Forms.Panel)Field(window,"audioWorkspace")).Visible || !preview.Visible)throw new Exception("Subtitle section overlaps music or hides preview");
+                    if((((System.Windows.Forms.Panel)Field(window,"audioWorkspace"))?.Visible ?? false) || !preview.Visible)throw new Exception("Subtitle section overlaps music or hides preview");
                     if (screenshots != null) Capture(window, Path.Combine(screenshots, "studio-subtitles.png"));
                     Invoke(window, "LeaveSubtitleWorkspace");
                     Invoke(window,"Save"); window.Close();

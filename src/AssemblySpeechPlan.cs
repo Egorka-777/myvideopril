@@ -153,6 +153,8 @@ namespace VideoBatch {
                     p.Captions = await EnsureCaptionsForAudioAsync(t, p.Voiceover, line?.Text, voiceSeconds, ct, progress).ConfigureAwait(false);
                 }
             }
+            // Source-length mode wins over voice timing: audio is trimmed/padded by the renderer.
+            AssemblyTimeline.ApplyVideoDuration(t, p);
             p.Captions = t.SubtitleStyle?.Enabled == true
                 ? WarmupSubtitles.FitToDuration(p.Captions, p.RollDuration(t))
                 : new List<WarmupCaption>();

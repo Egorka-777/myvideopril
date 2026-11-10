@@ -71,6 +71,7 @@ namespace VideoBatch {
                 }); files.Width = 560; body.Controls.Add(files);
                 AddNativeAudioControls(body, true);
                 body.Controls.Add(firstList);
+                AddVideoPlacementControls(body);
                 body.Controls.Add(new Label { Text = "Два экрана", AutoSize = true, Margin = new Padding(0, 14, 0, 6), Font = Theme.FontCardTitle });
                 var picker = new AssemblySplitLayoutPicker { Width = 560, SplitLayout = template.SplitLayout };
                 body.Controls.Add(picker);
@@ -159,7 +160,7 @@ namespace VideoBatch {
             LeaveSubtitleWorkspaceIfOpen();
             // Capture the scene so that actions never change a different scene by accident.
             var scene = SelectedScene;
-            using (var form = MediaDialog("Озвучка · " + AssemblyProfile.ShortLabel(studioProfile), 620)) {
+            using (var form = MediaDialog("Озвучка · " + AssemblyProfile.ShortLabel(studioProfile, template), 620)) {
                 var body = MediaBody(form);
                 Action refresh = () => { Changed(false); Save(); RequestTimingHints(); RefreshInfo(); };
                 body.Controls.Add(new Label { Text = "Один вариант озвучки выбирается из пачки для каждого ролика. Длина видео = выбранное аудио. Музыка настраивается отдельно.", Width = 560, Height = 54, ForeColor = Theme.TextSecondary });
@@ -217,7 +218,7 @@ namespace VideoBatch {
         }
         void OpenAudioEditor() {
             LeaveSubtitleWorkspaceIfOpen();
-            using (var form = MediaDialog("Музыка · " + AssemblyProfile.ShortLabel(studioProfile), 460)) {
+            using (var form = MediaDialog("Музыка · " + AssemblyProfile.ShortLabel(studioProfile, template), 460)) {
                 var body = MediaBody(form);
                 body.Controls.Add(new Label { Text = "Родной звук видео регулируется отдельно от музыки и озвучки. Пустая пачка музыки не отключает звук видео.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
                 AddNativeAudioControls(body, true);

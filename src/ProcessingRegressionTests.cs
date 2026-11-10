@@ -31,6 +31,15 @@ namespace VideoBatch {
                     if (s.CaptureDate > now || s.CaptureDate < now.AddDays(-30) || s.Brand != "OnePlus" || s.Software != "") return false;
                     varied |= previous >= 0 && previous != s.Rotation; previous = s.Rotation;
                 }
+                var canvasSettings = AssemblyProcessing.Defaults();
+                foreach (double scale in new[] { 98.3499, 100.5768 }) {
+                    canvasSettings.FrameScale.Values = new Range(scale, scale);
+                    var canvasProfile = new Profile();
+                    ProcessingEngine.Apply(canvasProfile, canvasSettings, media, new Random(2), now);
+                    var arguments = ProcessingEngine.Arguments("a.mp4", "b.mp4", canvasProfile, media, null);
+                    string filters = arguments[arguments.IndexOf("-vf") + 1];
+                    if (!filters.EndsWith(",setsar=1", StringComparison.Ordinal)) return false;
+                }
                 if (!varied || ProcessingDevices.BrandNames.Length!=15 || ProcessingDevices.ModelCount!=148) return false;
                 foreach (string brand in ProcessingDevices.BrandNames) {
                     var models=new System.Collections.Generic.HashSet<string>();

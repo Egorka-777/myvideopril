@@ -114,6 +114,9 @@ namespace VideoBatch {
             double fadeIn = Math.Min(s.FadeIn, duration / 2), fadeOut = Math.Min(s.FadeOut, duration / 2);
             if (fadeIn > 0) vf.Add("fade=t=in:st=0:d=" + N(fadeIn));
             if (fadeOut > 0) vf.Add("fade=t=out:st=" + N(duration - fadeOut) + ":d=" + N(fadeOut));
+            // FrameScale's inner scale changes SAR to preserve its input DAR.
+            // After pad/crop the output is the requested canvas again, with square pixels.
+            vf.Add("setsar=1");
             bool voice = !string.IsNullOrWhiteSpace(narration), background = !p.Short && !string.IsNullOrWhiteSpace(p.MusicPath);
             bool audio = p.Short || voice || m.HasAudio || background;
             var args = new List<string> { "-hide_banner", "-nostdin", "-n", "-loglevel", "error", "-stats_period", "0.3", "-progress", "pipe:1", "-i", input };

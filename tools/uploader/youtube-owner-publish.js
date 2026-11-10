@@ -10,7 +10,7 @@ const SAVE=/^(Save|Сохранить|Done|Готово|Publish|Опублико
 async function visible(locator){return S.one(locator,{optional:true});}
 async function enabled(button){return S.enabled(button);}
 async function visibilityControl(page){
- for(const selector of ['#visibility-button','#visibility','ytcp-video-visibility-select']){const control=await visible(page.locator(selector));if(control)return control;}
+ for(const selector of ['#visibility-button','#visibility','ytcp-video-visibility-select','#select-button[aria-label="Изменить параметры доступа к видео"],#select-button[aria-label="Edit video visibility"]']){const control=await visible(page.locator(selector));if(control)return control;}
  const root=await visible(page.locator(EDITOR));
  return root?visible(root.getByRole('button',{name:/visibility|доступ|scheduled|отложенная публ|запланирован|для всех|^public$/i})):null;
 }
@@ -22,9 +22,23 @@ function parseVisibility(label){
  if(/Unlisted|Доступ по ссылке|По ссылке/i.test(label))return 'unlisted';
  return '';
 }
+async function visibilitySummary(control){
+ const label=(await control.innerText())+' '+(await control.getAttribute('aria-label')||'');
+ if(parseVisibility(label))return label;
+ // Studio's select-button is an icon. The persisted value is rendered beside
+ // it in the visibility card, not inside the icon's accessible label.
+ return control.evaluate(el=>{
+  for(let p=el;p;p=p.parentElement||p.getRootNode()?.host){
+   const text=(p.innerText||p.textContent||'').replace(/\s+/g,' ').trim();
+   if(text.length>300)break;
+   if(/Public|Открытый доступ|Доступно всем|Для всех|Private|Ограниченный доступ|Закрытый доступ|Unlisted|Доступ по ссылке|По ссылке|Scheduled|Запланирован|Отложенная публ/i.test(text))return text.replace(/^(?:Параметры доступа|Visibility|Доступ)\s*/i,'');
+  }
+  return '';
+ });
+}
 async function readVisibility(page){
  const control=await visibilityControl(page);
- return control?parseVisibility((await control.innerText())+' '+(await control.getAttribute('aria-label')||'')):'';
+ return control?parseVisibility(await visibilitySummary(control)):'';
 }
 async function editor(page,id){
  await page.goto(`https://studio.youtube.com/video/${id}/edit`,{waitUntil:'domcontentloaded',timeout:35000});
@@ -174,4 +188,4 @@ async function runSequential(page,items,host){
   progress('owner_item_confirmed','Готово: публикация и комментарий автора проверены.');
  }
 }
-module.exports={BUILD,parseVisibility,canonicalAuthor,readVisibility,ownVideo,commentMatches,publish,comment,runSequential};
+module.exports={BUILD,parseVisibility,canonicalAuthor,visibilitySummary,readVisibility,ownVideo,commentMatches,publish,comment,runSequential};

@@ -57,8 +57,8 @@ namespace VideoBatch {
 
         public static string ResolvePublishMode(Preferences prefs, string kind) {
             if (!string.Equals((kind ?? "").Trim(), "long", StringComparison.OrdinalIgnoreCase)) return ResolvePublishMode(prefs);
-            string mode = (prefs?.YouTubeHttpLongPublishMode ?? "immediate").Trim().ToLowerInvariant();
-            return mode == "scheduled" || mode == "private" ? mode : "immediate";
+            string mode = (prefs?.YouTubeHttpLongPublishMode ?? "scheduled").Trim().ToLowerInvariant();
+            return mode == "immediate" || mode == "private" ? mode : "scheduled";
         }
 
         public static long GetAvailableMemoryMb() {

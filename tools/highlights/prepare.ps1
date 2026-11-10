@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Root)
+param([Parameter(Mandatory=$true)][string]$Root, [switch]$SpeechOnly)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $env:PYTHONUTF8 = '1'
@@ -27,7 +27,7 @@ function Resolve-OllamaExe {
     return $null
 }
 $ollama = Resolve-OllamaExe
-if (!$ollama) {
+if (!$SpeechOnly -and !$ollama) {
     throw 'Ollama not found. Install from https://ollama.com/download/windows or put ollama.exe on PATH (also checked: LocalAppData\Programs\Ollama and D:\ollama-windows-amd64). Then click Prepare again.'
 }
 Write-Output 'Preparing isolated speech tools...'
@@ -39,6 +39,13 @@ if (!(Test-Path (Join-Path $venv 'Scripts/python.exe'))) {
 $runtime = Join-Path $venv 'Scripts/python.exe'
 & $runtime -m pip install --requirement (Join-Path $PSScriptRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Speech dependency installation failed. Check internet connection.' }
+$cudaDevices = & $runtime -c 'import sys; sys.path.insert(0, sys.argv[1]); import ctranslate2; from whisper_runtime import _cuda_device_count; print(_cuda_device_count(ctranslate2))' $PSScriptRoot
+if ($LASTEXITCODE -ne 0) { throw 'CUDA device detection failed. Check the NVIDIA driver.' }
+if ([int]$cudaDevices -gt 0) {
+    Write-Output 'Installing CUDA 12.6 cuBLAS and cuDNN 9 for NVIDIA speech acceleration...'
+    & $runtime -m pip install 'nvidia-cublas-cu12==12.6.4.1' 'nvidia-cudnn-cu12==9.5.1.17'
+    if ($LASTEXITCODE -ne 0) { throw 'NVIDIA speech runtime installation failed.' }
+}
 Write-Output 'Downloading speech model (small, multilingual)...'
 $env:VB_HIGHLIGHTS_MODELS = Join-Path $Root 'models'
 $env:HF_HUB_DISABLE_SYMLINKS = '1'
@@ -49,6 +56,7 @@ download_model('small', output_dir=None, cache_dir=os.environ['VB_HIGHLIGHTS_MOD
 '@
 & $runtime -c $downloadSpeech
 if ($LASTEXITCODE -ne 0) { throw 'Speech model download failed' }
+if ($SpeechOnly) { Write-Output 'YouTube speech tools ready. Semantic selection uses the configured OpenRouter key.'; return }
 Write-Output 'Starting local model service...'
 $running = $false
 try { Invoke-RestMethod 'http://127.0.0.1:11434/api/tags' -TimeoutSec 4 | Out-Null; $running = $true } catch {}

@@ -4,7 +4,7 @@ const { parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, TOTAL_MS, 
 
 (async () => {
   assert.equal(TOTAL_MS, 900000);
-  assert.equal(WAIT_MS, 60000);
+  assert.equal(WAIT_MS, 120000);
   const partial = buildResult(["a", "b", "c"], new Set(["a"]), 2, "time_limit");
   assert(partial.partial && partial.coveredKeywords === 1 && partial.totalKeywords === 3 && partial.missing.length === 2);
   assert.equal(buildResult(["x"], new Set(["x"]), 30, "time_limit").partial, false);
@@ -95,11 +95,11 @@ const { parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, TOTAL_MS, 
     assert(messages.some(t => /фактически просмотрено/.test(t)));
     clock = 0; readyAfter = Infinity; current = 0;
     assert.equal(await watchResult(slowPage, true, 5000, {}, (s, t) => messages.push(t), async () => {}, 120000), false);
-    assert.equal(clock, 60000, 'unready video is skipped after one minute, not thrown');
+    assert.equal(clock, 120000, 'unready video is skipped after two minutes, not thrown');
     clock = 0;
     assert.equal(await watchResult(slowPage, true, 5000, {}, () => {}, async () => {}, 12000), false);
     assert.equal(clock, 12000, 'session limit bounds loading wait');
     assert(messages.some(t => /пропуск без засчитанного просмотра/.test(t)));
   } finally { Date.now = realNow; }
-  console.log("OK: 30-video randomized budget, delayed playback readiness, 60s skip and session deadline tests");
+  console.log("OK: 30-video randomized budget, delayed playback readiness, 120s skip and session deadline tests");
 })().catch(error => { console.error(error); process.exitCode = 1; });

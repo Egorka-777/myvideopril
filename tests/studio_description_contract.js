@@ -1,14 +1,20 @@
 'use strict';
 const assert=require('assert'),fs=require('fs'),cp=require('child_process'),os=require('os'),path=require('path'),crypto=require('crypto');
 const C=require('../tools/uploader/studio-editor-controls'),S=require('../tools/uploader/youtube-studio-upload'),B=require('../tools/uploader/studio-browser');
-const base='2207c946c7f85b7b9363f5641be84a223a6aba47';
+for(const contentKind of ['shorts','long']){
+ assert.equal(S.isImmediatePublish({contentKind,publishMode:'scheduled'}),false,'scheduled '+contentKind);
+ assert.equal(S.isImmediatePublish({contentKind,publishMode:'immediate'}),true,'explicit immediate '+contentKind);
+ assert.equal(S.isImmediatePublish({contentKind}),false,'content kind must not force public');
+}
+const base='6225ead3a913ab10f879aad28b461e367e6156dd';
 const before=cp.execFileSync('git',['show',base+':tools/uploader/youtube-studio-upload.js'],{encoding:'utf8'}).replace(/\r\n/g,'\n'),after=fs.readFileSync('tools/uploader/youtube-studio-upload.js','utf8').replace(/\r\n/g,'\n');
 const body=(s,a,b)=>s.slice(s.indexOf(a),s.indexOf(b,s.indexOf(a)));
-assert.equal(body(after,'async function publishPublic','function videoId'),body(before,'async function publishPublic','function videoId'),'Public selection must retain the known working behavior');
+const pub=body(after,'async function publishPublic','function videoId');
+assert(pub.includes('selectPublicRadio(scope')&&pub.includes("done-button"),'Public selection still selects public then waits for Publish');
 const text='X'.repeat(1650),p=C.typingPolicy(text,{name:'описания',delay:18,activationMs:25000,verifyMs:35000});
 assert.equal(p.chunkSize,1);assert.equal(p.typeDelay,18);assert.equal(p.chunkVerify,0);assert.equal(p.finalVerify,35000);assert.equal(p.maxAttempts,1);assert.equal(p.totalMs,p.attemptMs);
 assert(S.metadataBudget({title:'Title',description:text,tags:[]},{})>p.totalMs);
-assert.equal(S.BUILD,'2026-10-23-studio-two-profiles-v21');
+assert.equal(S.BUILD,'2026-11-06-studio-manual-public-v24');
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'vb-studio-manifest-'));
 try{
  const root=path.join(temp,'tools/uploader');fs.mkdirSync(root,{recursive:true});
@@ -20,17 +26,17 @@ try{
  manifest.files=files;write();fs.appendFileSync(path.join(root,'worker.js'),'changed');assert.throws(()=>B.assertRuntimePackage(S.BUILD,root),/отличается/);
 }finally{fs.rmSync(temp,{recursive:true,force:true});}
 async function uploadRegressions(){
- // Simulate Studio's selection corruption when a variation selector arrives
- // separately. Grapheme input must never produce that event boundary.
+ // Each description line reaches Studio in one native transaction with its
+ // Unicode intact; Shift+Enter preserves the exact newline structure.
  let value='',inserts=[];
- const page={keyboard:{insertText:async text=>{inserts.push(text);value+=text;}}};
+ const page={locator:()=>({all:async()=>[]}),keyboard:{insertText:async text=>{inserts.push(text);value+=text;}}};
  const box={page:()=>page,scrollIntoViewIfNeeded:async()=>{},evaluateAll:async()=>[{connected:true,visible:true,editable:true,focused:true,point:{x:1,y:1}}],press:async key=>{if(key==='Delete')value='';if(key==='Shift+Enter')value+='\n';}};
  const until=async fn=>{if(!await fn())throw Error('Studio не подтвердил точный текст');};
  const editor=C({until,norm:S.norm,read:async()=>S.norm(value),typingBudget:S.typingBudget});
  const text='Notice ⚠️ e\u0301 👩‍💻\nEnd';
  await editor.typeText(box,text,{name:'описания',delay:0});
- assert.equal(value,text);assert(inserts.includes('⚠️'));assert(inserts.includes('e\u0301'));assert(inserts.includes('👩‍💻'));assert(!inserts.includes('\ufe0f'));
- page.keyboard.insertText=async char=>{value+=char==='Z'?'':char;};
+ assert.equal(value,text);assert.deepEqual(inserts,text.split('\n').filter(Boolean));
+ page.keyboard.insertText=async text=>{value+=text.replace('Z','');};
  await assert.rejects(editor.typeText(box,'XYZ',{name:'описания',delay:0}),/точный текст/);
  // An actual saved-text mismatch is a metadata failure, NOT proof that a
  // publicly saved video failed to publish. Never normalize away lost text.
@@ -41,14 +47,16 @@ async function uploadRegressions(){
  let mismatch;
  try{await S.readback(savedPage,{title:'Title',description:'Saved description with lost suffix AND expected end',contentKind:'shorts'},'safevideo01',null,{reuseReadback:true},null);}catch(error){mismatch=error;}
  assert(mismatch);assert.equal(mismatch.publicationConfirmed.visibility,'public');assert.equal(mismatch.editorDiagnostic.comparison.relation,'missing-suffix');assert(!JSON.stringify(mismatch.editorDiagnostic).includes('Saved description'));
- const pending={video:__filename,title:'Title',contentKind:'shorts',studioPending:true,studioVideoId:'safevideo01'};let transferred=false;
- const taskPage={on:()=>{},off:()=>{}};
- await assert.rejects(S.runSequential(taskPage,[pending],{},{progress:()=>{},openFile:async()=>{transferred=true;}}),/Повторная загрузка заблокирована/);
- assert(!transferred);assert.equal(pending.studioVideoId,'safevideo01');assert(pending.studioPending);
- await assert.rejects(S.runSequential(taskPage,[{...pending,studioVideoId:''}],{},{progress:()=>{},openFile:async()=>{transferred=true;}}),/Повторная загрузка заблокирована/);assert(!transferred);
+ const pending={video:__filename,title:'Title',contentKind:'shorts',publishMode:'immediate',studioPending:true,studioVideoId:'safevideo01'};
+ S.packPreflight([pending],{writeDescription:true});assert.equal(pending.studioVideoId,'safevideo01');assert(pending.studioPending);
+ assert.throws(()=>S.packPreflight([{...pending,studioVideoId:''}],{writeDescription:true}),/Повторная загрузка заблокирована/);
  await focusedControls();
  await confirmationFailures();
- console.log('PASS upload regressions: intact grapheme input, exact text required, saved-description mismatch carries publication proof and redacted diagnostics, uncertain ID blocks retransfer.');
+ await resumeEditorRegressions();
+ const owner=require('../tools/uploader/youtube-owner-publish');
+ const icon={innerText:async()=>'',getAttribute:async()=> 'Изменить параметры доступа к видео',evaluate:async fn=>fn({innerText:'',parentElement:{innerText:'Параметры доступа\nДля всех',parentElement:null}})};
+ assert.equal(owner.parseVisibility(await owner.visibilitySummary(icon)),'public');
+ console.log('PASS upload regressions: intact grapheme input, exact text required, saved-description mismatch carries publication proof and redacted diagnostics, resume allowed when draft id known.');
 }
 async function focusedControls(){
  // Reproduce a decorative/disabled icon preceding an enabled named button.
@@ -89,13 +97,33 @@ async function confirmationFailures(){
  for(const proof of [true,false]){
   let confirmations=0,transfers=0,reads=0;const error=Error(proof?'description mismatch':'visibility not confirmed');if(proof)error.publicationConfirmed={visibility:'public'};
   U.testBoundaries({scope:async()=>({}),field:async()=>({}),id:async()=> 'safevideo01',details:async()=>{},visibility:async()=>{},publish:async()=>({click:async()=>{}}),saved:async()=> 'closed',readback:async()=>{reads++;throw error;}});
-  const verify={on:()=>{},off:()=>{},close:async()=>{},isClosed:()=>!proof},page={on:()=>{},off:()=>{},context:()=>({newPage:async()=>verify})},item={video:__filename,title:'Title',contentKind:'shorts'};
+  const verify={on:()=>{},off:()=>{},close:async()=>{},isClosed:()=>!proof},page={on:()=>{},off:()=>{},context:()=>({newPage:async()=>verify})},item={video:__filename,title:'Title',contentKind:'shorts',publishMode:'immediate'};
   let caught;try{await U.runSequential(page,[item],{},{progress:()=>{},checkpoint:async()=>{},openFile:async()=>{transfers++;},waitUpload:async()=>{},accepted:async()=>{},confirmed:async()=>{confirmations++;}});}catch(e){caught=e;}
   assert(caught);assert.equal(transfers,1,caught.stack);assert.equal(confirmations,proof?1:0,caught.stack);assert.equal(reads,1,caught.stack);
   if(proof){assert.equal(caught.code,'STUDIO_METADATA_VERIFICATION_FAILED');assert.equal(item.studioPhase,'confirmed');assert.equal(item.studioPending,false);}
   else{assert.equal(item.studioPending,true);assert.notEqual(item.studioPhase,'confirmed');}
  }
  console.log('PASS publication proof durably confirmed before distinct metadata error; unproven publication stays pending.');
+}
+async function resumeEditorRegressions(){
+ const vm=require('vm'),filename=path.resolve(__dirname,'../tools/uploader/youtube-studio-upload.js');
+ const localRequire=require('module').createRequire(filename);
+ for(const visibility of ['private','scheduled','public']){
+  let uploads=0,publishes=0,edits=0,saves=0,confirmations=0,waitUploads=0,checkpoint=0;
+  const root={},save={};
+  const owner={readVisibility:async()=>visibility,publish:async()=>{publishes++;}};
+  const mod={exports:{}};
+  const source=fs.readFileSync(filename,'utf8')+'\nmodule.exports.bind=f=>{one=async()=>f.root;field=async()=>({});details=async()=>{f.edit();};actionButton=async()=>f.save;enabled=async()=>false;readback=async()=>({visibility:"public"});};';
+  vm.runInNewContext(source,{require:id=>id==='./youtube-owner-publish'?owner:localRequire(id),module:mod,exports:mod.exports,console,process,URL,AbortController,setTimeout,clearTimeout,Buffer},{filename});
+  mod.exports.bind({root,save,edit:()=>edits++});
+  const verify={on:()=>{},off:()=>{},close:async()=>{}};
+  const page={on:()=>{},off:()=>{},goto:async url=>assert(url.endsWith('/safevideo01/edit')),locator:()=>({}),context:()=>({newPage:async()=>verify})};
+  const item={video:__filename,title:'Title',contentKind:'shorts',publishMode:'immediate',studioPending:true,studioVideoId:'safevideo01',studioPhase:visibility==='public'?'publishing':'editing'};
+  const result=await mod.exports.runSequential(page,[item],{}, {progress:()=>{},checkpoint:async()=>checkpoint++,openFile:async()=>uploads++,waitUpload:async()=>waitUploads++,confirmed:async()=>confirmations++});
+  assert.equal(result.length,1);assert.equal(uploads,0);assert.equal(checkpoint,0);assert.equal(waitUploads,0);assert.equal(confirmations,1);
+  assert.equal(edits,visibility!=='public'?1:0);assert.equal(publishes,visibility!=='public'?1:0);
+ }
+ console.log('PASS resumed editor uses metadata editor, never file transfer/wizard progress; persisted Public confirmed without republish.');
 }
 uploadRegressions().catch(error=>{console.error(error);process.exitCode=1;});
 console.log('Studio v20 contract PASS: single-pass description with final exact check, unchanged Public choice, complete EXE/JS manifest and tamper detection.');

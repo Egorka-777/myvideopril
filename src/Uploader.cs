@@ -17,12 +17,14 @@ namespace VideoBatch {
     public class YouTubeItem {
         public string Video="",Title="",Thumbnail="",PublishedUrl="",PublishedVideoId="";
         public string StudioUploadId=Guid.NewGuid().ToString("N"),StudioVideoId="",StudioPhase="";
-        public bool StudioPending;
+        public bool StudioPending,StudioRetryImmediate;
         public string StudioVisibility="",OwnerCommentState="",OwnerCommentText="",OwnerCommentId="";
+        public string ScheduleDate="",ScheduleTime="";
     }
     public static class StudioUploadState {
         public const int ProtocolVersion=2;
-        public static bool WasSubmitted(YouTubeItem item) { return item != null && (item.StudioPending || !string.IsNullOrWhiteSpace(item.StudioVideoId)); }
+        /// <summary>Неподтверждённая передача без ID: повтор нельзя (риск дубля). Черновик с известным ID можно продолжить.</summary>
+        public static bool WasSubmitted(YouTubeItem item) { return item != null && item.StudioPending && string.IsNullOrWhiteSpace(item.StudioVideoId); }
         public static bool RequiresAck(string stage){return stage=="item_submitting"||stage=="item_accepted"||stage=="item_publishing"||stage=="item_confirmed"||stage=="item_pending_cleared"||stage=="owner_comment_submitting";}
         public static bool Apply(YouTubeItem item,UploadMessage message){
             string stage=message.stage;
@@ -121,8 +123,12 @@ namespace VideoBatch {
     }
     [DataContract] public class UploadJob {
         [DataMember]public int studioProtocolVersion;
-        [DataMember]public string token,profileId,expectedIp,video,title,thumbnail,searchUrl,searchFilter,searchKeys,searchFullTitle,scheduleDate,scheduleTime,channelUrl,todayDate;
+        [DataMember]public string token,profileId,expectedIp,video,title,thumbnail,searchUrl,searchFilter,searchKeys,searchFullTitle,scheduleDate,scheduleTime,channelUrl,todayDate,sourceNow;
         [DataMember]public int localPort,pcUtcOffsetMinutes;
+        [DataMember]public int sourceVideoCount=3;
+        [DataMember]public bool highlightsSearch;
+        [DataMember]public string sourceMode,sourcePeriod,sourceDuration;
+        [DataMember]public string[] sourceEntries;
         [DataMember]public bool studioPaidPromotion,studioAlteredContent,studioPublishExisting;
         [DataMember]public bool recheckOnly,checkOnly,searchOnly,watchMesh,watchDirectLinks,shortsWarmup,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
         [DataMember]public int warmupMinMinutes,warmupMaxMinutes,warmupWatchMinSec,warmupWatchMaxSec,warmupLikePercent;
@@ -136,7 +142,7 @@ namespace VideoBatch {
         [DataMember]public double percent;
         [DataMember]public int packIndex,packTotal;
         [DataMember]public bool success,keptOpen;
-        [DataMember]public string outcome,reason,waitStage;
+        [DataMember]public string outcome,reason,waitStage,sourcesJson;
         [DataMember]public int warmupCovered,warmupTotal,waitMs;
         [DataMember]public int warmupOpened,warmupWatched,warmupTarget,warmupRemainingSec;
     }
@@ -1077,6 +1083,8 @@ namespace VideoBatch {
             row.Cells[CVideo].ToolTipText=c.Items!=null&&c.Items.Count>1?string.Join(Environment.NewLine,c.Items.Select((it,i)=>(i+1)+". "+Short(it.Video))):c.Video;
             row.Cells[CTitle].ToolTipText=c.Items!=null&&c.Items.Count>1?string.Join(Environment.NewLine,c.Items.Select((it,i)=>(i+1)+". "+CleanTitle(it.Title))):"Заголовок уйдёт на YouTube";
             row.Cells[CKind].Value=KindLabel(c.Kind);
+            // SaveGrid reads status from the cell; keep it in sync or Ready after assign is overwritten by the previous Error.
+            row.Cells[CStatus].Value=string.IsNullOrWhiteSpace(c.Status)?ChannelStatus.Ready:c.Status;
         }
         void AddRow(){SaveGrid();AddGridRow(new YouTubeChannel{Name=(marketView=="EN"?"Channel ":"Канал ")+(grid.Rows.Count+1),Market=marketView,Kind="long"});SaveGrid();RefreshMarketUi();}
         void CellClick(object sender,DataGridViewCellEventArgs e){if(e.RowIndex<0)return;var row=grid.Rows[e.RowIndex];var c=(YouTubeChannel)row.Tag;if(e.ColumnIndex==CVideoPick){var p=Ui.File(this,"Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все файлы|*.*");if(p!=null){if(c.Items==null||c.Items.Count==0)c.Items=new List<YouTubeItem>{new YouTubeItem()};else if(c.Items.Count>1&&MessageBox.Show(this,"В канале уже пачка из "+c.Items.Count+" видео. Заменить первым файлом?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
@@ -1723,8 +1731,13 @@ namespace VideoBatch {
                 if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl))
                     PropagateChannelUrl(ch.ProfileId,m.channelUrl.Trim());
                 if(StudioUploadState.RequiresAck(m.stage)&&m.stage!="owner_comment_submitting"&&m.packIndex>0&&m.packIndex<=list.Count){
-                    var item=list[m.packIndex-1].Source;
+                    var prep=list[m.packIndex-1];
+                    var item=prep.Source;
                     StudioUploadState.Apply(item,m);
+                    if(m.stage=="item_confirmed"){
+                        if(!string.IsNullOrWhiteSpace(prep.ScheduleDate))item.ScheduleDate=prep.ScheduleDate.Trim();
+                        if(!string.IsNullOrWhiteSpace(prep.ScheduleTime))item.ScheduleTime=prep.ScheduleTime.Trim();
+                    }
                     lock(saveLock)Store.Save(settings); // Must succeed before DolphinRunner sends ack.
                 }
                 if(m.packIndex>0&&!string.IsNullOrWhiteSpace(m.url)){
@@ -2157,11 +2170,14 @@ namespace VideoBatch {
                 if(rows.Count==0){MessageBox.Show(this,"Отметьте галочкой ✓ каналы для загрузки.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 var flat=ExpandUploadJobs(rows);
                 foreach(var skipped in flat.Where(j=>StudioUploadState.WasSubmitted(j.item)))
-                    Write(skipped.ch.Name+" ["+skipped.index+"/"+skipped.total+"]: уже передавался в Studio · "+(string.IsNullOrWhiteSpace(skipped.item.StudioVideoId)?"ID ещё не получен":skipped.item.StudioVideoId)+" · публикация не подтверждена, проверьте черновик. Повторная передача пропущена.");
+                    Write(skipped.ch.Name+" ["+skipped.index+"/"+skipped.total+"]: передача без сохранённого ID · проверьте черновик в Studio. Повторная передача того же файла пропущена.");
                 flat=flat.Where(j=>!StudioUploadState.WasSubmitted(j.item)).ToList();
-                foreach(var job in flat){job.item.Title=CleanTitle(job.item.Title);}
+                foreach(var job in flat){
+                    job.item.Title=CleanTitle(job.item.Title);
+                    if(job.ch.Status==ChannelStatus.Error||(job.ch.Items??new List<YouTubeItem>()).Any(it=>it.StudioRetryImmediate||it.StudioPending&&!YouTubeMeshCatalog.ItemIsPublished(it)))job.item.StudioRetryImmediate=true;
+                }
                 if(flat.Count==0){
-                    MessageBox.Show(this,"Нет новых роликов для передачи. Уже переданные ролики пропущены; неподтверждённые публикации проверьте в Studio.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                    MessageBox.Show(this,"Нет новых роликов для передачи. Ожидающие без ID пропущены; черновики с известным ID продолжатся при следующем запуске.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);
                     return;
                 }
 
@@ -2180,10 +2196,10 @@ namespace VideoBatch {
                     (src,pid,idx,tot,planned,title)=>StageUploadFile(src,pid,idx,tot,planned,title),
                     (ch,it,idx,tot)=>PlannedFileName(it.Title,idx,tot,it.Video),
                     (title,idx,tot)=>TitleCleaner.CleanForUpload(CleanTitle(title)),
-                    settings,studioSchedule:false,studioLongSchedule:true,workspaceKindView);
+                    settings,studioSchedule:true,studioLongSchedule:false,workspaceKindView);
                 if(!ShowSchedulePreview(batches))return;
                 batches=QueueManager.ShuffleBatches(batches);
-                Write("Порядок каналов перемешан · пауза между стартами профилей 2–12 сек.");
+                Write("Порядок каналов перемешан · пауза между стартами профилей не менее 5 сек.");
 
                 foreach(var batch in batches){
                     foreach(var it in batch.Items){
@@ -2194,7 +2210,7 @@ namespace VideoBatch {
                     }
                 }
 
-                int maxParallel=2;
+                int maxParallel=ProfileLaunchGate.ResolveStudioMaxConcurrent(settings);
                 lock(uploadLock){
                     if(uploadCts==null)uploadCts=new CancellationTokenSource();
                     foreach(var b in batches)busyProfiles.Add(b.ProfileId);
@@ -2203,11 +2219,11 @@ namespace VideoBatch {
                 token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
                 int dolphinPort=await SyncDolphinPortAsync(token,ct).ConfigureAwait(true);
                 UploadBusyStart();uiStarted=true;
-                Write("["+MarketLabel(marketView)+"] загрузка через Studio: "+batches.Count+" акк., "+free.Count+" рол., параллельно до "+maxParallel+" (Shorts — сразу публично, длинные — по расписанию).");
+                Write("["+MarketLabel(marketView)+"] загрузка через Studio: "+batches.Count+" акк., "+free.Count+" рол., параллельно до "+maxParallel+" (Shorts и длинные — по расписанию).");
 
                 var errors=new ConcurrentBag<string>();
-                var launchGate=new ProfileLaunchGate(maxParallel,3000,5000);
-                Write("Пауза между стартами профилей: 3000–5000 мс. Описание не изменяется; публикация после окончания проверки YouTube.");
+                var launchGate=ProfileLaunchGate.ForStudioUpload(settings);
+                Write("Пауза между стартами профилей: не менее 5000 мс. Описания записываются; фоновые проверки YouTube не ожидаются.");
                 var tasks=batches.Select(batch=>Task.Run(async()=>{
                     var row=batch.Row;var ch=batch.Channel;
                     try{
@@ -2225,9 +2241,9 @@ namespace VideoBatch {
                         }
                         Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
                         ch.Status=ChannelStatus.Scheduled;
-                        bool allShorts=batch.Items.All(it=>QueueManager.NormKindPublic(it.Kind??ch?.Kind)=="shorts");
+                        bool immediateBatch=batch.Items.All(it=>it.Source.StudioVisibility=="public");
                         string doneStatus=result.ThumbnailWarning?"Видео загружено · превью не подтверждено, см. Логи"
-                            :allShorts?(batch.Items.Count>1?("Опубликовано "+batch.Items.Count+" Shorts ✓"):("Опубликовано ✓ Shorts"))
+                            :immediateBatch?"Публикация подтверждена ✓"
                             :(batch.Items.Count>1?("Отложено "+batch.Items.Count+" ✓"):("Отложено ✓ "+batch.Items[0].ScheduleDate+" "+batch.Items[0].ScheduleTime));
                         Status(row,doneStatus);
                         if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(ch.ProfileId,result.Ip);
@@ -2235,6 +2251,8 @@ namespace VideoBatch {
                         }finally{launchGate.Exit();}
                     }catch(OperationCanceledException){Status(row,"Остановлено");}
                     catch(Exception e){
+                        foreach(var remaining in batch.Items.Where(it=>!YouTubeMeshCatalog.ItemIsPublished(it.Source)))remaining.Source.StudioRetryImmediate=true;
+                        SafeSave();
                         ch.Status=ChannelStatus.Error;
                         string msg=e.Message+(e is UploadException ue&&ue.KeptOpen?" (профиль оставлен)":"");
                         errors.Add(ch.Name+": "+msg);

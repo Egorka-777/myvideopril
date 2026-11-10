@@ -14,9 +14,16 @@ namespace VideoBatch {
         public static readonly string[] All = { Ru, En, RuInst, EnInst, RuTikTok, EnTikTok, Test };
         public static readonly string[] Visible = { Ru, En, RuInst, EnInst, Test };
 
+        public static bool IsCustom(string profile) {
+            Guid id;
+            return profile != null && profile.StartsWith("custom-", StringComparison.OrdinalIgnoreCase)
+                && Guid.TryParseExact(profile.Substring(7), "N", out id);
+        }
+
         public static string Normalize(string profile) {
             if (string.IsNullOrWhiteSpace(profile)) return Ru;
             profile = profile.Trim();
+            if (IsCustom(profile)) return profile.ToLowerInvariant();
             if (profile.Equals(Ru, StringComparison.OrdinalIgnoreCase)) return Ru;
             if (profile.Equals(En, StringComparison.OrdinalIgnoreCase)) return En;
             if (profile.Equals(RuInst, StringComparison.OrdinalIgnoreCase) || profile.Equals("RU Inst", StringComparison.OrdinalIgnoreCase)) return RuInst;
@@ -44,8 +51,14 @@ namespace VideoBatch {
 
         public static string LedgerScope(string profile) => Normalize(profile);
 
-        public static string ShortLabel(string profile) {
+        public static string ShortLabel(string profile) => ShortLabel(profile, null);
+
+        public static string ShortLabel(string profile, AssemblyTemplate template) {
             profile = Normalize(profile);
+            if (IsCustom(profile)) {
+                var custom = template?.CustomProfiles?.Find(p => p.Id == profile);
+                return custom == null ? profile : custom.Name;
+            }
             if (profile == RuInst) return "RU INS";
             if (profile == EnInst) return "EN INS";
             if (profile == Test) return "ТЕСТ";

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -53,16 +55,26 @@ namespace VideoBatch {
         public void AssignVideosToChannel(YouTubeChannel channel, string[] files) { Window.AssignVideosToChannel(channel, files); }
         public async Task AssignPreparedVideosToChannelAsync(YouTubeChannel channel, string[] files, IProgress<UploadPreparationProgress> progress) {
             string[] prepared = null;
-            string[] sources = null;
+            List<UploadPreparation.ClaimedSource> claimed = null;
+            bool assigned = false;
             try {
                 if (!string.IsNullOrWhiteSpace(channel.Market)) Window.SetMarketView(channel.Market);
-                sources = Window.RenamePickedVideosInPlace(channel, files);
-                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, sources, settings, progress);
+                string[] renamed = Window.RenamePickedVideosInPlace(channel, files);
+                string claimDir = Path.Combine(UploadStaging.Root(settings), "claimed", "YouTube", UploadStaging.SanitizeDirName(channel.ChannelId ?? channel.ProfileId));
+                claimed = UploadPreparation.ClaimFromSharedFolder(renamed, claimDir);
+                LogLine?.Invoke("«" + channel.Name + "»: исходники сразу убраны из общей папки · " + claimed.Count + ".");
+                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, claimed.Select(c => c.ClaimedPath).ToArray(), settings, progress);
                 if (Window.IsDisposed) throw new OperationCanceledException();
                 Window.AssignVideosToChannel(channel, prepared, true);
-                int removed = UploadPreparation.ConsumeSources(sources, prepared, path => UploadPreparation.IsAssignedVideo(settings, path));
-                if (removed > 0) LogLine?.Invoke("«" + channel.Name + "»: исходники убраны из общей папки · " + removed + ".");
-            } catch { UploadPreparation.DeleteOutputs(prepared); throw; }
+                assigned = true;
+                // Keep claimed originals until upload succeeds; do not delete them after prepare.
+            } catch {
+                if (!assigned) {
+                    UploadPreparation.DeleteOutputs(prepared);
+                    UploadPreparation.RestoreClaimed(claimed);
+                }
+                throw;
+            }
         }
         public void SelectChannel(YouTubeChannel channel) { Window.SelectChannel(channel); }
         public bool TrySchedulePreview() { return Window.TryShowSchedulePreview(); }
@@ -109,13 +121,25 @@ namespace VideoBatch {
         public void AssignVideosToProfile(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }
         public async Task AssignPreparedVideosToProfileAsync(TikTokAccount account, string[] files, IProgress<UploadPreparationProgress> progress) {
             string[] prepared = null;
+            List<UploadPreparation.ClaimedSource> claimed = null;
+            bool assigned = false;
             try {
-                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.TikTokKey(account), "TikTok", account.ProfileId, files, settings, progress);
+                string[] sources = (files ?? new string[0]).Select(f => { try { return Path.GetFullPath(f); } catch { return f; } }).ToArray();
+                string claimDir = Path.Combine(UploadStaging.Root(settings), "claimed", "TikTok", UploadStaging.SanitizeDirName(account.ProfileId));
+                claimed = UploadPreparation.ClaimFromSharedFolder(sources, claimDir);
+                LogLine?.Invoke("«" + account.Name + "»: исходники сразу убраны из общей папки · " + claimed.Count + ".");
+                prepared = await UploadPreparation.PrepareAsync(UploadPreparation.TikTokKey(account), "TikTok", account.ProfileId, claimed.Select(c => c.ClaimedPath).ToArray(), settings, progress);
                 if (Window.IsDisposed) throw new OperationCanceledException();
                 Window.AssignVideosToProfile(account.ProfileId, account.Market, prepared, true);
-                int removed = UploadPreparation.ConsumeSources(files, prepared, path => UploadPreparation.IsAssignedVideo(settings, path));
-                if (removed > 0) LogLine?.Invoke("«" + account.Name + "»: исходники убраны из общей папки · " + removed + ".");
-            } catch { UploadPreparation.DeleteOutputs(prepared); throw; }
+                assigned = true;
+                // Keep claimed originals until upload succeeds; do not delete them after prepare.
+            } catch {
+                if (!assigned) {
+                    UploadPreparation.DeleteOutputs(prepared);
+                    UploadPreparation.RestoreClaimed(claimed);
+                }
+                throw;
+            }
         }
 
         public void Dispose() {

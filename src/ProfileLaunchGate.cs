@@ -24,6 +24,15 @@ namespace VideoBatch {
             return new ProfileLaunchGate(maxConcurrent, minMs, maxMs);
         }
 
+        public static int ResolveStudioMaxConcurrent(Preferences prefs) {
+            int configured = prefs?.MaxParallelUploads ?? 3;
+            return configured <= 0 ? 3 : Math.Max(1, Math.Min(3, configured));
+        }
+
+        public static ProfileLaunchGate ForStudioUpload(Preferences prefs) {
+            return new ProfileLaunchGate(ResolveStudioMaxConcurrent(prefs), 5000, 5000);
+        }
+
         public async Task EnterAsync(CancellationToken ct) {
             await _running.WaitAsync(ct).ConfigureAwait(false);
             int waitMs = 0;

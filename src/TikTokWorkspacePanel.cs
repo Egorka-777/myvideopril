@@ -716,11 +716,13 @@ namespace VideoBatch {
 
                     RefreshGrid(skipSync: true);
 
-                    AppendLog("Добавлено видео: " + d.FileNames.Length + " → " + acc.Name + ". Исходники убраны из общей папки.");
-
+                    AppendLog("Добавлено видео: " + d.FileNames.Length + " → " + acc.Name + ".");
                     AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
-                } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(acc, "Подготовка отменена"); AppendLog(acc.Name + ": подготовка отменена. Исходники сохранены."); } }
-                catch (Exception ex) { AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error"); if (!IsDisposed) { MarkPreparationStopped(acc, "Ошибка подготовки"); AppendLog(acc.Name + ": ошибка подготовки · " + ex.Message); } }
+                } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(acc, "Подготовка отменена"); AppendLog(acc.Name + ": подготовка отменена. Исходники возвращены в общую папку."); } }
+                catch (Exception ex) {
+                    AppDiagnostics.Write("TikTok", acc.ProfileId, taskId, "video_prepare_error", ex.ToString(), "error");
+                    if (!IsDisposed) { MarkPreparationStopped(acc, "Ошибка подготовки"); AppendLog(acc.Name + ": ошибка подготовки · " + ex.Message); }
+                }
                 finally { preparationKeys.Remove(preparationKey); if (!IsDisposed) RefreshGrid(skipSync: true); }
             }
         }
