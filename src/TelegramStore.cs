@@ -45,6 +45,9 @@ namespace VideoBatch {
         public string profile_avatar_hash {get;set;}="";
         public string profile_photo_id {get;set;}="";
         public string profile_result {get;set;}="";
+        public string spam_status {get;set;}="";
+        public string spam_checked_at {get;set;}="";
+        public string spam_reply {get;set;}="";
         public override string ToString() => string.IsNullOrWhiteSpace(name) ? id.Substring(0,Math.Min(10,id.Length)) : name;
     }
     public sealed class TelegramEndpoint {public string host {get;set;}="";public int port {get;set;}=443;}

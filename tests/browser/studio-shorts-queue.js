@@ -32,8 +32,14 @@ function app(lang,options={}){
    setTimeout(()=>{if(dialog.isConnected)dialog.querySelector('ytcp-video-upload-progress').textContent='Uploaded: 100%';},options.transferDelay||300);
    dialog.querySelector('#next-button').onclick=()=>{step++;dialog.querySelectorAll('#stepper [role=tab]').forEach((tab,n)=>tab.setAttribute('aria-selected',String(n===step)));if(step===3){dialog.querySelector('#details').hidden=true;dialog.querySelector('#next-button').hidden=true;dialog.querySelector('ytcp-visibility-scheduler').hidden=false;setTimeout(()=>{dialog.querySelector('#done-button').setAttribute('aria-disabled','false');dialog.querySelector('#done-button button').disabled=false;},150);}};
    const finishPublish=()=>{
-    root.innerHTML='<h2>'+label('Видео опубликовано','Video published')+'</h2><a href="https://youtu.be/'+id+'">Video</a><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy A</button><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy B</button><button id="close-icon-button">X</button><ytcp-button id="close-button" aria-disabled="true"><button disabled>'+label('Закрыть','Close')+'</button></ytcp-button>';
-    const close=dialog.querySelector('#close-button');dialog.querySelector('#close-icon-button').onclick=()=>{stats.headerCloses++;dialog.remove();};
+    root.innerHTML='<h2>'+label(options.processingReceipt?'Обработка видео':'Видео опубликовано',options.processingReceipt?'Video processing':'Video published')+'</h2>'+(options.processingReceipt?'<p>'+label('После того как обработка видео в стандартном качестве завершится, оно будет опубликовано. Мы установили для него открытый доступ.','Once standard definition processing is complete, it will be published. Public.')+'</p>':'')+(options.processingReceipt?'':'<a href="https://youtu.be/'+id+'">Video</a>')+'<button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy A</button><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy B</button><button id="close-icon-button">X</button><ytcp-button id="close-button" aria-disabled="true"><button disabled>'+label('Закрыть','Close')+'</button></ytcp-button>';
+    let receiptRoot=root;
+    if(options.processingReceipt){
+     const card=document.createElement('ytcp-video-share-dialog');
+     const markup=root.innerHTML.split('<p>').join('<div>').split('</p>').join('</div>');
+     root.replaceChildren(card);receiptRoot=card.attachShadow({mode:'open'});receiptRoot.innerHTML=markup;
+    }
+    const close=receiptRoot.querySelector('#close-button');receiptRoot.querySelector('#close-icon-button').onclick=()=>{stats.headerCloses++;dialog.remove();};
     close.querySelector('button').onclick=()=>{stats.closes++;event('close');close.setAttribute('aria-disabled','true');close.querySelector('button').disabled=true;setTimeout(()=>{dialog.remove();q('#create-icon').disabled=true;setTimeout(()=>q('#create-icon').disabled=false,options.createDelay||200);},options.removeDelay||250);};
     setTimeout(()=>{if(close.isConnected&&!options.neverClose){close.setAttribute('aria-disabled','false');close.querySelector('button').disabled=false;}},options.closeDelay||450);
    };
@@ -99,7 +105,48 @@ async function run(){
   // A sharing panel and a disabled Publish button during processing are not success.
   await p.setContent('<ytcp-uploads-dialog><h2>Processing</h2><button>Copy link</button><button>Copy link</button><yt-share-target-renderer>Share</yt-share-target-renderer><button id="done-button" disabled>Publish</button><button id="close-button">Close</button></ytcp-uploads-dialog>');
   assert(!(await S.publishSuccessVisible(p)));await assert.rejects(S.waitSaveConfirmed(p,p.locator('ytcp-uploads-dialog'),{timeout:180}),/не показал подтверждение/);
-  await B.dismissPublishDialog(p);assert.equal(await p.locator('ytcp-uploads-dialog').count(),1);await p.close();
+  await B.dismissPublishDialog(p);assert.equal(await p.locator('ytcp-uploads-dialog').count(),1);
+  await p.setContent('<ytcp-uploads-dialog><ytcp-video-share-dialog></ytcp-video-share-dialog></ytcp-uploads-dialog>');
+  await p.locator('ytcp-video-share-dialog').evaluate(e=>{const root=e.attachShadow({mode:'open'});root.innerHTML='<h2>Обработка видео</h2><p>Видео будет опубликовано после завершения обработки. Открытый доступ.</p>'+Array.from({length:450},()=>'<span>Decoration</span>').join('')+'<a href="https://youtu.be/video000001">Video</a><button id="close-button">Закрыть</button>';});
+  const receipt=await B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001'});assert.equal(receipt.state,'published');assert.deepEqual(receipt.ids,['video000001']);
+  await assert.rejects(B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000002'}),/другое видео/);
+  await p.locator('a').evaluate(e=>e.remove());
+  assert.equal((await B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001'})).state,'published');
+  assert.equal((await B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog')})).state,'pending');
+  for(const copy of ['После того как обработка видео в стандартном качестве завершится, оно будет опубликовано. 12 ноября 2026 г. в 18:15 мы установили для него открытый доступ.','Once standard definition processing is complete, it will be published.']){
+   await p.setContent('<ytcp-uploads-dialog><ytcp-video-share-dialog><h2>Обработка видео</h2><p>'+copy+'</p><span>Проверка завершена. Нарушений не найдено.</span><button id="close-button">Закрыть</button></ytcp-video-share-dialog><button id="done-button" disabled>Запланировать публикацию</button></ytcp-uploads-dialog>');
+   assert.equal((await B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001'})).state,'published');
+  }
+  // Studio can render its receipt copy in a nested component's div/span,
+  // invisible to innerText on the upload host and absent from h/p selectors.
+  for(const copy of ['После того как завершится обработка видео в стандартном качестве, оно будет опубликовано. Для него будет установлен открытый доступ.','Once standard definition processing is complete, it will be published. Public.']){
+   await p.setContent('<ytcp-uploads-dialog><ytcp-video-share-dialog></ytcp-video-share-dialog></ytcp-uploads-dialog>');
+   await p.locator('ytcp-video-share-dialog').evaluate((e,copy)=>{
+    const shadow=e.attachShadow({mode:'open'});shadow.innerHTML='<div><span id="receipt"></span><span>Проверка завершена. На контент заявлены права.</span><button id="close-button">Закрыть</button></div>';
+    shadow.querySelector('#receipt').textContent=copy;
+    shadow.querySelector('button').onclick=()=>{window.receiptCloses=(window.receiptCloses||0)+1;e.closest('ytcp-uploads-dialog').remove();};
+   },copy);
+   const before=await p.evaluate(()=>window.receiptCloses||0);
+   assert.equal((await B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001'})).state,'published');
+   await B.dismissPublishDialog(p,()=>{},{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001',timeout:1500});
+   assert.equal(await p.evaluate(()=>window.receiptCloses),before+1);
+   assert.equal(await p.locator('ytcp-uploads-dialog').count(),0);
+  }
+  // Live Studio renders this receipt as a sibling, not inside the upload wizard.
+  await p.setContent('<ytcp-uploads-dialog><button id="done-button" disabled>Опубликовать</button><a href="https://youtu.be/video000001">Video</a></ytcp-uploads-dialog><ytcp-uploads-still-processing-dialog><div role="dialog"><h1>Обработка видео</h1><div>После того как завершится обработка видео в стандартном качестве, оно будет опубликовано. Для него будет установлен открытый доступ.</div><button id="close-button">Закрыть</button></div></ytcp-uploads-still-processing-dialog>');
+  assert.equal((await B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001'})).state,'published');
+  await p.locator('ytcp-uploads-still-processing-dialog button').evaluate(e=>e.onclick=()=>{document.querySelector('ytcp-uploads-still-processing-dialog').remove();document.querySelector('ytcp-uploads-dialog').remove();});
+  await B.dismissPublishDialog(p,()=>{},{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001',timeout:1500});
+  assert.equal(await p.locator('ytcp-uploads-still-processing-dialog').count(),0);
+  for(const label of ['OK','ОК']){
+   await p.setContent('<ytcp-uploads-dialog><ytcp-dialog style="display:block"><div role="dialog"><h2>Проверка видео ещё продолжается</h2><button>'+label+'</button></div></ytcp-dialog></ytcp-uploads-dialog>');
+   await p.locator('button').evaluate(button=>button.onclick=()=>{window.warningClicks=(window.warningClicks||0)+1;document.querySelector('ytcp-dialog').remove();document.querySelector('ytcp-uploads-dialog').innerHTML='<h2>Видео запланировано</h2><a href="https://youtu.be/video000001">Video</a>';});
+   const before=await p.evaluate(()=>window.warningClicks||0);
+   assert.equal(await S.waitSaveConfirmed(p,p.locator('ytcp-uploads-dialog'),{timeout:2000,expectedId:'video000001'}),'scheduled');
+   assert.equal(await p.evaluate(()=>window.warningClicks),before+1);
+  }
+  console.log('PASS scheduled-video checks warning: Latin OK and Cyrillic ОК clicked once; scheduling receipt recognized.');
+  await p.close();
   console.log('PASS exact multiline typing; prefixes/extra sharing buttons/disabled Publish never count as saved success; unfinished wizard stays open.');
   for(const lang of ['ru','en']){
    const f=await setup(browser,lang,dir);const result=await S.runSequential(f.page,f.pack,{titleDelay:1,descriptionDelay:1,saveTimeout:2500,closeTimeout:3000},f.host);
@@ -108,6 +155,14 @@ async function run(){
    for(let n=0;n<2;n++){const record=f.saved.get('video'+String(n+1).padStart(6,'0'));assert.equal(record.title,f.pack[n].title);assert.equal(record.description,f.pack[n].description);assert(!record.paid&&!record.ai);assert.equal(record.visibility,'public');}
    assert.equal(f.stages.filter(x=>x.stage==='item_confirmed').length,2);assert.equal(f.stages.filter(x=>x.stage==='studio_close'&&/один раз/.test(x.text)).length,2);
    console.log('PASS',lang,'2 real picker cycles → exact multiline descriptions → Public readback → duplicate Copy links → delayed footer Close once → delayed Create → next file, no thumbnails/reloads/header-X/Escape.');await f.ctx.close();
+  }
+  for(const lang of ['ru','en']){
+   const processing=await setup(browser,lang,dir,{processingReceipt:true});
+   const result=await S.runSequential(processing.page,processing.pack,{titleDelay:1,descriptionDelay:1,saveTimeout:2500,closeTimeout:3000,newTabPerVideo:true},processing.host);
+   assert.equal(result.length,2);assert.equal(processing.telemetry.filter(e=>e.type==='publish').length,2);assert.equal(processing.telemetry.filter(e=>e.type==='close').length,2);
+   assert(!processing.stages.some(e=>e.stage==='studio_verify'),'Processing receipt must not fall through to saved-ID editor verification');
+   const sequence=processing.telemetry.filter(e=>['file','publish','close'].includes(e.type)).map(e=>e.type);assert.deepEqual(sequence,['file','publish','close','file','publish','close']);
+   await processing.ctx.close();console.log('PASS',lang,'processing publication receipt closes once before next-tab upload, without waiting for processing or opening edit');
   }
   // A missing success card can be recovered by checking the saved ID. Only the
   // confirmed wizard may then be closed; there is still just one Publish click.

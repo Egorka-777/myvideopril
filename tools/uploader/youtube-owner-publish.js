@@ -9,6 +9,11 @@ const VISIBILITY='ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select
 const SAVE=/^(Save|Сохранить|Done|Готово|Publish|Опубликовать|OK|ОК)$/i;
 async function visible(locator){return S.one(locator,{optional:true});}
 async function enabled(button){return S.enabled(button);}
+async function pacedClick(control,actionDelayMs,afterDelayMs=actionDelayMs){
+ if(actionDelayMs)await control.page().waitForTimeout(actionDelayMs);
+ await control.click();
+ if(afterDelayMs)await control.page().waitForTimeout(afterDelayMs);
+}
 async function visibilityControl(page){
  for(const selector of ['#visibility-button','#visibility','ytcp-video-visibility-select','#select-button[aria-label="Изменить параметры доступа к видео"],#select-button[aria-label="Edit video visibility"]']){const control=await visible(page.locator(selector));if(control)return control;}
  const root=await visible(page.locator(EDITOR));
@@ -52,67 +57,65 @@ async function editor(page,id){
  await S.until(()=>visibilityControl(page),60000,'Studio не показал управление доступом указанного видео.');
 }
 async function visibilityDialog(page){
- const roots=[];
- for(const root of await page.locator(VISIBILITY).all())
-  if(await S.scopeAlive(root)||await root.locator('input[type=radio],tp-yt-paper-radio-button').filter({visible:true}).count())roots.push(root);
+ const locator=page.locator(VISIBILITY);
+ const indices=await locator.evaluateAll(nodes=>{
+  const parent=e=>e.parentElement||e.getRootNode().host;
+  const visible=e=>{if(!e.getClientRects().length)return false;for(let p=e;p;p=parent(p)){const s=getComputedStyle(p);if(p.hidden||s.display==='none'||s.visibility==='hidden')return false;}return true;};
+  // display:contents hosts have no box, but their live popup does.
+  const alive=e=>visible(e)||Array.from(e.querySelectorAll('tp-yt-paper-dialog,ytcp-dialog,[role=dialog],input[type=radio],tp-yt-paper-radio-button')).some(visible);
+  const live=nodes.filter(alive);
+  return live.filter(e=>{for(let p=parent(e);p;p=parent(p))if(live.includes(p))return false;return true;}).map(e=>nodes.indexOf(e));
+ });
+ const roots=indices.map(i=>locator.nth(i));
  if(!roots.length){
   const fallback=await visible(page.locator('[role=dialog]').filter({hasText:/Save or publish|Сохранить или опубликовать|Открытый доступ|Public/i}));
   if(fallback)roots.push(fallback);
  }
+ // Nested hosts represent one physical popup; separate live roots remain ambiguous.
  if(roots.length>1)throw new Error('Studio открыл несколько окон доступа. Выбор видео неоднозначен.');
  return roots[0]||null;
 }
 async function publicRadio(scope){
  return visible(scope.locator('#public-radio-button,[name=PUBLIC],tp-yt-paper-radio-button[name=PUBLIC]').or(scope.getByRole('radio',{name:S.L.public})));
 }
-async function expandPublish(scope){
+async function expandPublish(scope,actionDelayMs=2000){
  if(await publicRadio(scope))return;
- const card=await S.until(()=>visible(scope.getByText(/^(Save or publish|Сохранить или опубликовать)$/i)),15000,'Studio не показал блок «Сохранить или опубликовать / Save or publish».');
- await card.click();
+ const card=await S.until(()=>visible(scope.getByText(/^\s*(Save\s+or\s+publish|Сохранить\s+или\s+опубликовать)\s*$/i)),15000,'Studio не показал блок «Сохранить или опубликовать / Save or publish».');
+ await pacedClick(card,actionDelayMs);
  await S.until(()=>publicRadio(scope),15000,'Studio не раскрыл варианты доступа после «Сохранить или опубликовать».');
 }
-async function persistedPublic(page){
- if(await readVisibility(page)==='public')return true;
- // The editor can abbreviate/localize its summary. The selected native radio
- // still proves persisted Public without another Publish click.
- const control=await visibilityControl(page);if(!control)return false;
- await control.click();
- const dialog=await S.until(()=>visibilityDialog(page),15000,'Studio не открыл сохранённые настройки доступа.');
- await expandPublish(dialog);
- const radio=await publicRadio(dialog);
- const selected=radio&&await S.publicRadioSelected(radio);
- await page.keyboard.press('Escape');return !!selected;
-}
-async function publish(page,item,{progress=()=>{},verifyMs=30000}={}){
+async function publish(page,item,{progress=()=>{},actionDelayMs=2000,confirmDelayMs=5000}={}){
  const id=item.publishedVideoId;
  await editor(page,id);
  if(await readVisibility(page)==='public'){progress('owner_publish','Видео уже в открытом доступе.',{videoId:id});return;}
- const control=await visibilityControl(page);await control.click();
+ const control=await visibilityControl(page);await pacedClick(control,actionDelayMs);
  const dialog=await S.until(()=>visibilityDialog(page),30000,'Studio не открыл окно изменения доступа.');
  progress('owner_publish','Раскрываю «Сохранить или опубликовать / Save or publish».',{videoId:id});
- await expandPublish(dialog);
+ await expandPublish(dialog,actionDelayMs);
  progress('owner_publish','Выбираю «Открытый доступ / Public» и жду активную «ОК / Publish».',{videoId:id});
  // Editor dialog confirms through #save-button (OK), not upload wizard #done-button.
- const button=await S.confirmEditorVisibility(dialog);
+ const button=await S.confirmEditorVisibility(dialog,{actionDelayMs});
+ await S.until(async()=>{const radio=await publicRadio(dialog);return radio&&await S.publicRadioSelected(radio)&&await enabled(button);},15000,'Studio ещё не применил выбор открытого доступа.');
  if(!SAVE.test(S.norm(await button.innerText())))throw new Error('Studio не показал кнопку сохранения открытого доступа.');
  progress('owner_publish','Выбран открытый доступ; подтверждаю публикацию один раз.',{videoId:id});
- await button.click();
+ await pacedClick(button,actionDelayMs,confirmDelayMs);
  await S.until(async()=>!await S.scopeAlive(dialog),15000,'Studio не закрыл окно доступа после подтверждения. Проверьте видео перед повтором.');
  // Some Studio versions apply the dialog's Done locally, then require the
  // editor's Save. Other versions commit in the dialog and have no dirty Save.
  let save=null;
- const saveDeadline=Date.now()+3000;
+ const saveDeadline=Date.now()+15000;
  do{
   save=await S.actionButton(page,'save',/^(Save|Сохранить)$/i)
    ||await S.actionButton(page,'save-bar',/^(Save|Сохранить)$/i);
-  if(await enabled(save)){await save.click();break;}
-  if(!save)break;
+  if(await enabled(save)){
+   progress('owner_publish','Нажимаю верхнюю «Сохранить».',{videoId:id});
+   await pacedClick(save,actionDelayMs);
+   await S.until(async()=>!await enabled(save),30000,'Studio не завершил сохранение открытого доступа. Комментарий не отправлен.');
+   progress('owner_publish','Верхняя «Сохранить» нажата, кнопка стала неактивной.',{videoId:id});
+   break;
+  }
   await page.waitForTimeout(150);
  }while(Date.now()<saveDeadline);
- // A fresh editor tab is the proof of persisted Public; no reload of dirty UI.
- const check=await page.context().newPage();
- try{await editor(check,id);await S.until(()=>persistedPublic(check),verifyMs,'YouTube не подтвердил открытый доступ после сохранения. Комментарий не отправлен.');}
- finally{await check.close().catch(()=>{});}
 }
 function canonicalAuthor(href){
  try{const u=new URL(href,'https://www.youtube.com');return u.hostname.replace(/^www\./,'')==='youtube.com'?u.pathname.replace(/\/$/,'').toLowerCase():'';}catch{return '';}
@@ -135,16 +138,36 @@ async function commentMatches(page,text,author){
   let id='';try{id=new URL(stamp?.getAttribute('href')||'',location.href).searchParams.get('lc')||'';}catch{}
   const model=e.querySelector('ytd-comment-view-model,ytd-comment-renderer');
   id=id||model?.data?.commentId||'';
-  return {text:body?.innerText||'',author:name?.getAttribute('href')||'',id};
+  const copy=body?.cloneNode(true);
+  if(copy){copy.querySelectorAll('img[alt]').forEach(img=>img.replaceWith(document.createTextNode(img.alt)));copy.querySelectorAll('br').forEach(br=>br.replaceWith(document.createTextNode('\n')));}
+  return {text:copy?.textContent||'',author:name?.getAttribute('href')||'',id};
  }));
  return rows.filter(x=>S.norm(x.text)===S.norm(text)&&canonicalAuthor(x.author)===author&&x.id);
 }
-async function comment(page,item,{progress=()=>{},checkpoint,commentMs=30000,typingDelay=45}={}){
+async function readComment(box){
+ return S.norm(await box.evaluate(e=>{
+  const copy=e.cloneNode(true);
+  copy.querySelectorAll('img[alt]').forEach(img=>img.replaceWith(document.createTextNode(img.alt)));
+  copy.querySelectorAll('br').forEach(br=>br.replaceWith(document.createTextNode('\n')));
+  return copy.textContent;
+ }));
+}
+async function comment(studioPage,item,options={}){
+ if(!S.norm(item.commentText)||item.commentState==='confirmed'||item.commentState==='sent')return;
+ if(item.commentState==='pending')throw new Error('Предыдущая отправка комментария не подтверждена. Проверьте видео вручную перед повтором.');
+ const page=await studioPage.context().newPage();
+ if(options.usePage)options.usePage(page);
+ return commentOnWatch(page,item,options);
+}
+async function commentOnWatch(page,item,{progress=()=>{},checkpoint,commentMs=30000,typingDelay=45}={}){
  const id=item.publishedVideoId,text=S.norm(item.commentText);
- if(!text||item.commentState==='confirmed')return;
+ if(!text||item.commentState==='confirmed'||item.commentState==='sent')return;
  if(item.commentState==='pending')throw new Error('Предыдущая отправка комментария не подтверждена. Проверьте видео вручную перед повтором.');
  progress('owner_comment','Открываю опубликованное видео на YouTube для комментария автора.',{videoId:id});
  await page.goto(`https://www.youtube.com/watch?v=${id}`,{waitUntil:'domcontentloaded',timeout:60000});
+ progress('owner_comment','Открыта страница комментария: '+page.url(),{videoId:id});
+ const current=new URL(page.url());
+ if(current.hostname!=='www.youtube.com'||current.pathname!=='/watch'||current.searchParams.get('v')!==id)throw new Error('Не открылась страница просмотра указанного видео: '+page.url()+'. Комментарий не отправлен.');
  // This page is opened for its author controls, not for automated engagement.
  await page.locator('video').evaluateAll(nodes=>nodes.forEach(v=>v.pause()));
  await S.until(()=>visible(page.getByRole('link',{name:/^(Edit video|Изменить видео)$/i}).or(page.getByRole('button',{name:/^(Edit video|Изменить видео)$/i})).or(page.locator(`#owner a[href*="/video/${id}/edit"]`))),15000,'На странице видео нет управления автора. Комментарий не отправлен.');
@@ -155,7 +178,7 @@ async function comment(page,item,{progress=()=>{},checkpoint,commentMs=30000,typ
  const placeholder=await S.until(()=>visible(comments.locator('#simplebox-placeholder').or(comments.getByRole('textbox',{name:/add a comment|добавьте комментарий|оставьте комментарий/i}))),15000,'YouTube не открыл поле комментария. Возможно, комментарии отключены или ещё недоступны.');
  await placeholder.click();
  const box=await S.until(()=>visible(comments.locator('ytd-comment-simplebox-renderer #contenteditable-root[contenteditable=true]').or(comments.getByRole('textbox',{name:/add a comment|добавьте комментарий|оставьте комментарий/i}))),10000,'YouTube не открыл редактор комментария.');
- await S.typeText(box,text,{delay:typingDelay});
+ await S.typeText(box,text,{name:'комментария',delay:typingDelay,readValue:readComment});
  const button=await S.until(async()=>{const b=await S.actionButton(comments,'submit-button',/^(Comment|Post comment|Оставить комментарий|Комментировать)$/i);return await enabled(b)?b:null;},10000,'Кнопка отправки комментария недоступна.');
  // Re-check after typing, before the single irreversible click.
  await ownVideo(page,id);
@@ -164,9 +187,8 @@ async function comment(page,item,{progress=()=>{},checkpoint,commentMs=30000,typ
  await checkpoint(item,item._packIndex);
  item.commentState='pending';
  await button.click();
- const found=await S.until(async()=>{const matches=await commentMatches(page,text,author);return matches.length===1?matches[0]:null;},commentMs,'Комментарий мог отправиться, но YouTube не показал его ID. Повтор заблокирован до ручной проверки.');
- progress('owner_comment_confirmed','Комментарий автора подтверждён.',{videoId:id,commentId:found.id,commentText:text});
- item.commentState='confirmed';
+ progress('owner_comment_sent','Комментарий отправлен нажатием кнопки, без проверки появления.',{videoId:id,commentText:text});
+ item.commentState='sent';
 }
 async function runSequential(page,items,host){
  if(!items.length)throw new Error('Не выбраны загруженные видео для публикации.');
@@ -183,9 +205,9 @@ async function runSequential(page,items,host){
   const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex:i+1,localJobId:item.localJobId,videoId:item.publishedVideoId,...extra});
   progress('owner_publish',`Публикация ${i+1}/${items.length}: ${item.title||item.publishedVideoId}`);
   await publish(page,item,{...host,progress});
-  progress('owner_video_public','Открытый доступ проверен в Studio.',{visibility:'public'});
+  progress('owner_video_public','Этап установки открытого доступа завершён; повторная страница проверки не открывалась.',{visibility:'public'});
   await comment(page,item,{...host,progress});
-  progress('owner_item_confirmed','Готово: публикация и комментарий автора проверены.');
+  progress('owner_item_confirmed','Готово: видео опубликовано, комментарий обработан без проверки после отправки.');
  }
 }
-module.exports={BUILD,parseVisibility,canonicalAuthor,visibilitySummary,readVisibility,ownVideo,commentMatches,publish,comment,runSequential};
+module.exports={BUILD,visibilityDialog,parseVisibility,canonicalAuthor,visibilitySummary,readVisibility,ownVideo,commentMatches,publish,comment,readComment,runSequential};

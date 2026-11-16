@@ -6,6 +6,35 @@ using System.Windows.Forms;
 
 namespace VideoBatch {
     public static class ProcessingRegressionTests {
+        public static bool RunAssemblySync(string ffmpeg, string ffprobe) {
+            string root = Path.Combine(Path.GetTempPath(), "vb-assembly-sync-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            try {
+                string input = Path.Combine(root, "markers.mp4");
+                var ct = System.Threading.CancellationToken.None;
+                string tone = "aevalsrc=0.5*sin(2*PI*440*t)*(between(t\\,5\\,5.25)+between(t\\,15\\,15.25)+between(t\\,30\\,30.25)+between(t\\,45\\,45.25)):s=48000:d=50";
+                Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=180x320:r=25:d=50", "-f", "lavfi", "-i", tone, "-af", AssemblyRender.VoicePitchFilter(1.3).TrimEnd(','), "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", input }, ct, null, 120).GetAwaiter().GetResult();
+                var settings = new ProcessingSettings(); settings.Tempo.Enabled = true; settings.Tempo.Values = new Range(102,102);
+                settings.Pitch.Enabled = true; settings.Pitch.Values = new Range(102,102);
+                var effective = AssemblyProcessing.Effective(settings);
+                if (effective.Tempo.Enabled || !settings.Tempo.Enabled || AssemblyProcessing.Defaults().Tempo.Enabled) throw new Exception("Assembly tempo policy");
+                AssemblyProcessing.Apply(new AssemblyTemplate { OutputProcessing = settings }, ffmpeg, ffprobe, input, new Random(3), ct).GetAwaiter().GetResult();
+                string pcm = Path.Combine(root, "markers.pcm");
+                Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-i", input, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", pcm }, ct, null, 60).GetAwaiter().GetResult();
+                byte[] data = File.ReadAllBytes(pcm);
+                foreach (int second in new[] {5,15,30,45}) {
+                    double weighted = 0, energy = 0;
+                    for (int i = (second-1)*8000; i < (second+1)*8000 && i*2+1 < data.Length; i++) {
+                        double sample = BitConverter.ToInt16(data,i*2); double power = sample*sample;
+                        energy += power; weighted += power*i/8000;
+                    }
+                    double center = weighted/energy;
+                    if (energy <= 0 || Math.Abs(center-(second+.125)) > .12) throw new Exception("Audio sync drift at " + second + ": " + center);
+                    Console.WriteLine("Assembly sync PASS: marker=" + second + "s, actual=" + center.ToString("0.000") + "s");
+                }
+                return true;
+            } catch (Exception ex) { Console.WriteLine(ex); return false; }
+            finally { try { Directory.Delete(root,true); } catch { } }
+        }
         public static bool RunSelfTests() {
             string temp = Path.Combine(Path.GetTempPath(), "videobatch-processing-" + Guid.NewGuid().ToString("N"));
             string oldRoot = Store.Root;

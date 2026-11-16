@@ -71,7 +71,7 @@ namespace VideoBatch {
             f.Add("apad"); f.Add("atrim=duration=" + N(duration)); return string.Join(",", f);
         }
 
-        public static List<string> Arguments(string input, string output, Profile p, Media m, string narration) {
+        public static List<string> Arguments(string input, string output, Profile p, Media m, string narration, double untouchedPrefix = 0) {
             p.Validate(); var s = p.Processing;
             double duration = OutputDuration(p, m), end = m.Duration - s.TrimEnd;
             if (duration <= 0) throw new Exception("Подрезка оставила пустое видео.");
@@ -139,7 +139,15 @@ namespace VideoBatch {
                 else source = "speech";
             }
             if (audio) {
-                graph.Add("[" + source + "]" + FinishAudio(s, duration) + "[processed_audio]");
+                if (untouchedPrefix > 0 && !voice && !background && !p.Short) {
+                    // Preserve intro audio and its timestamps; effects only see the main section.
+                    graph.Add("[0:" + m.AudioIndex + "]asplit=2[introSource][mainSource]");
+                    graph.Add("[introSource]atrim=end=" + N(untouchedPrefix) + ",asetpts=PTS-STARTPTS[introAudio]");
+                    graph.Add("[mainSource]atrim=start=" + N(untouchedPrefix) + ",asetpts=PTS-STARTPTS," + FinishAudio(s, Math.Max(.001,duration-untouchedPrefix)) + "[mainAudio]");
+                    graph.Add("[introAudio][mainAudio]concat=n=2:v=0:a=1[processed_audio]");
+                    // The generic full-roll speech chain is not used for this path.
+                    graph.RemoveAll(line => line.EndsWith("[speech]", StringComparison.Ordinal));
+                } else graph.Add("[" + source + "]" + FinishAudio(s, duration) + "[processed_audio]");
                 args.AddRange(new[] { "-filter_complex", string.Join(";", graph), "-map", "[processed_audio]", "-c:a", "aac", "-b:a", "160k" });
             }
             args.AddRange(new[] { "-vf", string.Join(",", vf), "-t", N(duration), "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p" });

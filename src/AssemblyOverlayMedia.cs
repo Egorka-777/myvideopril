@@ -56,6 +56,7 @@ namespace VideoBatch {
         public static double PlaybackLength(AssemblyLayer layer, string path, double available) {
             return layer.PlaybackMode == "continuous" ? available : Math.Min(available, IsAnimated(path) ? Duration(path) : layer.PhotoDuration);
         }
+        public static double RepeatPeriod(AssemblyLayer layer, double playback) => layer.RepeatInterval > 0 ? layer.RepeatInterval : playback + layer.RepeatPause;
         public static IEnumerable<string> DecoderArguments(string path) {
             // Native VP8/VP9 decoders discard the WebM alpha side stream.
             if (!Path.GetExtension(path).Equals(".webm", StringComparison.OrdinalIgnoreCase)) return new string[0];

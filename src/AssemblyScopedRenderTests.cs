@@ -16,6 +16,24 @@ namespace VideoBatch {
             try { RunAsync(ffmpeg,ffprobe,root).GetAwaiter().GetResult();return true; }
             finally {Directory.Delete(root,true);}
         }
+        public static bool RunDifferencePipeline(string ffmpeg, string ffprobe) {
+            string root=Path.Combine(Path.GetTempPath(),"assembly-difference-pipeline-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            try {
+                string source=Path.Combine(root,"source.mp4");
+                Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","testsrc2=s=180x320:r=25:d=3","-f","lavfi","-i","sine=frequency=440:sample_rate=48000:duration=3","-c:v","libx264","-c:a","aac",source},CancellationToken.None,null,60).GetAwaiter().GetResult();
+                var t=new AssemblyTemplate { Materials=root, Videos=source, Output=Path.Combine(root,"output"), Width=180, Height=320, Fps=25, Transition="cut", SceneTimingVersion=1, DurationByVideo=true, RenderMode="cpu", Count=1, OutputProcessing=new ProcessingSettings() };
+                t.Scenes.Add(new AssemblyScene{Duration=3});
+                var progress=new Progress<Update>();
+                var result=AssemblyEngine.Run(t,ffmpeg,ffprobe,Path.Combine(root,"history"),AssemblyRaster.Save,progress,CancellationToken.None).GetAwaiter().GetResult();
+                Require(result.Errors.Count==0 && result.Outputs.Count==1,"Difference pipeline failed: "+string.Join("; ",result.Errors));
+                string reportPath=AssemblyOutputFiles.Report(result.Outputs[0],".difference.xml");
+                Require(File.Exists(reportPath),"Difference report not published with output");
+                var report=AssemblyFiles.Load<AssemblyDifferenceReport>(reportPath);
+                Require(report.DifferencePercent.HasValue,"Complete source comparison returned no index");
+                Require(!string.IsNullOrWhiteSpace(AssemblyDifferenceAnalysis.Format(report)),"Difference report text empty");
+                Console.WriteLine("Assembly difference pipeline PASS: render, automatic analysis, report publication and XML readback"); return true;
+            } finally { try { Directory.Delete(root,true); } catch(IOException) { } }
+        }
         public static bool RunNativeAudioTests(string ffmpeg, string ffprobe) {
             string root = Path.Combine(Path.GetTempPath(), "assembly-native-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try { RunAsync(ffmpeg, ffprobe, root, true).GetAwaiter().GetResult(); return true; }

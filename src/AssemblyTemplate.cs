@@ -13,7 +13,9 @@ namespace VideoBatch {
         public string Name = "Изображение", Source = "";
         public bool Enabled = true, Unique = false, Fixed = false, PlacementConfigured = false, ModeExplicit = false;
         public string FixedAssetHash = "", ObjectId = Guid.NewGuid().ToString("N");
+        public bool InCombination = true;
         public bool UniformImageScale;
+        public bool PreserveAspectRatio = true;
         public bool GreenScreen;
         public double X = .08, Y = .35, Width = .84, Height = .25, Opacity = 1;
         public double Start = 0, End = 0; // End=0 means until the end of this scene.
@@ -22,6 +24,7 @@ namespace VideoBatch {
         // Missing fields in existing XML retain the original continuous playback.
         public string PlaybackMode = "continuous"; // once | continuous | repeat
         public double RepeatPause = 1, PhotoDuration = 3;
+        public double RepeatInterval;
         public string ExitTransition = "cut";
         public double ExitDuration = .35;
         /// <summary>all | primary | continuation — which video part shows this image.</summary>
@@ -48,6 +51,10 @@ namespace VideoBatch {
     public class AssemblyScene {
         public string Folder = "";
         public string Name = "Сцена", Videos = "", VideoMode = ""; // Empty mode preserves legacy folder fallback.
+        /// <summary>Intro clip: always first, fixed scene duration, not affected by «По длине видео».</summary>
+        public bool IsPreview;
+        public bool VideoInCombination = true;
+        public bool DurationByVideo;
         /// <summary>Second video pack: fills the scene only after the first primary clip ends.</summary>
         public string ContinuationVideos = "";
         public bool MixVideos;
@@ -57,15 +64,21 @@ namespace VideoBatch {
         // Empty mode keeps the old whole-roll voiceover; shared/own/none enable scene-level voiceover.
         public string Voiceover = "", VoiceMode = "";
         public double MusicVolume = 1;
+        // Negative values preserve old projects: their former global levels remain the
+        // initial per-scene levels until the scene is edited in the sound window.
+        public double NativeAudioVolume = -1;
+        public double BedMusicVolume = -1;
         public List<AssemblyLayer> Layers = new List<AssemblyLayer>();
         public override string ToString() { return Name + " · " + Duration.ToString("0.##") + " с"; }
     }
     public class AssemblyTemplate {
         public int Version = 1, PackStudioVersion = 0, ObjectStudioVersion = 0, SceneTimingVersion = 0;
+        public AssemblyCombinationSettings Combination = new AssemblyCombinationSettings();
         public bool LoopShortVideos = false, AllowVideoReuse = false;
         public bool DurationByVideo;
         public string Id = Guid.NewGuid().ToString("N"), Name = "Моя студия";
-        public string Materials = "", Videos = "Видео", Music = "", Output = "";
+        public string Materials = "", Videos = "Видео", Backgrounds = "", Music = "", Output = "";
+        public bool BackgroundForeground;
         public int Width = 1080, Height = 1920, Fps = 30, Count = 10;
         public string Transition = "fade", RenderMode = "auto";
         public double TransitionDuration = .35, MusicVolume = .8;
@@ -84,10 +97,20 @@ namespace VideoBatch {
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
         public bool HasSceneVoiceovers { get { return Scenes != null && Scenes.Any(s => s.VoiceMode == "own" || s.VoiceMode == "shared" || s.VoiceMode == "none"); } }
         public bool UsesWholeRollVoiceover { get { return !HasSceneVoiceovers && (AssemblySpeechPlan.SharedVoiceOptions(this).Count > 0 || !string.IsNullOrWhiteSpace(Voiceover)); } }
+        public double SceneNativeAudioVolume(AssemblyScene scene) {
+            if (scene == null) return 0;
+            return scene.NativeAudioVolume >= 0 ? scene.NativeAudioVolume
+                : scene.IsPreview ? 1 : PrimaryNativeAudio ? PrimaryNativeVolume : 0;
+        }
+        public double SceneBedMusicVolume(AssemblyScene scene) {
+            if (scene == null) return 0;
+            return scene.BedMusicVolume >= 0 ? scene.BedMusicVolume : scene.IsPreview ? 0 : MusicVolume;
+        }
         public List<AssemblyLayer> GlobalLayers = new List<AssemblyLayer>();
         public List<AssemblyInsertion> Insertions = new List<AssemblyInsertion>();
         public bool ContinuousVideo = false;
         public double BaseVideoX = 0, BaseVideoY = 0, BaseVideoWidth = 1, BaseVideoHeight = 1;
+        public bool BaseVideoPreserveAspectRatio = true;
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
@@ -97,11 +120,19 @@ namespace VideoBatch {
         public bool SplitFixHalves = true;
         public bool PrimaryNativeAudio = true, SecondaryNativeAudio = true;
         public double PrimaryNativeVolume = 1, SecondaryNativeVolume = 1;
+        public bool NativeAudioLeveled;
+        public List<AssemblyAudioLevel> NativeAudioLevels = new List<AssemblyAudioLevel>();
+        public double VoicePitchSemitones;
         /// <summary>Доля первой половины (верх/слева), 0.25–0.75.</summary>
         public double SplitRatio = .5;
         public double SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
+        internal AssemblyTemplate WithVideoSubtitleStyle(Random random) {
+            var copy = (AssemblyTemplate)MemberwiseClone();
+            copy.SubtitleStyle = SubtitleRandomSettings.ForVideo(SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }, random);
+            return copy;
+        }
         public List<AssemblyCaption> Captions = new List<AssemblyCaption>();
         public double TransitionSeconds { get { return SceneTimingVersion>0?Math.Round(TransitionDuration*Fps,MidpointRounding.AwayFromZero)/Fps:TransitionDuration; } }
         public double Duration { get { return Scenes.Sum(s => s.Duration)+(SceneTimingVersion>0 && Transition!="cut"?Math.Max(0,Scenes.Count-1)*TransitionSeconds:0); } }
@@ -154,12 +185,23 @@ namespace VideoBatch {
             return SplitVideoPaths().Count;
         }
         public string[] PictureExtensions { get { return PackStudioVersion > 0 ? AssemblyFiles.PictureExtensions : AssemblyFiles.ImageExtensions; } }
+        public bool HasPreviewScene => Scenes != null && Scenes.Count > 0 && Scenes[0].IsPreview;
+        public bool UsesVideoDuration(AssemblyScene scene) => !scene.IsPreview && (scene.DurationByVideo || DurationByVideo && scene == Scenes.FirstOrDefault(s => !s.IsPreview));
+        public bool HasVideoDuration => Scenes.Any(UsesVideoDuration);
+        public void MigrateVideoDuration() {
+            if (!DurationByVideo) return;
+            var main = Scenes.FirstOrDefault(s => !s.IsPreview);
+            if (main != null) main.DurationByVideo = true;
+            DurationByVideo = false;
+        }
         public void Validate() {
+            if (Combination == null) Combination = new AssemblyCombinationSettings();
             AssemblySpeechPlan.NormalizeSceneVoiceModes(this);
             if (Version != 1) throw new Exception("Неизвестная версия шаблона.");
             if (string.IsNullOrWhiteSpace(Id) || Id.Length > 100 || Id.Any(c => !char.IsLetterOrDigit(c) && c != '-')) throw new Exception("Некорректный ID шаблона.");
             if (Scenes == null || Scenes.Count > 12) throw new Exception("В студии допустимо до 12 сцен.");
-            if (DurationByVideo && Scenes.Count != 1) throw new Exception("Для режима «По длине видео» оставь одну сцену: длина результата определяется выбранным видео.");
+            foreach (var scene in Scenes) if (scene.IsPreview && Scenes.IndexOf(scene) != 0) throw new Exception("Сцена превью должна идти первой. Перемести её стрелками «←».");
+            if (Scenes.Count(s => s.IsPreview) > 1) throw new Exception("Допустима только одна сцена превью.");
             if (Width < 180 || Width > 2160 || Height < 180 || Height > 3840 || Width % 2 != 0 || Height % 2 != 0) throw new Exception("Размер кадра должен быть чётным, от 180 до 2160 × 3840.");
             if (Fps < 15 || Fps > 60 || Count < 1) throw new Exception("FPS: 15–60. Количество роликов должно быть положительным.");
             Check(MusicVolume, 0, 2, "Громкость музыки"); Check(TransitionDuration, 0, 2, "Длительность перехода");
@@ -168,12 +210,12 @@ namespace VideoBatch {
             HistoryScope = AssemblyHistoryScope.Normalize(HistoryScope);
             if (!Transitions.Contains(Transition)) throw new Exception("Неизвестный переход.");
             if (SplitLayout != "none" && SplitLayout != "horizontal" && SplitLayout != "vertical") throw new Exception("Неизвестный шаблон двух видео.");
-            Check(BaseVideoX, 0, 1, "Видео · X"); Check(BaseVideoY, 0, 1, "Видео · Y");
-            Check(BaseVideoWidth, .02, 1, "Видео · ширина"); Check(BaseVideoHeight, .02, 1, "Видео · высота");
-            if (BaseVideoX + BaseVideoWidth > 1.000001 || BaseVideoY + BaseVideoHeight > 1.000001) throw new Exception("Основное видео выходит за край кадра.");
+            Check(BaseVideoX, double.MinValue, double.MaxValue, "Видео · X"); Check(BaseVideoY, double.MinValue, double.MaxValue, "Видео · Y");
+            Check(BaseVideoWidth, .02, double.MaxValue, "Видео · ширина"); Check(BaseVideoHeight, .02, double.MaxValue, "Видео · высота");
             Check(SplitSoftness, 0, .5, "Мягкость границы"); Check(SplitRatio, .25, .75, "Доля первой половины");
             Check(SplitPrimaryZoom, .85, 1.15, "Масштаб первой половины"); Check(SplitSecondaryZoom, .85, 1.15, "Масштаб второй половины");
             Check(VoiceoverVolume, 0, 2, "Громкость озвучки");
+            Check(VoicePitchSemitones, -12, 12, "Тон голоса");
             Check(PrimaryNativeVolume, 0, 2, "Родной звук первой пачки");
             Check(SecondaryNativeVolume, 0, 2, "Родной звук второй пачки");
             if (GlobalLayers == null) GlobalLayers = new List<AssemblyLayer>();
@@ -185,8 +227,7 @@ namespace VideoBatch {
             }
             foreach (var l in GlobalLayers.Where(l => l.Enabled)) {
                 if (string.IsNullOrWhiteSpace(l.Source)) throw new Exception("Укажи изображения для слоя на весь ролик.");
-                Check(l.X, 0, 1, "X"); Check(l.Y, 0, 1, "Y"); Check(l.Width, .02, 1, "Ширина"); Check(l.Height, .02, 1, "Высота");
-                if (l.X + l.Width > 1.000001 || l.Y + l.Height > 1.000001) throw new Exception("Изображение выходит за край кадра.");
+                Check(l.X, double.MinValue, double.MaxValue, "X"); Check(l.Y, double.MinValue, double.MaxValue, "Y"); Check(l.Width, .02, double.MaxValue, "Ширина"); Check(l.Height, .02, double.MaxValue, "Высота");
                 Check(l.Opacity, 0, 1, "Непрозрачность");
                 ValidateAppearance(l);
                 Check(l.Start, 0, 86400, "Появление"); Check(l.End, 0, 86400, "Исчезновение");
@@ -199,16 +240,18 @@ namespace VideoBatch {
                 if (scene.VoiceMode == "own" && string.IsNullOrWhiteSpace(scene.Voiceover)) throw new Exception(scene.Name + ": добавьте свои файлы озвучки.");
                 if (scene.VideoMode == "own" && string.IsNullOrWhiteSpace(scene.Videos)) throw new Exception("Укажи папку своих видео для сцены.");
                 Check(scene.Duration, .5, 60, "Длительность сцены");
-                if (!DurationByVideo && Transition != "cut" && TransitionDuration >= scene.Duration / 2) throw new Exception("Переход должен быть короче половины каждой сцены.");
+                Check(scene.NativeAudioVolume, -1, 2, "Звук видео сцены");
+                Check(scene.BedMusicVolume, -1, 2, "Фоновая музыка сцены");
+                Check(scene.MusicVolume, 0, 2, "Отдельное аудио сцены");
+                if (!UsesVideoDuration(scene) && Transition != "cut" && TransitionDuration >= scene.Duration / 2) throw new Exception("Переход должен быть короче половины каждой сцены.");
                 if (scene.Layers == null || scene.Layers.Count > 8) throw new Exception("Допустимо до 8 изображений в сцене.");
                 foreach (var l in scene.Layers.Where(l => l.Enabled)) {
                     if (string.IsNullOrWhiteSpace(l.Source)) throw new Exception(scene.Name + ": укажите источник для «" + l.Name + "».");
-                    Check(l.X, 0, 1, "X"); Check(l.Y, 0, 1, "Y"); Check(l.Width, .02, 1, "Ширина"); Check(l.Height, .02, 1, "Высота");
-                    if (l.X + l.Width > 1.000001 || l.Y + l.Height > 1.000001) throw new Exception("Изображение «" + l.Name + "» выходит за край кадра.");
+                    Check(l.X, double.MinValue, double.MaxValue, "X"); Check(l.Y, double.MinValue, double.MaxValue, "Y"); Check(l.Width, .02, double.MaxValue, "Ширина"); Check(l.Height, .02, double.MaxValue, "Высота");
                     ValidateAppearance(l);
-                    Check(l.Opacity, 0, 1, "Непрозрачность"); Check(l.Start, 0, DurationByVideo ? 86400 : scene.Duration, "Появление");
-                    Check(l.End, 0, DurationByVideo ? 86400 : scene.Duration, "Исчезновение");
-                    if ((!DurationByVideo || l.End != 0) && l.Start >= (l.End == 0 ? scene.Duration : l.End)) throw new Exception("Время исчезновения должно быть позже появления.");
+                    Check(l.Opacity, 0, 1, "Непрозрачность"); Check(l.Start, 0, UsesVideoDuration(scene) ? 86400 : scene.Duration, "Появление");
+                    Check(l.End, 0, UsesVideoDuration(scene) ? 86400 : scene.Duration, "Исчезновение");
+                    if ((!UsesVideoDuration(scene) || l.End != 0) && l.Start >= (l.End == 0 ? scene.Duration : l.End)) throw new Exception("Время исчезновения должно быть позже появления.");
                     Check(l.FontSize, 12, 240, "Размер шрифта"); Check(l.Radius, 0, 200, "Скругление"); Check(l.Padding, 0, 150, "Отступ текста");
                     if (l.Fixed && l.Unique) throw new Exception("Фиксированное изображение не может одновременно быть без повторов.");
                 }
@@ -219,6 +262,7 @@ namespace VideoBatch {
             Check(layer.AppearanceDuration, .05, 2, "Длительность появления");
             if (layer.PlaybackMode != "once" && layer.PlaybackMode != "continuous" && layer.PlaybackMode != "repeat") throw new Exception("Неизвестный режим анимации объекта.");
             Check(layer.RepeatPause, 0, 86400, "Пауза повтора");
+            Check(layer.RepeatInterval, 0, 86400, "Период запуска");
             Check(layer.PhotoDuration, .05, 86400, "Время показа фото");
             if (layer.ExitTransition != "cut" && layer.ExitTransition != "fade") throw new Exception("Неизвестный эффект исчезновения объекта.");
             Check(layer.ExitDuration, .05, 2, "Длительность исчезновения");
@@ -232,6 +276,7 @@ namespace VideoBatch {
         public static readonly string[] VideoExtensions = { ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v" };
         public static readonly string[] MusicExtensions = { ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac" };
         public static readonly string[] PictureExtensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".mov", ".webm", ".mp4" };
+        public static readonly string[] BackgroundExtensions = PictureExtensions.Concat(VideoExtensions).Distinct().ToArray();
         public static readonly string[] ImageExtensions = PictureExtensions.Concat(new[] { ".txt" }).ToArray();
         public static List<string> Pool(string path, string[] extensions) {
             var items = File.Exists(path) ? new[] { path } : Directory.Exists(path) ? Directory.GetFiles(path) : new string[0];
@@ -372,6 +417,8 @@ namespace VideoBatch {
     }
     public static class AssemblyTimeline {
         public static readonly string[] RandomTransitions={"fade","zoomsoft","zoomout","pull","swipe"};
+        public static double MainStart(AssemblyTemplate t, AssemblyPlan p) => p.Scenes.Count > 1 && p.Scenes[0].Scene.IsPreview
+            ? SceneSeconds(p.Scenes[0]) + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0) : 0;
         public static double SceneSeconds(AssemblyScenePlan s) => s.ContentSeconds>0?s.ContentSeconds:s.Scene.Duration;
         public static double ContentDuration(AssemblyTemplate t,AssemblyScenePlan s) => s.ContentSeconds>0?s.ContentSeconds:(t.SceneTimingVersion>0?s.Scene.Duration:s.RenderDuration);
         public static bool LoopInput(AssemblyTemplate t,AssemblyScenePlan s) {
@@ -383,12 +430,28 @@ namespace VideoBatch {
         public static string Transition(AssemblyTemplate t,AssemblyScenePlan s) => string.IsNullOrEmpty(s.TransitionOut)?(t.Transition=="random"?"fade":t.Transition):s.TransitionOut;
         public static string Padding(AssemblyTemplate t,AssemblyScenePlan s) => t.SceneTimingVersion>0?"tpad=start_mode=clone:start_duration="+Core.N(s.IncomingPad)+":stop_mode=clone:stop_duration="+Core.N(s.OutgoingPad)+",":"";
         public static void ApplyVideoDuration(AssemblyTemplate t, AssemblyPlan p) {
-            if (!t.DurationByVideo) return;
-            var scene = p.Scenes[0];
-            scene.ContentSeconds = scene.Video.Duration;
-            scene.RenderDuration = scene.Video.Duration;
-            scene.VideoStart = 0; scene.IncomingPad = 0; scene.OutgoingPad = 0;
-            p.RenderDuration = scene.Video.Duration;
+            if (!t.HasVideoDuration) return;
+            for (int i = 0; i < p.Scenes.Count; i++) {
+                var scene = p.Scenes[i];
+                if (scene.Scene.IsPreview) {
+                    scene.ContentSeconds = scene.Scene.Duration;
+                    scene.VideoStart = 0;
+                    continue;
+                }
+                if (t.UsesVideoDuration(scene.Scene)) {
+                    scene.ContentSeconds = scene.Video.Duration;
+                    scene.RenderDuration = scene.Video.Duration;
+                    scene.VideoStart = 0;
+                    if (p.Scenes.Count == 1) { scene.IncomingPad = 0; scene.OutgoingPad = 0; }
+                    scene.RenderDuration = scene.ContentSeconds + scene.IncomingPad + scene.OutgoingPad;
+                }
+            }
+            double roll = 0;
+            for (int i = 0; i < p.Scenes.Count; i++) {
+                roll += SceneSeconds(p.Scenes[i]);
+                if (i < p.Scenes.Count - 1 && t.SceneTimingVersion > 0 && t.Transition != "cut") roll += t.TransitionSeconds;
+            }
+            p.RenderDuration = roll;
         }
         public static void Complete(AssemblyTemplate t,AssemblyPlan p,Random random) {
             string previous="";
@@ -422,7 +485,7 @@ namespace VideoBatch {
         public double VideoStart, RenderDuration, IncomingPad, OutgoingPad;
         public string TransitionOut="";
         public string Music = "", MusicHash = "";
-        public string Voiceover = "";
+        public string Voiceover = "", VoiceoverHash = "";
         public double VoiceSeconds, ContentSeconds;
         public List<AssemblyLayerPlan> Layers = new List<AssemblyLayerPlan>();
     }
@@ -430,9 +493,10 @@ namespace VideoBatch {
         public List<AssemblyScenePlan> Scenes = new List<AssemblyScenePlan>();
         public List<string> UniqueImages = new List<string>();
         public string Signature, Music, MusicHash;
-        public string Voiceover = "";
+        public string Voiceover = "", VoiceoverHash = "";
         /// <summary>Effective duration for the selected voice file(s), with one second of visual tail.</summary>
         public double RenderDuration;
+        public AssemblyAsset Background;
         public AssemblyVideo SecondaryVideo;
         /// <summary>Вторая половина экрана показывает основное видео сцены, первая — второе видео.</summary>
         public bool SplitSwapped;

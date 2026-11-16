@@ -45,6 +45,7 @@ namespace VideoBatch {
             actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};layout.Controls.Add(actions,0,0);
             WorkButton("＋ Добавить аккаунты",ChooseImport,true);
             WorkButton("Диагностика",async()=>await RunSelected("doctor"));
+            WorkButton("Чекер аккаунтов",async()=>await RunSelected("spam_check"));
             WorkButton("Настройки",Settings);
             actions.Controls.Add(new Label{Text="Поиск",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,4,0)});
             search=Theme.MakeSearchBox();search.Width=160;search.Margin=new Padding(4,7,0,0);search.TextChanged+=(s,e)=>RefreshData();actions.Controls.Add(search);
@@ -60,6 +61,7 @@ namespace VideoBatch {
             foreach(var spec in new[]{new[]{"name","95","120"},new[]{"username","80","90"},new[]{"status","90","110"},new[]{"proxy","155","170"},new[]{"country","45","60"},new[]{"checked","65","80"},new[]{"detail","170","180"}}){grid.Columns[spec[0]].FillWeight=int.Parse(spec[1]);grid.Columns[spec[0]].MinimumWidth=int.Parse(spec[2]);}
             grid.Columns["detail"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.DisplayedCellsExceptHeaders;
             grid.Columns["username"].Visible=false;grid.Columns["country"].Visible=false;
+            grid.Columns.Add(new DataGridViewTextBoxColumn{Name="spam",HeaderText="Спам-чек",ReadOnly=true,MinimumWidth=145,FillWeight=120});
             grid.Columns["name"].DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.RowTemplate.Height=60;
             grid.ColumnHeaderMouseClick+=(s,e)=>{if(e.ColumnIndex==0){bool select=grid.Rows.Cast<DataGridViewRow>().Any(row=>!Convert.ToBoolean(row.Cells[0].Value));foreach(DataGridViewRow row in grid.Rows)row.Cells[0].Value=select;}};
             grid.CellDoubleClick+=(s,e)=>{if(e.RowIndex>=0)OpenWeb(grid.Rows[e.RowIndex].Tag as TelegramAccount);};
@@ -153,6 +155,11 @@ namespace VideoBatch {
             summary.Text=$"Всего {all.Count}   ·   Доступны {ready}   ·   Требуют внимания {all.Count-ready-uncheckedCount}   ·   Проверить {uncheckedCount}";
         }
         void PaintHealth(DataGridViewRow row,TelegramAccount a){
+            string spam=a.spam_status=="clean"?"Без спам-ограничений":a.spam_status=="restricted"?"Спам-блок":a.spam_status=="unknown"?"Не удалось определить":a.spam_status=="error"?"Ошибка проверки":"Не проверен";
+            row.Cells["spam"].Value=spam;
+            row.Cells["spam"].Style.ForeColor=a.spam_status=="clean"?Theme.Success:a.spam_status=="restricted"?Theme.Error:Theme.TextSecondary;
+            row.Cells["spam"].Style.SelectionForeColor=row.Cells["spam"].Style.ForeColor;
+            row.Cells["spam"].ToolTipText=string.Join(Environment.NewLine,a.spam_checked_at,a.spam_reply);
             string label=TelegramHealth.AccountLabel(a);row.Cells["status"].Value=label;
             row.Cells["status"].Style.ForeColor=label.StartsWith("○")?Theme.TextMuted:a.status=="ready"&&!label.Contains("Пауза")?Theme.Success:new[]{"network","blocked","deactivated","unauthorized","configuration","error"}.Contains(a.status)?Theme.Error:Theme.Warning;
             row.Cells["proxy"].Value=string.IsNullOrWhiteSpace(a.proxy)?"○ Без прокси":TelegramHealth.ProxyLabel(a)+" · "+TelegramStore.ProxyLabel(a.proxy);row.Cells["proxy"].Style.ForeColor=string.IsNullOrWhiteSpace(a.proxy)?Theme.TextMuted:a.proxy_status=="ready"?Theme.Success:a.proxy_status=="failed"?Theme.Error:new[]{"limited","partial"}.Contains(a.proxy_status)?Theme.Warning:Theme.TextMuted;row.Cells["proxy"].ToolTipText=a.proxy_detail;
@@ -294,6 +301,13 @@ namespace VideoBatch {
                         string id=Get(ev,"id"),session=Get(ev,"session");
                         if(session!="")store.Change(d=>{var a=d.accounts.FirstOrDefault(x=>x.id==id);if(a!=null)a.session=session;});
                         return; // Authorization data is never written to the log.
+                    }
+                    if(type=="spam_check"){
+                        string accountId=Get(ev,"id");store.Change(data=>{var a=data.accounts.FirstOrDefault(x=>x.id==accountId);if(a==null)return;
+                            a.spam_status=Get(ev,"status");a.spam_checked_at=Get(ev,"checked_at");a.spam_reply=Get(ev,"reply");
+                        });
+                        if(Get(ev,"status")=="error"||Get(ev,"status")=="unknown")failed=true;
+                        RefreshHealthRows();
                     }
                     if(type=="profile_updated"||type=="profile_failed"){
                         string accountId=Get(ev,"id");store.Change(data=>{var a=data.accounts.FirstOrDefault(x=>x.id==accountId);if(a==null)return;

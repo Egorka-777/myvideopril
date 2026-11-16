@@ -25,7 +25,11 @@ namespace VideoBatch {
             });
             if (recognize) Safe(() => {
                 var audio = (template.HasSceneVoiceovers ? template.Scenes.SelectMany(s => AssemblySpeechPlan.SceneVoiceOptions(template, s)) : AssemblySpeechPlan.SharedVoiceOptions(template)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                if (audio.Count == 0) throw new Exception("Сначала добавьте файлы озвучки: общую папку или озвучку отдельных сцен.");
+                if (audio.Count == 0) {
+                    template.SubtitleStyle.Enabled = true; Save(); RefreshInfo();
+                    status.Text = "Субтитры включены. Речь выбранных видео распознается отдельно для каждого ролика при сборке.";
+                    return;
+                }
                 using (var dialog = new AudioSubtitleProgressDialog(audio)) if (dialog.ShowDialog(this) == DialogResult.OK) {
                     template.SubtitleStyle.Enabled = true; Save(); RequestTimingHints(); RefreshInfo();
                     status.Text = "Субтитры готовы. Оформление можно изменить кнопкой «Субтитры».";
@@ -223,7 +227,8 @@ namespace VideoBatch {
             var saved = ReadSubtitleCaptions(strict);
             template.SubtitleStyle = style;
             template.Captions = saved;
-            if (saved.Count > 0) template.SubtitleStyle.Enabled = true;
+            if (saved.Count > 0 && subtitleEnabled != null && subtitleEnabled.Checked)
+                template.SubtitleStyle.Enabled = true;
             Changed(false); Save();
         }
 

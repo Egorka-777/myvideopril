@@ -6,6 +6,44 @@ using System.Reflection;
 
 namespace VideoBatch {
     public static class AssemblyRegressionTests {
+        public static bool RunPerSceneDurationRenderTests(string ffmpeg,string probe) {
+            string root=Path.Combine(Path.GetTempPath(),"scene-duration-render-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var ct=System.Threading.CancellationToken.None;
+            try {
+                var t=new AssemblyTemplate {Width=180,Height=180,Fps=30,SceneTimingVersion=1,Transition="fade",TransitionDuration=.3,RenderMode="cpu"};
+                var p=new AssemblyPlan(); int i=0;
+                foreach(double seconds in new[]{1.2,2.4,1.8}) {
+                    string file=Path.Combine(root,"source"+i+".mp4");
+                    Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","color=c="+(i==0?"red":i==1?"blue":"green")+":s=180x180:r=30:d="+Core.N(seconds),"-f","lavfi","-i","sine=frequency=440:sample_rate=48000:duration="+Core.N(seconds),"-c:v","libx264","-c:a","aac","-shortest",file},ct).GetAwaiter().GetResult();
+                    var scene=new AssemblyScene {Duration=i==1?1:4,DurationByVideo=i!=1};t.Scenes.Add(scene);
+                    p.Scenes.Add(new AssemblyScenePlan {Scene=scene,Video=new AssemblyVideo {Path=file,Duration=seconds,HasAudio=true}});i++;
+                }
+                AssemblyTimeline.Complete(t,p,new Random(1));AssemblyTimeline.ApplyVideoDuration(t,p);
+                string output=Path.Combine(root,"output.mp4");AssemblyRender.Run(t,p,ffmpeg,probe,output,Path.Combine(root,"work"),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                var media=Core.VideoInfo(Core.Probe(probe,output,ct).GetAwaiter().GetResult());
+                if(Math.Abs(media.VideoDuration-4.6)>.06 || !media.HasAudio)throw new Exception("Mixed per-scene render duration/audio incorrect: "+media.VideoDuration);
+                Console.WriteLine("Per-scene real FFmpeg PASS: full 1.2s clip + fixed 1s scene + full 1.8s clip + two transitions = 4.6s, audio present.");return true;
+            } finally {Directory.Delete(root,true);}
+        }
+        public static bool RunPerSceneDurationTests() {
+            var t=new AssemblyTemplate {SceneTimingVersion=1,Transition="fade",TransitionDuration=.3};
+            var intro=new AssemblyScene {IsPreview=true,Duration=3};
+            var a=new AssemblyScene {Duration=4,DurationByVideo=true};
+            var b=new AssemblyScene {Duration=5};
+            var c=new AssemblyScene {Duration=4,DurationByVideo=true};
+            t.Scenes.AddRange(new[]{intro,a,b,c}); t.Validate();
+            var p=new AssemblyPlan();
+            foreach(var scene in t.Scenes)p.Scenes.Add(new AssemblyScenePlan {Scene=scene,Video=new AssemblyVideo {Duration=scene==a?18:scene==c?35:10}});
+            AssemblyTimeline.Complete(t,p,new Random(1)); AssemblyTimeline.ApplyVideoDuration(t,p);
+            if(AssemblyTimeline.SceneSeconds(p.Scenes[0])!=3 || AssemblyTimeline.SceneSeconds(p.Scenes[1])!=18 || AssemblyTimeline.SceneSeconds(p.Scenes[2])!=5 || AssemblyTimeline.SceneSeconds(p.Scenes[3])!=35 || Math.Abs(p.RollDuration(t)-61.9)>.001)throw new Exception("Per-scene duration or transition sum failed");
+            var xml=new System.Xml.Serialization.XmlSerializer(typeof(AssemblyTemplate));var text=new StringWriter();xml.Serialize(text,t);
+            var copy=(AssemblyTemplate)xml.Deserialize(new StringReader(text.ToString()));
+            AssemblyMarketProfiles.Capture(copy,AssemblyProfile.Ru);AssemblyMarketProfiles.Apply(copy,AssemblyProfile.Ru);
+            if(!copy.Scenes[1].DurationByVideo || copy.Scenes[2].DurationByVideo || !copy.Scenes[3].DurationByVideo)throw new Exception("Scene timing XML/profile copy failed");
+            var legacy=new AssemblyTemplate {DurationByVideo=true};legacy.Scenes.AddRange(new[]{new AssemblyScene {IsPreview=true},new AssemblyScene(),new AssemblyScene()});
+            legacy.MigrateVideoDuration();if(legacy.DurationByVideo || !legacy.Scenes[1].DurationByVideo || legacy.Scenes[2].DurationByVideo)throw new Exception("Legacy duration migration failed");
+            Console.WriteLine("Per-scene duration PASS: fixed intro, 18s video, fixed 5s scene, 35s video, transitions, XML and legacy migration.");return true;
+        }
         public static bool RunImageAppearanceTests() {
             string root = Path.Combine(Path.GetTempPath(), "image-timing-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try {
@@ -70,6 +108,77 @@ namespace VideoBatch {
                 return true;
             } finally { Directory.Delete(root, true); }
         }
+        public static bool RunPreviewAudioTests(string ffmpeg, string probe) {
+            string root=Path.Combine(Path.GetTempPath(),"preview-audio-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var ct=System.Threading.CancellationToken.None;
+            try {
+                string intro=Path.Combine(root,"intro.mp4"), main=Path.Combine(root,"main.mp4"), music=Path.Combine(root,"music.wav");
+                foreach(var item in new[]{new {Path=intro,Color="blue",Hz=440,Seconds=1},new {Path=main,Color="red",Hz=880,Seconds=2}})
+                    Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","color=c="+item.Color+":s=180x180:r=30:d="+item.Seconds,"-f","lavfi","-i","sine=frequency="+item.Hz+":sample_rate=48000:duration="+item.Seconds,"-c:v","libx264","-c:a","aac","-shortest",item.Path},ct).GetAwaiter().GetResult();
+                Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","sine=frequency=1320:sample_rate=48000:duration=3",music},ct).GetAwaiter().GetResult();
+                var t=new AssemblyTemplate {Width=180,Height=180,Fps=30,SceneTimingVersion=1,DurationByVideo=true,Transition="fade",TransitionDuration=.3,RenderMode="cpu",PrimaryNativeAudio=true,PrimaryNativeVolume=1,MusicVolume=1};
+                var a=new AssemblyScene {IsPreview=true,Duration=1,VideoMode="own",Videos=intro}; var b=new AssemblyScene {Duration=2,VideoMode="own",Videos=main}; t.Scenes.Add(a);t.Scenes.Add(b);
+                var p=new AssemblyPlan {Music=music}; p.Scenes.Add(new AssemblyScenePlan {Scene=a,Video=new AssemblyVideo {Path=intro,Duration=1,HasAudio=true}});p.Scenes.Add(new AssemblyScenePlan {Scene=b,Video=new AssemblyVideo {Path=main,Duration=2,HasAudio=true}});
+                AssemblyTimeline.Complete(t,p,new Random(1)); AssemblyTimeline.ApplyVideoDuration(t,p);
+                if(Math.Abs(p.Scenes[1].IncomingPad-.3)>.001 || Math.Abs(AssemblyTimeline.MainStart(t,p)-1.3)>.001)throw new Exception("Preview transition pad/main start lost");
+                string output=Path.Combine(root,"result.mp4");
+                AssemblyRender.Run(t,p,ffmpeg,probe,output,Path.Combine(root,"work"),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                double Amplitude(double time,int hz) {
+                    string pcm=Path.Combine(root,"sample.pcm");
+                    Core.Tool(ffmpeg,new[]{"-v","error","-y","-ss",Core.N(time),"-i",output,"-t","0.2","-vn","-ac","1","-ar","48000","-f","s16le",pcm},ct).GetAwaiter().GetResult();
+                    byte[] bytes=File.ReadAllBytes(pcm); double re=0,im=0; int n=bytes.Length/2;
+                    for(int i=0;i<n;i++){double value=BitConverter.ToInt16(bytes,i*2)/32768d; double phase=2*Math.PI*hz*i/48000;re+=value*Math.Cos(phase);im+=value*Math.Sin(phase);}return 2*Math.Sqrt(re*re+im*im)/n;
+                }
+                double own=Amplitude(.3,440), earlyMain=Amplitude(.3,880), earlyMusic=Amplitude(.3,1320), laterMain=Amplitude(1.4,880), laterMusic=Amplitude(1.6,1320);
+                if(own<.04 || earlyMain>.005 || earlyMusic>.005 || laterMain<.04 || laterMusic<.04)throw new Exception("Audio overlap: "+string.Join(",",own,earlyMain,earlyMusic,laterMain,laterMusic));
+                // Stress the real settings that previously leaked into intro audio.
+                t.VoicePitchSemitones=1.8;t.PrimaryNativeVolume=.5;
+                t.OutputProcessing=new ProcessingSettings();
+                t.OutputProcessing.Pitch.Enabled=true;t.OutputProcessing.Pitch.Values=new Range(120,120);
+                t.OutputProcessing.Volume.Enabled=true;t.OutputProcessing.Volume.Values=new Range(50,50);
+                t.OutputProcessing.Speed.Enabled=true;t.OutputProcessing.Speed.Values=new Range(102,102);
+                AssemblyRender.Run(t,p,ffmpeg,probe,output,Path.Combine(root,"stress"),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                AssemblyProcessing.Apply(t,ffmpeg,probe,output,new Random(4),ct,AssemblyTimeline.MainStart(t,p)).GetAwaiter().GetResult();
+                double cleanIntro=Amplitude(.3,440), shiftedIntro=Amplitude(.3,880), changedMain=Amplitude(1.7,(int)Math.Round(880*Math.Pow(2,1.8/12)*1.2));
+                if(cleanIntro<.07 || shiftedIntro>.005 || changedMain<.01)throw new Exception("Intro effects leaked or main effects missing: "+string.Join(",",cleanIntro,shiftedIntro,changedMain));
+                if(Math.Abs(Core.VideoInfo(Core.Probe(probe,output,ct).GetAwaiter().GetResult()).VideoDuration-3.3)>.06)throw new Exception("Postprocessing shifted intro boundary");
+                t.SubtitleStyle.Enabled=true;t.Captions.Add(new AssemblyCaption {Text="Main",Start=.1,End=.5});
+                AssemblySpeechPlan.Prepare(t,p,ffmpeg,probe,Path.Combine(root,"work"),ct).GetAwaiter().GetResult();
+                if(p.Captions.Count!=1 || Math.Abs(p.Captions[0].Start-1.4)>.01)throw new Exception("Main subtitles were not shifted after intro");
+                AssemblySpeechPlan.Prepare(t,p,ffmpeg,probe,Path.Combine(root,"work"),ct).GetAwaiter().GetResult();
+                if(Math.Abs(p.Captions[0].Start-1.4)>.01)throw new Exception("Subtitle shift accumulated on repeat");
+                Console.WriteLine("Preview real FFmpeg: intro only; main audio and music after 1.3s; captions after intro; repeat stable");return true;
+            } finally {Directory.Delete(root,true);}
+        }
+        public static bool RunPreviewSceneTests() {
+            string temp = Path.Combine(Path.GetTempPath(), "preview-scene-" + Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp);
+                var preview = new AssemblyScene { Name = "Превью", IsPreview = true, Duration = 2, VideoMode = "own", Folder = "Сцены/Превью" };
+                preview.Videos = Path.Combine(preview.Folder, "Видео");
+                var main = new AssemblyScene { Name = "Сцена 1", Duration = 5, Folder = "Сцены/Сцена-01" };
+                var t = new AssemblyTemplate { Materials = temp, Videos = "Видео", DurationByVideo = true, SceneTimingVersion = 1, Transition = "fade", TransitionDuration = .35 };
+                t.Scenes.Add(preview); t.Scenes.Add(main);
+                AssemblyWorkspace.Prepare(t);
+                t.Validate();
+                string previewVideo = t.Resolve(Path.Combine(preview.Videos, "intro.mp4"));
+                string mainVideo = t.Resolve("Видео/main.mp4");
+                Directory.CreateDirectory(Path.GetDirectoryName(previewVideo)); Directory.CreateDirectory(Path.GetDirectoryName(mainVideo));
+                File.WriteAllText(previewVideo, "pv"); File.WriteAllText(mainVideo, "mn");
+                var videos = new[] {
+                    new AssemblyVideo { Path = previewVideo, Hash = "pv", Duration = 2.4 },
+                    new AssemblyVideo { Path = mainVideo, Hash = "mn", Duration = 9.1 }
+                };
+                var batch = AssemblyPlanner.Create(t, videos, new AssemblyHistory(), new Random(3), 1);
+                if (batch.Plans.Count != 1) throw new Exception("Preview scene planner failed: " + batch.Limit);
+                var plan = batch.Plans[0];
+                if (plan.Scenes.Count != 2 || !plan.Scenes[0].Scene.IsPreview || plan.Scenes[0].ContentSeconds != 2 || plan.Scenes[1].ContentSeconds != 9.1) throw new Exception("Preview/main durations not applied");
+                if (Math.Abs(plan.RenderDuration - (2 + 9.1 + .35)) > .02) throw new Exception("Roll duration with preview: " + plan.RenderDuration);
+                t.Scenes[1].IsPreview = true;
+                try { t.Validate(); return false; } catch (Exception) { }
+                return true;
+            } finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+        }
         public static bool RunPlannerTests() {
             string temp = Path.Combine(Path.GetTempPath(), "assembly-tests-" + Guid.NewGuid().ToString("N"));
             try {
@@ -97,8 +206,10 @@ namespace VideoBatch {
                 t.Scenes[2].Layers[1].Source = "Заголовки-2"; t.Scenes[2].Layers[1].Unique = true;
                 var shared = AssemblyPlanner.Create(t, videos, new AssemblyHistory(), new Random(7), 10);
                 if (shared.Plans.Count != 1) return false;
-                // No opaque success for an invalid layout or an invalid timeline.
+                // Free placement permits crossing the canvas edge, but not non-finite coordinates or an invalid timeline.
                 t.Scenes[0].Layers[0].X = .95;
+                t.Validate();
+                t.Scenes[0].Layers[0].X = double.NaN;
                 try { t.Validate(); return false; } catch (Exception) { }
                 t.Scenes[0].Layers[0].X = .08; t.Scenes[0].Layers[0].Start = 5;
                 try { t.Validate(); return false; } catch (Exception) { }
@@ -356,7 +467,7 @@ namespace VideoBatch {
                     var slider=All(window).Single(c=>c.Name=="SceneDurationSlider");
                     if (!toggle.Visible || !All(window).Any(c=>c.Name=="ObjectAppearance" && c.Visible)) throw new Exception("Timing controls are not visible");
                     toggle.Checked=true; System.Windows.Forms.Application.DoEvents();
-                    if (!current.DurationByVideo || slider.Enabled) throw new Exception("Source duration toggle did not apply");
+                    if (!current.Scenes[0].DurationByVideo || slider.Enabled) throw new Exception("Source duration toggle did not apply");
                     Invoke(window,"ApplyCapacity",new AssemblyCapacity {Exact=true,Variants=90,BatchLimit=90});
                     var quantity=All(window).OfType<System.Windows.Forms.Button>().Single(c=>c.Name=="AssemblyCount");
                     var value=(System.Windows.Forms.NumericUpDown)Field(window,"count");
@@ -364,9 +475,15 @@ namespace VideoBatch {
                     value.Value=37;
                     Invoke(window,"Save");
                     if (AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Count != 37) throw new Exception("Requested count not saved");
-                    if (!AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).DurationByVideo) throw new Exception("Duration mode not saved");
+                    if (!AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml")).Scenes[0].DurationByVideo) throw new Exception("Duration mode not saved");
                     toggle.Checked=false;
                     if (!slider.Enabled) throw new Exception("Manual duration did not restore");
+                    toggle.Checked=true; Invoke(window,"InsertScene",1); System.Windows.Forms.Application.DoEvents();
+                    if(current.Scenes.Count!=2 || !current.Scenes[0].DurationByVideo || current.Scenes[1].DurationByVideo || toggle.Checked)throw new Exception("Adding scene must preserve independent duration settings");
+                    toggle.Checked=true; Invoke(window,"SelectScene",0); System.Windows.Forms.Application.DoEvents();
+                    if(!toggle.Checked || !current.Scenes[1].DurationByVideo)throw new Exception("Source duration selection lost when switching scenes");
+                    Invoke(window,"SelectScene",1); toggle.Checked=false; Invoke(window,"SelectScene",0);
+                    if(!toggle.Checked)throw new Exception("Disabling second scene changed first scene");
                     using (var pool=(System.Windows.Forms.Form)typeof(AssemblyWindow).GetMethod("CreatePoolWindow",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{2})) {
                         pool.Show(window); System.Windows.Forms.Application.DoEvents();
                         var green=All(pool).OfType<System.Windows.Forms.CheckBox>().Single(c=>c.Name=="ObjectGreenScreen");
@@ -419,6 +536,29 @@ namespace VideoBatch {
                 return true;
             } finally { Store.Root=previous; if(Directory.Exists(temp))Directory.Delete(temp,true); }
         }
+        public static bool RunAudioSettingsUiTests() {
+            string previous=Store.Root,temp=Path.Combine(Path.GetTempPath(),"assembly-audio-ui-"+Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root=temp;
+                var initial=AssemblyTemplate.Defaults(); initial.Materials=Path.Combine(temp,"materials"); initial.Output=Path.Combine(temp,"output");
+                AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
+                using(var window=new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    var current=(AssemblyTemplate)Field(window,"template");
+                    using(var dialog=new System.Windows.Forms.Form()) {
+                        var body=new System.Windows.Forms.FlowLayoutPanel(); dialog.Controls.Add(body);
+                        typeof(AssemblyWindow).GetMethod("AddAudioLevelingControls",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(window,new object[]{body,dialog});
+                        if(!All(dialog).Any(c=>c.Name=="AudioLevelCheck") || !All(dialog).Any(c=>c.Name=="AudioLevelAlign")) throw new Exception("Audio check/align controls missing");
+                        if(All(dialog).Any(c=>c.Name=="PrimaryAudioSlider")) throw new Exception("Global native volume remains in per-scene sound UI");
+                        current.Scenes[0].NativeAudioVolume=.37; current.Scenes[0].BedMusicVolume=.19;
+                        if(Math.Abs(current.SceneNativeAudioVolume(current.Scenes[0])-.37)>.001 || Math.Abs(current.SceneBedMusicVolume(current.Scenes[0])-.19)>.001) throw new Exception("Per-scene sound levels failed");
+                        if(All(dialog).OfType<System.Windows.Forms.Button>().Single(c=>c.Name=="AudioLevelAlign").Enabled) throw new Exception("Align enabled without measurement");
+                    }
+                    window.Close();
+                }
+                Console.WriteLine("Audio settings UI PASS: leveling controls, no global volume, independent scene levels"); return true;
+            } finally { Store.Root=previous; if(Directory.Exists(temp)) Directory.Delete(temp,true); }
+        }
         public static bool RunSubtitleSettingsTests() {
             string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "assembly-subtitle-ui-" + Guid.NewGuid().ToString("N"));
             try {
@@ -450,7 +590,10 @@ namespace VideoBatch {
                 var initial = AssemblyTemplate.Defaults(); initial.Materials = Path.Combine(temp, "materials"); initial.Output = Path.Combine(temp, "output");
                 AssemblyFiles.Save(Path.Combine(temp, "assembly-template.xml"), initial);
                 string firstId;
-                using (var window = new AssemblyWindow(true)) {
+                var sharedPreferences=new Preferences();Store.Save(sharedPreferences);
+                using (var window = new AssemblyWindow(true, preferences: sharedPreferences)) {
+                    if(!ReferenceEquals(Field(window,"assemblyPrefs"),sharedPreferences))throw new Exception("Embedded studio must share shell preferences, not save a stale queue snapshot");
+                    sharedPreferences.TikTokAccounts.Add(new TikTokAccount{ProfileId="queue-during-studio",Items=new System.Collections.Generic.List<TikTokItem>{new TikTokItem{Caption="Keep progress",HttpVideoId="123",Published=true}}});
                     window.Show(); System.Windows.Forms.Application.DoEvents();
                     var current = (AssemblyTemplate)Field(window, "template");
                     int originalScenes = current.Scenes.Count;
@@ -488,6 +631,8 @@ namespace VideoBatch {
                     if (current.Count != 1 || current.Scenes.Count != 0) throw new Exception("First custom data contaminated second custom");
                     All(window).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "AssemblyCustomProfile-" + firstId).PerformClick();
                     if (Math.Abs(current.MusicVolume - .37) > .001 || Store.Load().AssemblyStudioProfile != firstId) throw new Exception("Switch did not persist custom editor or preference");
+                    var keptQueue=Store.Load().TikTokAccounts.Single(a=>a.ProfileId=="queue-during-studio").Items.Single();
+                    if(!keptQueue.Published||keptQueue.HttpVideoId!="123")throw new Exception("Switching assembly profiles overwrote TikTok queue progress");
                     window.Close();
                 }
                 using (var reopened = new AssemblyWindow(true)) {
@@ -504,6 +649,40 @@ namespace VideoBatch {
                 }
                 return true;
             } finally { Store.Root = previous; if (Directory.Exists(temp)) Directory.Delete(temp, true); }
+        }
+        public static bool RunVisualEstimateUiTests() {
+            string previous=Store.Root, temp=Path.Combine(Path.GetTempPath(),"visual-estimate-ui-"+Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root=temp;
+                var initial=AssemblyTemplate.Defaults(); initial.Materials=Path.Combine(temp,"materials"); initial.Output=Path.Combine(temp,"output");
+                AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
+                using(var window=new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    var timer=(System.Windows.Forms.Timer)Field(window,"visualEstimateTimer"); timer.Stop();
+                    var label=(System.Windows.Forms.Label)All(window).Single(c=>c.Name=="VisualDifferenceEstimate");
+                    var details=All(window).Single(c=>c.Name=="VisualDifferenceDetails");
+                    foreach(var size in new[]{new Size(1180,790),new Size(980,660)}) {
+                        window.ClientSize=size; System.Windows.Forms.Application.DoEvents(); timer.Stop();
+                        if(!label.Visible || !details.Visible || label.Height<20 || !label.Parent.ClientRectangle.Contains(label.Bounds) || !details.Parent.ClientRectangle.Contains(details.Bounds)) throw new Exception("Visual estimate controls clipped at "+size+": label="+label.Bounds+" visible="+label.Visible+" details="+details.Bounds+" visible="+details.Visible+" parent="+label.Parent.ClientRectangle);
+                    }
+                    label.Text="stale estimate";
+                    Invoke(window,"Changed",false);
+                    if(!timer.Enabled || !label.Text.Contains("пересчёт") || ((string)Field(window,"visualEstimateDetails")).Contains("40%")) throw new Exception("Layout change did not invalidate estimate");
+                    timer.Stop();
+                    label.Text="stale placement";
+                    var canvas=Field(window,"canvas");
+                    var placement=(Action)canvas.GetType().GetField("BaseVideoPlacementChanged",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(canvas);
+                    placement();
+                    if(!timer.Enabled || !label.Text.Contains("пересчёт")) throw new Exception("Dragging base video did not invalidate estimate");
+                    timer.Stop();
+                    var current=(AssemblyTemplate)Field(window,"template"); current.Scenes.Clear();
+                    Invoke(window,"StartVisualEstimate");
+                    if(!label.Text.Contains("добавьте сцену")) throw new Exception("Empty scene estimate not explained");
+                    window.Dispose();
+                    if(!(bool)Field(window,"visualEstimateDisposed")) throw new Exception("Estimate lifecycle did not stop on dispose");
+                    return true;
+                }
+            } finally { Store.Root=previous; if(Directory.Exists(temp))Directory.Delete(temp,true); }
         }
         public static bool RunMediaEditorTests() { return MediaEditorCheck(null); }
         public static bool WriteMediaScreenshots(string folder) { Directory.CreateDirectory(folder); return MediaEditorCheck(folder); }

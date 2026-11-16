@@ -18,16 +18,21 @@ namespace VideoBatch {
         public double MusicVolume = .8, TransitionDuration = .35;
         public string Transition = "fade", RenderMode = "auto";
         public bool RandomVideoStart, LoopShortVideos, AllowVideoReuse, DurationByVideo;
+        public AssemblyCombinationSettings Combination = new AssemblyCombinationSettings();
         public List<AssemblyLayer> GlobalLayers = new List<AssemblyLayer>();
         public List<AssemblyInsertion> Insertions = new List<AssemblyInsertion>();
         public bool ContinuousVideo;
         public double BaseVideoX = 0, BaseVideoY = 0, BaseVideoWidth = 1, BaseVideoHeight = 1;
+        public bool BaseVideoPreserveAspectRatio = true;
         public AssemblySpeechSettings Speech = new AssemblySpeechSettings();
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
         public bool SplitSharedPool, SplitFixHalves = true;
         public bool PrimaryNativeAudio = true, SecondaryNativeAudio = true;
         public double PrimaryNativeVolume = 1, SecondaryNativeVolume = 1;
+        public bool NativeAudioLeveled;
+        public List<AssemblyAudioLevel> NativeAudioLevels = new List<AssemblyAudioLevel>();
+        public double VoicePitchSemitones;
         public double SplitRatio = .5, SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
@@ -37,7 +42,8 @@ namespace VideoBatch {
         public int Count = 10;
         public int FormatWidth;
         public int FormatHeight;
-        public string Videos = "";
+        public string Videos = "", Backgrounds = "";
+        public bool BackgroundForeground;
         public string Music = "";
         public List<AssemblyScene> Scenes = new List<AssemblyScene>();
         public AssemblyOutputMetadata OutputMetadata;
@@ -141,6 +147,7 @@ namespace VideoBatch {
                 Fixed = l.Fixed,
                 PlacementConfigured = l.PlacementConfigured,
                 ModeExplicit = l.ModeExplicit,
+                InCombination = l.InCombination,
                 FixedAssetHash = l.FixedAssetHash,
                 ObjectId = l.ObjectId,
                 X = l.X,
@@ -153,12 +160,12 @@ namespace VideoBatch {
                 AppearanceTransition = l.AppearanceTransition,
                 AppearanceDuration = l.AppearanceDuration,
                 PlaybackMode = l.PlaybackMode,
-                RepeatPause = l.RepeatPause,
+                RepeatPause = l.RepeatPause, RepeatInterval = l.RepeatInterval,
                 PhotoDuration = l.PhotoDuration,
                 ExitTransition = l.ExitTransition,
                 ExitDuration = l.ExitDuration,
                 GreenScreen = l.GreenScreen,
-                UniformImageScale = l.UniformImageScale,
+                UniformImageScale = l.UniformImageScale, PreserveAspectRatio = l.PreserveAspectRatio,
                 ImagePart = l.ImagePart,
                 Font = l.Font,
                 FontSize = l.FontSize,
@@ -180,8 +187,13 @@ namespace VideoBatch {
                 VoiceMode = s.VoiceMode,
                 Voiceover = s.Voiceover,
                 Duration = s.Duration,
+                IsPreview = s.IsPreview,
+                VideoInCombination = s.VideoInCombination,
+                DurationByVideo = s.DurationByVideo,
                 Music = s.Music,
                 MusicVolume = s.MusicVolume,
+                NativeAudioVolume = s.NativeAudioVolume,
+                BedMusicVolume = s.BedMusicVolume,
                 Layers = CloneLayers(s.Layers)
             };
         }
@@ -224,11 +236,13 @@ namespace VideoBatch {
             slice.LoopShortVideos = t.LoopShortVideos;
             slice.AllowVideoReuse = t.AllowVideoReuse;
             slice.DurationByVideo = t.DurationByVideo;
+            slice.Combination = (t.Combination ?? new AssemblyCombinationSettings()).Copy();
             slice.GlobalLayers = CloneLayers(t.GlobalLayers);
             slice.Insertions = AssemblyInsertions.Copy(t.Insertions);
             slice.ContinuousVideo = t.ContinuousVideo;
             slice.BaseVideoX = t.BaseVideoX; slice.BaseVideoY = t.BaseVideoY;
             slice.BaseVideoWidth = t.BaseVideoWidth; slice.BaseVideoHeight = t.BaseVideoHeight;
+            slice.BaseVideoPreserveAspectRatio = t.BaseVideoPreserveAspectRatio;
             slice.Speech = CloneSpeech(t.Speech);
             slice.SpeechLines = CloneSpeechLines(t.SpeechLines);
             slice.SecondaryVideos = t.SecondaryVideos;
@@ -237,6 +251,9 @@ namespace VideoBatch {
             slice.SplitFixHalves = t.SplitFixHalves;
             slice.PrimaryNativeAudio = t.PrimaryNativeAudio; slice.SecondaryNativeAudio = t.SecondaryNativeAudio;
             slice.PrimaryNativeVolume = t.PrimaryNativeVolume; slice.SecondaryNativeVolume = t.SecondaryNativeVolume;
+            slice.NativeAudioLeveled = t.NativeAudioLeveled;
+            slice.NativeAudioLevels = AssemblyAudioLeveling.Copy(t.NativeAudioLevels);
+            slice.VoicePitchSemitones = t.VoicePitchSemitones;
             slice.SplitRatio = t.SplitRatio;
             slice.SplitPrimaryZoom = t.SplitPrimaryZoom;
             slice.SplitSecondaryZoom = t.SplitSecondaryZoom;
@@ -260,11 +277,13 @@ namespace VideoBatch {
             t.LoopShortVideos = slice.LoopShortVideos;
             t.AllowVideoReuse = slice.AllowVideoReuse;
             t.DurationByVideo = slice.DurationByVideo;
+            t.Combination = (slice.Combination ?? new AssemblyCombinationSettings()).Copy();
             t.GlobalLayers = CloneLayers(slice.GlobalLayers);
             t.Insertions = AssemblyInsertions.Copy(slice.Insertions);
             t.ContinuousVideo = slice.ContinuousVideo;
             t.BaseVideoX = slice.BaseVideoX; t.BaseVideoY = slice.BaseVideoY;
             t.BaseVideoWidth = slice.BaseVideoWidth; t.BaseVideoHeight = slice.BaseVideoHeight;
+            t.BaseVideoPreserveAspectRatio = slice.BaseVideoPreserveAspectRatio;
             t.Speech = CloneSpeech(slice.Speech);
             t.SpeechLines = CloneSpeechLines(slice.SpeechLines);
             t.SecondaryVideos = slice.SecondaryVideos;
@@ -273,6 +292,9 @@ namespace VideoBatch {
             t.SplitFixHalves = slice.SplitFixHalves;
             t.PrimaryNativeAudio = slice.PrimaryNativeAudio; t.SecondaryNativeAudio = slice.SecondaryNativeAudio;
             t.PrimaryNativeVolume = slice.PrimaryNativeVolume; t.SecondaryNativeVolume = slice.SecondaryNativeVolume;
+            t.NativeAudioLeveled = slice.NativeAudioLeveled;
+            t.NativeAudioLevels = AssemblyAudioLeveling.Copy(slice.NativeAudioLevels);
+            t.VoicePitchSemitones = slice.VoicePitchSemitones;
             t.SplitRatio = slice.SplitRatio <= 0 ? .5 : slice.SplitRatio;
             t.SplitPrimaryZoom = slice.SplitPrimaryZoom <= 0 ? 1 : slice.SplitPrimaryZoom;
             t.SplitSecondaryZoom = slice.SplitSecondaryZoom <= 0 ? 1 : slice.SplitSecondaryZoom;
@@ -286,6 +308,8 @@ namespace VideoBatch {
         static void CaptureWorkspace(AssemblyTemplate t, AssemblyMarketSettings slice) {
             slice.Materials = t.Materials ?? "";
             slice.Videos = t.Videos ?? "";
+            slice.Backgrounds = t.Backgrounds ?? "";
+            slice.BackgroundForeground = t.BackgroundForeground;
             slice.Music = t.Music ?? "";
             slice.Scenes = CloneScenes(t.Scenes);
             slice.WorkspaceConfigured = true;
@@ -295,6 +319,8 @@ namespace VideoBatch {
             if (!slice.WorkspaceConfigured) CaptureWorkspace(t, slice);
             if (!string.IsNullOrWhiteSpace(slice.Materials)) t.Materials = slice.Materials;
             t.Videos = slice.Videos ?? "";
+            t.Backgrounds = slice.Backgrounds ?? "";
+            t.BackgroundForeground = slice.BackgroundForeground;
             t.Music = slice.Music ?? "";
             t.Scenes = CloneScenes(slice.Scenes);
         }
@@ -302,6 +328,8 @@ namespace VideoBatch {
         static void ImportWorkspaceFromSettings(AssemblyMarketSettings target, AssemblyMarketSettings source) {
             if (source == null || !source.WorkspaceConfigured) return;
             target.Videos = source.Videos ?? "";
+            target.Backgrounds = source.Backgrounds ?? "";
+            target.BackgroundForeground = source.BackgroundForeground;
             target.Music = source.Music ?? "";
             target.Scenes = CloneScenes(source.Scenes);
             target.WorkspaceConfigured = true;
@@ -325,6 +353,8 @@ namespace VideoBatch {
 
         static void ImportWorkspaceSnapshot(AssemblyMarketSettings slice, AssemblyTemplate snap) {
             slice.Videos = snap.Videos ?? "";
+            slice.Backgrounds = snap.Backgrounds ?? "";
+            slice.BackgroundForeground = snap.BackgroundForeground;
             slice.Music = snap.Music ?? "";
             slice.Scenes = CloneScenes(snap.Scenes);
             slice.WorkspaceConfigured = slice.Scenes.Count > 0;

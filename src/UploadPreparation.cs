@@ -21,6 +21,8 @@ namespace VideoBatch {
         static readonly Dictionary<string, CancellationTokenSource> jobs = new Dictionary<string, CancellationTokenSource>();
         static readonly Dictionary<string, UploadPreparationProgress> states = new Dictionary<string, UploadPreparationProgress>();
         public static string Key(string platform, string account, string market) => platform + "|" + market + "|" + account;
+        public static string DatedFolder(Preferences settings, string stage, string platform, string account, DateTime added) =>
+            Path.Combine(UploadStaging.Root(settings), stage, UploadStaging.SanitizeDirName(platform), added.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), UploadStaging.SanitizeDirName(account));
         public static string YouTubeKey(YouTubeChannel channel) => Key("YouTube", string.IsNullOrWhiteSpace(channel.ChannelId) ? channel.ProfileId : channel.ChannelId, channel.Market);
         public static string TikTokKey(TikTokAccount account) => Key("TikTok", account.ProfileId, account.Market);
         public static void DeleteOutputs(IEnumerable<string> files) { foreach (string file in files ?? Enumerable.Empty<string>()) try { if (File.Exists(file)) File.Delete(file); } catch { } }
@@ -42,8 +44,16 @@ namespace VideoBatch {
                 for (int attempt = 0; attempt < 8; attempt++) {
                     try {
                         dest = AssemblyFiles.SafeImportDestination(claimFolder, path);
+                        // Reserve a name for both files: an older transcript must not block this claim.
+                        while (File.Exists(Path.ChangeExtension(dest, ".txt")))
+                            dest = Path.Combine(claimFolder, Path.GetFileNameWithoutExtension(path) + "-" + Guid.NewGuid().ToString("N").Substring(0,8) + Path.GetExtension(path));
                         File.Move(path, dest);
-                        claimed.Add(new ClaimedSource { OriginalDirectory = origin, ClaimedPath = dest, FileName = Path.GetFileName(dest) });
+                        claimed.Add(new ClaimedSource { OriginalDirectory = origin, ClaimedPath = dest, FileName = Path.GetFileName(path) });
+                        string transcript = Path.ChangeExtension(path, ".txt");
+                        if (File.Exists(transcript)) {
+                            try { File.Move(transcript, Path.ChangeExtension(dest, ".txt")); }
+                            catch { File.Move(dest, path); claimed.RemoveAt(claimed.Count - 1); throw; }
+                        }
                         last = null; break;
                     } catch (Exception ex) {
                         last = ex;
@@ -64,15 +74,23 @@ namespace VideoBatch {
                 try {
                     string folder = string.IsNullOrWhiteSpace(item.OriginalDirectory) ? Path.GetDirectoryName(item.ClaimedPath) : item.OriginalDirectory;
                     Directory.CreateDirectory(folder);
-                    string dest = AssemblyFiles.SafeImportDestination(folder, item.ClaimedPath);
+                    string dest = AssemblyFiles.SafeImportDestination(folder, Path.Combine(folder, item.FileName));
+                    while (File.Exists(Path.ChangeExtension(dest, ".txt")))
+                        dest = Path.Combine(folder, Path.GetFileNameWithoutExtension(item.FileName) + "-" + Guid.NewGuid().ToString("N").Substring(0,8) + Path.GetExtension(item.FileName));
                     File.Move(item.ClaimedPath, dest);
-                } catch { try { File.Delete(item.ClaimedPath); } catch { } }
+                    string transcript = Path.ChangeExtension(item.ClaimedPath, ".txt");
+                    if (File.Exists(transcript)) File.Move(transcript, Path.ChangeExtension(dest, ".txt"));
+                } catch (Exception ex) { AppDiagnostics.Write("Подготовка", "", "", "restore_source_error", "Не удалось вернуть исходник: " + item.ClaimedPath + " · " + ex.Message, "error"); }
             }
         }
         public static void DiscardClaimed(IEnumerable<ClaimedSource> claimed) {
             foreach (var item in claimed ?? Enumerable.Empty<ClaimedSource>()) {
                 if (item == null || string.IsNullOrWhiteSpace(item.ClaimedPath)) continue;
-                try { if (File.Exists(item.ClaimedPath)) File.Delete(item.ClaimedPath); } catch { }
+                try {
+                    if (File.Exists(item.ClaimedPath)) File.Delete(item.ClaimedPath);
+                    string transcript = Path.ChangeExtension(item.ClaimedPath, ".txt");
+                    if (File.Exists(transcript)) File.Delete(transcript);
+                } catch { }
             }
         }
         public sealed class ConsumeResult {
@@ -157,6 +175,11 @@ namespace VideoBatch {
 
         public static async Task<string[]> PrepareAsync(string key, string platform, string account, string[] files, Preferences settings, IProgress<UploadPreparationProgress> progress, CancellationToken cancellation = default(CancellationToken)) {
             var sources = (files ?? new string[0]).Select(Path.GetFullPath).ToArray();
+            DateTime added = DateTime.Now;
+            if (sources.Length > 0) {
+                string sourceDate = Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(sources[0])));
+                if (DateTime.TryParseExact(sourceDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime claimedDate)) added = claimedDate;
+            }
             if (sources.Length == 0) throw new Exception("Выберите видео для подготовки.");
             var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             lock (sync) {
@@ -170,7 +193,7 @@ namespace VideoBatch {
                 await slots.WaitAsync(linked.Token).ConfigureAwait(false); acquired = true;
                 return await Task.Run(async () => {
                     if (!ToolsLocator.TryResolve(out string ffmpeg, out string ffprobe, out _)) throw new Exception("Для подготовки видео нужны ffmpeg.exe и ffprobe.exe в папке tools полного комплекта VideoBatch. Запустите приложение из папки установки. Исходники не изменены.");
-                    string folder = Path.Combine(UploadStaging.Root(settings), "prepared", UploadStaging.SanitizeDirName(platform), UploadStaging.SanitizeDirName(account));
+                    string folder = DatedFolder(settings, "prepared", platform, account, added);
                     Directory.CreateDirectory(folder);
                     var random = new Random(Guid.NewGuid().GetHashCode());
                     var metadata = settings.Processing ?? new ProcessingSettings();
@@ -200,7 +223,10 @@ namespace VideoBatch {
                         VideoMetadata.Verify(after, profile.Processing, null);
                         if (after.format?.tags == null || !after.format.tags.TryGetValue("edition_id", out string stored) || stored != edition)
                             throw new Exception("Не удалось сохранить метаданные подготовленного видео.");
-                        linked.Token.ThrowIfCancellationRequested(); File.Move(partial, output); partial = null; outputs.Add(output);
+                        linked.Token.ThrowIfCancellationRequested();
+                        string transcript = Path.ChangeExtension(source,".txt");
+                        if (File.Exists(transcript)) File.Copy(transcript,Path.ChangeExtension(output,".txt"),false);
+                        File.Move(partial, output); partial = null; outputs.Add(output);
                     }
                     Report(key, "ready", 100, sources.Length, sources.Length, sources.Last(), progress); completed = true; return outputs.ToArray();
                 }, linked.Token).ConfigureAwait(false);

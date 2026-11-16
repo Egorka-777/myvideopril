@@ -19,7 +19,7 @@ namespace VideoBatch {
         public string StudioUploadId=Guid.NewGuid().ToString("N"),StudioVideoId="",StudioPhase="";
         public bool StudioPending,StudioRetryImmediate;
         public string StudioVisibility="",OwnerCommentState="",OwnerCommentText="",OwnerCommentId="";
-        public string ScheduleDate="",ScheduleTime="";
+        public string ScheduleDate="",ScheduleTime="",StudioPublishMode="";
     }
     public static class StudioUploadState {
         public const int ProtocolVersion=2;
@@ -130,7 +130,7 @@ namespace VideoBatch {
         [DataMember]public string sourceMode,sourcePeriod,sourceDuration;
         [DataMember]public string[] sourceEntries;
         [DataMember]public bool studioPaidPromotion,studioAlteredContent,studioPublishExisting;
-        [DataMember]public bool recheckOnly,checkOnly,searchOnly,watchMesh,watchDirectLinks,shortsWarmup,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
+        [DataMember]public bool reconcileOnly,recheckOnly,checkOnly,searchOnly,watchMesh,watchDirectLinks,shortsWarmup,skipQueueDelay,applyThumbFrame,draftOnly,keepProfileOpen,openTodayOnly;
         [DataMember]public int warmupMinMinutes,warmupMaxMinutes,warmupWatchMinSec,warmupWatchMaxSec,warmupLikePercent;
         [DataMember]public bool warmupLikesEnabled;
         [DataMember]public string warmupKeywords;
@@ -141,7 +141,7 @@ namespace VideoBatch {
         [DataMember]public string stage,text,ip,url,error,channelUrl,meshOwner,videoId,profileId,localJobId,fileName,diagnosticFile,lastStage,visibility,commentText,commentId;
         [DataMember]public double percent;
         [DataMember]public int packIndex,packTotal;
-        [DataMember]public bool success,keptOpen;
+        [DataMember]public bool success,keptOpen,requiresPersistenceAck;
         [DataMember]public string outcome,reason,waitStage,sourcesJson;
         [DataMember]public int warmupCovered,warmupTotal,waitMs;
         [DataMember]public int warmupOpened,warmupWatched,warmupTarget,warmupRemainingSec;
@@ -205,7 +205,7 @@ namespace VideoBatch {
                         catch(SerializationException){if(update!=null)update(new UploadMessage{stage="log",text="Нечитаемое сообщение worker."});continue;}
                         AppDiagnostics.Write(label,job.profileId,Path.GetFileNameWithoutExtension(file),msg.stage,msg.text??msg.error,AppDiagnostics.Level(msg.stage));
                         if(update!=null)update(msg);
-                        if(msg.stage=="item_submitting"||msg.stage=="owner_comment_submitting"||(string.Equals(workerPath,Worker,StringComparison.OrdinalIgnoreCase)&&StudioUploadState.RequiresAck(msg.stage))){
+                        if(msg.requiresPersistenceAck||msg.stage=="item_submitting"||msg.stage=="owner_comment_submitting"||(string.Equals(workerPath,Worker,StringComparison.OrdinalIgnoreCase)&&StudioUploadState.RequiresAck(msg.stage))){
                             await process.StandardInput.WriteLineAsync("ack:"+msg.localJobId).ConfigureAwait(false);
                             await process.StandardInput.FlushAsync().ConfigureAwait(false);
                         }
@@ -593,7 +593,7 @@ namespace VideoBatch {
             titlesBtn=Ui.Button("Заголовки",OpenTitleBanks);
             moreBtn=Ui.Button("⋯",ShowMoreMenu);
             var help=Ui.Button("?",()=>MessageBox.Show(this,"Рабочий процесс:\n1) Заголовки — один раз (RU/EN · Long/Shorts).\n2) Выберите канал в таблице.\n3) «Добавить видео» — файлы сразу к этому каналу.\n4) «Загрузить» — отложенная публикация пачкой.\n\n«⋯» — распределение по каналам, Dolphin, проверка.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information));
-            tools.Controls.Add(files);tools.Controls.Add(titlesBtn);tools.Controls.Add(moreBtn);tools.Controls.Add(help);root.Controls.Add(tools,0,3);
+            tools.Controls.Add(files);tools.Controls.Add(titlesBtn);tools.Controls.Add(Ui.Button("Ссылка на канал",EditSelectedChannelUrl));tools.Controls.Add(moreBtn);tools.Controls.Add(help);root.Controls.Add(tools,0,3);
             setup=Ui.Button("Dolphin",Configure);check=Ui.Button("Проверить",null);check.Click+=async(s,e)=>await CheckProfiles();
             var searchPanel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=4,RowCount=3,Padding=new Padding(0)};searchPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,100));searchPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,55));searchPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,170));searchPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,45));searchPanel.RowStyles.Add(new RowStyle(SizeType.Absolute,56));searchPanel.RowStyles.Add(new RowStyle(SizeType.Absolute,36));searchPanel.RowStyles.Add(new RowStyle(SizeType.Absolute,36));
             searchKeys=new TextBox{Dock=DockStyle.Fill,Multiline=true,ScrollBars=ScrollBars.Vertical};
@@ -974,15 +974,10 @@ namespace VideoBatch {
             }
             return list.ToArray();
         }
-        void PropagateChannelUrl(string profileId,string channelUrl){
-            if(string.IsNullOrWhiteSpace(profileId)||string.IsNullOrWhiteSpace(channelUrl))return;
-            if(InvokeRequired){BeginInvoke(new Action(()=>PropagateChannelUrl(profileId,channelUrl)));return;}
-            foreach(DataGridViewRow row in grid.Rows){
-                if(!row.Visible)continue;
-                var c=(YouTubeChannel)row.Tag;
-                if(!string.Equals((c.ProfileId??"").Trim(),profileId.Trim(),StringComparison.OrdinalIgnoreCase))continue;
-                c.ChannelUrl=channelUrl;
-            }
+        void PropagateChannelUrl(YouTubeChannel source,string channelUrl){
+            if(source==null||string.IsNullOrWhiteSpace(channelUrl))return;
+            if(InvokeRequired){BeginInvoke(new Action(()=>PropagateChannelUrl(source,channelUrl)));return;}
+            QueueManager.UpdateChannelUrl(settings.YouTubeChannels,source,channelUrl);
             Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
             SafeSave();
         }
@@ -1054,7 +1049,13 @@ namespace VideoBatch {
             if(string.IsNullOrWhiteSpace(ext))ext=".mp4";
             string dest=FindUniqueFilePath(Path.GetDirectoryName(path)??"",FileNameFromTitle(finalTitle),ext,path);
             if(PathsEqual(path,dest))return PathUtil.Normalize(Path.GetFullPath(path));
-            try{File.Move(path,dest);return PathUtil.Normalize(Path.GetFullPath(dest));}
+            try{
+                string transcript=Path.ChangeExtension(path,".txt"), targetTranscript=Path.ChangeExtension(dest,".txt");
+                bool hasTranscript=File.Exists(transcript);
+                if(hasTranscript)File.Move(transcript,targetTranscript);
+                try{File.Move(path,dest);}catch{if(hasTranscript&&File.Exists(targetTranscript)&&!File.Exists(transcript))File.Move(targetTranscript,transcript);throw;}
+                return PathUtil.Normalize(Path.GetFullPath(dest));
+            }
             catch(Exception ex){throw new IOException("Не удалось переименовать «"+Path.GetFileName(path)+"» в «"+Path.GetFileName(dest)+"»: "+ex.Message,ex);}
         }
         string AssignVideoFile(string path,string title,int index,int total){
@@ -1093,7 +1094,7 @@ namespace VideoBatch {
                 string packKind=EffectiveKind(c);
                 try{title=PeekTitlesFromBank(packKind,1,m)[0];}catch(Exception ex){Ui.Error(this,ex);return;}
                 string path=AssignVideoFile(p,title,1,1);
-                c.Items=new List<YouTubeItem>{new YouTubeItem{Video=path,Title=PackTitleWithIndex(title,1,1),Thumbnail=c.Thumbnail??""}};c.Kind=packKind;SyncChannelPrimary(c);c.Enabled=true;row.Cells[COn].Value=true;row.Cells[CKind].Value=KindLabel(packKind);AdvanceTitleCursor(packKind,1,m);Write(TitleCursorLabel(packKind,m));RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbPick){var p=Ui.File(this,"Изображение|*.jpg;*.jpeg;*.png;*.webp|Все файлы|*.*");if(p!=null){c.Thumbnail=p;if(c.Items!=null&&c.Items.Count>0)c.Items[0].Thumbnail=p;RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbClear){ClearThumbnail(c);SyncChannelPrimary(c);RefreshRowDisplay(row);}else if(e.ColumnIndex==CRemove){grid.Rows.RemoveAt(e.RowIndex);}SaveGrid();RefreshMarketUi();}
+                c.Thumbnail="";c.Items=new List<YouTubeItem>{new YouTubeItem{Video=path,Title=PackTitleWithIndex(title,1,1),Thumbnail=""}};c.Kind=packKind;SyncChannelPrimary(c);c.Enabled=true;row.Cells[COn].Value=true;row.Cells[CKind].Value=KindLabel(packKind);AdvanceTitleCursor(packKind,1,m);Write(TitleCursorLabel(packKind,m));RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbPick){var p=Ui.File(this,"Изображение|*.jpg;*.jpeg;*.png;*.webp|Все файлы|*.*");if(p!=null){c.Thumbnail=p;if(c.Items!=null&&c.Items.Count>0)c.Items[0].Thumbnail=p;RefreshRowDisplay(row);}}else if(e.ColumnIndex==CThumbClear){ClearThumbnail(c);SyncChannelPrimary(c);RefreshRowDisplay(row);}else if(e.ColumnIndex==CRemove){grid.Rows.RemoveAt(e.RowIndex);}SaveGrid();RefreshMarketUi();}
         List<string> TitleBankRef(string kind,string market=null){
             kind=NormKind(kind);bool en=NormMarket(market??marketView)=="EN";
             if(kind=="shorts")return en?settings.TitleBankShortsEn:settings.TitleBankShortsRu;
@@ -1297,6 +1298,31 @@ namespace VideoBatch {
             }
             SafeSave();
         }
+        void EditSelectedChannelUrl(){
+            SaveGrid();
+            var row=CurrentChannelRow();
+            if(row==null){Ui.Error(this,new Exception("Выберите канал в таблице."));return;}
+            var ch=(YouTubeChannel)row.Tag;
+            using(var dialog=new Form{Text="Ссылка на канал · "+ch.Name,ClientSize=new Size(560,145),StartPosition=FormStartPosition.CenterParent,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false,Font=Font,BackColor=Ui.Bg,ForeColor=Ui.Ink}){
+                var label=new Label{Text="Ссылка YouTube или @имя канала",AutoSize=true,Location=new Point(16,16)};
+                var input=new TextBox{Text=ResolveChannelUrlFromGrid(ch,GridUrlHint(ch)),Location=new Point(16,43),Width=528};
+                var save=Ui.Button("Сохранить",()=>{
+                    try{
+                        string text=input.Text.Trim();
+                        if(text.StartsWith("@"))text="https://www.youtube.com/"+text;
+                        string url=Store.NormalizeChannelVideosUrl(text);
+                        if(!Store.IsValidYouTubeChannelUrl(url))throw new Exception("Вставьте ссылку на канал YouTube или @имя канала, не ссылку на видео.");
+                        PropagateChannelUrl(ch,url);
+                        LoadGrid();
+                        dialog.DialogResult=DialogResult.OK;dialog.Close();
+                    }catch(Exception error){Ui.Error(dialog,error);}
+                },true);
+                save.Location=new Point(300,93);
+                var cancel=Ui.Button("Отмена",()=>dialog.Close());cancel.Location=new Point(430,93);
+                dialog.Controls.AddRange(new Control[]{label,input,save,cancel});dialog.AcceptButton=save;dialog.CancelButton=cancel;
+                dialog.ShowDialog(this);
+            }
+        }
         void AssignVideosToSelectedChannel(){
             SaveGrid();
             var row=CurrentChannelRow();
@@ -1360,9 +1386,9 @@ namespace VideoBatch {
                 path=AssignVideoFile(path,baseTitle,i+1,paths.Length);
                 if(!string.Equals(before,path,StringComparison.OrdinalIgnoreCase))renamed++;
                 else if(!string.Equals(Path.GetFileName(before),Path.GetFileName(path),StringComparison.OrdinalIgnoreCase))renamed++;
-                items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=i==0?(ch.Thumbnail??""):""});
+                items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=""});
             }
-            ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;ch.Status=ChannelStatus.Ready;
+            ch.Thumbnail="";ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;ch.Status=ChannelStatus.Ready;
             SyncChannelPrimary(ch);
             AdvanceTitleCursor(packKind,paths.Length,m);
             RefreshRowDisplay(row);
@@ -1427,9 +1453,9 @@ namespace VideoBatch {
                             string path=paths[i];string before=path;
                             path=AssignVideoFile(path,baseTitle,i+1,paths.Count);
                             if(!string.Equals(before,path,StringComparison.OrdinalIgnoreCase))renamed++;
-                            items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=i==0?(ch.Thumbnail??""):""});
+                            items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=""});
                         }
-                        ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;SyncChannelPrimary(ch);done+=items.Count;
+                        ch.Thumbnail="";ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;SyncChannelPrimary(ch);done+=items.Count;
                         AdvanceTitleCursor(packKind,paths.Count,m);
                         cursorKinds.Add(m+"|"+NormKind(packKind));
                     }
@@ -1483,7 +1509,7 @@ namespace VideoBatch {
                     string path=AssignVideoFile(videoFiles[i],baseTitle,i+1,videoFiles.Length);
                     items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=""});
                 }
-                baseCh.Enabled=true;baseCh.Market=m;baseCh.Kind="shorts";baseCh.Items=items;baseCh.Status="Готов (шортс "+items.Count+")";
+                baseCh.Thumbnail="";baseCh.Enabled=true;baseCh.Market=m;baseCh.Kind="shorts";baseCh.Items=items;baseCh.Status="Готов (шортс "+items.Count+")";
                 AdvanceTitleCursor("shorts",videoFiles.Length,m);
                 SyncChannelPrimary(baseCh);SaveGrid();LoadGrid();
                 Write("["+MarketLabel(marketView)+"] пачка шортсов «"+baseCh.Name+"»: "+items.Count+" файлов.");
@@ -1729,7 +1755,7 @@ namespace VideoBatch {
                 if(!string.IsNullOrWhiteSpace(m.ip))PropagateIp(ch.ProfileId,m.ip);
                 if(!string.IsNullOrWhiteSpace(m.text))Status(row,m.text);
                 if(string.Equals(m.stage,"mesh",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(m.channelUrl))
-                    PropagateChannelUrl(ch.ProfileId,m.channelUrl.Trim());
+                    PropagateChannelUrl(ch,m.channelUrl.Trim());
                 if(StudioUploadState.RequiresAck(m.stage)&&m.stage!="owner_comment_submitting"&&m.packIndex>0&&m.packIndex<=list.Count){
                     var prep=list[m.packIndex-1];
                     var item=prep.Source;
@@ -2161,6 +2187,8 @@ namespace VideoBatch {
             finally{if(uiStarted)UploadBusyEnd();SaveGrid();RefreshMarketUi();}
         }
         async Task UploadAll(IReadOnlyList<YouTubeChannel> channelsFilter=null){
+            // Each Studio run owns its launch gate; do not multiply the limit with another run.
+            if(uploadsInFlight>0){MessageBox.Show(this,"Сначала дождитесь текущей загрузки или нажмите Стоп.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             if(cancellation!=null){MessageBox.Show(this,"Сначала дождитесь проверки/поиска или нажмите Стоп.","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             string token="";
             bool uiStarted=false;
@@ -2172,10 +2200,7 @@ namespace VideoBatch {
                 foreach(var skipped in flat.Where(j=>StudioUploadState.WasSubmitted(j.item)))
                     Write(skipped.ch.Name+" ["+skipped.index+"/"+skipped.total+"]: передача без сохранённого ID · проверьте черновик в Studio. Повторная передача того же файла пропущена.");
                 flat=flat.Where(j=>!StudioUploadState.WasSubmitted(j.item)).ToList();
-                foreach(var job in flat){
-                    job.item.Title=CleanTitle(job.item.Title);
-                    if(job.ch.Status==ChannelStatus.Error||(job.ch.Items??new List<YouTubeItem>()).Any(it=>it.StudioRetryImmediate||it.StudioPending&&!YouTubeMeshCatalog.ItemIsPublished(it)))job.item.StudioRetryImmediate=true;
-                }
+                foreach(var job in flat)job.item.Title=CleanTitle(job.item.Title);
                 if(flat.Count==0){
                     MessageBox.Show(this,"Нет новых роликов для передачи. Ожидающие без ID пропущены; черновики с известным ID продолжатся при следующем запуске.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);
                     return;
@@ -2203,9 +2228,7 @@ namespace VideoBatch {
 
                 foreach(var batch in batches){
                     foreach(var it in batch.Items){
-                        string kind=QueueManager.NormKindPublic(it.Kind??batch.Channel?.Kind);
-                        bool shorts=kind=="shorts";
-                        string when=shorts?"сразу в открытый доступ":(it.ScheduleDate+" "+it.ScheduleTime);
+                        string when=string.IsNullOrWhiteSpace(it.ScheduleDate)&&string.IsNullOrWhiteSpace(it.ScheduleTime)?"сразу в открытый доступ":(it.ScheduleDate+" "+it.ScheduleTime);
                         Write("  "+batch.Channel.Name+" ["+it.Index+"/"+it.Total+"] → "+Path.GetFileName(it.StagedVideo)+" · "+when+" · «"+it.UploadTitle+"»");
                     }
                 }
@@ -2224,7 +2247,8 @@ namespace VideoBatch {
                 var errors=new ConcurrentBag<string>();
                 var launchGate=ProfileLaunchGate.ForStudioUpload(settings);
                 Write("Пауза между стартами профилей: не менее 5000 мс. Описания записываются; фоновые проверки YouTube не ожидаются.");
-                var tasks=batches.Select(batch=>Task.Run(async()=>{
+                var tasks=batches.GroupBy(b=>b.ProfileId,StringComparer.OrdinalIgnoreCase).Select(profileBatches=>Task.Run(async()=>{
+                    foreach(var batch in profileBatches){
                     var row=batch.Row;var ch=batch.Channel;
                     try{
                         await launchGate.EnterAsync(ct).ConfigureAwait(false);
@@ -2233,7 +2257,9 @@ namespace VideoBatch {
                         Status(row,ChannelStatus.Uploading);
                         var job=batch.ToUploadJob(token,dolphinPort,settings);
                         lock(saveLock)Store.Save(settings);
-                        job.keepProfileOpen=false;
+                        // Close only after every channel batch sharing this profile succeeded.
+                        job.keepProfileOpen=!ReferenceEquals(batch,profileBatches.Last());
+                        Write(ch.Name+": маршрут Studio · Profile ID "+job.profileId+" · "+(job.channelUrl??"(текущий канал)"));
                         var result=await RunUploadOnce(job,ch,row,batch.Items,ct).ConfigureAwait(false);
                         if(!string.IsNullOrWhiteSpace(result.Url)&&batch.Items.Count==1&&string.IsNullOrWhiteSpace(batch.Items[0].Source.PublishedUrl)){
                             batch.Items[0].Source.PublishedUrl=result.Url.Trim();
@@ -2248,18 +2274,29 @@ namespace VideoBatch {
                         Status(row,doneStatus);
                         if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(ch.ProfileId,result.Ip);
                         SafeSave();
+                        }catch(Exception e){
+                            // A closed profile has freed its browser slot. Its failure must
+                            // not pause unrelated queued profiles or cancel active uploads.
+                            // Retained error windows still count toward the three-window limit.
+                            if(ProfileLaunchGate.ShouldPauseAfterStudioFailure(e))
+                                launchGate.StopPendingStarts();
+                            throw;
                         }finally{launchGate.Exit();}
-                    }catch(OperationCanceledException){Status(row,"Остановлено");}
+                    }catch(OperationCanceledException){
+                        Status(row,ct.IsCancellationRequested?"Остановлено":"Не запущено: очередь приостановлена после ошибки профиля");
+                        break;
+                    }
                     catch(Exception e){
-                        foreach(var remaining in batch.Items.Where(it=>!YouTubeMeshCatalog.ItemIsPublished(it.Source)))remaining.Source.StudioRetryImmediate=true;
                         SafeSave();
                         ch.Status=ChannelStatus.Error;
                         string msg=e.Message+(e is UploadException ue&&ue.KeptOpen?" (профиль оставлен)":"");
                         errors.Add(ch.Name+": "+msg);
                         Status(row,ChannelStatus.Error);
-                    }finally{
-                        lock(uploadLock)busyProfiles.Remove(batch.ProfileId);
+                        Write(ch.Name+": профиль сохранён после ошибки; остальные каналы этого профиля не запускались.");
+                        break;
                     }
+                    }
+                    lock(uploadLock)busyProfiles.Remove(profileBatches.Key);
                 })).ToArray();
                 await Task.WhenAll(tasks).ConfigureAwait(true);
                 if(errors.Count>0){

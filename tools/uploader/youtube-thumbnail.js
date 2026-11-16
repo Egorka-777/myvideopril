@@ -60,24 +60,38 @@ async function pngPayload(page,file,reference){
  const buffer=Buffer.from(data,'base64');if(buffer.length>50*1024*1024)throw new Error('PNG после преобразования больше 50 МБ.');
  return {name:path.basename(file,path.extname(file))+'.png',mimeType:'image/png',buffer};
 }
+async function dismissThumbnailRestriction(page){
+ const dialogs=page.locator('ytcp-dialog, tp-yt-paper-dialog, [role="dialog"]').filter({hasText:/Пройти проверку должен владелец канала|попросите основного владельца канала подтвердить личность|channel owner.*verif|primary.*owner.*verify/i});
+ for(const dialog of await dialogs.all())if(await dialog.isVisible()){
+  const ok=await oneVisible(dialog.getByRole('button',{name:/^(ОК|OK)$/i}));
+  if(!ok)throw new Error('YouTube требует проверку владельца; кнопка ОК не найдена.');
+  await ok.click();await dialog.waitFor({state:'hidden',timeout:10000});
+  return 'YouTube требует подтверждения личности основного владельца канала';
+ }
+ return null;
+}
+async function verifySavedThumbnail(page,file,timeout){
+ const verify=await page.context().newPage();
+ try{await verify.goto(page.url(),{waitUntil:'domcontentloaded',timeout:90000});return await verifyThumbnail(verify,file,{timeout});}
+ finally{await verify.close();}
+}
 async function uploadThumbnail(page,file,{scope=page,save=false,verifyReload=false,timeout=30000,progress=()=>{}}={}){
  if(!file)return null;const reference=fileData(file);progress('Превью: открываю редактор изображения');
  const editor=await until(page,()=>editorRoot(scope),timeout);await revealEditor(editor);
  if(save&&verifyReload&&await matchingImage(page,editor,reference,{persistent:true})) {
-  await page.reload({waitUntil:'domcontentloaded',timeout:90000});
-  const confirmed=await verifyThumbnail(page,file,{timeout});progress('Превью: выбранная картинка уже сохранена, подтверждено после перезагрузки');return confirmed;
+  const confirmed=await verifySavedThumbnail(page,file,timeout);progress('Превью: выбранная картинка уже сохранена, подтверждено в отдельной вкладке');return confirmed;
  }
  let inputs=editor.locator('input[type="file"]');if(!await inputs.count()){const open=await oneVisible(editor.getByRole('button',{name:UPLOAD}));if(open)await open.click();inputs=scope.locator('input[type="file"][accept*="image" i],input[type="file"][accept*="png" i],input[type="file"][accept*="jpeg" i]');}
  if(await inputs.count()!==1)throw new Error('Не найдено однозначное поле изображения в редакторе превью.');
  await inputs.setInputFiles(await pngPayload(page,file,reference));
  const cache=new Map();
- const selected=await until(page,async()=>{const errors=await editor.locator('[role="alert"],.error,ytcp-error-tip').allTextContents();if(errors.some(t=>t.trim()))throw new Error('YouTube отклонил превью: '+errors.join(' ').slice(0,180));return matchingImage(page,editor,reference,{cache});},timeout);
+ const selected=await until(page,async()=>{const restriction=await dismissThumbnailRestriction(page);if(restriction)throw new Error(restriction);const errors=await editor.locator('[role="alert"],.error,ytcp-error-tip').allTextContents();if(errors.some(t=>t.trim()))throw new Error('YouTube отклонил превью: '+errors.join(' ').slice(0,180));return matchingImage(page,editor,reference,{cache});},timeout);
  progress('Превью: выбранная картинка подтверждена в редакторе');
  if(save){const button=await until(page,async()=>{const b=await oneVisible(scope.getByRole('button',{name:SAVE}));return b&&!await b.isDisabled()?b:null;},timeout);await button.click();
   await until(page,async()=>!await button.isVisible()||await button.isDisabled()||await scope.getByText(/changes saved|изменения сохранены/i).first().isVisible().catch(()=>false),timeout);
   progress('Превью: сохранено, проверяю результат');
-  if(verifyReload){await page.reload({waitUntil:'domcontentloaded',timeout:90000});const result=await verifyThumbnail(page,file,{timeout});progress('Превью: картинка подтверждена после перезагрузки');return result;}
+  if(verifyReload){const result=await verifySavedThumbnail(page,file,timeout);progress('Превью: сохранённая картинка подтверждена в отдельной вкладке');return result;}
  }
  return selected;
 }
-module.exports={uploadThumbnail,verifyThumbnail,imageSources,matches};
+module.exports={uploadThumbnail,verifyThumbnail,imageSources,matches,dismissThumbnailRestriction};

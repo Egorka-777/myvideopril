@@ -6,6 +6,10 @@ for(const contentKind of ['shorts','long']){
  assert.equal(S.isImmediatePublish({contentKind,publishMode:'immediate'}),true,'explicit immediate '+contentKind);
  assert.equal(S.isImmediatePublish({contentKind}),false,'content kind must not force public');
 }
+for(const contentKind of ['shorts','long']){
+ assert(S.isImmediatePublish({contentKind,publishMode:'scheduled',scheduledUnixSeconds:Date.now()/1000-3600}),'expired slot publishes now');
+ assert(!S.isImmediatePublish({contentKind,publishMode:'scheduled',scheduledUnixSeconds:Date.now()/1000+3600}),'future slot remains scheduled');
+}
 const base='6225ead3a913ab10f879aad28b461e367e6156dd';
 const before=cp.execFileSync('git',['show',base+':tools/uploader/youtube-studio-upload.js'],{encoding:'utf8'}).replace(/\r\n/g,'\n'),after=fs.readFileSync('tools/uploader/youtube-studio-upload.js','utf8').replace(/\r\n/g,'\n');
 const body=(s,a,b)=>s.slice(s.indexOf(a),s.indexOf(b,s.indexOf(a)));
@@ -108,8 +112,8 @@ async function confirmationFailures(){
 async function resumeEditorRegressions(){
  const vm=require('vm'),filename=path.resolve(__dirname,'../tools/uploader/youtube-studio-upload.js');
  const localRequire=require('module').createRequire(filename);
- for(const visibility of ['private','scheduled','public']){
-  let uploads=0,publishes=0,edits=0,saves=0,confirmations=0,waitUploads=0,checkpoint=0;
+ for(const visibility of ['private','scheduled','public'])for(const contentKind of ['shorts','long']){
+  let uploads=0,publishes=0,edits=0,saves=0,confirmations=0,waitUploads=0,checkpoint=0,thumbnails=0;
   const root={},save={};
   const owner={readVisibility:async()=>visibility,publish:async()=>{publishes++;}};
   const mod={exports:{}};
@@ -118,8 +122,9 @@ async function resumeEditorRegressions(){
   mod.exports.bind({root,save,edit:()=>edits++});
   const verify={on:()=>{},off:()=>{},close:async()=>{}};
   const page={on:()=>{},off:()=>{},goto:async url=>assert(url.endsWith('/safevideo01/edit')),locator:()=>({}),context:()=>({newPage:async()=>verify})};
-  const item={video:__filename,title:'Title',contentKind:'shorts',publishMode:'immediate',studioPending:true,studioVideoId:'safevideo01',studioPhase:visibility==='public'?'publishing':'editing'};
-  const result=await mod.exports.runSequential(page,[item],{}, {progress:()=>{},checkpoint:async()=>checkpoint++,openFile:async()=>uploads++,waitUpload:async()=>waitUploads++,confirmed:async()=>confirmations++});
+  const item={video:__filename,title:'Title',contentKind,thumbnail:'selected.png',publishMode:'immediate',studioPending:true,studioVideoId:'safevideo01',studioPhase:visibility==='public'?'publishing':'editing'};
+  const result=await mod.exports.runSequential(page,[item],{}, {progress:()=>{},thumbnail:async(p,file,opts)=>{thumbnails++;assert.equal(p,page);assert.equal(file,'selected.png');assert.equal(opts.save,true);assert.equal(opts.verifyReload,true);},checkpoint:async()=>checkpoint++,openFile:async()=>uploads++,waitUpload:async()=>waitUploads++,confirmed:async()=>confirmations++});
+  assert.equal(thumbnails,contentKind==='long'?1:0,'resume applies long-video thumbnail, including already public, but never Shorts');
   assert.equal(result.length,1);assert.equal(uploads,0);assert.equal(checkpoint,0);assert.equal(waitUploads,0);assert.equal(confirmations,1);
   assert.equal(edits,visibility!=='public'?1:0);assert.equal(publishes,visibility!=='public'?1:0);
  }

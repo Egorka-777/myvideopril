@@ -6,6 +6,7 @@ namespace VideoBatch {
     /// <summary>Limits concurrent Dolphin profile launches and enforces a minimum gap between start requests.</summary>
     public sealed class ProfileLaunchGate {
         readonly SemaphoreSlim _running;
+        readonly CancellationTokenSource _pendingStarts = new CancellationTokenSource();
         readonly object _startLock = new object();
         readonly int _minGapMs, _maxGapMs;
         readonly Random _rng = new Random();
@@ -33,20 +34,34 @@ namespace VideoBatch {
             return new ProfileLaunchGate(ResolveStudioMaxConcurrent(prefs), 5000, 5000);
         }
 
+        public static bool ShouldPauseAfterStudioFailure(Exception error) {
+            return !System.Text.RegularExpressions.Regex.IsMatch(error?.Message??"",
+                "Target page, context or browser has been closed|browser has been closed|browser disconnected",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
+        /// <summary>Stops queued starts only; tokens belonging to already running jobs are unchanged.</summary>
+        public void StopPendingStarts() {
+            _pendingStarts.Cancel();
+        }
+
         public async Task EnterAsync(CancellationToken ct) {
-            await _running.WaitAsync(ct).ConfigureAwait(false);
-            int waitMs = 0;
-            lock (_startLock) {
-                var now = DateTime.UtcNow;
-                if (now < _nextStartUtc)
-                    waitMs = (int)Math.Ceiling((_nextStartUtc - now).TotalMilliseconds);
-                int gap = _rng.Next(_minGapMs, _maxGapMs + 1);
-                var startAt = waitMs > 0 ? now.AddMilliseconds(waitMs) : now;
-                _nextStartUtc = startAt.AddMilliseconds(gap);
+            using (var start = CancellationTokenSource.CreateLinkedTokenSource(ct, _pendingStarts.Token)) {
+                await _running.WaitAsync(start.Token).ConfigureAwait(false);
+                try {
+                    int waitMs = 0;
+                    lock (_startLock) {
+                        var now = DateTime.UtcNow;
+                        if (now < _nextStartUtc)
+                            waitMs = (int)Math.Ceiling((_nextStartUtc - now).TotalMilliseconds);
+                        int gap = _rng.Next(_minGapMs, _maxGapMs + 1);
+                        var startAt = waitMs > 0 ? now.AddMilliseconds(waitMs) : now;
+                        _nextStartUtc = startAt.AddMilliseconds(gap);
+                    }
+                    if (waitMs > 0) await Task.Delay(waitMs, start.Token).ConfigureAwait(false);
+                    start.Token.ThrowIfCancellationRequested();
+                } catch { _running.Release(); throw; }
             }
-            try {
-                if (waitMs > 0) await Task.Delay(waitMs, ct).ConfigureAwait(false);
-            } catch { _running.Release(); throw; }
         }
 
         /// <summary>Staggered gap between profile starts, then releases the slot (for long parallel jobs like mesh watch).</summary>

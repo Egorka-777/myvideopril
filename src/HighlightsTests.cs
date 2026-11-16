@@ -38,6 +38,105 @@ namespace VideoBatch {
                 Console.WriteLine("C# → UTF-8 Python job → real FFmpeg → result JSON → cleanup PASS");return true;
             } finally {Store.Root=old;Environment.SetEnvironmentVariable("VIDEOBATCH_HOME",oldHome);try{Directory.Delete(temp,true);}catch{}}
         }
+        sealed class InterApiHandler : System.Net.Http.HttpMessageHandler {
+            public string Filter;
+            public System.Net.HttpStatusCode Code=System.Net.HttpStatusCode.OK;
+            public string Body="{\"status\":\"success\",\"results\":[{\"id\":\"abcdefghijk\",\"title\":\"Тест\",\"url\":\"https://www.youtube.com/watch?v=abcdefghijk\",\"author\":\"Канал\",\"duration_sec\":null,\"view_count\":null}]}";
+            protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request,CancellationToken token) {
+                token.ThrowIfCancellationRequested();
+                if(request.Method!=System.Net.Http.HttpMethod.Get||request.RequestUri.Host!="api.interapi.dev"||request.RequestUri.AbsolutePath!="/api/v1/youtube/search")throw new Exception("InterAPI endpoint mismatch");
+                if(request.Headers.GetValues("X-API-Key").Single()!="fixture-key")throw new Exception("InterAPI key header missing");
+                var query=System.Web.HttpUtility.ParseQueryString(request.RequestUri.Query);
+                if(query["q"]!="русский запрос & test"||query["filter"]!=Filter||query["limit"]!="20")throw new Exception("InterAPI query mismatch");
+                return Task.FromResult(new System.Net.Http.HttpResponseMessage(Code){Content=new System.Net.Http.StringContent(Body)});
+            }
+        }
+        public static bool RunInterApiUiTest() {
+            var previous=Store.Root;var temp=Path.Combine(Path.GetTempPath(),"vb-interapi-"+Guid.NewGuid().ToString("N"));
+            try {
+                Store.Root=temp;
+                using(var panel=new HighlightsPanel(new Preferences()))using(var timer=new System.Windows.Forms.Timer{Interval=100}) {
+                    Exception failure=null;bool inspected=false;
+                    timer.Tick+=(s,e)=>{
+                        var dialog=Application.OpenForms.Cast<Form>().FirstOrDefault(f=>f.Text=="InterAPI · поиск YouTube");
+                        if(dialog==null)return;timer.Stop();
+                        try {
+                            var type=All(dialog).OfType<ComboBox>().Single();
+                            if(type.Items.Count!=2||type.Text!="YouTube Shorts")throw new Exception("Shorts selection missing");
+                            type.SelectedIndex=1;if(type.Text!="YouTube Long")throw new Exception("Long selection missing");
+                            if(All(dialog).OfType<ListBox>().Single().Items.Count!=0)throw new Exception("Unexpected automatic API search");
+                            if(All(dialog).OfType<Button>().Single(b=>b.Text=="Открыть видео").Enabled)throw new Exception("Empty result can open");
+                            foreach(var size in new[]{new Size(740,500),new Size(860,580)}){dialog.ClientSize=size;Application.DoEvents();}
+                            inspected=true;
+                        }catch(Exception ex){failure=ex;}finally{dialog.Close();}
+                    };
+                    timer.Start();typeof(HighlightsPanel).GetMethod("ShowInterApi",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(panel,null);
+                    var deadline=DateTime.UtcNow.AddSeconds(5);while(!inspected&&failure==null&&DateTime.UtcNow<deadline){Application.DoEvents();Thread.Sleep(10);}
+                    if(failure!=null)throw failure;if(!inspected)throw new Exception("InterAPI dialog did not open");
+                }
+                return true;
+            }finally{Store.Root=previous;try{Directory.Delete(temp,true);}catch{}}
+        }
+        public static bool RunBackgroundNavigationTests() {
+            var previous=Store.Root;var temp=Path.Combine(Path.GetTempPath(),"vb-background-"+Guid.NewGuid().ToString("N"));
+            const BindingFlags flags=BindingFlags.Instance|BindingFlags.NonPublic;
+            try {
+                Store.Root=temp;
+                using(var host=new Form {ClientSize=new Size(1050,760)})using(var panel=new HighlightsPanel(new Preferences()))using(var other=new Panel {Dock=DockStyle.Fill,Visible=false}) {
+                    host.Controls.Add(panel);host.Controls.Add(other);host.Show();Application.DoEvents();
+                    foreach(var method in new[]{"ShowYouTube","ShowInterApi"}) {
+                        typeof(HighlightsPanel).GetMethod(method,flags).Invoke(panel,null);Application.DoEvents();
+                        var window=host.OwnedForms.Single();
+                        if(!host.Enabled||window.Modal)throw new Exception("Search blocks main window");
+                        var input=All(window).OfType<TextBox>().First();input.Text="сохранённый запрос";
+                        typeof(HighlightsPanel).GetMethod(method,flags).Invoke(panel,null);
+                        if(host.OwnedForms.Length!=1)throw new Exception("Duplicate search window");
+                        typeof(HighlightsPanel).GetMethod("SetBusy",flags).Invoke(panel,new object[]{true});
+                        panel.Visible=false;other.Visible=true;other.BringToFront();Application.DoEvents();
+                        if(window.Visible||!host.Enabled||!other.Visible||!panel.HasWork)throw new Exception("Cannot switch away from working cutter");
+                        typeof(HighlightsPanel).GetMethod("ProgressLine",flags).Invoke(panel,new object[]{"{\"stage\":\"export\",\"message\":\"фоновый прогресс\",\"percent\":42}"});Application.DoEvents();
+                        other.Visible=false;panel.Visible=true;panel.BringToFront();Application.DoEvents();
+                        if(!window.Visible||input.Text!="сохранённый запрос"||!panel.HasWork)throw new Exception("Search state lost after navigation");
+                        var status=(Label)typeof(HighlightsPanel).GetField("status",flags).GetValue(panel);
+                        var progress=(ProgressBar)typeof(HighlightsPanel).GetField("progress",flags).GetValue(panel);
+                        if(status.Text!="фоновый прогресс"||progress.Value!=42)throw new Exception("Background progress lost");
+                        typeof(HighlightsPanel).GetMethod("SetBusy",flags).Invoke(panel,new object[]{false});
+                        window.Close();Application.DoEvents();
+                    }
+                    host.Close();
+                }
+                Console.WriteLine("Cutter nonmodal navigation, single windows, retained inputs and simulated background progress PASS");return true;
+            }finally{Store.Root=previous;try{Directory.Delete(temp,true);}catch{}}
+        }
+        public static bool RunInterApiTests() {
+            var handler=new InterApiHandler();
+            using(var client=new System.Net.Http.HttpClient(handler)) {
+                foreach(bool shorts in new[]{true,false}) {
+                    handler.Filter=shorts?"shorts":"video";
+                    var found=InterApiSearch.Search(client,"fixture-key","русский запрос & test",shorts,20,CancellationToken.None).GetAwaiter().GetResult();
+                    if(found.Count!=1||found[0].title!="Тест"||!found[0].ToString().Contains("просмотры неизвестны"))throw new Exception("InterAPI result mismatch");
+                }
+                foreach(var code in new[]{System.Net.HttpStatusCode.Unauthorized,(System.Net.HttpStatusCode)429,System.Net.HttpStatusCode.InternalServerError}) {
+                    handler.Code=code;
+                    try {InterApiSearch.Search(client,"fixture-key","русский запрос & test",false,20,CancellationToken.None).GetAwaiter().GetResult();throw new Exception("HTTP failure accepted");}
+                    catch(Exception ex) {if(!ex.Message.StartsWith("InterAPI: HTTP "))throw;}
+                }
+                handler.Code=System.Net.HttpStatusCode.OK;
+                foreach(string body in new[]{"not json","{}","{\"status\":\"error\",\"results\":[]}"}) {
+                    handler.Body=body;
+                    try {InterApiSearch.Search(client,"fixture-key","русский запрос & test",false,20,CancellationToken.None).GetAwaiter().GetResult();throw new Exception("Invalid response accepted");}
+                    catch(Exception ex) {if(!ex.Message.StartsWith("InterAPI"))throw;}
+                }
+                using(var cancel=new CancellationTokenSource()) {
+                    cancel.Cancel();
+                    try {InterApiSearch.Search(client,"fixture-key","русский запрос & test",false,20,cancel.Token).GetAwaiter().GetResult();throw new Exception("Cancellation ignored");}catch(OperationCanceledException){}
+                }
+            }
+            var key=WindowsSupport.Protect("fixture-key");
+            var saved=new JavaScriptSerializer().Serialize(new Preferences{ProtectedInterApiKey=key});
+            if(saved.Contains("fixture-key")||WindowsSupport.Unprotect(new JavaScriptSerializer().Deserialize<Preferences>(saved).ProtectedInterApiKey)!="fixture-key")throw new Exception("InterAPI protected storage mismatch");
+            Console.WriteLine("InterAPI request/response, errors, cancellation, protected storage PASS (fixture, not live)");return true;
+        }
         public static bool RunYouTubeProtocolTests() {
             var job=new UploadJob {highlightsSearch=true,sourceMode="sources",sourcePeriod="week",sourceDuration="short",sourceEntries=new[]{"https://www.youtube.com/@example"},todayDate="2026-11-10",pcUtcOffsetMinutes=420};
             string payload;
@@ -93,6 +192,7 @@ namespace VideoBatch {
                             }catch(Exception ex){failure=ex;}finally{dialog.Close();}
                         };
                         timer.Start();typeof(HighlightsPanel).GetMethod("ShowYouTube",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(panel,null);
+                        var deadline=DateTime.UtcNow.AddSeconds(5);while(!inspected&&failure==null&&DateTime.UtcNow<deadline){Application.DoEvents();Thread.Sleep(10);}
                     }
                     if(failure!=null)throw failure;if(!inspected)throw new Exception("YouTube dialog not inspected");form.Close();
                 }

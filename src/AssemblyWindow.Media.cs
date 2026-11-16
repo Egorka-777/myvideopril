@@ -69,6 +69,7 @@ namespace VideoBatch {
                     if (scope.SelectedIndex == 2 && SelectedScene != null) OpenPool(3); else OpenPool(0);
                     RefreshCounts();
                 }); files.Width = 560; body.Controls.Add(files);
+                AddVoicePitchControls(body);
                 AddNativeAudioControls(body, true);
                 body.Controls.Add(firstList);
                 AddVideoPlacementControls(body);
@@ -164,6 +165,7 @@ namespace VideoBatch {
                 var body = MediaBody(form);
                 Action refresh = () => { Changed(false); Save(); RequestTimingHints(); RefreshInfo(); };
                 body.Controls.Add(new Label { Text = "Один вариант озвучки выбирается из пачки для каждого ролика. Длина видео = выбранное аудио. Музыка настраивается отдельно.", Width = 560, Height = 54, ForeColor = Theme.TextSecondary });
+                AddVoicePitchControls(body);
                 body.Controls.Add(new Label { Text = "ОБЩАЯ ПАЧКА ОЗВУЧКИ", Width = 560, Height = 28, Font = Theme.FontCardTitle });
                 var sharedCount = AssemblySpeechPlan.SharedVoiceOptions(template).Count;
                 body.Controls.Add(new Label { Text = "Доступно вариантов: " + sharedCount + (string.IsNullOrWhiteSpace(template.Voiceover) ? " · ElevenLabs" : " · загруженные файлы"), Width = 560, Height = 32, ForeColor = Theme.TextSecondary });
@@ -207,26 +209,57 @@ namespace VideoBatch {
                 form.ShowDialog(this);
             }
         }
+        void AddVoicePitchControls(FlowLayoutPanel body) {
+            var pitch = new NumericUpDown { Name = "VoicePitchValue", Minimum = -12, Maximum = 12, DecimalPlaces = 1, Increment = .5m,
+                Value = (decimal)template.VoicePitchSemitones, Visible = false };
+            body.Controls.Add(pitch);
+            body.Controls.Add(new AssemblySlider("Тон голоса · ниже / выше", pitch, "пт") { Name = "VoicePitchSlider", Width = 560 });
+            body.Controls.Add(new Label { Text = "−12…+12 полутонов · 0 — обычный голос. Без изменения скорости. Озвучка, а без неё — звук видео. Музыка и фон не меняются.", Width = 560, Height = 46, ForeColor = Theme.TextSecondary });
+            pitch.ValueChanged += (s, e) => { template.VoicePitchSemitones = (double)pitch.Value; Changed(false); Save(); };
+        }
         void AddNativeAudioControls(FlowLayoutPanel body, bool primary) {
             var row = new FlowLayoutPanel { Width = 560, Height = 32, WrapContents = false };
             var on = new CheckBox { Text = "Родной звук · пачка " + (primary ? "1" : "2"), AutoSize = true,
                 Checked = primary ? template.PrimaryNativeAudio : template.SecondaryNativeAudio, ForeColor = Theme.TextPrimary };
             var level = new NumericUpDown { Minimum = 0, Maximum = 200, Width = 65, Value = (decimal)((primary ? template.PrimaryNativeVolume : template.SecondaryNativeVolume) * 100) };
-            row.Controls.Add(on); row.Controls.Add(level); row.Controls.Add(new Label { Text = "%", AutoSize = true }); body.Controls.Add(row);
+            row.Controls.Add(on);
+            if (!primary) { row.Controls.Add(level); row.Controls.Add(new Label { Text = "%", AutoSize = true }); }
+            else { on.Text="Включить звук основных видео"; level.Dispose(); }
+            body.Controls.Add(row);
             on.CheckedChanged += (s, e) => { if (primary) template.PrimaryNativeAudio = on.Checked; else template.SecondaryNativeAudio = on.Checked; Changed(false); Save(); };
-            level.ValueChanged += (s, e) => { if (primary) template.PrimaryNativeVolume = (double)level.Value / 100; else template.SecondaryNativeVolume = (double)level.Value / 100; Changed(false); Save(); };
+            if (!primary) level.ValueChanged += (s, e) => { template.SecondaryNativeVolume = (double)level.Value / 100; Changed(false); Save(); };
         }
         void OpenAudioEditor() {
             LeaveSubtitleWorkspaceIfOpen();
-            using (var form = MediaDialog("Музыка · " + AssemblyProfile.ShortLabel(studioProfile, template), 460)) {
+            using (var form = MediaDialog("Настройки звука · " + AssemblyProfile.ShortLabel(studioProfile, template), 740)) {
                 var body = MediaBody(form);
-                body.Controls.Add(new Label { Text = "Родной звук видео регулируется отдельно от музыки и озвучки. Пустая пачка музыки не отключает звук видео.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
-                AddNativeAudioControls(body, true);
-                if (template.SplitLayout != "none") AddNativeAudioControls(body, false);
-                var rollMusic = Button("Музыка на весь ролик · " + Pool(template.Music, AssemblyFiles.MusicExtensions).Count + " файлов", () => OpenPool(1)); rollMusic.Width = 560; body.Controls.Add(rollMusic);
-                loading = true; volume.Value = (decimal)(template.MusicVolume * 100); loading = false;
-                body.Controls.Add(new AssemblySlider("Громкость музыки на весь ролик", volume, "%") { Width = 560 });
-                body.Controls.Add(new Label { Text = SelectedScene == null ? "Выбери сцену для локального аудио." : "Аудио только для «" + SceneLabel(SelectedScene, sceneIndex) + "»", Width = 560, Height = 30, Margin = new Padding(0, 14, 0, 0) });
+                body.Controls.Add(new Label { Text = "Фоновая музыка играет непрерывно весь ролик. Все уровни ниже регулируются только для выбранной сцены. 0% отключает звук в этой сцене.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
+                AddVoicePitchControls(body);
+                AddAudioLevelingControls(body, form);
+                body.Controls.Add(new Label { Text = SelectedScene == null ? "Выбери сцену." : "ЗВУК · " + SceneLabel(SelectedScene, sceneIndex), Width = 560, Height = 30, Font = Theme.FontCardTitle, Margin = new Padding(0, 14, 0, 0) });
+                if (SelectedScene != null) {
+                    double initialNative = template.SceneNativeAudioVolume(SelectedScene);
+                    var nativeOn = new CheckBox { Text = "Включить звук видео этой сцены", Width = 560, Height = 30, Checked = initialNative > 0, ForeColor = Theme.TextPrimary };
+                    var nativeLevel = Value(0, 200, 0); nativeLevel.Value = (decimal)(initialNative * 100); nativeLevel.Visible = false;
+                    body.Controls.Add(nativeOn); body.Controls.Add(nativeLevel);
+                    body.Controls.Add(new AssemblySlider("Громкость звука видео этой сцены", nativeLevel, "%") { Width = 560, Name = "SceneNativeAudioSlider" });
+                    nativeOn.CheckedChanged += (s, e) => {
+                        if (!nativeOn.Checked) SelectedScene.NativeAudioVolume = 0;
+                        else if (SelectedScene.NativeAudioVolume <= 0) SelectedScene.NativeAudioVolume = nativeLevel.Value > 0 ? (double)nativeLevel.Value / 100 : 1;
+                        nativeLevel.Value = (decimal)(SelectedScene.NativeAudioVolume * 100);
+                        Changed(false); Save();
+                    };
+                    nativeLevel.ValueChanged += (s, e) => {
+                        SelectedScene.NativeAudioVolume = (double)nativeLevel.Value / 100;
+                        nativeOn.Checked = SelectedScene.NativeAudioVolume > 0;
+                        Changed(false); Save();
+                    };
+                }
+                var rollMusic = Button("Пачка фоновой музыки · " + Pool(template.Music, AssemblyFiles.MusicExtensions).Count + " файлов", () => OpenPool(1)); rollMusic.Width = 560; body.Controls.Add(rollMusic);
+                var bedVolume = Value(0, 200, 0); bedVolume.Value = (decimal)(template.SceneBedMusicVolume(SelectedScene) * 100); bedVolume.Visible = false; body.Controls.Add(bedVolume);
+                body.Controls.Add(new AssemblySlider("Громкость фоновой музыки в этой сцене", bedVolume, "%") { Width = 560, Name = "SceneBedMusicSlider" });
+                bedVolume.ValueChanged += (s, e) => { if (SelectedScene != null) { SelectedScene.BedMusicVolume = (double)bedVolume.Value / 100; Changed(false); Save(); } };
+                body.Controls.Add(new Label { Text = SelectedScene == null ? "Выбери сцену для отдельного аудио." : "Отдельный аудиофайл только для этой сцены", Width = 560, Height = 30, Margin = new Padding(0, 14, 0, 0) });
                 var sceneMusic = Button("Добавить аудио выбранной сцены", () => {
                     if (SelectedScene == null) return;
                     var paths = PickFiles(1); if (paths == null) return;

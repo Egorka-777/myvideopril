@@ -111,6 +111,8 @@ namespace VideoBatch {
 
             headerActions.Controls.Add(Theme.MakeMenuButton("Ещё",
 
+                ("Поиск аккаунта…", PromptSearch),
+                ("Фильтр статуса…", ShowStatusFilter),
                 ("+ Аккаунт", AddAccount),
 
                 ("Из YouTube", SyncProfilesFromYouTubeMenu),
@@ -138,7 +140,7 @@ namespace VideoBatch {
 
             contextRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            contextRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            contextRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
 
             var switches = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Theme.Card, Margin = new Padding(0, 2, 0, 0) };
 
@@ -146,7 +148,9 @@ namespace VideoBatch {
 
             var meta = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = true, BackColor = Theme.Card, Margin = new Padding(0, 2, 0, 0) };
 
-            meta.Controls.Add(Theme.MakeChip("Shorts · Dolphin"));
+            meta.MaximumSize = new Size(260, 0);
+            meta.Controls.Add(Theme.MakeAccentChip("ПК " + DateTime.Now.ToString("zzz")));
+            meta.Controls.Add(Theme.MakeChip("Видео · Dolphin"));
 
             meta.Controls.Add(accountBadge);
 
@@ -178,7 +182,7 @@ namespace VideoBatch {
 
             contextCard.Controls.Add(contextRow);
 
-            contextCard.Controls.Add(filterRow);
+            // Search and status filtering use the same «Ещё» placement as YouTube.
 
 
 
@@ -206,6 +210,10 @@ namespace VideoBatch {
 
             Theme.StyleGrid(grid);
 
+            grid.RowTemplate.Height = 54;
+            grid.Margin = new Padding(0, 8, 0, 0);
+            grid.DefaultCellStyle.SelectionBackColor = Theme.ColorFromHex("#106B54");
+            grid.DefaultCellStyle.SelectionForeColor = Color.White;
             grid.AlternatingRowsDefaultCellStyle.BackColor = Theme.ColorFromHex("#282828");
 
             var onCol = new DataGridViewCheckBoxColumn { Name = "on", HeaderText = "✓", Width = 40, MinimumWidth = 40, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, FillWeight = 20 };
@@ -216,7 +224,10 @@ namespace VideoBatch {
 
             grid.Columns.Add("account", "Аккаунт");
 
-            grid.Columns["account"].FillWeight = 160;
+            grid.Columns["account"].FillWeight = 260;
+            grid.Columns["account"].MinimumWidth = 200;
+            grid.Columns["account"].DefaultCellStyle.Font = new Font(Theme.FontBody.FontFamily, 10.5f, FontStyle.Bold);
+            grid.Columns["account"].DefaultCellStyle.Padding = new Padding(4, 6, 8, 6);
 
             grid.Columns.Add("profile", "Profile ID");
 
@@ -230,7 +241,7 @@ namespace VideoBatch {
 
             grid.Columns["ip"].FillWeight = 70;
 
-            grid.Columns.Add("files", "Файлы");
+            grid.Columns.Add("files", "Видео");
 
             grid.Columns["files"].FillWeight = 60;
 
@@ -240,7 +251,12 @@ namespace VideoBatch {
 
             grid.Columns.Add("status", "Статус");
 
-            grid.Columns["status"].FillWeight = 100;
+            grid.Columns["status"].FillWeight = 90;
+            grid.Columns["status"].DefaultCellStyle.ForeColor = Theme.TextSecondary;
+            grid.Columns["status"].DefaultCellStyle.Font = Theme.FontSmall;
+            grid.Columns["caption"].DefaultCellStyle.ForeColor = Theme.TextSecondary;
+            foreach (DataGridViewColumn column in grid.Columns) column.ReadOnly = column.Name != "on";
+            grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && grid.Columns[e.ColumnIndex].Name != "on") AddVideos(); };
             grid.CellPainting += (sender, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == grid.Columns["status"].Index && grid.Rows[e.RowIndex].Tag is TikTokAccount a) UploadPreparation.PaintProgress(e, UploadPreparation.TikTokKey(a)); };
             Disposed += (sender, e) => { foreach (var key in preparationKeys.ToArray()) UploadPreparation.Cancel(key); };
 
@@ -340,7 +356,7 @@ namespace VideoBatch {
 
         }
 
-        void ReconcileAccount(TikTokAccount account) {
+        async void ReconcileAccount(TikTokAccount account) {
 
             if (account == null) return;
 
@@ -348,7 +364,7 @@ namespace VideoBatch {
 
                 SyncWorkspaceToBackend();
 
-                backend.ReconcileUploads(new List<TikTokAccount> { account });
+                await backend.RecheckContentAsync(new List<TikTokAccount> { account });
 
                 RefreshGrid(skipSync: true);
 
@@ -490,9 +506,34 @@ namespace VideoBatch {
 
 
 
+        void PromptSearch() {
+            using (var dialog = new Form { Text = "Поиск аккаунта", Width = 420, Height = 150, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Theme.Background, ForeColor = Theme.TextPrimary }) {
+                var box = new TextBox { Left = 20, Top = 38, Width = 360, Text = accountSearch.Text };
+                var ok = new Button { Text = "Найти", Left = 208, Top = 72, Width = 82, DialogResult = DialogResult.OK };
+                var clear = new Button { Text = "Сброс", Left = 116, Top = 72, Width = 82 };
+                clear.Click += (s, e) => box.Text = "";
+                dialog.Controls.AddRange(new Control[] { new Label { Text = "Имя или Profile ID", Left = 20, Top = 14, Width = 360 }, box, clear, ok, new Button { Text = "Отмена", Left = 298, Top = 72, Width = 82, DialogResult = DialogResult.Cancel } });
+                dialog.AcceptButton = ok;
+                if (dialog.ShowDialog(this) == DialogResult.OK) accountSearch.Text = box.Text;
+            }
+        }
+
+        void ShowStatusFilter() {
+            var menu = Theme.MakeContextMenu();
+            foreach (var value in statusFilter.Items) {
+                string status = value.ToString();
+                menu.Items.Add(new ToolStripMenuItem(status) { Checked = status == statusFilterValue });
+                menu.Items[menu.Items.Count - 1].Click += (s, e) => statusFilter.SelectedItem = status;
+            }
+            menu.Show(Cursor.Position);
+        }
+
         void SyncProfilesFromYouTubeMenu() {
 
-            var r = SyncProfilesFromYouTube(silent: false);
+            var r = TikTokProfileSync.ImportAllFromYouTube(settings);
+            Store.Save(settings);
+            backend.Reload();
+            AppendLog("YouTube→TikTok · RU/EN: привязано " + r.Linked + ", новых " + r.Imported + ".");
 
             RefreshGrid(skipSync: true);
 
@@ -760,37 +801,8 @@ namespace VideoBatch {
 
             }
 
-            var blocked = checkedAccounts.Where(AccountNeedsReview).ToList();
-
-            var ready = checkedAccounts.Where(a => !AccountNeedsReview(a)).ToList();
-
-            if (blocked.Count > 0) {
-
-                AppendLog("Нужна сверка (пропуск): " + string.Join(", ", blocked.Select(a => a.Name)));
-
-                if (ready.Count == 0) {
-
-                    MessageBox.Show(this,
-
-                        string.Join("\n", blocked.Select(a => "• " + a.Name)) +
-
-                        "\n\nПредыдущая попытка не подтверждена. ПКМ → «Сверить загрузку» → «Нет», если ролика в Studio нет, или снимите галочку с лишних аккаунтов.",
-
-                        "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-
-                    return;
-
-                }
-
-                MessageBox.Show(this,
-
-                    "Пропускаем аккаунты со сверкой:\n" + string.Join("\n", blocked.Select(a => "• " + a.Name)) +
-
-                    "\n\nЗагрузка пойдёт только для:\n" + string.Join("\n", ready.Select(a => "• " + a.Name)),
-
-                    "TikTok", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-            }
+            // Studio reconciles every pending item before sending files, including uncertain attempts.
+            var ready = checkedAccounts;
 
             try {
 

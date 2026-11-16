@@ -187,7 +187,11 @@ const { automationEndpoint, releaseTaskPage } = require("./dolphin-session");
 
 async function stopProfile({ completedUpload = false } = {}) {
   if (!profileStarted || !job || (!profileOwned && !completedUpload) || job.keepProfileOpen) return;
-  if(completedUpload)await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`);
+  if(completedUpload){
+    const result=await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`);
+    if(!result||result.success!==true)throw new Error('Dolphin не подтвердил закрытие профиля '+job.profileId+'.');
+    send('dolphin','Dolphin подтвердил закрытие профиля '+job.profileId+'.');
+  }
   else try { await api(`/v1.0/browser_profiles/${encodeURIComponent(job.profileId)}/stop`); } catch (_) {}
   profileStarted = false;
 }
@@ -357,6 +361,7 @@ async function closeProfileSafely(page) {
   if (browser) await browser.close(); // Disconnect CDP; Dolphin owns the browser.
   browser = null;
   await stopProfile({ completedUpload: isStudioUploadJob(job) });
+  if(job.keepProfileOpen)send('dolphin','Профиль оставлен открытым для следующей пачки каналов.');
 }
 
 async function fetchText(url, timeoutMs = 20000) {
@@ -2941,10 +2946,12 @@ async function main() {
     await studioBrowser.openStudio(page,job.channelUrl,send);
     const owner=require('./youtube-owner-publish');
     await owner.runSequential(page,job.items||[],{progress:send,
+      usePage:current=>{taskPage=current;},
       checkpoint:(item,index)=>durableCheckpoint('owner_comment_submitting',item,index,{videoId:item.publishedVideoId,commentText:item.commentText})});
-    await closeProfileSafely(page);
+    if(browser)await browser.close(); // Disconnect only; keep Dolphin and its current page open.
+    browser=null;
     finished=true;
-    send('done','Публикация проверена. Комментарии автора обработаны.',{success:true,percent:100});
+    send('done','Публикация завершена. Комментарии обработаны без проверки после отправки; профиль оставлен открытым.',{success:true,keptOpen:true,percent:100});
     return;
   }
 

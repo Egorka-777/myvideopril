@@ -173,7 +173,8 @@ namespace VideoBatch {
                     List<WarmupCaption> captions = null;
                     if (job.Subtitles?.Enabled == true) {
                         log(prefix + "Накладываю субтитры по таймкодам озвучки…");
-                        captions = WarmupSubtitles.Rasterize(WarmupSubtitles.Cues(alignment, duration, job.Subtitles.WordsPerCaption), job.Subtitles, work);
+                        var style = SubtitleRandomSettings.ForVideo(job.Subtitles, rnd);
+                        captions = WarmupSubtitles.Rasterize(WarmupSubtitles.Cues(alignment, duration, style.WordsPerCaption), style, work);
                     }
                     await Core.Tool(ffmpeg, RenderArguments(backgroundFile, wav, partial, duration, captions), ct, null, 180).ConfigureAwait(false);
                     await VerifyOutputAsync(ffprobe, partial, duration, ct).ConfigureAwait(false);

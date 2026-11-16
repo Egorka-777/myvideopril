@@ -71,6 +71,8 @@ async function confirmReviewDialog(page) {
   }
   const confirm=dialog.getByRole("button",{name:POST}).first();
   if(!await ready(confirm) || await confirm.isDisabled())return false;
+  await confirm.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(2000);
   await confirm.click();return true;
 }
 function matchRow(list,id,caption,before) {
@@ -83,7 +85,7 @@ function matchRow(list,id,caption,before) {
   });
   if(matches.length>1)throw new Error("Найдено несколько новых публикаций с этой подписью. Повтор запрещён; нужна сверка Studio.");
   if(!matches.length)return null;
-  const row=matches[0], review=REVIEW.test(row.text);
+  const row=matches[0], review=REVIEW.test(row.text) || /(?:^|\s)(?:Only me|Только я)(?:\s|$)/i.test(row.text);
   const publicPost=/(?:^|\s)(?:Everyone|Public|Все|Для всех)(?:\s|$)/i.test(row.text) && !review;
   if(!review && !publicPost)throw new Error("Ролик найден в Studio, но доступ «Все» не подтверждён. Повтор запрещён.");
   return {id:row.id,review,public:publicPost};
@@ -91,24 +93,54 @@ function matchRow(list,id,caption,before) {
 async function publishNative(page,item,{beforeSubmit,accepted,reviewTimeout=600000,pollMs=5000,id=""}={}) {
   await immediatePublic(page);
   const content=await contentPage(page);
+  let before, contentUrl;
   try {
-    const before=new Set((await rows(content)).map(r=>r.id));
-    await beforeSubmit();
-    const button=page.getByRole("button",{name:POST}).first();
-    if(!await ready(button) || await button.isDisabled())throw new Error("Кнопка публикации недоступна. Проверь Studio перед повтором.");
-    await button.click();
-    let confirmed=false, result=null, notified=false;
-    const end=Date.now()+reviewTimeout;
-    while(Date.now()<end){
-      if(!confirmed)confirmed=await confirmReviewDialog(page);
-      await content.reload({waitUntil:"domcontentloaded",timeout:90000});
-      result=matchRow(await rows(content),id,item.caption,before);
-      if(result){if(!notified){await accepted(result);notified=true;}if(result.public)return result;}
-      await page.waitForTimeout(pollMs);
-    }
-    if(result && result.review)return result;
-    throw new Error("TikTok не подтвердил новую запись в Studio. Автоповтор запрещён; проверь профиль.");
+    before=new Set((await rows(content)).map(r=>r.id));
+    contentUrl=new URL(content.url());
   }finally{await content.close();}
+  const button=page.getByRole("button",{name:POST}).first();
+  if(!await ready(button) || await button.isDisabled())throw new Error("Кнопка публикации недоступна. Проверь Studio перед повтором.");
+  await button.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(2000);
+  await beforeSubmit();
+  await button.click();
+  let confirmed=false, result=null, notified=false, inContent=false;
+  const end=Date.now()+reviewTimeout;
+  while(Date.now()<end){
+    if(!confirmed)confirmed=await confirmReviewDialog(page);
+    const current=new URL(page.url());
+    if(current.origin===contentUrl.origin && current.pathname===contentUrl.pathname){
+      if(inContent)await page.reload({waitUntil:"domcontentloaded",timeout:90000});
+      inContent=true;
+      result=matchRow(await rows(page),id,item.caption,before);
+      if(result){
+        id=result.id;
+        if(!notified){await accepted(result);notified=true;}
+        if(result.public)return result;
+      }
+    }
+    await page.waitForTimeout(pollMs);
+  }
+  if(notified)throw new Error("TikTok ещё не подтвердил доступ «Все» за отведённое время. Профиль оставлен открытым; повторная загрузка запрещена.");
+  throw new Error("TikTok не подтвердил новую запись в списке Studio. Профиль оставлен открытым; автоповтор запрещён.");
+}
+async function openNextUpload(page) {
+  const uploadName=/^(Upload|Upload video|Загрузить|Загрузить видео)$/i;
+  let control=page.getByRole("link",{name:uploadName}).first();
+  if(!await ready(control))control=page.getByRole("button",{name:uploadName}).first();
+  await control.waitFor({state:"visible",timeout:30000});
+  await control.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(2000);
+  await control.click();
+  const file=page.locator('input[type="file"]').first();
+  const video=page.getByRole("menuitem",{name:/^(Video|Видео)$/i}).or(page.getByRole("link",{name:/^(Video|Видео)$/i})).or(page.getByRole("button",{name:/^(Video|Видео)$/i})).first();
+  await file.or(video).first().waitFor({state:"attached",timeout:30000});
+  if(!await file.count()){
+    await video.waitFor({state:"visible",timeout:30000});
+    await page.waitForTimeout(2000);
+    await video.click();
+  }
+  await file.waitFor({state:"attached",timeout:30000});
 }
 async function recheckNative(page,item,{timeout=30000,pollMs=5000}={}) {
   const id=String(item.videoId||item.publishedVideoId||"");
@@ -121,4 +153,41 @@ async function recheckNative(page,item,{timeout=30000,pollMs=5000}={}) {
     throw new Error("Сохранённый ID публикации не найден. Блокировка повтора сохранена.");
   }finally{await content.close();}
 }
-module.exports={publishNative,recheckNative,immediatePublic,confirmReviewDialog,matchRow,rows};
+// Reconciliation deliberately does not use matchRow's post-submit prefix heuristic.
+// A caption without an ID is only unique after the entire Studio list was read.
+function reconcileInventory(inventory,items) {
+  const list=inventory.rows, used=new Set();
+  return items.map((item,index)=>{
+    const id=String(item.publishedVideoId||""),caption=clean(item.caption||item.description||item.title);
+    if(!id && !caption)throw new Error(`Ролик ${index+1}: нет подписи для сверки Studio.`);
+    if(!id && !inventory.complete)throw new Error("Список Studio прочитан не полностью: уникальность полной подписи не подтверждена. Загрузка не начиналась; нужна проверка пагинации Studio.");
+    if(!id && list.some(row=>{
+      const value=clean(row.caption);
+      return !value || /(?:…|\.{3})$/.test(value) && value!==caption && caption.startsWith(value.replace(/(?:…|\.{3})$/,""));
+    }))throw new Error(`Ролик ${index+1}: Studio показывает сокращённую или недоступную подпись; точное совпадение не доказано. Повтор запрещён.`);
+    const matches=list.filter(row=>id?row.id===id:clean(row.caption)===caption);
+    if(matches.length>1)throw new Error(`Ролик ${index+1}: несколько публикаций с одинаковой полной подписью/ID. Автоматическая сверка остановлена.`);
+    if(!matches.length) {
+      if(id || item.studioPending)throw new Error(`Ролик ${index+1}: ранее отправленная публикация не найдена; блокировка повтора сохранена.`);
+      return null;
+    }
+    const row=matches[0];
+    if(used.has(row.id))throw new Error("Одна публикация Studio соответствует нескольким заданиям. Автоматическая сверка остановлена.");
+    used.add(row.id);
+    return matchRow([row],row.id,caption,new Set());
+  });
+}
+async function reconcileNative(page,items,{matched=async()=>{}}={}) {
+  const content=await contentPage(page);
+  try {
+    const list=await rows(content);
+    // Empty-state text is already awaited by contentPage. For a populated list,
+    // pagination must be verified against real Studio DOM before claiming completeness.
+    const complete=!list.length && await content.locator("body").innerText().then(text=>/no posts|no videos|нет публикаций|публикаций нет|загрузите первое видео|upload your first video/i.test(text));
+    const results=reconcileInventory({rows:list,complete},items);
+    // Resolve every item before persisting anything, so ambiguity cannot authorize a partial upload.
+    for(let i=0;i<results.length;i++)if(results[i])await matched(results[i],items[i],i+1,items.length);
+    return results;
+  }finally{await content.close();}
+}
+module.exports={publishNative,recheckNative,immediatePublic,confirmReviewDialog,matchRow,rows,contentPage,openNextUpload,reconcileInventory,reconcileNative};

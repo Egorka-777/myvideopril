@@ -8,6 +8,33 @@ using System.Web.Script.Serialization;
 
 namespace VideoBatch {
     public static class AssemblySpeechPlan {
+        public static bool SubtitlesEnabled(AssemblyTemplate t) => t?.SubtitleStyle != null && t.SubtitleStyle.Enabled;
+        public static string TranscriptText(AssemblyPlan plan, double mainStart) {
+            var lines = (plan.Captions ?? new List<WarmupCaption>()).Where(c => c.End > mainStart && !string.IsNullOrWhiteSpace(c.Text))
+                .OrderBy(c => c.Start).Select(c => c.Start < mainStart && c.Words != null && c.Words.Count > 0
+                    ? string.Join(" ", c.Words.Where(w => w.Start >= mainStart).Select(w => w.Text)) : c.Text);
+            return string.Join(" ", lines.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()));
+        }
+        public static void SaveTranscript(string video, AssemblyPlan plan, double mainStart) {
+            string text = TranscriptText(plan, mainStart);
+            if (string.IsNullOrWhiteSpace(text)) throw new Exception("Нет сохранённой транскрибации для ролика: " + Path.GetFileName(video));
+            File.WriteAllText(Path.ChangeExtension(video, ".txt"), text + Environment.NewLine, new System.Text.UTF8Encoding(true));
+        }
+        public static async Task EnsureTranscript(AssemblyTemplate t, AssemblyPlan plan, string video, string ffmpeg, string work, CancellationToken ct, Action<string> progress) {
+            if (!SubtitlesEnabled(t)) return;
+            double start = AssemblyTimeline.MainStart(t, plan);
+            if (!string.IsNullOrWhiteSpace(TranscriptText(plan, start))) return;
+            progress?.Invoke("Готовлю текст основного видео без вступления…");
+            string speech = Path.Combine(work, "transcript-main.wav");
+            await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-ss", Core.N(start), "-i", video, "-vn", "-ac", "1", "-ar", "16000", speech }, ct, null, 600).ConfigureAwait(false);
+            var cues = await EnsureCaptionsForAudioAsync(t, speech, null, Math.Max(0, plan.RollDuration(t) - start), ct, progress).ConfigureAwait(false);
+            foreach (var cue in cues) {
+                cue.Start += start; cue.End += start;
+                if (cue.Words != null) foreach (var word in cue.Words) { word.Start += start; word.End += start; }
+            }
+            plan.Captions = cues;
+            if (string.IsNullOrWhiteSpace(TranscriptText(plan, start))) throw new Exception("Речь в основном видео не распознана; текстовый файл не создан.");
+        }
         public sealed class SpeechTiming {
             public string AudioHash, Text, Source;
             public WarmupAlignment Alignment;
@@ -109,6 +136,7 @@ namespace VideoBatch {
                     var scene = p.Scenes[i];
                     scene.VoiceSeconds = 0;
                     scene.ContentSeconds = 0;
+                    if (scene.Scene.IsPreview) scene.Voiceover = "";
                     if (!string.IsNullOrWhiteSpace(scene.Voiceover)) {
                         if (!File.Exists(scene.Voiceover)) throw new Exception("Не найдена озвучка сцены: " + scene.Voiceover);
                         scene.VoiceSeconds = Core.AudioDuration(await Core.Probe(probe, scene.Voiceover, ct).ConfigureAwait(false));
@@ -135,6 +163,7 @@ namespace VideoBatch {
                 p.Captions = captions;
             } else {
                 // Prepare may be called more than once for a preview and its final render.
+                p.Captions = (t.Captions ?? new List<AssemblyCaption>()).Select(c => new WarmupCaption { Text=c.Text, Start=c.Start, End=c.End }).ToList();
                 foreach (var scene in p.Scenes) { scene.ContentSeconds = 0; scene.VoiceSeconds = 0; }
                 if (string.IsNullOrWhiteSpace(p.Voiceover)) p.Voiceover = await ResolveVoiceoverAsync(t, ffmpeg, probe, work, ct).ConfigureAwait(false);
                 double voiceSeconds = 0;
@@ -155,9 +184,75 @@ namespace VideoBatch {
             }
             // Source-length mode wins over voice timing: audio is trimmed/padded by the renderer.
             AssemblyTimeline.ApplyVideoDuration(t, p);
+            double mainStart = AssemblyTimeline.MainStart(t, p);
+            if (mainStart > 0 && !t.HasSceneVoiceovers) foreach (var cue in p.Captions) {
+                cue.Start += mainStart; cue.End += mainStart;
+                if (cue.Words != null) foreach (var word in cue.Words) { word.Start += mainStart; word.End += mainStart; }
+            }
             p.Captions = t.SubtitleStyle?.Enabled == true
                 ? WarmupSubtitles.FitToDuration(p.Captions, p.RollDuration(t))
                 : new List<WarmupCaption>();
+        }
+        // Run only after the concrete video segments and final scene durations are known.
+        public static async Task PrepareVideoCaptions(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string work, CancellationToken ct, Action<string> progress = null) {
+            if (t.SubtitleStyle?.Enabled != true || !string.IsNullOrWhiteSpace(p.Voiceover)) return;
+            var args = new List<string> { "-v", "error", "-nostdin", "-y" };
+            var graph = new List<string>(); var audio = new List<string>(); int input = 0;
+            double roll = p.RollDuration(t), position = 0;
+            bool continuous = t.ContinuousVideo && p.Scenes.All(s => string.IsNullOrWhiteSpace(s.Voiceover));
+            if (continuous) {
+                if (t.SceneNativeAudioVolume(p.Scenes[0].Scene) > 0)
+                    AssemblyRender.AppendNativeAudio(p.Scenes[0].Video, 0, roll, 0, t.LoopShortVideos && p.Scenes[0].Video.Duration < roll,
+                        t.SceneNativeAudioVolume(p.Scenes[0].Scene), roll, args, ref input, graph, audio);
+                if (t.SplitLayout != "none" && t.SecondaryNativeAudio && t.SecondaryNativeVolume > 0 && p.SecondaryVideo != null)
+                    AssemblyRender.AppendNativeAudio(p.SecondaryVideo, 0, roll, 0, t.LoopShortVideos && p.SecondaryVideo.Duration < roll,
+                        t.SecondaryNativeVolume, roll, args, ref input, graph, audio);
+            }
+            foreach (var scene in p.Scenes) {
+                double content = AssemblyTimeline.ContentDuration(t, scene);
+                double audioStart = position + (t.HasPreviewScene ? 0 : scene.IncomingPad);
+                if (!scene.Scene.IsPreview && string.IsNullOrWhiteSpace(scene.Voiceover) && !continuous) {
+                    double nativeVolume = t.SceneNativeAudioVolume(scene.Scene);
+                    if (nativeVolume > 0) {
+                        if (t.ContinuousVideo) {
+                            AssemblyRender.AppendNativeAudio(scene.Video, position + scene.IncomingPad, content, audioStart,
+                                t.LoopShortVideos && scene.Video.Duration < roll, nativeVolume, roll, args, ref input, graph, audio);
+                        } else if (scene.VideoSegments != null && scene.VideoSegments.Count > 1) {
+                            double offset = 0;
+                            foreach (var segment in scene.VideoSegments) {
+                                AssemblyRender.AppendNativeAudio(segment.Video, 0, segment.Duration, audioStart + offset,
+                                    false, nativeVolume, roll, args, ref input, graph, audio);
+                                offset += segment.Duration;
+                            }
+                        } else AssemblyRender.AppendNativeAudio(scene.Video, AssemblyTimeline.SourceStart(t, scene), content, audioStart,
+                            AssemblyTimeline.LoopInput(t, scene), nativeVolume, roll, args, ref input, graph, audio);
+                    }
+                    if (t.SplitLayout != "none" && t.SecondaryNativeAudio && t.SecondaryNativeVolume > 0 && p.SecondaryVideo != null)
+                        AssemblyRender.AppendNativeAudio(p.SecondaryVideo, position + scene.IncomingPad, content, audioStart,
+                            t.LoopShortVideos && p.SecondaryVideo.Duration < roll, t.SecondaryNativeVolume, roll, args, ref input, graph, audio);
+                }
+                position += AssemblyTimeline.SceneSeconds(scene) + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
+            }
+            if (audio.Count == 0) {
+                if (p.Captions.Count == 0) throw new Exception("Субтитры включены, но нет озвучки или включённого звука видео для распознавания.");
+                return;
+            }
+            progress?.Invoke("Распознаю речь выбранных видео для этого ролика…");
+            string speech = Path.Combine(work, "video-speech.wav");
+            graph.Add(string.Join("", audio.Select(a => "[" + a + "]")) + "amix=inputs=" + audio.Count + ":duration=longest:normalize=0,atrim=duration=" + Core.N(roll) + "[speech]");
+            args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(";", graph), "-map", "[speech]", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", speech });
+            await Core.Tool(ffmpeg, args, ct, null, 600).ConfigureAwait(false);
+            var cues = await EnsureCaptionsForAudioAsync(t, speech, null, roll, ct, progress).ConfigureAwait(false);
+            double mainStart = AssemblyTimeline.MainStart(t, p);
+            p.Captions.AddRange(cues.Where(c => c.End > mainStart));
+            if (mainStart > 0) foreach (var cue in p.Captions) {
+                cue.Start = Math.Max(mainStart, cue.Start);
+                if (cue.Words != null) {
+                    cue.Words.RemoveAll(w => w.End <= mainStart);
+                    foreach (var word in cue.Words) word.Start = Math.Max(mainStart, word.Start);
+                }
+            }
+            p.Captions = WarmupSubtitles.FitToDuration(p.Captions.OrderBy(c => c.Start).ToList(), roll);
         }
         public static Task<string> ResolveVoiceoverAsync(AssemblyTemplate t, string ffmpeg, string probe, string work, CancellationToken ct) {
             ct.ThrowIfCancellationRequested();

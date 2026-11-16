@@ -46,10 +46,12 @@ foreach ($file in $js) { $files.Add(@{source=$file.FullName;relative=('tools/upl
 foreach ($file in @(Get-ChildItem -LiteralPath $binaryRoot -File | Where-Object { $_.Extension -eq '.dll' -or $_.Name -eq 'VideoBatch.exe.config' })) {
     $files.Add(@{source=$file.FullName;relative=$file.Name})
 }
-$highlightsRoot=Join-Path $sourceRoot 'tools/highlights'
-if (Test-Path -LiteralPath $highlightsRoot) {
-    foreach ($file in Get-ChildItem -LiteralPath $highlightsRoot -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' -and $_.Extension -ne '.pyc' }) {
-        $files.Add(@{source=$file.FullName;relative=('tools/highlights/'+$file.FullName.Substring($highlightsRoot.Length+1).Replace('\','/'))})
+foreach ($tool in @('highlights','telegram','subtitles')) {
+    $toolRoot=Join-Path $sourceRoot ('tools/'+$tool)
+    if (Test-Path -LiteralPath $toolRoot) {
+        foreach ($file in Get-ChildItem -LiteralPath $toolRoot -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' -and $_.Extension -ne '.pyc' }) {
+            $files.Add(@{source=$file.FullName;relative=('tools/'+$tool+'/'+$file.FullName.Substring($toolRoot.Length+1).Replace('\','/'))})
+        }
     }
 }
 $runtimeRoot=Join-Path $binaryRoot 'runtimes'

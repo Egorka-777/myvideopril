@@ -234,7 +234,7 @@ namespace VideoBatch {
             telegramPanel = new TelegramPanel(preferences:()=>settings);
             AddPanel(telegramPanel);
             Console.WriteLine("UI startup: AssemblyWindow");
-            assemblyStudio = new AssemblyWindow(embedded: true);
+            assemblyStudio = new AssemblyWindow(embedded: true, preferences: settings);
             assemblyStudio.Visible = false;
             contentHost.Controls.Add(assemblyStudio);
             if (ToolsLocator.TryResolve(out _, out _, out _)) {

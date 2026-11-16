@@ -5,7 +5,7 @@ using System.Linq;
 using System.Windows.Forms;
 
 namespace VideoBatch {
-    public sealed class SubtitleStyleDialog : Form {
+    public sealed partial class SubtitleStyleDialog : Form {
         readonly SubtitleStylePreview preview;
         readonly FlowLayoutPanel cards;
         readonly List<WarmupCaption> cues;
@@ -51,7 +51,7 @@ namespace VideoBatch {
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 53)); fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 47)); settings.Controls.Add(fields);
             enabled = new CheckBox { Text = "Включены", AutoSize = true }; uppercase = new CheckBox { Text = "Заглавные буквы", AutoSize = true }; bold = new CheckBox { Text = "Жирный шрифт", AutoSize = true };
             font = Theme.MakeCombo(SubtitlePresets.Fonts); plate = Theme.MakeCombo(new[] { "Без плашки", "Скруглённая", "Прямая" });
-            highlight = Theme.MakeCombo(new[] { "Без выделения", "Текущее слово", "Караоке" }); motion = Theme.MakeCombo(new[] { "Без анимации", "Лёгкое увеличение" });
+            highlight = Theme.MakeCombo(new[] { "Без выделения", "Текущее слово", "Караоке" }); motion = Theme.MakeCombo(new[] { "Без анимации", "Лёгкое увеличение", "Плавное появление", "Мягкий подъём", "Акцент на слове" });
             size = Number(28, 88); position = Number(10, 90); words = Number(1, 6); opacity = Number(0, 100); outline = Number(0, 10);
             textColor = ColorButton("TextColor", () => Style.TextColor, c => Style.TextColor = c);
             plateColor = ColorButton("PlateColor", () => Style.PlateColor, c => Style.PlateColor = c);
@@ -66,7 +66,8 @@ namespace VideoBatch {
             foreach (var control in new NumericUpDown[] { size, position, words, opacity, outline }) control.ValueChanged += (s, e) => Changed();
             foreach (var control in new CheckBox[] { enabled, uppercase, bold }) control.CheckedChanged += (s, e) => Changed();
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
-            var apply = Theme.MakeButton("Применить", accent: true, action: () => { DialogResult = DialogResult.OK; Close(); });
+            AddRandomFields(fields);
+            var apply = Theme.MakeButton("Применить", accent: true, action: () => { if (!ValidateRandomChoices()) return; DialogResult = DialogResult.OK; Close(); });
             var cancel = Theme.MakeButton("Отмена", ghost: true, action: () => { DialogResult = DialogResult.Cancel; Close(); });
             actions.Controls.Add(apply); actions.Controls.Add(cancel); root.Controls.Add(actions, 1, 1); AcceptButton = apply; CancelButton = cancel;
             var leftActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true };
@@ -87,7 +88,7 @@ namespace VideoBatch {
             var button = Theme.MakeButton("Выбрать", ghost: true); button.Name = "Subtitle" + name;
             button.Click += (s, e) => { using (var picker = new ColorDialog { Color = ColorTranslator.FromHtml(read()), FullOpen = true }) {
                 if (picker.ShowDialog(this) != DialogResult.OK) return;
-                write(ColorTranslator.ToHtml(Color.FromArgb(picker.Color.R, picker.Color.G, picker.Color.B))); UpdateColors(); UpdatePreview();
+                write(ColorTranslator.ToHtml(Color.FromArgb(picker.Color.R, picker.Color.G, picker.Color.B))); randomPreview = null; UpdateColors(); UpdatePreview();
             } }; return button;
         }
         void LoadFields() {
@@ -95,9 +96,9 @@ namespace VideoBatch {
             try {
                 enabled.Checked = Style.Enabled; uppercase.Checked = Style.Uppercase; bold.Checked = Style.Bold; font.SelectedItem = Style.FontFamily;
                 plate.SelectedIndex = Style.Plate == "none" ? 0 : Style.Plate == "rounded" ? 1 : 2;
-                highlight.SelectedIndex = Style.Highlight == "none" ? 0 : Style.Highlight == "active" ? 1 : 2; motion.SelectedIndex = Style.Motion == "pop" ? 1 : 0;
+                highlight.SelectedIndex = Style.Highlight == "none" ? 0 : Style.Highlight == "active" ? 1 : 2; motion.SelectedIndex = Array.IndexOf(new[] { "none", "pop", "fade", "rise", "word-accent" }, Style.Motion);
                 size.Value = Style.FontSize; position.Value = Style.Position; words.Value = Style.WordsPerCaption; opacity.Value = Style.Opacity; outline.Value = Style.OutlineWidth;
-                UpdateColors();
+                UpdateColors(); LoadRandomFields();
             } finally { loading = false; }
             UpdatePreview();
         }
@@ -111,15 +112,15 @@ namespace VideoBatch {
             Style.Enabled = enabled.Checked; Style.FontFamily = Convert.ToString(font.SelectedItem); Style.Uppercase = uppercase.Checked; Style.Bold = bold.Checked;
             Style.FontSize = (int)size.Value; Style.Position = (int)position.Value; Style.WordsPerCaption = (int)words.Value; Style.Opacity = (int)opacity.Value; Style.OutlineWidth = (int)outline.Value;
             Style.Plate = plate.SelectedIndex == 0 ? "none" : plate.SelectedIndex == 1 ? "rounded" : "solid";
-            Style.Highlight = highlight.SelectedIndex == 0 ? "none" : highlight.SelectedIndex == 1 ? "active" : "progressive"; Style.Motion = motion.SelectedIndex == 1 ? "pop" : "none";
-            Style.Normalize(); UpdatePreview();
+            Style.Highlight = highlight.SelectedIndex == 0 ? "none" : highlight.SelectedIndex == 1 ? "active" : "progressive"; Style.Motion = new[] { "none", "pop", "fade", "rise", "word-accent" }[Math.Max(0, motion.SelectedIndex)];
+            Style.Normalize(); randomPreview = null; UpdatePreview();
         }
         void LoadCards() {
             foreach (Control old in cards.Controls.Cast<Control>().ToArray()) old.Dispose(); cards.Controls.Clear();
             try {
                 foreach (var preset in SubtitlePresets.Load()) {
                     var card = new SubtitlePresetCard(preset) { Width = Math.Max(170, (cards.ClientSize.Width - 36) / 2), Height = 135, Margin = new Padding(4), IsSelected = preset.Id == Style.PresetId };
-                    card.Click += (s, e) => { Style = preset.Style.Copy(); Style.Enabled = true; selected.Text = preset.Name; LoadFields(); foreach (SubtitlePresetCard item in cards.Controls) item.IsSelected = item.PresetId == Style.PresetId; cards.Invalidate(true); };
+                    card.Click += (s, e) => { var random = Style.RandomStyle.Copy(); Style = preset.Style.Copy(); Style.RandomStyle = random; Style.Enabled = true; selected.Text = preset.Name; LoadFields(); foreach (SubtitlePresetCard item in cards.Controls) item.IsSelected = item.PresetId == Style.PresetId; cards.Invalidate(true); };
                     cards.Controls.Add(card);
                 }
             } catch (Exception ex) { MessageBox.Show(this, "Не удалось прочитать ваши стили: " + ex.Message, "Субтитры"); }
@@ -134,7 +135,12 @@ namespace VideoBatch {
         }
         void UpdatePreview() {
             if (preview == null || IsDisposed) return;
-            preview.Set(Style, cues, (DateTime.UtcNow - started).TotalSeconds);
+            var displayed = Style;
+            if (Style.RandomStyle.Enabled && Style.Enabled && HasRandomChoices()) {
+                if (randomPreview == null) randomPreview = SubtitleRandomSettings.ForVideo(Style, new Random());
+                displayed = randomPreview;
+            }
+            preview.Set(displayed, cues, (DateTime.UtcNow - started).TotalSeconds);
         }
         protected override void Dispose(bool disposing) { if (disposing) { timer.Stop(); timer.Dispose(); } base.Dispose(disposing); }
     }
@@ -169,7 +175,7 @@ namespace VideoBatch {
             double start = cues[0].Start, duration = Math.Min(8, cues.Last().End - start + .4), time = start + elapsed % Math.Max(.1, duration);
             var cue = cues.FirstOrDefault(c => time >= c.Start && time < c.End);
             var frame = cue == null ? null : SubtitlePresets.FrameAt(cue, style, time);
-            string next = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(style) + "|" + frame?.Text + "|" + frame?.ActiveWord + "|" + frame?.TextScale;
+            string next = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(style) + "|" + frame?.Text + "|" + frame?.ActiveWord + "|" + frame?.TextScale + "|" + frame?.FrameOpacity + "|" + frame?.OffsetY + "|" + frame?.ActiveWordScale;
             if (next == key) return; key = next; caption?.Dispose();
             caption = !style.Enabled || frame == null ? null : SubtitleTypography.UsesTypography(style) ? SubtitleTypography.Paint(frame, style, canvasWidth, canvasHeight) : WarmupSubtitles.Paint(frame.Text, style, canvasWidth, canvasHeight);
             Invalidate();

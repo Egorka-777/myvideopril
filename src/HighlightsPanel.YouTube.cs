@@ -37,9 +37,14 @@ namespace VideoBatch {
         CancellationTokenSource youtubeCancellation;
         bool youtubeBatch;
         Action<string> youtubeProgress;
+        Form youtubeWindow;
         void ShowYouTube() {
+            if(youtubeWindow!=null&&!youtubeWindow.IsDisposed){youtubeWindow.Show();youtubeWindow.Activate();return;}
             if(busy)return;
-            using(var dialog=new Form {Text="YouTube → горизонтальные вырезки",ClientSize=new Size(860,660),MinimumSize=new Size(740,600),StartPosition=FormStartPosition.CenterParent,BackColor=Theme.Background,ForeColor=Theme.TextPrimary,Font=Theme.FontBody}) {
+            var dialog=new Form {Text="YouTube → горизонтальные вырезки",ClientSize=new Size(860,660),MinimumSize=new Size(740,600),StartPosition=FormStartPosition.CenterParent,BackColor=Theme.Background,ForeColor=Theme.TextPrimary,Font=Theme.FontBody};
+            youtubeWindow=dialog;
+            dialog.FormClosed+=(s,e)=>youtubeWindow=null;
+            {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=7,Padding=new Padding(16)};
                 foreach(int height in new[]{42,92,82,36})layout.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
@@ -119,12 +124,12 @@ namespace VideoBatch {
                         int ok=result.sources.Count(x=>x.status=="success"), failed=result.sources.Count-ok, clips=result.sources.Sum(x=>x.outputs?.Count??0);
                         details.Text="Видео готово: "+ok+"; не завершено: "+failed+". Вырезок: "+clips+".";
                         status.Text=details.Text;
-                        if(failed>0)MessageBox.Show(dialog,string.Join(Environment.NewLine,result.sources.Where(x=>x.status!="success").Select(x=>(x.title??x.videoId)+": "+(x.error??x.status))),"Обработка завершена не полностью",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                        if(failed>0&&dialog.Visible)MessageBox.Show(dialog,string.Join(Environment.NewLine,result.sources.Where(x=>x.status!="success").Select(x=>(x.title??x.videoId)+": "+(x.error??x.status))),"Обработка завершена не полностью",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                     }catch(OperationCanceledException){details.Text="Остановлено. Готовые файлы сохранены.";status.Text=details.Text;}
                     catch(Exception ex){details.Text=ex.Message;ShowError(ex);}
                     finally{youtubeProgress=null;SetBusy(false);working(false);}
                 };
-                dialog.ShowDialog(this);
+                dialog.Show(FindForm());
             }
         }
         async Task<HighlightBatchResult> RunYouTubeBatch(List<HighlightSource> sources) {
@@ -135,7 +140,7 @@ namespace VideoBatch {
             if(string.IsNullOrWhiteSpace(key))throw new Exception("Укажите ключ OpenRouter в настройках приложения.");
             var id=Guid.NewGuid().ToString("N");var jobs=Path.Combine(root,"jobs");Directory.CreateDirectory(jobs);
             var job=Path.Combine(jobs,id+".json");var result=Path.Combine(jobs,id+".result.json");var workdir=Path.Combine(jobs,id+".work");cancellation=Path.Combine(jobs,id+".cancel");
-            var input=new Dictionary<string,object> {{"action","youtube_batch"},{"sources",sources},{"root",root},{"output",prefs.Output},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"node",DolphinRunner.Node},{"minimum",120},{"maximum",300},{"count",4},{"export_format","original"},{"mode","speech"},{"openrouter_model",youtubeSettings.OpenRouterModel},{"result",result},{"workdir",workdir},{"cancel",cancellation}};
+            var input=new Dictionary<string,object> {{"action","youtube_batch"},{"sources",sources},{"root",root},{"output",prefs.Output},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"node",DolphinRunner.Node},{"minimum",120},{"maximum",300},{"count",4},{"export_format","original"},{"mode","speech"},{"openrouter_model","google/gemini-2.5-flash"},{"result",result},{"workdir",workdir},{"cancel",cancellation}};
             File.WriteAllText(job,json.Serialize(input),new UTF8Encoding(false));
             youtubeBatch=true;
             try {

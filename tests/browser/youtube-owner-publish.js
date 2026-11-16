@@ -4,7 +4,7 @@ const {chromium}=require('../../tools/uploader/node_modules/playwright-core');
 const O=require('../../tools/uploader/youtube-owner-publish');
 const S=require('../../tools/uploader/youtube-studio-upload');
 const IDS=['video000001','video000002'];
-function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotPicker=false,unknownLabel=false,inertPublicHost=false}={}){
+function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotPicker=false,unknownLabel=false,inertPublicHost=false,readbackDelay=0}={}){
  const ru=lang==='ru',label=unknownLabel?'Visibility updated':state.visibility==='public'?(ru?(screenshotPicker?'Для всех':'Открытый доступ'):'Public'):(ru?(screenshotPicker?'Отложенная публ...':'Запланировано'):'Scheduled');
  if(screenshotPicker){
   return `<html lang="${lang}"><body><ytcp-video-metadata-editor><textarea name="title">Original title</textarea><button id="visibility">${label}</button></ytcp-video-metadata-editor>
@@ -12,7 +12,7 @@ function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotP
   document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('ytcp-video-visibility-edit-dialog')?.remove();});
   document.querySelector('#visibility').onclick=()=>{
    const el=document.createElement('ytcp-video-visibility-edit-dialog');el.style.display='contents';
-   el.innerHTML=${JSON.stringify(`<div role="dialog"><section><button id="expand-publish">${ru?'Сохранить или опубликовать':'Save or publish'}</button><div id="choices" hidden><tp-yt-paper-radio-button name="PRIVATE">${ru?'Ограниченный доступ':'Private'}</tp-yt-paper-radio-button><tp-yt-paper-radio-button name="UNLISTED">${ru?'Доступ по ссылке':'Unlisted'}</tp-yt-paper-radio-button><tp-yt-paper-radio-button name="PUBLIC" id="public-radio-button">${ru?'Открытый доступ':'Public'}</tp-yt-paper-radio-button><label><input type="checkbox">${ru?'Провести премьеру сейчас':'Set as instant Premiere'}</label></div></section><section id="schedule">${ru?'Запланировать публикацию':'Schedule'}<input value="2 Nov 2026"><input value="06:16"></section><footer><button id="cancel">${ru?'Отмена':'Cancel'}</button><ytcp-button id="save-button"><button disabled>${ru?'ОК':'OK'}</button></ytcp-button></footer></div>`)};
+   el.innerHTML=${JSON.stringify(`<div role="dialog"><section><button id="expand-publish">\n          ${ru?'Сохранить или опубликовать':'Save or publish'}\n        </button><div id="choices" hidden><tp-yt-paper-radio-button name="PRIVATE">${ru?'Ограниченный доступ':'Private'}</tp-yt-paper-radio-button><tp-yt-paper-radio-button name="UNLISTED">${ru?'Доступ по ссылке':'Unlisted'}</tp-yt-paper-radio-button><tp-yt-paper-radio-button name="PUBLIC" id="public-radio-button">${ru?'Открытый доступ':'Public'}</tp-yt-paper-radio-button><label><input type="checkbox">${ru?'Провести премьеру сейчас':'Set as instant Premiere'}</label></div></section><section id="schedule">${ru?'Запланировать публикацию':'Schedule'}<input value="2 Nov 2026"><input value="06:16"></section><footer><button id="cancel">${ru?'Отмена':'Cancel'}</button><ytcp-button id="save-button"><button disabled>${ru?'ОК':'OK'}</button></ytcp-button></footer></div>`)};
    document.body.append(el);el.querySelector('#cancel').onclick=()=>el.remove();
    el.querySelectorAll('tp-yt-paper-radio-button').forEach(btn=>{
     const sr=btn.attachShadow({mode:'open'});
@@ -26,7 +26,7 @@ function editor(lang,state,{twoStep=true,dirty=false,wrongSave=false,screenshotP
     btn.onclick=e=>{if(e.target===btn)e.preventDefault();};
    });
    const savedPublic=${JSON.stringify(state.visibility==='public')};
-   const seedPublic=()=>{if(!savedPublic)return;el.querySelector('tp-yt-paper-radio-button[name=PUBLIC]')?.shadowRoot?.querySelector('#radioContainer')?.click();};
+   const seedPublic=()=>{if(!savedPublic)return;setTimeout(()=>el.querySelector('tp-yt-paper-radio-button[name=PUBLIC]')?.shadowRoot?.querySelector('#radioContainer')?.click(),${readbackDelay});};
    el.querySelector('#expand-publish').onclick=()=>{window.expands=(window.expands||0)+1;el.querySelector('#choices').hidden=false;el.querySelector('#schedule').hidden=true;seedPublic();};
    el.querySelector('#save-button').onclick=async()=>{const pub=el.querySelector('tp-yt-paper-radio-button[name=PUBLIC]');const ok=el.querySelector('#save-button button');if(ok.disabled||!pub?.shadowRoot?.querySelector('#input')?.checked||el.querySelector('#choices').hidden)return;await fetch('/fixture/public',{method:'POST'});document.querySelector('#visibility').textContent=${JSON.stringify(ru?'Для всех':'Public')};el.remove();};
   };
@@ -46,9 +46,11 @@ function watch(lang,state,{owned=true,saveComment=true,wrongAuthor=false}={}){
  const ru=lang==='ru';return `<html><body><div id="owner"><div id="channel-name"><a href="/@owner">Owner</a></div>${owned?`<a href="https://studio.youtube.com/video/${state.id}/edit">${ru?'Изменить видео':'Edit video'}</a>`:''}</div>
  <div id="comments"><button id="simplebox-placeholder">${ru?'Введите комментарий':'Add a comment'}</button><ytd-comment-simplebox-renderer hidden><div id="contenteditable-root" contenteditable="true" role="textbox"></div><ytcp-button id="submit-button"><button>${ru?'Оставить комментарий':'Comment'}</button></ytcp-button></ytd-comment-simplebox-renderer><section id="threads"></section></div>
  <script>
+ document.querySelector('#contenteditable-root').addEventListener('blur',()=>{const box=document.querySelector('#contenteditable-root');for(const n of Array.from(box.childNodes)){if(n.nodeType!==3||!/[📌📲]/u.test(n.textContent))continue;const fragment=document.createDocumentFragment();for(const part of n.textContent.split(/([📌📲])/u)){if(/^[📌📲]$/u.test(part)){const img=document.createElement('img');img.alt=part;fragment.append(img);}else fragment.append(document.createTextNode(part));}n.replaceWith(fragment);}});
+ document.querySelector('#contenteditable-root').addEventListener('beforeinput',e=>{if(e.inputType==='insertText'&&e.data===':')e.preventDefault();});
  const rows=${JSON.stringify(state.comments||[])};function render(row){const thread=document.createElement('ytd-comment-thread-renderer');thread.innerHTML='<a id="author-text"></a><div id="content-text" style="white-space:pre-wrap"></div><a id="published-time-text"></a>';thread.querySelector('#author-text').href=row.author||'/@owner';thread.querySelector('#content-text').textContent=row.text;thread.querySelector('#published-time-text').href='/watch?v=${state.id}&lc='+row.id;document.querySelector('#threads').append(thread);}rows.forEach(render);
  document.querySelector('#simplebox-placeholder').onclick=()=>{document.querySelector('ytd-comment-simplebox-renderer').hidden=false;document.querySelector('#simplebox-placeholder').hidden=true;};
- document.querySelector('#submit-button').onclick=async()=>{window.sent=(window.sent||0)+1;const text=document.querySelector('#contenteditable-root').innerText;const row=await (await fetch('/fixture/comment',{method:'POST',body:JSON.stringify({text})})).json();${saveComment?`row.author=${JSON.stringify(wrongAuthor?'/@stranger':'/@owner')};setTimeout(()=>render(row),150);`:''}};
+ document.querySelector('#submit-button').onclick=async()=>{window.sent=(window.sent||0)+1;const copy=document.querySelector('#contenteditable-root').cloneNode(true);copy.querySelectorAll('img[alt]').forEach(img=>img.replaceWith(document.createTextNode(img.alt)));copy.querySelectorAll('br').forEach(br=>br.replaceWith(document.createTextNode('\\n')));const text=copy.textContent;const row=await (await fetch('/fixture/comment',{method:'POST',body:JSON.stringify({text})})).json();${saveComment?`row.author=${JSON.stringify(wrongAuthor?'/@stranger':'/@owner')};setTimeout(()=>render(row),150);`:''}};
  </script></body></html>`;
 }
 async function fixture(browser,lang,options={}){
@@ -69,6 +71,12 @@ async function fixture(browser,lang,options={}){
 }
 (async()=>{
  const browser=await chromium.launch({headless:true});try{
+  const picker=await browser.newPage();
+  await picker.setContent('<ytcp-video-visibility-edit-dialog style="display:contents"><tp-yt-paper-dialog id="dialog" role="dialog"><ytcp-video-visibility-select><label><input type="radio" name="PUBLIC">Public</label></ytcp-video-visibility-select><button>OK</button></tp-yt-paper-dialog></ytcp-video-visibility-edit-dialog><ytcp-video-visibility-edit-dialog hidden><tp-yt-paper-dialog id="dialog"><input type="radio"></tp-yt-paper-dialog></ytcp-video-visibility-edit-dialog>');
+  assert.equal(await (await O.visibilityDialog(picker)).evaluate(e=>e.tagName),'YTCP-VIDEO-VISIBILITY-EDIT-DIALOG');
+  await picker.locator('body').evaluate(e=>e.insertAdjacentHTML('beforeend','<ytcp-video-visibility-select-dialog><input type="radio">Second popup</ytcp-video-visibility-select-dialog>'));
+  await assert.rejects(O.visibilityDialog(picker),/несколько окон доступа/);await picker.close();
+  console.log('PASS nested visibility host + paper dialog + select is one popup; hidden stale popup ignored; separate live popups rejected');
   for(const lang of ['ru','en']){
    const f=await fixture(browser,lang,{screenshotPicker:true,inertPublicHost:true});
    await f.page.goto('https://studio.youtube.com/video/'+IDS[0]+'/edit');await f.page.locator('#visibility').click();await f.page.locator('#expand-publish').click();
@@ -76,9 +84,12 @@ async function fixture(browser,lang,options={}){
    await S.selectPublicRadio(dialog);
    await S.until(()=>f.page.locator('#save-button button').isEnabled(),1500,'Public circle must enable Publish even when aria-checked was already true');
    assert.equal(await f.page.evaluate(()=>window.trustedRadioClicks),1,'one real pointer click on shadow radio circle');
-   await O.runSequential(f.page,[{publishedVideoId:IDS[0],commentText:'Author comment 0511'}],{typingDelay:1,progress:()=>{},checkpoint:async()=>{}});
+   await O.runSequential(f.page,[{publishedVideoId:IDS[0],commentText:'Author comment 0511'}],{typingDelay:1,actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{}});
    assert.deepEqual(f.counts(),{publishCalls:1,commentCalls:1});
    assert.deepEqual(f.log,['public:'+IDS[0],'comment:'+IDS[0]]);
+   assert.equal(f.ctx.pages().length,2,'Only original Studio editor and watch/comment tab');
+   assert(f.page.url().includes('studio.youtube.com/video/'),'Original editor remains unchanged');
+   assert(f.ctx.pages()[1].url().includes('youtube.com/watch?v='+IDS[0]),'New tab opens watch URL, not editor');
    assert.equal(f.state.get(IDS[0]).comments[0].text,'Author comment 0511');
    await f.ctx.close();
    console.log('PASS',lang,'already checked Public + inert host: trusted circle click enables Publish, then one publication and author comment');
@@ -86,8 +97,8 @@ async function fixture(browser,lang,options={}){
   assert.equal(O.parseVisibility('Отложенная публикация'),'scheduled');assert.equal(O.parseVisibility('Отложенная публ...'),'scheduled');assert.equal(O.parseVisibility('Для всех'),'public');assert.equal(O.parseVisibility('Visibility: Public'),'public');
   for(const lang of ['ru','en']){
    const f=await fixture(browser,lang,{screenshotPicker:true}),events=[];
-   const items=IDS.map((id,i)=>({publishedVideoId:id,title:'Scheduled '+i,localJobId:'scheduled-'+i,commentText:'📌 https://t.me/example_bot?start=t0211\nМатериалы автора',commentState:''}));
-   await O.runSequential(f.page,items,{typingDelay:1,progress:(stage,text,extra)=>events.push({stage,text,...extra}),checkpoint:async()=>{}});
+   const items=IDS.map((id,i)=>({publishedVideoId:id,title:'Scheduled '+i,localJobId:'scheduled-'+i,commentText:'📌 https://t.me/example_bot?start=t0211\n📲 Платформа: https://bit.ly/binodex-broker',commentState:''}));
+   await O.runSequential(f.page,items,{typingDelay:1,actionDelayMs:0,confirmDelayMs:0,progress:(stage,text,extra)=>events.push({stage,text,...extra}),checkpoint:async()=>{}});
    assert.deepEqual(f.counts(),{publishCalls:2,commentCalls:2});
    assert.deepEqual(f.log,IDS.flatMap(id=>['public:'+id,'comment:'+id]));
    assert.equal(events.filter(e=>e.stage==='owner_item_confirmed').length,2);
@@ -96,34 +107,41 @@ async function fixture(browser,lang,options={}){
    await f.ctx.close();
    console.log('PASS',lang,'screenshot layout: Scheduled → expand Save or publish → Public → one Publish → watch → author comment; display:contents host and delayed Publish');
   }
-  const changed=await fixture(browser,'en',{screenshotPicker:true,unknownLabel:true});
-  await O.runSequential(changed.page,[{publishedVideoId:IDS[0],commentText:''}],{progress:()=>{},checkpoint:async()=>{}});assert.equal(changed.counts().publishCalls,1);await changed.ctx.close();
-  console.log('PASS unrecognized summary opens native picker; saved PUBLIC radio confirms without republishing');
+  const changed=await fixture(browser,'en',{screenshotPicker:true,unknownLabel:true,readbackDelay:800});
+  let visibilityOpens=0;await changed.ctx.exposeBinding('recordVisibilityOpen',()=>{visibilityOpens++;});
+  await changed.ctx.addInitScript(()=>{document.addEventListener('click',e=>{if(e.target.closest('#visibility'))window.recordVisibilityOpen();});});
+  await O.runSequential(changed.page,[{publishedVideoId:IDS[0],commentText:''}],{actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{}});assert.equal(changed.counts().publishCalls,1);assert.equal(visibilityOpens,1,'Only the publication picker is opened; no readback page');await changed.ctx.close();
+  console.log('PASS unrecognized summary opens publication picker once; no readback tab');
   for(const lang of ['ru','en']){
    const f=await fixture(browser,lang),events=[];const items=IDS.map((id,i)=>({publishedVideoId:id,title:'Title '+i,localJobId:'job-'+i,commentText:'📌 Материалы: https://example.com/?date=2110\nSecond line',commentState:''}));
-   await O.runSequential(f.page,items,{typingDelay:1,progress:(stage,text,extra)=>events.push({stage,...extra}),checkpoint:async(item,index)=>{assert.equal(f.counts().commentCalls,index-1,'durable ACK before click');f.log.push('ack:'+item.publishedVideoId);}});
+   await O.runSequential(f.page,items,{typingDelay:1,actionDelayMs:0,confirmDelayMs:0,progress:(stage,text,extra)=>events.push({stage,...extra}),checkpoint:async(item,index)=>{assert.equal(f.counts().commentCalls,index-1,'durable ACK before click');f.log.push('ack:'+item.publishedVideoId);}});
    assert.deepEqual(f.counts(),{publishCalls:2,commentCalls:2});assert.deepEqual(f.log,IDS.flatMap(id=>['public:'+id,'ack:'+id,'comment:'+id]));
-   assert(events.filter(e=>e.stage==='owner_comment_confirmed').every(e=>e.commentId&&e.commentText==='📌 Материалы: https://example.com/?date=2110\nSecond line'));
+   assert.equal(events.filter(e=>e.stage==='owner_comment_sent').length,2);
+   assert(items.every(i=>i.commentState==='sent'));
    assert.equal(events.filter(e=>e.stage==='owner_video_public').length,2);
    // Repeat is idempotent even when the local confirmation was lost: exact own
    // comment is detected on page, with real ID, before any submit checkpoint.
-   await O.runSequential(f.page,items.map(i=>({...i,commentState:''})),{typingDelay:1,progress:()=>{},checkpoint:async()=>{throw Error('must not send again');}});
+   await O.runSequential(f.page,items.map(i=>({...i,commentState:''})),{typingDelay:1,actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{throw Error('must not send again');}});
    assert.deepEqual(f.counts(),{publishCalls:2,commentCalls:2});await f.ctx.close();
    console.log('PASS',lang,'two existing IDs: dialog Done + editor Save + persisted Public + own comment + durable ACK + repeat without duplicates');
   }
   const direct=await fixture(browser,'en',{twoStep:false});
-  await O.runSequential(direct.page,[{publishedVideoId:IDS[0],commentText:''}],{progress:()=>{},checkpoint:async()=>{throw Error('empty comment');}});assert.deepEqual(direct.counts(),{publishCalls:1,commentCalls:0});await direct.ctx.close();
+  await O.runSequential(direct.page,[{publishedVideoId:IDS[0],commentText:''}],{actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{throw Error('empty comment');}});assert.deepEqual(direct.counts(),{publishCalls:1,commentCalls:0});await direct.ctx.close();
   const sameText=await fixture(browser,'ru');sameText.state.get(IDS[0]).comments.push({text:'Same text',author:'/@stranger',id:'foreign-comment'});
-  await O.runSequential(sameText.page,[{publishedVideoId:IDS[0],commentText:'Same text'}],{typingDelay:1,progress:()=>{},checkpoint:async()=>{}});assert.equal(sameText.counts().commentCalls,1);await sameText.ctx.close();
+  await O.runSequential(sameText.page,[{publishedVideoId:IDS[0],commentText:'Same text'}],{typingDelay:1,actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{}});assert.equal(sameText.counts().commentCalls,1);await sameText.ctx.close();
   console.log('PASS one-step visibility commit, delayed editor Save, empty template, and exact text from another author is not treated as own comment');
   const wrong=await fixture(browser,'en',{wrongSave:true});
-  await assert.rejects(O.runSequential(wrong.page,[{publishedVideoId:IDS[0],commentText:'Not sent'}],{verifyMs:350,progress:()=>{},checkpoint:async()=>{throw Error('must not submit');}}),/не подтвердил открытый доступ/);assert.equal(wrong.counts().commentCalls,0);await wrong.ctx.close();
+  let extraPages=0;wrong.ctx.on('page',()=>extraPages++);
+  await O.runSequential(wrong.page,[{publishedVideoId:IDS[0],commentText:''}],{actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{throw Error('empty comment');}});
+  assert.equal(extraPages,0,'No verification page even when persistence cannot be confirmed');assert.equal(wrong.counts().commentCalls,0);await wrong.ctx.close();
   const foreign=await fixture(browser,'ru',{owned:false});
   await foreign.page.goto('https://www.youtube.com/watch?v='+IDS[0]);await assert.rejects(O.ownVideo(foreign.page,IDS[0]),/может редактировать/);assert.equal(foreign.counts().commentCalls,0);await foreign.ctx.close();
   const uncertain=await fixture(browser,'en',{saveComment:false});const item={publishedVideoId:IDS[0],localJobId:'durable',commentText:'Account text',commentState:''};
-  await assert.rejects(O.runSequential(uncertain.page,[item],{typingDelay:1,commentMs:350,progress:()=>{},checkpoint:async()=>{}}),/Повтор заблокирован/);assert.equal(item.commentState,'pending');assert.equal(uncertain.counts().commentCalls,1);
-  await assert.rejects(O.runSequential(uncertain.page,[item],{progress:()=>{}}),/неподтверждённая/);assert.equal(uncertain.counts().commentCalls,1);await uncertain.ctx.close();
-  const noAck=await fixture(browser,'ru');await assert.rejects(O.runSequential(noAck.page,[{publishedVideoId:IDS[0],commentText:'No ACK'}],{typingDelay:1,progress:()=>{},checkpoint:async()=>{throw Error('storage full');}}),/storage full/);assert.equal(noAck.counts().commentCalls,0);await noAck.ctx.close();
+  const next={publishedVideoId:IDS[1],commentText:'Next account text',commentState:''};
+  await O.runSequential(uncertain.page,[item,next],{typingDelay:1,actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{}});
+  assert.equal(item.commentState,'sent');assert.equal(next.commentState,'sent');assert.equal(uncertain.counts().commentCalls,2);
+  await O.runSequential(uncertain.page,[item,next],{actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{throw Error('must not resend');}});assert.equal(uncertain.counts().commentCalls,2);await uncertain.ctx.close();
+  const noAck=await fixture(browser,'ru');await assert.rejects(O.runSequential(noAck.page,[{publishedVideoId:IDS[0],commentText:'No ACK'}],{typingDelay:1,actionDelayMs:0,confirmDelayMs:0,progress:()=>{},checkpoint:async()=>{throw Error('storage full');}}),/storage full/);assert.equal(noAck.counts().commentCalls,0);await noAck.ctx.close();
   console.log('PASS persisted Public mismatch / non-owner / lost comment confirmation / failed durable ACK block comments and unsafe retries');
   // Explicit opt-out remains supported; production upload now writes app descriptions.
   for(const lang of ['ru','en']){

@@ -111,7 +111,7 @@ namespace VideoBatch {
         }
         // Retained only as a reference for controlled before/after benchmarks.
         public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
-            if(p.Scenes.SelectMany(s => s.Layers).Any(l => AssemblyOverlayMedia.IsAnimated(l.Asset.Path)) || t.DurationByVideo || t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
+            if(p.Background != null || p.Scenes.SelectMany(s => s.Layers).Any(l => AssemblyOverlayMedia.IsAnimated(l.Asset.Path)) || t.HasVideoDuration || t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
                 await AssemblyRender.Run(t,p,ffmpeg,ffprobe,output,work,rasterize,ct,progress).ConfigureAwait(false);return;
             }
             Directory.CreateDirectory(work); var paths = new List<string>();
@@ -168,12 +168,15 @@ namespace VideoBatch {
                                     f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + targetCount + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / targetCount)); }, videos, random, mix).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 progress.Report(new Update("Ролик " + (global + 1) + " · обработка изображения и звука…", 100.0 * global / targetCount));
-                                await AssemblyProcessing.Apply(t, ffmpeg, ffprobe, partial, random, ct).ConfigureAwait(false);
+                                await AssemblyProcessing.Apply(t, ffmpeg, ffprobe, partial, random, ct, AssemblyTimeline.MainStart(t, plan)).ConfigureAwait(false);
                                 // Tag and validate the private file before making it visible as a result.
                                 string chosenTitle=AssemblyOutputTags.PickTitle(t.TitleBank,random,usedTitles);
                                 destination = AssemblyFiles.SafeImportDestination(t.Output, Path.Combine(t.Output, VideoBatchOutputPaths.AssemblyVideoFileName(t, global, chosenTitle)));
                                 var metadata=await AssemblyOutputTags.Apply(ffmpeg,ffprobe,partial,chosenTitle,t.OutputMetadata,random,ct).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
+                                if (AssemblySpeechPlan.SubtitlesEnabled(t))
+                                    await AssemblySpeechPlan.EnsureTranscript(t,plan,partial,ffmpeg,itemWork,ct,
+                                        message => progress.Report(new Update("Ролик " + (global + 1) + " · " + message, 100.0 * global / targetCount))).ConfigureAwait(false);
                                 AssemblyHistoryRecord reservation=null; bool published=false;
                                 try {
                                     AssemblyOutputFiles.Prepare(destination);
@@ -182,12 +185,16 @@ namespace VideoBatch {
                                     File.WriteAllLines(AssemblyOutputFiles.Report(destination,".metadata.txt"),metadata,System.Text.Encoding.UTF8);
                                     reservation=AssemblyHistoryStore.Reserve(historyFolder,history,plan,destination,t.Id,partial,historyScope);
                                     ct.ThrowIfCancellationRequested();
+                                    if (AssemblySpeechPlan.SubtitlesEnabled(t))
+                                        AssemblySpeechPlan.SaveTranscript(destination,plan,AssemblyTimeline.MainStart(t,plan));
                                     File.Move(partial,destination); published=true; result.Outputs.Add(destination);
                                     AssemblyOutputFiles.DeleteLegacySidecars(destination);
                                     AssemblyHistoryStore.Commit(historyFolder,history,reservation,historyScope);
                                 } finally {
                                     if (!published) {
                                         AssemblyOutputFiles.DeleteReports(destination);
+                                        string transcript = Path.ChangeExtension(destination,".txt");
+                                        if (File.Exists(transcript)) File.Delete(transcript);
                                         if (reservation!=null) AssemblyHistoryStore.Release(historyFolder,history,reservation,historyScope);
                                     }
                                     // Once published, its durable reservation survives any commit failure.
@@ -199,7 +206,7 @@ namespace VideoBatch {
                         if (batch.Limit != "") { limitNote = " Запрошено " + targetCount + ": " + batch.Limit; break; }
                         if (result.Errors.Count>0) break;
                     }
-                    if (t.DurationByVideo && result.Outputs.Count < targetCount && result.Errors.Count == 0)
+                    if (t.HasVideoDuration && result.Outputs.Count < targetCount && result.Errors.Count == 0)
                         result.Errors.Add("Обработано " + result.Outputs.Count + " из " + targetCount + " запрошенных роликов. " + limitNote);
                 }
             } catch (OperationCanceledException) { result.Cancelled = true; }

@@ -58,7 +58,14 @@ namespace VideoBatch {
         Process active;
         string cancellation;
         bool busy, stopping;
-        public bool HasWork => busy;
+        public bool HasWork => busy || interApiCancellation!=null;
+        protected override void OnVisibleChanged(EventArgs e) {
+            base.OnVisibleChanged(e);
+            foreach(var window in new[]{youtubeWindow,interApiWindow}) {
+                if(window==null||window.IsDisposed)continue;
+                if(Visible)window.Show();else window.Hide();
+            }
+        }
         public HighlightsPanel() : this(null) { }
         public HighlightsPanel(Preferences settings) {
             youtubeSettings=settings;
@@ -82,6 +89,7 @@ namespace VideoBatch {
             intro.Controls.Add(new Label {Text="Законченные мысли и события · 20–40 сек · выберите соотношение сторон для просмотра и экспорта", AutoSize=true, ForeColor=Theme.TextSecondary, MaximumSize=new Size(900,0)});
             layout.Controls.Add(intro,0,0);
             toolbar = new FlowLayoutPanel { Dock=DockStyle.Fill, WrapContents=true, Margin=Padding.Empty };
+            toolbar.Controls.Add(Theme.MakeButton("InterAPI · Shorts / Long",ghost:true,action:ShowInterApi));
             load=Theme.MakeButton("＋ Видео",action:ChooseSource);
             sourceLabel = new Label {AutoSize=false, Width=300, Height=36, AutoEllipsis=true, TextAlign=ContentAlignment.MiddleLeft, Text=string.IsNullOrEmpty(prefs.Source)?"Выберите длинное видео":Path.GetFileName(prefs.Source)};
             mode=Theme.MakeCombo(new[]{"Авто: речь и события","Сильные мысли и цитаты","События без речи"}); mode.Width=224; mode.SelectedIndex=Math.Max(0,Math.Min(2,prefs.Mode));
@@ -257,7 +265,7 @@ namespace VideoBatch {
             try {var args=new List<string>{"-NoProfile","-ExecutionPolicy","Bypass","-File",Path.Combine(Scripts(),"prepare.ps1"),"-Root",root};if(speechOnly)args.Add("-SpeechOnly");await RunProcess("powershell.exe",args.ToArray(),false);status.Text=stopping?"Подготовка остановлена":speechOnly?"Готово. Откройте «YouTube · свежие видео».":"Всё готово. Выберите видео и нажмите «Найти моменты».";}
             catch(Exception ex){if(!stopping)ShowError(ex);}finally{SetBusy(false);}
         }
-        public async Task StopBeforeClose() {CancelWork();while(busy)await Task.Delay(100);}
+        public async Task StopBeforeClose() {interApiCancellation?.Cancel();CancelWork();while(HasWork)await Task.Delay(100);}
         public async void CancelWork() {
             if(!busy || stopping)return;stopping=true;stop.Enabled=false;status.Text="Останавливаю…";
             youtubeCancellation?.Cancel();
@@ -266,7 +274,7 @@ namespace VideoBatch {
             await Task.Delay(2500);
             try {if(process!=null&&!process.HasExited){using(var killer=Process.Start(new ProcessStartInfo("taskkill.exe","/PID "+process.Id+" /T /F"){UseShellExecute=false,CreateNoWindow=true}))await Task.Run(()=>killer.WaitForExit());}}catch{}
         }
-        void ShowError(Exception ex) {status.Text=ex.Message;AppDiagnostics.Write("Нарезка","","highlights","error",ex.ToString(),"error");MessageBox.Show(this,ex.Message,"Нарезка",MessageBoxButtons.OK,MessageBoxIcon.Information);}
+        void ShowError(Exception ex) {status.Text=ex.Message;AppDiagnostics.Write("Нарезка","","highlights","error",ex.ToString(),"error");if(Visible)MessageBox.Show(this,ex.Message,"Нарезка",MessageBoxButtons.OK,MessageBoxIcon.Information);}
         static void OpenFolder(string path) {if(Directory.Exists(path))Process.Start(new ProcessStartInfo(path){UseShellExecute=true});}
     }
 }

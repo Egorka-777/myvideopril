@@ -33,6 +33,44 @@ const S=require('../../tools/uploader/youtube-studio-upload');
     console.log('PASS native Studio picker',lang,shadow?'shadow CDP':'Playwright');
    }
   }
+  // A slow read must not replace the real deadline with the five-second probe limit.
+  let probes=0;const slowStart=Date.now();
+  assert.equal(await B.waitFor(()=>++probes===1?new Promise(()=>{}):true,6500,'actual deadline'),true);
+  assert(Date.now()-slowStart>=5000);assert.equal(probes,2);
+  let navigationReads=0;
+  assert.equal(await B.waitFor(()=>{if(!navigationReads++)throw Error('Execution context was destroyed, most likely because of a navigation');return true;},1000,'actual deadline'),true);
+  const deadlineStart=Date.now();
+  await assert.rejects(B.waitFor(()=>new Promise(()=>{}),300,'actual deadline'),/actual deadline/);
+  assert(Date.now()-deadlineStart>=290);
+  // A saved @handle must resolve to its own channel, never the current Studio account.
+  await context.route('https://www.youtube.com/**',route=>route.fulfill({contentType:'text/html',body:'<script>window.ytInitialData={metadata:{channelMetadataRenderer:{externalId:"UCabcdefghijklmnopqrstuv"}}}</script>'}));
+  await context.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html',body:'<button>Create</button>'}));
+  let lookupTimeout=0;
+  const newPage=context.newPage.bind(context);
+  context.newPage=async()=>{const lookup=await newPage(),goto=lookup.goto.bind(lookup);lookup.goto=(url,opts)=>{lookupTimeout=opts.timeout;return goto(url,opts);};return lookup;};
+  try{await B.openStudio(page,'https://www.youtube.com/@requested/videos',()=>{});}
+  finally{context.newPage=newPage;}
+  assert(lookupTimeout>0&&lookupTimeout<=60000,'Channel lookup navigation shares the 60-second deadline');
+  assert.equal(page.url(),'https://studio.youtube.com/channel/UCabcdefghijklmnopqrstuv');
+  assert.equal(context.pages().length,1,'Handle lookup tab must close');await context.unrouteAll();
+  // Access denied is a concrete account/channel error, not a missing Create button.
+  await context.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:'<h1>У вас нет доступа к этой странице.</h1>'}));
+  const deniedStart=Date.now();
+  await assert.rejects(B.openStudio(page,'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv',()=>{}),/нет доступа к каналу UCabcdefghijklmnopqrstuv/);
+  assert(Date.now()-deniedStart<5000);await context.unrouteAll();
+  await context.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html',body:'<button>Create</button>'}));
+  const originalGoto=page.goto.bind(page);
+  page.goto=(_,options)=>originalGoto('https://studio.youtube.com/channel/UCwrongchannel00000000000',options);
+  try{await assert.rejects(B.openStudio(page,'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv',()=>{}),/ожидался UCabcdefghijklmnopqrstuv, открыт UCwrongchannel00000000000/);}
+  finally{page.goto=originalGoto;}
+  await context.unrouteAll();
+  // A delayed file input in an already open picker must not click Create behind its backdrop.
+  await context.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html',body:'<button id="create-icon" onclick="window.createClicks++">Create</button><ytcp-uploads-dialog style="display:block"><div role="dialog">Select files</div></ytcp-uploads-dialog><script>window.createClicks=0;setTimeout(()=>document.querySelector("ytcp-uploads-dialog").insertAdjacentHTML("beforeend",\'<input type="file" accept="video/mp4">\'),500)</script>'}));
+  await page.goto('https://studio.youtube.com/channel/UCabcdefghijklmnopqrstuv');
+  await B.openFile(page,path.join(temp,'selected-ru-false.mp4'),async()=>{},()=>{},{channelUrl:'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv'});
+  assert.equal(await page.evaluate(()=>window.createClicks),0);
+  assert.equal(await page.locator('input[type=file]').evaluate(e=>e.files.length),1);
+  await context.unrouteAll();
   // A loading resource must not block Studio controls that are already interactive.
   let held=null;
   await context.route('https://studio.youtube.com/**',async route=>{

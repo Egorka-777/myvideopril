@@ -32,24 +32,31 @@ namespace VideoBatch {
         }
 
         public UploadJob ToUploadJob(string token,int localPort,Preferences settings=null){
-            foreach(var it in Items)if(string.IsNullOrWhiteSpace(it.Source.StudioUploadId))it.Source.StudioUploadId=Guid.NewGuid().ToString("N");
+            foreach(var it in Items){
+                if(string.IsNullOrWhiteSpace(it.Source.StudioUploadId))it.Source.StudioUploadId=Guid.NewGuid().ToString("N");
+                // Persist the intended slot before the worker starts, not only after confirmation.
+                it.Source.ScheduleDate=it.ScheduleDate??"";
+                it.Source.ScheduleTime=NormalizeScheduleTime(it.ScheduleTime);
+            }
             var first=Items[0];
             var job=new UploadJob{
                 studioProtocolVersion=StudioUploadState.ProtocolVersion,
                 token=token,
                 localPort=localPort,
-                profileId=Channel.ProfileId,channelUrl=Channel.ChannelUrl,
+                profileId=(Channel.ProfileId??"").Trim(),channelUrl=Channel.ChannelUrl,
                 expectedIp=Channel.ExpectedIp,
                 items=Items.Select(it=>{
                     string kind=QueueManager.NormKindPublic(it.Kind??Channel?.Kind);
                     bool shorts=kind=="shorts";
-                    bool immediate=it.Source.StudioRetryImmediate||it.Source.StudioPending||!string.IsNullOrWhiteSpace(it.Source.StudioVideoId);
+                    bool immediate=string.IsNullOrWhiteSpace(it.ScheduleDate)&&string.IsNullOrWhiteSpace(it.ScheduleTime);
                     long unix=0;int offsetMin=0;
                     if(!string.IsNullOrWhiteSpace(it.ScheduleDate)&&!string.IsNullOrWhiteSpace(it.ScheduleTime)){
                         var slot=ScheduleGenerator.ParseSlot(it.ScheduleDate,it.ScheduleTime);
                         unix=new DateTimeOffset(slot).ToUnixTimeSeconds();
                         offsetMin=(int)TimeZoneInfo.Local.GetUtcOffset(slot).TotalMinutes;
+                        if(slot<=DateTime.Now.AddMinutes(1))immediate=true;
                     }
+                    it.Source.StudioPublishMode=immediate?"immediate":"scheduled";
                     return new UploadItemJob{
                     video=it.StagedVideo,
                     title=it.UploadTitle,
@@ -92,6 +99,7 @@ namespace VideoBatch {
             IList<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> jobs,
             Func<YouTubeChannel,YouTubeItem,int,int,string> plannedFileName){
             if(jobs==null||jobs.Count==0)throw new Exception("Нет готовых роликов: выберите канал и добавьте видео.");
+            ValidateProfileChannels(jobs);
             var seenPerProfile=new Dictionary<string,HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             foreach(var job in jobs){
                 string ctx=job.ch.Name+" ["+job.index+"/"+job.total+"]";
@@ -111,13 +119,37 @@ namespace VideoBatch {
             }
         }
 
-        /// <summary>Same profile + same video file — keep one row (duplicate selection / merged channels).</summary>
+        static void ValidateProfileChannels(IList<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> jobs){
+            var channels=new Dictionary<string,YouTubeChannel>(StringComparer.OrdinalIgnoreCase);
+            foreach(var job in jobs){
+                string pid=(job.ch.ProfileId??"").Trim();
+                if(pid.Length==0)continue; // Missing IDs retain the existing per-channel validation error.
+                if(!channels.TryGetValue(pid,out var first)){channels[pid]=job.ch;continue;}
+                bool same=ReferenceEquals(first,job.ch)||(!string.IsNullOrWhiteSpace(first.ChannelId)&&!string.IsNullOrWhiteSpace(job.ch.ChannelId)
+                    &&string.Equals(first.ChannelId.Trim(),job.ch.ChannelId.Trim(),StringComparison.OrdinalIgnoreCase));
+                if(!same)foreach(var channel in new[]{first,job.ch})
+                    if(string.IsNullOrWhiteSpace(channel.ChannelUrl))throw new Exception("Канал «"+channel.Name+"»: не указана ссылка на YouTube-канал. В Dolphin-профиле «"+pid+"» используются несколько каналов. Укажите ссылку канала, чтобы загрузка выбрала правильный канал.");
+            }
+        }
+
+        public static void UpdateChannelUrl(IEnumerable<YouTubeChannel> channels,YouTubeChannel source,string channelUrl){
+            foreach(var channel in channels??Enumerable.Empty<YouTubeChannel>()){
+                bool same=ReferenceEquals(channel,source)||(!string.IsNullOrWhiteSpace(source.ChannelId)
+                    &&string.Equals(channel.ChannelId,source.ChannelId,StringComparison.OrdinalIgnoreCase));
+                if(same)channel.ChannelUrl=channelUrl;
+            }
+        }
+
+        static string ChannelRoute(YouTubeChannel channel) => (channel.ProfileId??"").Trim()+"|"+
+            (!string.IsNullOrWhiteSpace(channel.ChannelUrl)?channel.ChannelUrl.Trim().TrimEnd('/'):(channel.ChannelId??"").Trim());
+
+        /// <summary>Same channel/profile + same video file — keep one duplicate selection.</summary>
         static List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> DeduplicateJobs(
             IList<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> jobs){
             var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var list=new List<(DataGridViewRow,YouTubeChannel,YouTubeItem,int,int)>();
             foreach(var job in jobs){
-                string key=(job.ch.ProfileId??"").Trim()+"|"+(job.item.Video??"").Trim();
+                string key=ChannelRoute(job.ch)+"|"+(job.item.Video??"").Trim();
                 if(!seen.Add(key))continue;
                 list.Add(job);
             }
@@ -171,12 +203,14 @@ namespace VideoBatch {
             Func<YouTubeChannel,YouTubeItem,int,int,string> plannedFileName,
             Func<string,int,int,string> cleanTitleForUpload,
             Preferences schedulePrefs=null,bool studioSchedule=false,bool studioLongSchedule=false,string effectiveKind=null){
+            // Check channel ownership before deduplication can hide a conflicting selection.
+            if(jobs!=null&&jobs.Count>0)ValidateProfileChannels(jobs);
             jobs=DeduplicateJobs(jobs);
             ValidateBeforeStart(jobs,plannedFileName);
             var grouped=new Dictionary<string,List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)>>(StringComparer.OrdinalIgnoreCase);
             var profileOrder=new List<string>();
             foreach(var j in jobs){
-                string pid=(j.ch.ProfileId??"").Trim();
+                string pid=ChannelRoute(j.ch);
                 if(!grouped.TryGetValue(pid,out var list)){
                     list=new List<(DataGridViewRow,YouTubeChannel,YouTubeItem,int,int)>();
                     grouped[pid]=list;
@@ -187,7 +221,7 @@ namespace VideoBatch {
             var byProfile=new List<(List<(DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)> list,DataGridViewRow row,YouTubeChannel ch,string pid)>();
             foreach(var pid in profileOrder){
                 var list=grouped[pid].OrderBy(x=>x.index).ToList();
-                byProfile.Add((list,list[0].row,list[0].ch,pid));
+                byProfile.Add((list,list[0].row,list[0].ch,(list[0].ch.ProfileId??"").Trim()));
             }
             var batches=new List<PreparedProfileBatch>();
             foreach(var g in byProfile){
@@ -208,13 +242,22 @@ namespace VideoBatch {
                         Total=j.total,
                         StagedVideo=staged,
                         UploadTitle=uploadTitles[ti],
-                        Kind=itemKind
+                        Kind=itemKind,
+                        ScheduleDate=studioSchedule||studioLongSchedule?j.item.ScheduleDate:null,
+                        ScheduleTime=studioSchedule||studioLongSchedule?j.item.ScheduleTime:null
                     });
                 }
                 batches.Add(batch);
             }
-            ScheduleGenerator.AssignCrossBatchSchedule(batches,schedulePrefs,allScheduled:studioSchedule,studioLongOnly:studioLongSchedule);
-            ScheduleGenerator.EnsureValidYouTubeSchedule(batches,schedulePrefs,allScheduled:studioSchedule,studioLongOnly:studioLongSchedule);
+            // Studio slots already saved for this item are intent, not a request for a new slot.
+            // Exclude them from both generation and the lead-time recalculation (including expired slots).
+            var scheduleBatches=studioSchedule||studioLongSchedule?batches.Select(b=>new PreparedProfileBatch{
+                Row=b.Row,Channel=b.Channel,ProfileId=b.ProfileId,
+                Items=b.Items.Where(it=>string.IsNullOrWhiteSpace(it.ScheduleDate)&&string.IsNullOrWhiteSpace(it.ScheduleTime)
+                    &&it.Source.StudioPublishMode!="immediate").ToList()
+            }).Where(b=>b.Items.Count>0).ToList():batches;
+            ScheduleGenerator.AssignCrossBatchSchedule(scheduleBatches,schedulePrefs,allScheduled:studioSchedule,studioLongOnly:studioLongSchedule);
+            ScheduleGenerator.EnsureValidYouTubeSchedule(scheduleBatches,schedulePrefs,allScheduled:studioSchedule,studioLongOnly:studioLongSchedule);
             if(studioSchedule||studioLongSchedule)foreach(var batch in batches)foreach(var it in batch.Items)
                 if(!string.IsNullOrEmpty(it.ScheduleTime)&&it.ScheduleTime.Length>5)it.ScheduleTime=it.ScheduleTime.Substring(0,5);
             return batches;

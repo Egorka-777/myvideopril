@@ -114,6 +114,37 @@ namespace VideoBatch {
                 return true;
             } finally { Store.Root = previous; }
         }
+        public static bool RunVideoTests(string first, string second, string ffmpeg, string probe, string folder) {
+            Directory.CreateDirectory(folder);
+            var t = new AssemblyTemplate { Width=240, Height=320, Fps=20, SceneTimingVersion=1, Transition="cut", RenderMode="cpu", PrimaryNativeAudio=true,
+                SubtitleStyle=SubtitlePresets.BuiltIn().First(p => p.Id=="bold-green").Style.Copy() };
+            t.SubtitleStyle.Enabled=true;
+            var texts = new List<string>();
+            for(int mode=0;mode<6;mode++) {
+                t.ContinuousVideo=mode==2;
+                var source=new AssemblyScene {Duration=12}; t.Scenes.Clear(); t.Scenes.Add(source);
+                var video=new AssemblyVideo {Path=mode==1?second:first,Duration=12,HasAudio=true};
+                var scene=new AssemblyScenePlan {Scene=source,Video=video,RenderDuration=12};
+                if(mode==3) { scene.VideoSegments.Add(new AssemblySceneVideoSegment {Video=new AssemblyVideo {Path=first,Duration=6,HasAudio=true},Duration=6}); scene.VideoSegments.Add(new AssemblySceneVideoSegment {Video=new AssemblyVideo {Path=second,Duration=6,HasAudio=true},Duration=6}); }
+                var plan=new AssemblyPlan(); plan.Scenes.Add(scene);
+                if(mode==4) plan.Voiceover=second;
+                if(mode==5) { source.VoiceMode="own"; source.Voiceover=second; scene.Voiceover=second; }
+                string work=Path.Combine(folder,"work-"+mode), output=Path.Combine(folder,"captions-"+mode+".mp4");
+                AssemblyRender.Run(t,plan,ffmpeg,probe,output,work,(a,b,c)=>{throw new Exception("Unexpected layer");},CancellationToken.None,Console.WriteLine).GetAwaiter().GetResult();
+                Check(plan.Captions.Count>0 && plan.Captions.Any(c=>c.Words.Count>0),"native speech word captions mode "+mode);
+                Check(plan.Captions.All(c=>c.Start>=0 && c.End<=12.001),"native captions fit output mode "+mode);
+                Check(File.Exists(plan.Captions[0].TrackPath),"caption raster track created");
+                texts.Add(string.Join(" ",plan.Captions.Select(c=>c.Text)));
+                var media=Core.VideoInfo(Core.Probe(probe,output,CancellationToken.None).GetAwaiter().GetResult());
+                Check(media.HasAudio && Math.Abs(media.VideoDuration-12)<.15,"captioned output audio and duration");
+                Console.WriteLine("NATIVE CAPTIONS "+mode+": "+texts.Last());
+            }
+            Check(texts[0]!=texts[1],"different videos must not share captions");
+            Check(texts[0]==texts[2],"continuous video captions use same source clock");
+            Check(texts[4]==texts[1] && texts[5]==texts[1],"whole-roll and scene voiceover take priority over native video speech");
+            Console.WriteLine("PASS real native video speech: distinct outputs, continuous clock, segment order and burned subtitle tracks.");
+            return true;
+        }
         public static bool RunUiTests(string folder) {
             Directory.CreateDirectory(folder);
             using (var form = new AudioSubtitleProgressDialog(new[] { "Пример озвучки.mp3" })) Capture(form, Path.Combine(folder, "audio-recognition.png"));

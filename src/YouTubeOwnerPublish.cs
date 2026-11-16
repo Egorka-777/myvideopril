@@ -19,9 +19,10 @@ namespace VideoBatch {
         public static string VideoId(YouTubeItem item){
             string id=(item?.PublishedVideoId??"").Trim();
             if(!Store.IsValidYouTubeVideoId(id))id=Store.ExtractYouTubeVideoId(item?.PublishedUrl??"");
+            if(!Store.IsValidYouTubeVideoId(id))id=(item?.StudioVideoId??"").Trim();
             return Store.IsValidYouTubeVideoId(id)?id:"";
         }
-        public static bool CommentComplete(YouTubeItem item)=>item?.OwnerCommentState=="confirmed"||item?.OwnerCommentState=="confirmed_manual";
+        public static bool CommentComplete(YouTubeItem item)=>item?.OwnerCommentState=="confirmed"||item?.OwnerCommentState=="confirmed_manual"||item?.OwnerCommentState=="sent";
         /// <summary>Дата для подписи: слот отложки видео, иначе текущий момент (или переданный fallback).</summary>
         public static DateTime CommentDateForItem(YouTubeItem item,DateTime? fallback=null){
             if(item!=null&&ScheduleGenerator.TryParseSlot(item.ScheduleDate,item.ScheduleTime,out var at))return at;
@@ -41,7 +42,7 @@ namespace VideoBatch {
             // Existing saved signatures use account prefixes t/i/trpr/max/m/bar/aleks.
             // Render today's date only in these Telegram date tags; never rewrite the
             // stored template, other link parameters or arbitrary numbers.
-            result=Regex.Replace(result,@"(?<url>https?://(?:t\.me|telegram\.me)/[^\s?#]+\?(?:[^\s#&]+&)*start=)(?<prefix>trpr|max|bar|aleks|[itm])(?<stamp>\d{4})(?=&|#|\s|$)",m=>{
+            result=Regex.Replace(result,@"(?<url>https?://(?:t\.me|telegram\.me)/[^\s?#]+\?(?:[^\s#&]+&)*start=)(?<prefix>trpr|max|bar|aleks|myput|realtr|zaptr|trsO|[itm])(?<stamp>\d{4})(?=&|#|\s|$)",m=>{
                 string stamp=m.Groups["stamp"].Value;int day=int.Parse(stamp.Substring(0,2)),month=int.Parse(stamp.Substring(2,2));
                 return month>=1&&month<=12&&day>=1&&day<=DateTime.DaysInMonth(2000,month)
                     ?m.Groups["url"].Value+m.Groups["prefix"].Value+pcDate.ToString("ddMM",CultureInfo.InvariantCulture):m.Value;
@@ -55,7 +56,7 @@ namespace VideoBatch {
             foreach(var channel in channels??Enumerable.Empty<YouTubeChannel>()){
                 if(channel==null)continue;
                 foreach(var item in channel.Items??new List<YouTubeItem>()){
-                    if(item==null||item.StudioPending||VideoId(item)=="")continue;
+                    if(item==null||VideoId(item)=="")continue;
                     var commentDate=CommentDateForItem(item,fallback);
                     result.Add(new OwnerPublishSelection{Channel=channel,Item=item,CommentText=(item.OwnerCommentState=="pending"||CommentComplete(item))?item.OwnerCommentText:RenderComment(channel.OwnerCommentTemplate,commentDate)});
                 }
@@ -68,7 +69,6 @@ namespace VideoBatch {
         }
         public static UploadItemJob ToJob(OwnerPublishSelection choice){
             if(choice==null||choice.Channel==null||choice.Item==null||choice.VideoId=="")throw new Exception("Нет подтверждённого ID видео.");
-            if(choice.Item.StudioPending)throw new Exception("Сначала проверьте незавершённую загрузку в Studio.");
             if(choice.Item.OwnerCommentState=="pending")throw new Exception("Предыдущая отправка комментария не подтверждена. Сначала проверьте видео.");
             if(string.IsNullOrWhiteSpace(choice.Item.StudioUploadId))choice.Item.StudioUploadId=Guid.NewGuid().ToString("N");
             return new UploadItemJob{title=choice.Item.Title,publishedVideoId=choice.VideoId,localJobId=choice.Item.StudioUploadId,
@@ -77,11 +77,14 @@ namespace VideoBatch {
         public static void Apply(OwnerPublishSelection choice,UploadMessage message){
             if(choice==null||message.videoId!=choice.VideoId||message.localJobId!=choice.Item.StudioUploadId)throw new Exception("Ответ публикации относится к другому видео. Действие остановлено.");
             var item=choice.Item;
-            if(message.stage=="owner_video_public"){item.StudioVisibility="public";}
+            if(message.stage=="owner_video_public"){item.StudioVisibility="public";item.StudioPending=false;item.StudioPhase="confirmed";item.PublishedVideoId=message.videoId;item.PublishedUrl="https://www.youtube.com/watch?v="+message.videoId;}
             else if(message.stage=="owner_comment_submitting"){
                 if(CommentComplete(item)||item.OwnerCommentState=="pending")throw new Exception("Комментарий уже отправлен или ожидает проверки.");
                 if(message.commentText!=choice.CommentText)throw new Exception("Текст комментария изменился после предпросмотра.");
                 item.OwnerCommentText=choice.CommentText;item.OwnerCommentState="pending";
+            }else if(message.stage=="owner_comment_sent"){
+                if(message.commentText!=choice.CommentText)throw new Exception("Текст отправленного комментария изменился.");
+                item.OwnerCommentText=choice.CommentText;item.OwnerCommentId="";item.OwnerCommentState="sent";
             }else if(message.stage=="owner_comment_confirmed"){
                 if(string.IsNullOrWhiteSpace(message.commentId)||message.commentText!=choice.CommentText)throw new Exception("YouTube не подтвердил ID и текст комментария.");
                 item.OwnerCommentText=choice.CommentText;item.OwnerCommentId=message.commentId;item.OwnerCommentState="confirmed";
@@ -98,10 +101,13 @@ namespace VideoBatch {
             string token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
             if(string.IsNullOrWhiteSpace(token))throw new Exception("Укажите токен Dolphin в настройках.");
             // Snapshot the whole plan before the first profile starts. No files needed.
-            var batches=choices.GroupBy(c=>(c.Channel.ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase).Select(group=>{
-                if(group.Key=="")throw new Exception("Не указан профиль Dolphin.");
+            foreach(var profile in choices.Select(c=>c.Channel).Distinct().GroupBy(c=>(c.ProfileId??"").Trim(),StringComparer.OrdinalIgnoreCase))
+                if(profile.Count()>1)foreach(var channel in profile)
+                    if(string.IsNullOrWhiteSpace(channel.ChannelUrl))throw new Exception("Канал «"+channel.Name+"»: не указана ссылка на YouTube-канал для общего Dolphin-профиля «"+profile.Key+"».");
+            var batches=choices.GroupBy(c=>c.Channel).Select(group=>{
+                string profileId=(group.Key.ProfileId??"").Trim();
+                if(profileId=="")throw new Exception("Не указан профиль Dolphin.");
                 var list=group.ToList();
-                if(list.Select(c=>c.Channel).Distinct().Count()>1)throw new Exception("Для одного профиля выбраны разные каналы. Запустите их по отдельности.");
                 foreach(var choice in list){
                     YouTubeOwnerPublish.EnsureAttached(settings,choice);
                     if(choice.Item.OwnerCommentState!="pending"&&!YouTubeOwnerPublish.CommentComplete(choice.Item))
@@ -109,7 +115,7 @@ namespace VideoBatch {
                 }
                 var items=list.Select(YouTubeOwnerPublish.ToJob).ToArray();
                 if(items.Select(i=>i.publishedVideoId).Distinct().Count()!=items.Length)throw new Exception("Одно видео выбрано дважды.");
-                return new {Choices=list,Items=items,ProfileId=group.Key};
+                return new {Choices=list,Items=items,ProfileId=profileId};
             }).ToList();
             lock(saveLock)Store.Save(settings);
             lock(uploadLock){if(batches.Any(b=>busyProfiles.Contains(b.ProfileId)))throw new Exception("Выбранный профиль занят.");uploadCts=new CancellationTokenSource();foreach(var b in batches)busyProfiles.Add(b.ProfileId);}
@@ -121,10 +127,10 @@ namespace VideoBatch {
                     Action<string> report=text=>{if(row!=null)Status(row,text);else Write(channel.Name+": "+text);};
                     try{
                         var job=new UploadJob{token=token,localPort=settings.DolphinPort,profileId=batch.ProfileId,channelUrl=channel.ChannelUrl,
-                            studioPublishExisting=true,skipQueueDelay=true,keepProfileOpen=settings.KeepDolphinProfileOpenAfterUpload,items=batch.Items};
+                            studioPublishExisting=true,skipQueueDelay=true,keepProfileOpen=true,items=batch.Items};
                         await DolphinRunner.Run(job,message=>{
                             if(!string.IsNullOrWhiteSpace(message.text))report(message.text);
-                            if(message.stage=="owner_video_public"||message.stage=="owner_comment_submitting"||message.stage=="owner_comment_confirmed"){
+                            if(message.stage=="owner_video_public"||message.stage=="owner_comment_submitting"||message.stage=="owner_comment_sent"||message.stage=="owner_comment_confirmed"){
                                 if(message.packIndex<1||message.packIndex>batch.Choices.Count)throw new Exception("Неверный номер видео в ответе worker.");
                                 lock(saveLock){var choice=batch.Choices[message.packIndex-1];YouTubeOwnerPublish.EnsureAttached(settings,choice);YouTubeOwnerPublish.Apply(choice,message);Store.Save(settings);}
                             }
@@ -248,7 +254,7 @@ namespace VideoBatch {
             videos=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill,SelectionMode=DataGridViewSelectionMode.FullRowSelect};Theme.StyleGrid(videos);
             videos.Columns.Add(new DataGridViewCheckBoxColumn{Name="on",HeaderText="✓",Width=38,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});videos.Columns.Add("account","Аккаунт");videos.Columns.Add("title","Видео");videos.Columns.Add("state","Состояние");
             foreach(DataGridViewColumn c in videos.Columns)if(c.Name!="on")c.ReadOnly=true;
-            foreach(var c in candidates){int i=videos.Rows.Add(c.Item.StudioVisibility=="scheduled"&&c.Item.OwnerCommentState!="pending",c.Channel.Name,c.Item.Title,State(c));videos.Rows[i].Tag=c;}
+            foreach(var c in candidates){int i=videos.Rows.Add(!YouTubeOwnerPublish.CommentComplete(c.Item)&&c.Item.OwnerCommentState!="pending",c.Channel.Name,c.Item.Title,State(c));videos.Rows[i].Tag=c;}
             videos.SelectionChanged+=(s,e)=>ShowPreview();videos.CellMouseDown+=(s,e)=>{if(e.RowIndex>=0&&e.Button==MouseButtons.Right){videos.CurrentCell=videos.Rows[e.RowIndex].Cells["title"];var c=(OwnerPublishSelection)videos.Rows[e.RowIndex].Tag;var menu=Theme.MakeContextMenu();menu.Items.Add("Открыть видео",null,(a,b)=>Ui.Open("https://www.youtube.com/watch?v="+c.VideoId));if(c.Item.OwnerCommentState=="pending"){
                 menu.Items.Add("Проверил: комментарий уже есть",null,(a,b)=>Reconcile(c,e.RowIndex,true));menu.Items.Add("Проверил: комментария нет — разрешить повтор",null,(a,b)=>Reconcile(c,e.RowIndex,false));}menu.Show(Cursor.Position);}};
             root.Controls.Add(videos,0,1);root.Controls.Add(new Label{Text="Комментарий под выбранным видео (дата — слот отложки этого ролика)",AutoSize=true,ForeColor=Theme.TextSecondary,Margin=new Padding(0,12,0,6)},0,2);
@@ -258,7 +264,7 @@ namespace VideoBatch {
             var publish=Theme.MakeButton("Опубликовать выбранные",accent:true,action:()=>{try{videos.EndEdit();Choices=videos.Rows.Cast<DataGridViewRow>().Where(r=>Convert.ToBoolean(r.Cells["on"].Value??false)).Select(r=>(OwnerPublishSelection)r.Tag).ToList();if(Choices.Count==0)throw new Exception("Отметьте видео галочкой.");foreach(var c in Choices)YouTubeOwnerPublish.ToJob(c);DialogResult=DialogResult.OK;Close();}catch(Exception e){MessageBox.Show(this,e.Message,"YouTube");}});
             buttons.Controls.Add(cancel);buttons.Controls.Add(publish);root.Controls.Add(buttons,0,4);CancelButton=cancel;Shown+=(s,e)=>ShowPreview();ShowPreview();
         }
-        static string State(OwnerPublishSelection c)=>c.Item.OwnerCommentState=="pending"?"Комментарий: проверить":c.Item.OwnerCommentState=="confirmed_manual"?"Проверено вручную":YouTubeOwnerPublish.CommentComplete(c.Item)?"Комментарий сохранён":c.Item.StudioVisibility=="public"?"Открытый доступ":c.Item.StudioVisibility=="scheduled"?"Запланировано":"Проверить доступ";
+        static string State(OwnerPublishSelection c)=>c.Item.OwnerCommentState=="pending"?"Комментарий: проверить":c.Item.OwnerCommentState=="sent"?"Отправлен, без проверки":c.Item.OwnerCommentState=="confirmed_manual"?"Проверено вручную":YouTubeOwnerPublish.CommentComplete(c.Item)?"Комментарий сохранён":c.Item.StudioVisibility=="public"?"Открытый доступ":c.Item.StudioVisibility=="scheduled"?"Запланировано":"Проверить доступ";
         void ShowPreview(){
             if(preview==null)return;
             var c=(videos.CurrentRow?.Tag??(videos.Rows.Count>0?videos.Rows[0].Tag:null)) as OwnerPublishSelection;

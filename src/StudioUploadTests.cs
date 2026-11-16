@@ -32,13 +32,123 @@ namespace VideoBatch {
                 Check(running.CurrentCount==expected,"completed Studio upload releases its slot");
                 running.Dispose();
             }
+            var closed=new ProfileLaunchGate(1,500,500);
+            using(var active=new System.Threading.CancellationTokenSource()){
+                closed.EnterAsync(active.Token).GetAwaiter().GetResult();
+                var queued=closed.EnterAsync(active.Token);
+                if(ProfileLaunchGate.ShouldPauseAfterStudioFailure(new Exception("page.goto: Target page, context or browser has been closed")))closed.StopPendingStarts();
+                closed.Exit();
+                queued.GetAwaiter().GetResult();
+                Check(!active.IsCancellationRequested,"closed profile does not cancel other uploads");
+                closed.Exit();
+            }
+            Check(ProfileLaunchGate.ShouldPauseAfterStudioFailure(new Exception("Studio did not save; profile retained")),"retained failure still respects window capacity");
+            var retained=new ProfileLaunchGate(1,500,500);
+            using(var active=new System.Threading.CancellationTokenSource()){
+                retained.EnterAsync(active.Token).GetAwaiter().GetResult();
+                var queued=retained.EnterAsync(active.Token);
+                retained.StopPendingStarts();
+                retained.Exit();
+                bool cancelled=false;
+                try{queued.GetAwaiter().GetResult();}catch(OperationCanceledException){cancelled=true;}
+                Check(cancelled,"retained error window prevents queued replacement start");
+                Check(!active.IsCancellationRequested,"pending-start stop does not cancel running uploads");
+                cancelled=false;
+                try{retained.EnterAsync(active.Token).GetAwaiter().GetResult();}catch(OperationCanceledException){cancelled=true;}
+                Check(cancelled,"new launches remain paused after slot release");
+            }
+        }
+        static void CheckQueueRoutingAndRetry(string root){
+            string video=Path.Combine(root,"queue-source.mp4");File.WriteAllText(video,"queue source");
+            var first=new YouTubeChannel{ChannelId="channel-a",Name="Канал A",ProfileId="shared-profile",Kind="long"};
+            var other=new YouTubeChannel{ChannelId="channel-b",Name="Канал B",ProfileId=" SHARED-PROFILE ",Kind="shorts"};
+            var jobs=new List<(System.Windows.Forms.DataGridViewRow row,YouTubeChannel ch,YouTubeItem item,int index,int total)>{
+                (null,first,new YouTubeItem{Video=video,Title="First"},1,2),
+                (null,other,new YouTubeItem{Video=video,Title="Second"},2,2)
+            };
+            int staged=0,planned=0;
+            Func<YouTubeChannel,YouTubeItem,int,int,string> plan=(ch,it,index,total)=>{planned++;return it.Title+".mp4";};
+            Func<string,string,int,int,string,string,string> stage=(src,pid,index,total,name,title)=>{staged++;return src;};
+            foreach(bool missingIds in new[]{false,true}){
+                if(missingIds){first.ChannelId="";other.ChannelId="";}
+                string error="";try{QueueManager.Prepare(jobs,stage,plan,(title,index,total)=>title,studioSchedule:true);}catch(Exception e){error=e.Message;}
+                Check(error.Contains(first.Name)&&error.Contains("не указана ссылка")&&error.IndexOf("shared-profile",StringComparison.OrdinalIgnoreCase)>=0,"conflicting profile error identifies both channels and profile: "+error);
+                Check(staged==0&&planned==0&&File.ReadAllText(video)=="queue source"&&jobs.All(j=>j.item.Video==video),"conflicting profile rejected before staging, filename planning or source changes, even with duplicate media");
+                error="";try{QueueManager.ValidateBeforeStart(jobs,plan);}catch(Exception e){error=e.Message;}
+                Check(error.Contains(first.Name)&&error.Contains("не указана ссылка")&&planned==0,"direct validation rejects profile ownership before filename planning");
+            }
+            first.ChannelUrl="https://www.youtube.com/channel/UC2ZegEqor59rDcragScoNMg";
+            other.ChannelUrl="https://www.youtube.com/channel/UCTWETG4b_LbmXYfsRNZ7dzQ";
+            var separate=QueueManager.Prepare(jobs,stage,plan,(title,index,total)=>title,studioSchedule:true);
+            Check(separate.Count==2&&separate.All(b=>b.Items.Count==1)&&separate[0].Channel.ChannelUrl!=separate[1].Channel.ChannelUrl,"shared Dolphin profile retains both channel routes and duplicate media");
+            first.ChannelId="channel-a";other.ChannelId="channel-b";
+            var twin=new YouTubeChannel{ChannelId="CHANNEL-A",ProfileId=first.ProfileId,ChannelUrl=first.ChannelUrl};
+            string otherUrl=other.ChannelUrl;
+            QueueManager.UpdateChannelUrl(new[]{first,other,twin},first,"https://www.youtube.com/@updated");
+            Check(first.ChannelUrl==twin.ChannelUrl&&other.ChannelUrl==otherUrl,"discovered URL follows channel identity, never shared profile identity");
+            Check(separate[1].ToUploadJob("test",3001).profileId=="SHARED-PROFILE","worker gets normalized profile ID");
+            first.ChannelUrl="";other.ChannelUrl="";
+            first.ChannelId="channel-a";other.ChannelId=" CHANNEL-A ";
+            string secondVideo=Path.Combine(root,"queue-second.mp4");File.WriteAllText(secondVideo,"second");jobs[1].item.Video=secondVideo;
+            var sameChannel=QueueManager.Prepare(jobs,stage,plan,(title,index,total)=>title,studioSchedule:true);
+            Check(sameChannel.Count==1&&sameChannel[0].Items.Count==2&&sameChannel[0].Items[0].Kind=="long"&&sameChannel[0].Items[1].Kind=="shorts","same nonempty channel ID supports multiple kinds on one profile");
+            Check(first.ProfileId=="shared-profile"&&other.ProfileId==" SHARED-PROFILE ","validation never reassigns profile IDs");
+            foreach(string mode in new[]{"random","network"}){
+                var prefs=new Preferences{YouTubeScheduleMode=mode,YouTubeScheduleMinMinutes=2,YouTubeScheduleMaxMinutes=2};
+                var expired=DateTime.Now.AddDays(-1);
+                var retained=new YouTubeItem{Video=video,Title="Retained",ScheduleDate=expired.ToString("yyyy-MM-dd"),ScheduleTime=expired.ToString("HH:mm"),StudioRetryImmediate=true,StudioPending=true,StudioVideoId="abcdefghijk",StudioPhase="editing"};
+                var fresh=new YouTubeItem{Video=secondVideo,Title="Fresh"};
+                var immediate=new YouTubeItem{Video=Path.Combine(root,"immediate.mp4"),Title="Immediate",StudioPublishMode="immediate",StudioPending=true,StudioVideoId="safevideo01"};File.WriteAllText(immediate.Video,"immediate");
+                var noSlot=new YouTubeItem{Video=Path.Combine(root,"no-slot.mp4"),Title="Legacy pending",StudioRetryImmediate=true,StudioPending=true,StudioVideoId="safevideo02"};File.WriteAllText(noSlot.Video,"no slot");
+                first.Items=new List<YouTubeItem>{retained,fresh,immediate,noSlot};prefs.YouTubeChannels=new List<YouTubeChannel>{first};
+                var retryJobs=first.Items.Select((it,index)=>((System.Windows.Forms.DataGridViewRow)null,first,it,index+1,4)).ToList();
+                var prepared=QueueManager.Prepare(retryJobs,stage,plan,(title,index,total)=>title,prefs,studioSchedule:true);
+                Check(prepared[0].Items[0].ScheduleDate==retained.ScheduleDate&&prepared[0].Items[0].ScheduleTime==retained.ScheduleTime,"Prepare never advances retained expired slot: "+mode);
+                var wire=prepared[0].ToUploadJob("not-saved",3001,prefs);
+                Check(wire.items[0].publishMode=="immediate"&&wire.items[0].scheduleDate==retained.ScheduleDate&&wire.items[0].scheduleTime==retained.ScheduleTime&&wire.items[0].studioPending,"expired slot publishes immediately while preserving date and draft ID: "+mode);
+                Check(wire.items[1].publishMode=="scheduled"&&wire.items[1].scheduledUnixSeconds>DateTimeOffset.Now.ToUnixTimeSeconds(),"fresh item remains newly scheduled: "+mode);
+                Check(wire.items[2].publishMode=="immediate"&&wire.items[2].scheduledUnixSeconds==0,"explicit immediate intent without slot survives resume: "+mode);
+                Check(wire.items[3].publishMode=="scheduled","legacy retry/pending without intent is not implicitly immediate: "+mode);
+                Store.Save(prefs);var restored=Store.Load();
+                Check(restored.YouTubeChannels[0].Items[1].ScheduleDate==wire.items[1].scheduleDate&&restored.YouTubeChannels[0].Items[1].ScheduleTime==wire.items[1].scheduleTime,"new slot is durable before worker/confirmation: "+mode);
+                Check(restored.YouTubeChannels[0].Items[2].StudioPublishMode=="immediate","explicit intent survives XML restart: "+mode);
+                var originalFreshSlot=wire.items[1].scheduledUnixSeconds;
+                var restoredChannel=restored.YouTubeChannels[0];
+                var restoredJobs=restoredChannel.Items.Select((it,index)=>((System.Windows.Forms.DataGridViewRow)null,restoredChannel,it,index+1,4)).ToList();
+                var resumed=QueueManager.Prepare(restoredJobs,stage,plan,(title,index,total)=>title,restored,studioSchedule:true)[0].ToUploadJob("not-saved",3001,restored);
+                Check(resumed.items[0].scheduledUnixSeconds==wire.items[0].scheduledUnixSeconds&&resumed.items[1].scheduledUnixSeconds==originalFreshSlot,"subsequent Prepare preserves both old and newly persisted slots: "+mode);
+            }
+            // Without local IDs, repeated selections of the actual same object are still legitimate.
+            first.ChannelId="";first.Items=new List<YouTubeItem>{new YouTubeItem{Video=video,Title="One"},new YouTubeItem{Video=secondVideo,Title="Two"}};
+            var repeated=first.Items.Select((it,index)=>((System.Windows.Forms.DataGridViewRow)null,first,it,index+1,2)).ToList();
+            Check(QueueManager.Prepare(repeated,stage,plan,(title,index,total)=>title,studioSchedule:true)[0].Items.Count==2,"same actual channel object is allowed without channel ID");
         }
         public static bool RunSelfTests(){
             string oldRoot=Store.Root,root=Path.Combine(Path.GetTempPath(),"vb-studio-contract-"+Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             try {
                 Store.Root=root;
+                var reconcileJob=new UploadJob{reconcileOnly=true,items=new[]{new UploadItemJob{localJobId="tiktok-item",caption="Exact caption",publishedVideoId="1234567890123456789",studioPending=true}}};
+                using(var stream=new MemoryStream()){
+                    var reconcileSerializer=new DataContractJsonSerializer(typeof(UploadJob));reconcileSerializer.WriteObject(stream,reconcileJob);stream.Position=0;
+                    var restored=(UploadJob)reconcileSerializer.ReadObject(stream);
+                    Check(restored.reconcileOnly&&restored.items[0].studioPending&&restored.items[0].publishedVideoId=="1234567890123456789"&&restored.items[0].localJobId=="tiktok-item","TikTok reconciliation preserves uncertain attempt and saved ID in worker contract");
+                }
+                using(var stream=new MemoryStream(Encoding.UTF8.GetBytes("{\"stage\":\"item_done\",\"requiresPersistenceAck\":true}"))){
+                    var message=(UploadMessage)new DataContractJsonSerializer(typeof(UploadMessage)).ReadObject(stream);
+                    Check(message.requiresPersistenceAck,"TikTok reconciliation waits for durable persistence ACK");
+                }
+                var tikTokPrefs=new Preferences();
+                tikTokPrefs.TikTokAccounts.Add(new TikTokAccount{ProfileId="resume-profile",Items=new List<TikTokItem>{
+                    new TikTokItem{LocalJobId="done",Caption="Public caption",Published=true,HttpVideoId="111"},
+                    new TikTokItem{LocalJobId="review",Caption="Review caption",ContentReview=true,HttpSubmitted=true,HttpVideoId="222"},
+                    new TikTokItem{LocalJobId="uncertain",Caption="Uncertain caption",HttpNeedsReview=true},
+                    new TikTokItem{LocalJobId="remaining",Caption="Remaining caption"}}});
+                Store.Save(tikTokPrefs);
+                var savedTikTok=Store.Load().TikTokAccounts.Single().Items;
+                Check(savedTikTok.Count==4&&savedTikTok[0].Published&&savedTikTok[0].HttpVideoId=="111"&&savedTikTok[1].ContentReview&&savedTikTok[1].HttpVideoId=="222"&&savedTikTok[2].HttpNeedsReview&&!savedTikTok[3].Published,"TikTok resume states survive settings reload without replaying public posts");
                 CheckStudioLaunchPolicy();
+                CheckQueueRoutingAndRetry(root);
                 var prefs=new Preferences{YouTubeDescriptionBankRu=new List<string>{"Описание первого варианта","Описание второго варианта"},YouTubeDescriptionBankEn=new List<string>{"First English description","Second English description"},YouTubeStudioPaidPromotion=false,YouTubeStudioAlteredContent=false};
                 var channel=new YouTubeChannel{Name="Account RU",ProfileId="profile-1",Market="RU",ChannelUrl="https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv"};
                 var batch=new PreparedProfileBatch{Channel=channel,ProfileId=channel.ProfileId};
@@ -112,11 +222,11 @@ namespace VideoBatch {
                 batch.Items[0].Kind="shorts";batch.Items[0].Source.Thumbnail=Path.Combine(root,"missing-thumbnail.png");
                 var shortJob=batch.ToUploadJob("not-saved",3001,prefs);
                 Check(shortJob.items[0].thumbnail==null&&shortJob.thumbnail==null,"Shorts do not send thumbnail images");
-                Check(shortJob.items[0].publishMode=="immediate","unfinished known Studio ID resumes as public");
+                Check(shortJob.items[0].publishMode=="scheduled","unfinished known Studio ID retains scheduled publication");
                 var fresh=batch.Items[2].Source;
                 Check(shortJob.items[2].publishMode=="scheduled","untouched video keeps scheduling");
                 fresh.StudioRetryImmediate=true;Store.Save(prefs);
-                Check(batch.ToUploadJob("not-saved",3001,prefs).items[2].publishMode=="immediate","failed batch remainder publishes without scheduling");
+                Check(batch.ToUploadJob("not-saved",3001,prefs).items[2].publishMode=="scheduled","legacy retry flag does not override original schedule");
                 fresh.StudioRetryImmediate=false;
                 batch.Items[0].Kind="long";batch.Items[0].Source.Thumbnail="";
                 Check(TitleCleaner.RunSelfTests(),"clean title regressions");
@@ -144,12 +254,20 @@ namespace VideoBatch {
                 // Immediate claim: files leave the shared folder before preparation finishes.
                 string pickA=Path.Combine(root,"pick-a.mp4");File.WriteAllText(pickA,"a");
                 string pickB=Path.Combine(root,"pick-b.mp4");File.WriteAllText(pickB,"b");
-                string claim=Path.Combine(root,"claimed");
+                var dateFolder=UploadPreparation.DatedFolder(prefs,"claimed","YouTube","test-channel",new DateTime(2026,11,13));
+                Check(dateFolder.EndsWith(Path.Combine("claimed","YouTube","2026-11-13","test-channel")),"claim folder uses selection date");
+                Check(UploadPreparation.DatedFolder(prefs,"prepared","YouTube","test-channel",new DateTime(2026,11,14))!=UploadPreparation.DatedFolder(prefs,"prepared","YouTube","test-channel",new DateTime(2026,11,13)),"different dates use separate prepared folders");
+                string claim=Path.Combine(root,"claimed"); Directory.CreateDirectory(claim);
+                File.WriteAllText(Path.ChangeExtension(pickA,".txt"),"транскрибация");
+                File.WriteAllText(Path.Combine(claim,"pick-a.txt"),"старый текст");
                 var claimed=UploadPreparation.ClaimFromSharedFolder(new[]{pickA,pickB},claim);
+                Check(!File.Exists(Path.ChangeExtension(pickA,".txt")) && File.ReadAllText(Path.ChangeExtension(claimed[0].ClaimedPath,".txt"))=="транскрибация","transcript moves with selected video despite stale sidecar");
                 Check(claimed.Count==2&&!File.Exists(pickA)&&!File.Exists(pickB),"picked files disappear from the shared folder immediately");
                 Check(claimed.All(c=>File.Exists(c.ClaimedPath)),"claimed copies stay available for preparation");
                 UploadPreparation.RestoreClaimed(claimed);
                 Check(Directory.GetFiles(root,"pick-*.mp4").Length==2,"failed prepare can restore claimed originals");
+                Check(File.Exists(pickA) && File.ReadAllText(Path.ChangeExtension(pickA,".txt"))=="транскрибация","rollback restores original name and transcript");
+                File.Delete(Path.Combine(claim,"pick-a.txt"));
                 claimed=UploadPreparation.ClaimFromSharedFolder(Directory.GetFiles(root,"pick-*.mp4"),claim);
                 Check(Directory.GetFiles(root,"pick-*.mp4").Length==0&&claimed.Count==2&&claimed.All(c=>File.Exists(c.ClaimedPath)),"successful prepare keeps claimed originals until upload");
                 UploadPreparation.DiscardClaimed(claimed);

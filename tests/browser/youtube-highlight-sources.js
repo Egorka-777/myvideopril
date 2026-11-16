@@ -65,7 +65,9 @@ async function fixture(browser, lang = 'en', options = {}) {
         (step === 4 && !options.empty ? '<ytd-continuation-item-renderer style="display:block;height:50px;margin-top:1200px">More</ytd-continuation-item-renderer>' : '') +
         '</ytd-search><script>document.querySelector("#filters").onclick=()=>{window.clicked("filters");document.querySelector("#choices").hidden=false;};' +
         'const choice=document.querySelector("ytd-search-filter-renderer a");if(choice)choice.onclick=()=>window.clicked(' + JSON.stringify(labels[step + 1] || '') + ');' +
-        'const more=document.querySelector("ytd-continuation-item-renderer");if(more)new IntersectionObserver(rows=>{if(rows.some(r=>r.isIntersecting)){more.insertAdjacentHTML("beforebegin",' + JSON.stringify(card(ids.second)) + ');more.remove();}}).observe(more);' +
+        'const more=document.querySelector("ytd-continuation-item-renderer");if(more)new IntersectionObserver(rows=>{if(rows.some(r=>r.isIntersecting)){' +
+        (options.shiftContinuation ? 'if(!more.dataset.shifted){more.dataset.shifted="true";setTimeout(()=>{more.style.marginTop="3600px";},50);return;}' : '') +
+        'more.insertAdjacentHTML("beforebegin",' + JSON.stringify(card(ids.second)) + ');more.remove();}}).observe(more);' +
         'document.addEventListener("keydown",e=>{if(e.key==="Escape")throw Error("No Escape allowed")});</script>', !options.signedOut);
     } else {
       body = shell('<ytd-browse><yt-chip-cloud-chip-renderer selected>Latest</yt-chip-cloud-chip-renderer>' + [ids.today, ids.old].map(card).join('') +
@@ -198,6 +200,11 @@ async function fixture(browser, lang = 'en', options = {}) {
     assert(movingResults.some(x => x.videoId === ids.second), 'Moving continuation still loads next results');
     await moving.context.close();
     console.log('PASS unstable continuation scroll does not wait for node stability');
+    const shifted = await fixture(browser, 'en', { shiftContinuation: true });
+    const shiftedResults = await H.discoverSources(shifted.page, base, shifted.report);
+    assert(shiftedResults.some(x => x.videoId === ids.second), 'Continuation displaced by layout is scrolled into view again');
+    await shifted.context.close();
+    console.log('PASS continuation follows layout shifts until results arrive');
     const large = await fixture(browser, 'en', { large: true });
     const top = await H.discoverSources(large.page, base, large.report);
     assert.equal(top.length, 3);

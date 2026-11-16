@@ -32,23 +32,40 @@ namespace VideoBatch {
         }
     }
     public static class AssemblyRender {
-        static string Fill(int width,int height,int fps) => "fps="+fps+",scale="+width+":"+height+":force_original_aspect_ratio=increase,crop="+width+":"+height+",setsar=1,format=yuv420p";
+        internal static string Fill(int width,int height,int fps) => "fps="+fps+",scale="+width+":"+height+":force_original_aspect_ratio=increase,crop="+width+":"+height+",setsar=1,format=yuv420p";
         static IEnumerable<AssemblyVideo> SourceVideos(AssemblyPlan p) => p.Scenes.SelectMany(s => s.VideoSegments != null && s.VideoSegments.Count > 0 ? s.VideoSegments.Select(v => v.Video) : new[] { s.Video }).Concat(p.SecondaryVideo == null ? Enumerable.Empty<AssemblyVideo>() : new[] { p.SecondaryVideo });
-        static bool NativeAudio(AssemblyTemplate t, AssemblyPlan p) => t.PrimaryNativeAudio && t.PrimaryNativeVolume > 0 && p.Scenes.Any(s => (s.VideoSegments != null && s.VideoSegments.Count > 0 ? s.VideoSegments.Select(v => v.Video) : new[] { s.Video }).Any(v => v.HasAudio))
+        static bool NativeAudio(AssemblyTemplate t, AssemblyPlan p) => p.Scenes.Any(s => t.SceneNativeAudioVolume(s.Scene) > 0 && (s.VideoSegments != null && s.VideoSegments.Count > 0 ? s.VideoSegments.Select(v => v.Video) : new[] { s.Video }).Any(v => v.HasAudio))
             || t.SplitLayout != "none" && t.SecondaryNativeAudio && t.SecondaryNativeVolume > 0 && p.SecondaryVideo?.HasAudio == true;
-        static void AppendNativeAudio(AssemblyVideo video, double start, double seconds, double delay, bool loop, double volume, double roll,
-            List<string> args, ref int input, List<string> graph, List<string> audio) {
+        internal static string VoicePitchFilter(double semitones) {
+            if (Math.Abs(semitones) < .000001) return "";
+            double ratio = Math.Pow(2, semitones / 12);
+            return "aresample=48000,asetrate=" + Core.N(48000 * ratio) + ",aresample=48000,"
+                + string.Join(",", ProcessingEngine.TempoFilters(1 / ratio)) + ",";
+        }
+        internal static void AppendNativeAudio(AssemblyVideo video, double start, double seconds, double delay, bool loop, double volume, double roll,
+            List<string> args, ref int input, List<string> graph, List<string> audio, double pitchSemitones = 0, double gainDb = 0) {
             if (!video.HasAudio || volume <= 0 || seconds <= 0) return;
             int index = input++;
             if (loop) args.AddRange(new[] { "-stream_loop", "-1" });
             args.AddRange(new[] { "-ss", Core.N(start), "-t", Core.N(seconds), "-i", video.Path });
             string label = "native" + index;
-            graph.Add("[" + index + ":a:0]asetpts=PTS-STARTPTS,atrim=duration=" + Core.N(seconds) + ",volume=" + Core.N(volume)
-                + ",adelay=" + Math.Round(delay * 1000).ToString(Core.Inv) + ":all=1,apad,atrim=duration=" + Core.N(roll) + "[" + label + "]");
+            graph.Add("[" + index + ":a:0]asetpts=PTS-STARTPTS,atrim=duration=" + Core.N(seconds)
+                + (gainDb > 0 ? ",volume=" + Core.N(gainDb) + "dB:precision=double" : "") + ",volume=" + Core.N(volume)
+                + (Math.Abs(pitchSemitones) < .000001 ? "" : "," + VoicePitchFilter(pitchSemitones) + "apad,atrim=duration=" + Core.N(seconds))
+                + (gainDb > 0 && volume * Math.Pow(10, gainDb / 20) > 1 ? ",alimiter=limit=0.95:level=false:latency=true" : "")
+                + "[" + label + "Source]");
+            AppendAudioDelay(graph, label + "Source", label, delay, roll);
             audio.Add(label);
         }
+        static void AppendAudioDelay(List<string> graph, string source, string output, double delay, double roll) {
+            if (delay > 0) {
+                // Explicit silence avoids adelay losing its prefix after atempo in the shipped FFmpeg.
+                graph.Add("anullsrc=r=48000:cl=stereo,atrim=duration=" + Core.N(delay) + "[" + output + "Silence]");
+                graph.Add("[" + output + "Silence][" + source + "]concat=n=2:v=0:a=1,apad,atrim=duration=" + Core.N(roll) + "[" + output + "]");
+            } else graph.Add("[" + source + "]apad,atrim=duration=" + Core.N(roll) + "[" + output + "]");
+        }
         static bool HasAudio(AssemblyPlan p) => !string.IsNullOrWhiteSpace(p.Music) || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover));
-        public static void AppendSceneVideo(AssemblyTemplate t, AssemblyScenePlan s, List<string> args, ref int input, List<string> graph, string outputLabel) {
+        public static void AppendSceneVideo(AssemblyTemplate t, AssemblyScenePlan s, List<string> args, ref int input, List<string> graph, string outputLabel, bool transparentPlacement = false) {
             double content = AssemblyTimeline.ContentDuration(t, s);
             var segments = s.VideoSegments != null && s.VideoSegments.Count > 0
                 ? s.VideoSegments
@@ -59,7 +76,7 @@ namespace VideoBatch {
                 args.AddRange(new[] { "-threads", "1", "-ss", Core.N(AssemblyTimeline.SourceStart(t, s)), "-t", Core.N(content), "-i", segments[0].Video.Path });
                 graph.Add("[" + video + ":v:0]setpts=PTS-STARTPTS," + Fill(t.Width, t.Height, t.Fps) + ","
                     + (t.SceneTimingVersion > 0 || s.ContentSeconds > 0 ? "tpad=stop_mode=clone:stop_duration=" + Core.N(content) + "," : "")
-                    + "trim=duration=" + Core.N(content) + AssemblyVideoPlacement.Filter(t) + "[" + outputLabel + "]");
+                    + "trim=duration=" + Core.N(content) + AssemblyVideoPlacement.Filter(t, transparentPlacement) + "[" + outputLabel + "]");
                 return;
             }
             bool blend = t.Transition != "cut" && t.TransitionSeconds > 0;
@@ -87,7 +104,7 @@ namespace VideoBatch {
             // Fractional source durations and xfade frame rounding must not leave
             // the scene shorter than its voice-driven boundary for the next xfade.
             graph.Add("[" + chainLabel + "]fps=" + t.Fps + ",tpad=stop_mode=clone:stop_duration=" + Core.N(content)
-                + ",trim=duration=" + Core.N(content) + AssemblyVideoPlacement.Filter(t) + ",settb=1/" + t.Fps + ",setpts=PTS-STARTPTS[" + outputLabel + "]");
+                + ",trim=duration=" + Core.N(content) + AssemblyVideoPlacement.Filter(t, transparentPlacement) + ",settb=1/" + t.Fps + ",setpts=PTS-STARTPTS[" + outputLabel + "]");
         }
         static bool BurnCaptions(AssemblyTemplate t, AssemblyPlan p) => t.SubtitleStyle?.Enabled == true && p.Captions != null && p.Captions.Count > 0;
         public static List<string> EncoderArguments(string encoder, int threads) {
@@ -106,7 +123,8 @@ namespace VideoBatch {
             string enable, string current, string next, string format, List<string> args, ref int input, List<string> graph) {
             if (end <= start) { graph.Add("[" + current + "]null[" + next + "]"); return; }
             double playback = AssemblyOverlayMedia.PlaybackLength(layer.Layer, layer.Asset.Path, end - start);
-            double period = playback + layer.Layer.RepeatPause;
+            double period = AssemblyOverlayMedia.RepeatPeriod(layer.Layer, playback);
+            if (layer.Layer.PlaybackMode == "repeat") playback = Math.Min(playback, period);
             int count = layer.Layer.PlaybackMode == "repeat" ? (int)Math.Ceiling((end-start)/period) : 1;
             for (int cycle=0; cycle<count; cycle++) {
                 double from = start + cycle*period, until = Math.Min(end, from+playback);
@@ -214,28 +232,30 @@ namespace VideoBatch {
             var graph = new List<string>(); int input = 0;
             bool transitions = p.Scenes.Count > 1 && t.Transition != "cut" && t.TransitionDuration > 0;
             bool split=t.SplitLayout!="none",transparentScenes=t.ContinuousVideo || split;
+            bool background = p.Background != null, sceneAlpha = transparentScenes || background;
+            bool transparentPlacement = background;
             int continuous=-1;
             if(t.ContinuousVideo) {
                 continuous=input++; var video=p.Scenes[0].Video;
                 if(t.LoopShortVideos && video.Duration+.001<dur)args.AddRange(new[]{"-stream_loop","-1"});
                 args.AddRange(new[]{"-threads","1","-t",Core.N(dur),"-i",video.Path});
-                graph.Add("["+continuous+":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+",tpad=stop_mode=clone:stop_duration="+Core.N(dur)+",trim=duration="+Core.N(dur)+AssemblyVideoPlacement.Filter(t)+"[continuous]");
+                graph.Add("["+continuous+":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+",tpad=stop_mode=clone:stop_duration="+Core.N(dur)+",trim=duration="+Core.N(dur)+AssemblyVideoPlacement.Filter(t, transparentPlacement)+"[continuous]");
             }
             for (int i = 0; i < p.Scenes.Count; i++) {
                 var s = p.Scenes[i]; string current = "base" + i;
                 if(transparentScenes) graph.Add("color=c=black@0:s="+t.Width+"x"+t.Height+":r="+t.Fps+":d="+Core.N(AssemblyTimeline.ContentDuration(t,s))+",format=yuva444p["+current+"]");
                 if(!t.ContinuousVideo) {
                     string videoOut = split && !t.ContinuousVideo ? "videoBase" + i : current;
-                    AppendSceneVideo(t, s, args, ref input, graph, videoOut);
+                    AppendSceneVideo(t, s, args, ref input, graph, videoOut, background);
                 }
                 for (int j = 0; j < s.Layers.Count; j++) {
                     var layer = s.Layers[j]; string next = "overlay" + i + "_" + j;
                     AssemblySceneVideoBuilder.LayerOverlayRange(t, s, layer.Layer, out double start, out double end);
                     AppendLayerOverlay(t, layer, start, end, AssemblySceneVideoBuilder.LayerOverlayEnable(t, s, layer.Layer),
-                        current, next, transparentScenes ? "auto" : "yuv420", args, ref input, graph);
+                        current, next, sceneAlpha ? "auto" : "yuv420", args, ref input, graph);
                     current = next;
                 }
-                graph.Add("[" + current + "]"+AssemblyTimeline.Padding(t,s)+"settb=1/" + t.Fps + ",setpts=PTS-STARTPTS,format=" + (transparentScenes ? "yuva444p" : transitions ? "yuv444p" : "yuv420p") + "[s" + i + "]");
+                graph.Add("[" + current + "]"+AssemblyTimeline.Padding(t,s)+"settb=1/" + t.Fps + ",setpts=PTS-STARTPTS,format=" + (sceneAlpha ? "yuva444p" : transitions ? "yuv444p" : "yuv420p") + "[s" + i + "]");
                 if(split && !t.ContinuousVideo)graph.Add("[videoBase"+i+"]"+AssemblyTimeline.Padding(t,s)+"settb=1/"+t.Fps+",setpts=PTS-STARTPTS,format="+(transitions?"yuv444p":"yuv420p")+"[videoScene"+i+"]");
             }
             string joined;
@@ -279,6 +299,20 @@ namespace VideoBatch {
                 string weight = AssemblySplit.BlendWeight(vertical, splitLine, feather);
                 graph.Add("[splitA][splitB]blend=all_expr='A*(1-(" + weight + "))+B*(" + weight + ")':shortest=1[split]"); joined = "split";
             }
+            if (background) {
+                int media = input++;
+                string extension = Path.GetExtension(p.Background.Path).ToLowerInvariant();
+                if (AssemblyFiles.VideoExtensions.Contains(extension) || extension == ".gif") {
+                    args.AddRange(new[] { "-stream_loop", "-1" });
+                    if (extension == ".gif") args.AddRange(new[] { "-ignore_loop", "1" });
+                } else args.AddRange(new[] { "-loop", "1", "-framerate", t.Fps.ToString() });
+                args.AddRange(new[] { "-threads", "1", "-t", Core.N(dur), "-i", p.Background.Path });
+                graph.Add("[" + media + ":v:0]setpts=PTS-STARTPTS," + (t.BackgroundForeground ? Fill(t.Width, t.Height, t.Fps).Replace("format=yuv420p", "format=yuva444p") : Fill(t.Width, t.Height, t.Fps))
+                    + ",trim=duration=" + Core.N(dur) + "[background]");
+                // Preserve media alpha for a foreground PNG frame; never key video colours.
+                graph.Add((t.BackgroundForeground ? "[" + joined + "][background]" : "[background][" + joined + "]") + "overlay=0:0:format=yuv420:shortest=1[backgroundComposited]");
+                joined = "backgroundComposited";
+            }
             if(sceneOverlay!=null) {graph.Add("["+joined+"]["+sceneOverlay+"]overlay=0:0:format=yuv420:shortest=1[sceneComposited]");joined="sceneComposited";}
             for(int j=0;j<p.GlobalLayers.Count;j++) {
                 var layer=p.GlobalLayers[j]; string next="global"+j;
@@ -301,47 +335,64 @@ namespace VideoBatch {
             }
             graph.Add("[" + joined + "]format=yuv420p[vout]");
             var audio=new List<string>();
-            if (t.PrimaryNativeAudio && t.PrimaryNativeVolume > 0) {
-                if (t.ContinuousVideo) AppendNativeAudio(p.Scenes[0].Video, 0, dur, 0, t.LoopShortVideos && p.Scenes[0].Video.Duration < dur, t.PrimaryNativeVolume, dur, args, ref input, graph, audio);
-                else {
-                    double position = 0;
-                    foreach (var scene in p.Scenes) {
-                        double content = AssemblyTimeline.ContentDuration(t, scene);
-                        if (scene.VideoSegments != null && scene.VideoSegments.Count > 1) {
-                            double segmentTime = 0;
-                            foreach (var segment in scene.VideoSegments) {
-                                AppendNativeAudio(segment.Video, 0, segment.Duration, position + scene.IncomingPad + segmentTime, false, t.PrimaryNativeVolume, dur, args, ref input, graph, audio);
-                                segmentTime += segment.Duration;
-                            }
-                        } else AppendNativeAudio(scene.Video, AssemblyTimeline.SourceStart(t, scene), content, position + scene.IncomingPad, AssemblyTimeline.LoopInput(t, scene), t.PrimaryNativeVolume, dur, args, ref input, graph, audio);
-                        position += AssemblyTimeline.SceneSeconds(scene) + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
-                    }
+            double mainStart = AssemblyTimeline.MainStart(t, p), mainSeconds = Math.Max(0, dur - mainStart);
+            string mainDelay = mainStart > 0 ? ",adelay=" + Math.Round(mainStart * 1000).ToString(Core.Inv) + ":all=1" : "";
+            double nativePitch = string.IsNullOrWhiteSpace(p.Voiceover) && !p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Voiceover)) ? t.VoicePitchSemitones : 0;
+            if (p.Scenes.Any(s => t.SceneNativeAudioVolume(s.Scene) > 0)) {
+                double position = 0;
+                foreach (var scene in p.Scenes) {
+                    double content = AssemblyTimeline.ContentDuration(t, scene);
+                    bool preview = scene.Scene.IsPreview;
+                    double level = t.SceneNativeAudioVolume(scene.Scene);
+                    double pitch = preview ? 0 : nativePitch;
+                    double Gain(AssemblyVideo video) => preview ? 0 : AssemblyAudioLeveling.GainFor(t, video.Path);
+                    double audioStart = position + (t.HasPreviewScene ? 0 : scene.IncomingPad);
+                    double sourceStart = t.ContinuousVideo ? position + scene.IncomingPad : AssemblyTimeline.SourceStart(t, scene);
+                    if (level > 0 && scene.VideoSegments != null && scene.VideoSegments.Count > 1) {
+                        double segmentTime = 0;
+                        foreach (var segment in scene.VideoSegments) {
+                            AppendNativeAudio(segment.Video, 0, segment.Duration, audioStart + segmentTime, false, level, dur, args, ref input, graph, audio, pitch, Gain(segment.Video));
+                            segmentTime += segment.Duration;
+                        }
+                    } else if (level > 0) AppendNativeAudio(scene.Video, sourceStart, content, audioStart, AssemblyTimeline.LoopInput(t, scene), level, dur, args, ref input, graph, audio, pitch, Gain(scene.Video));
+                    position += AssemblyTimeline.SceneSeconds(scene) + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
                 }
             }
             if (t.SplitLayout != "none" && t.SecondaryNativeAudio && p.SecondaryVideo != null)
-                AppendNativeAudio(p.SecondaryVideo, 0, dur, 0, t.LoopShortVideos && p.SecondaryVideo.Duration < dur, t.SecondaryNativeVolume, dur, args, ref input, graph, audio);
-            if(!string.IsNullOrWhiteSpace(p.Music)) {
-                int index=input++;args.AddRange(new[]{"-stream_loop","-1","-i",p.Music});
-                double fade=Math.Min(.2,dur/4);
-                graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,volume="+Core.N(t.MusicVolume)+",afade=t=in:d="+Core.N(fade)+",afade=t=out:st="+Core.N(dur-fade)+":d="+Core.N(fade)+",apad,atrim=duration="+Core.N(dur)+"[music]");audio.Add("music");
+                AppendNativeAudio(p.SecondaryVideo, 0, mainSeconds, mainStart, t.LoopShortVideos && p.SecondaryVideo.Duration < mainSeconds, t.SecondaryNativeVolume, dur, args, ref input, graph, audio, nativePitch);
+            if(!string.IsNullOrWhiteSpace(p.Music) && p.Scenes.Any(s=>t.SceneBedMusicVolume(s.Scene)>0)) {
+                int index=input++; string label="bedMusic";
+                args.AddRange(new[]{"-stream_loop","-1","-i",p.Music});
+                double fade=Math.Min(.2,dur/4), musicTime=0;
+                var musicEnds=new List<double>();
+                foreach(var scene in p.Scenes) {
+                    musicTime+=AssemblyTimeline.SceneSeconds(scene)+(t.SceneTimingVersion>0 && t.Transition!="cut"?t.TransitionSeconds:0);
+                    musicEnds.Add(musicTime);
+                }
+                string level=Core.N(t.SceneBedMusicVolume(p.Scenes[p.Scenes.Count-1].Scene));
+                for(int i=p.Scenes.Count-2;i>=0;i--)
+                    level="if(lt(t,"+Core.N(musicEnds[i])+"),"+Core.N(t.SceneBedMusicVolume(p.Scenes[i].Scene))+","+level+")";
+                graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,atrim=duration="+Core.N(dur)+",volume='"+level+"':eval=frame,afade=t=in:d="+Core.N(fade)+",afade=t=out:st="+Core.N(Math.Max(0,dur-fade))+":d="+Core.N(fade)+"["+label+"]");audio.Add(label);
             }
             double sceneTime=0;
             for(int i=0;i<p.Scenes.Count;i++) {
                 var scene=p.Scenes[i];
-                if(!string.IsNullOrWhiteSpace(scene.Music)) {
+                if(!scene.Scene.IsPreview && !string.IsNullOrWhiteSpace(scene.Music)) {
                     int index=input++;args.AddRange(new[]{"-stream_loop","-1","-i",scene.Music});string label="sceneAudio"+i;
                     graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,atrim=duration="+Core.N(AssemblyTimeline.SceneSeconds(scene))+",volume="+Core.N(scene.Scene.MusicVolume)+",adelay="+Math.Round(sceneTime*1000).ToString(Core.Inv)+":all=1,apad,atrim=duration="+Core.N(dur)+"["+label+"]");audio.Add(label);
                 }
-                if(!string.IsNullOrWhiteSpace(scene.Voiceover)) {
+                if(!scene.Scene.IsPreview && !string.IsNullOrWhiteSpace(scene.Voiceover)) {
                     int index=input++;args.AddRange(new[]{"-i",scene.Voiceover});string label="sceneVoice"+i;
                     double voiceDur = AssemblyTimeline.SceneSeconds(scene);
-                    graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,atrim=duration="+Core.N(voiceDur)+",volume=1,adelay="+Math.Round(sceneTime*1000).ToString(Core.Inv)+":all=1,apad,atrim=duration="+Core.N(dur)+"["+label+"]");audio.Add(label);
+                    graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,atrim=duration="+Core.N(voiceDur)+","+VoicePitchFilter(t.VoicePitchSemitones)+"apad,atrim=duration="+Core.N(voiceDur)+",volume=1["+label+"Source]");
+                    AppendAudioDelay(graph,label+"Source",label,sceneTime,dur);audio.Add(label);
                 }
                 sceneTime+=AssemblyTimeline.SceneSeconds(scene)+(t.SceneTimingVersion>0 && t.Transition!="cut"?t.TransitionSeconds:0);
             }
             if(!string.IsNullOrWhiteSpace(p.Voiceover)) {
                 int index=input++;args.AddRange(new[]{"-i",p.Voiceover});
-                graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,volume=1,apad,atrim=duration="+Core.N(dur)+"[voiceover]");audio.Add("voiceover");
+                graph.Add("["+index+":a:0]asetpts=PTS-STARTPTS,"+VoicePitchFilter(t.VoicePitchSemitones)+"volume=1,atrim=duration="+Core.N(mainSeconds)+"[voiceoverSource]");
+                AppendAudioDelay(graph,"voiceoverSource","voiceover",mainStart,dur);audio.Add("voiceover");
             }
             bool music=audio.Count>0;
             string mixDuration = "longest"; // Keep the one-second tail after speech.
@@ -372,15 +423,22 @@ namespace VideoBatch {
         public static async Task Run(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string output, string work,
             Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress,
             AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null) {
+            t = t.WithVideoSubtitleStyle(segmentRandom ?? new Random());
             context = context ?? new AssemblyRenderContext(); var total = Stopwatch.StartNew(); var stage = Stopwatch.StartNew();
             var report = new AssemblyRenderReport { Width = t.Width, Height = t.Height, Fps = t.Fps, Duration = t.Duration,
                 RequestedMode = t.RenderMode, EncoderThreads = context.EncoderThreads, FilterThreads = context.FilterThreads };
             Directory.CreateDirectory(work);
             string cache = context.CacheDirectory ?? Path.Combine(work, "raster-cache"); Directory.CreateDirectory(cache);
-            progress?.Invoke("Готовлю озвучку и субтитры…");
+            progress?.Invoke(AssemblySpeechPlan.SubtitlesEnabled(t) ? "Готовлю озвучку и субтитры…" : "Готовлю озвучку…");
             await AssemblySpeechPlan.Prepare(t, p, ffmpeg, probe, work, ct, progress).ConfigureAwait(false);
             if (catalog != null && catalog.Count > 0)
                 AssemblySceneVideoBuilder.EnsureSegments(t, p, catalog, segmentRandom ?? new Random(), segmentMix);
+            // Loaded recipes may lack audio metadata; resolve before subtitle source selection.
+            foreach (var video in SourceVideos(p).GroupBy(v => v.Path).Select(g => g.First())) {
+                var media = Core.VideoInfo(await Core.Probe(probe, video.Path, ct).ConfigureAwait(false));
+                foreach (var source in SourceVideos(p).Where(v => v.Path == video.Path)) source.HasAudio = media.HasAudio;
+            }
+            await AssemblySpeechPlan.PrepareVideoCaptions(t, p, ffmpeg, probe, work, ct, progress).ConfigureAwait(false);
             double roll = p.RollDuration(t);
             report.Duration = roll;
             progress?.Invoke("Готовлю изображения…");
@@ -401,11 +459,6 @@ namespace VideoBatch {
                 }
                 if (p.Captions.Count > 0)
                     WarmupSubtitles.Rasterize(p.Captions, t.SubtitleStyle, work, t.Width, t.Height);
-            }
-            // Plans loaded from older recipes do not contain source audio metadata.
-            foreach (var video in SourceVideos(p).GroupBy(v => v.Path).Select(g => g.First())) {
-                var media = Core.VideoInfo(await Core.Probe(probe, video.Path, ct).ConfigureAwait(false));
-                foreach (var source in SourceVideos(p).Where(v => v.Path == video.Path)) source.HasAudio = media.HasAudio;
             }
             report.RasterSeconds = stage.Elapsed.TotalSeconds; stage.Restart();
             progress?.Invoke("Проверяю ускорение…");

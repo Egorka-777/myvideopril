@@ -122,7 +122,7 @@ async function selectSearchFilter(page, label) {
     document.addEventListener('yt-navigate-finish', () => { window.__highlightNavigationFinished = true; }, { once: true });
   });
   await choice.click();
-  await page.waitForURL(url => url.href !== before, { timeout: 15000 });
+  await page.waitForURL(url => url.href !== before, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForFunction(() => window.__highlightNavigationFinished === undefined || window.__highlightNavigationFinished === true,
     null, { timeout: 20000 });
   await choice.waitFor({ state: 'hidden', timeout: 10000 });
@@ -267,9 +267,17 @@ async function nextListingPage(page) {
     return count;
   }, CARDS);
   if (before === null) return false;
-  await page.waitForFunction(({ selector, before }) => document.querySelectorAll(selector).length > before ||
-    !document.querySelector('ytd-search ytd-continuation-item-renderer, ytd-browse ytd-continuation-item-renderer'),
-  { selector: CARDS, before }, { timeout: 20000 });
+  await page.waitForFunction(({ selector, before }) => {
+    const nodes = document.querySelectorAll('ytd-search ytd-continuation-item-renderer, ytd-browse ytd-continuation-item-renderer');
+    if (document.querySelectorAll(selector).length > before || !nodes.length) return true;
+    // Lazy images and appended sections move the continuation after the first
+    // scroll. Keep the current trigger in view while waiting for new results.
+    const continuation = nodes[nodes.length - 1];
+    const rect = continuation.getBoundingClientRect();
+    if (rect.bottom > innerHeight || rect.top < 0)
+      continuation.scrollIntoView({ block: 'end', behavior: 'instant' });
+    return false;
+  }, { selector: CARDS, before }, { timeout: 60000, polling: 250 });
   return true;
 }
 

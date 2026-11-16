@@ -165,6 +165,7 @@ namespace VideoBatch {
         public int YouTubeWarmupLikePercent=38;
         public bool YouTubeWarmupAutoBeforeUpload;
         public string ProtectedOpenRouterKey="", ProtectedElevenLabsKey="", ProtectedWarmupHttpProxy="";
+        public string ProtectedInterApiKey="";
         public string OpenRouterModel="openai/gpt-4o-mini";
         public string WarmupVideoMarketView="RU";
         public string WarmupVideoPromptRu="Короткие смешные анекдоты про трейдеров и трейдинг, без мата, 1–2 предложения.";

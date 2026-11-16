@@ -59,9 +59,9 @@ namespace VideoBatch {
             bool assigned = false;
             try {
                 if (!string.IsNullOrWhiteSpace(channel.Market)) Window.SetMarketView(channel.Market);
-                string[] renamed = Window.RenamePickedVideosInPlace(channel, files);
-                string claimDir = Path.Combine(UploadStaging.Root(settings), "claimed", "YouTube", UploadStaging.SanitizeDirName(channel.ChannelId ?? channel.ProfileId));
-                claimed = UploadPreparation.ClaimFromSharedFolder(renamed, claimDir);
+                string[] sources = (files ?? new string[0]).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToArray();
+                string claimDir = UploadPreparation.DatedFolder(settings, "claimed", "YouTube", channel.ChannelId ?? channel.ProfileId, DateTime.Now);
+                claimed = UploadPreparation.ClaimFromSharedFolder(sources, claimDir);
                 LogLine?.Invoke("«" + channel.Name + "»: исходники сразу убраны из общей папки · " + claimed.Count + ".");
                 prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, claimed.Select(c => c.ClaimedPath).ToArray(), settings, progress);
                 if (Window.IsDisposed) throw new OperationCanceledException();
@@ -125,7 +125,7 @@ namespace VideoBatch {
             bool assigned = false;
             try {
                 string[] sources = (files ?? new string[0]).Select(f => { try { return Path.GetFullPath(f); } catch { return f; } }).ToArray();
-                string claimDir = Path.Combine(UploadStaging.Root(settings), "claimed", "TikTok", UploadStaging.SanitizeDirName(account.ProfileId));
+                string claimDir = UploadPreparation.DatedFolder(settings, "claimed", "TikTok", account.ProfileId, DateTime.Now);
                 claimed = UploadPreparation.ClaimFromSharedFolder(sources, claimDir);
                 LogLine?.Invoke("«" + account.Name + "»: исходники сразу убраны из общей папки · " + claimed.Count + ".");
                 prepared = await UploadPreparation.PrepareAsync(UploadPreparation.TikTokKey(account), "TikTok", account.ProfileId, claimed.Select(c => c.ClaimedPath).ToArray(), settings, progress);

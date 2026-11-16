@@ -756,6 +756,65 @@ async def open_account(account):
     raise SessionConnectionError(text, wss_failure or failure, attempts)
 
 
+def spam_status(text):
+    text = ' '.join((text or '').casefold().split())
+    restricted = ('your account is now limited', 'your account is limited',
+                  'while the account is limited', 'while your account is limited',
+                  'пока действуют ограничения', 'ваш аккаунт ограничен',
+                  'ваш аккаунт был ограничен')
+    clean = ('no limits are currently applied to your account',
+             'your account is free from any limitations',
+             'на ваш аккаунт не наложено никаких ограничений',
+             'ваш аккаунт свободен от каких-либо ограничений')
+    if any(phrase in text for phrase in restricted):
+        return 'restricted'
+    if any(phrase in text for phrase in clean):
+        return 'clean'
+    return 'unknown'
+
+
+async def check_spam_accounts(job):
+    counts = dict(clean=0, restricted=0, unknown=0)
+    failures = 0
+    for account in job.get('accounts', []):
+        cancelled()
+        client = None
+        try:
+            client, me = await open_account(account)
+            bot = await asyncio.wait_for(client.get_entity('SpamBot'), 20)
+            if not getattr(bot, 'bot', False) or not getattr(bot, 'verified', False) or (bot.username or '').casefold() != 'spambot':
+                raise ValueError('Не удалось подтвердить официальный @SpamBot')
+            emit('stage', id=account['id'], text='Отправляю /start официальному @SpamBot…')
+            sent = await asyncio.wait_for(client.send_message(bot, '/start'), 20)
+            deadline = time.monotonic() + 30
+            reply = None
+            while time.monotonic() < deadline:
+                cancelled()
+                messages = await asyncio.wait_for(client.get_messages(bot, min_id=sent.id, limit=10), 10)
+                replies = [m for m in messages if not m.out and m.sender_id == bot.id and m.raw_text]
+                if replies:
+                    reply = max(replies, key=lambda m: m.id)
+                    break
+                await pause(1)
+            if reply is None:
+                raise TimeoutError('Нет нового ответа @SpamBot')
+            state = spam_status(reply.raw_text)
+            counts[state] += 1
+            label = dict(clean='Без спам-ограничений', restricted='Спам-блок', unknown='Не удалось определить ответ @SpamBot')[state]
+            emit('spam_check', id=account['id'], status=state, checked_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), reply=reply.raw_text, text=label)
+        except StopJob:
+            raise
+        except Exception as exc:
+            failures += 1
+            state, text, seconds = error_info(exc)
+            emit('spam_check', id=account['id'], status='error', checked_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), reply='', text='Проверка @SpamBot не завершена: '+text, code=type(exc).__name__)
+        finally:
+            if client:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(client.disconnect(), 3)
+    emit('summary', text=f"Спам-чек: без ограничений {counts['clean']}; спам-блок {counts['restricted']}; не определено {counts['unknown']}; ошибок {failures}", failures=failures+counts['unknown'])
+
+
 async def check_accounts(job):
     ready = failed = 0
     report = []
@@ -1069,10 +1128,10 @@ async def invite(job):
         until = datetime.fromisoformat(account['wait_until'].replace('Z', '+00:00'))
         if until > datetime.now(timezone.utc):
             raise ValueError('Ещё действует сохранённая пауза Telegram; дождитесь её окончания')
-    client = client_for(account)
+    client = None
     ledger = InviteLedger(Path(job['root']) / 'invites.sqlite')
     try:
-        me = await connect(client, account)
+        client, me = await open_account(account)
         target = await resolve_target(client, job.get('target', ''))
         emit('target', title=target.title, target_id=target.id, text='Права подтверждены: '+target.title)
         done = attempted = unresolved = skipped = 0
@@ -1140,7 +1199,8 @@ async def invite(job):
         raise
     finally:
         ledger.close()
-        await client.disconnect()
+        if client:
+            await client.disconnect()
 
 
 @contextlib.contextmanager
@@ -1180,6 +1240,8 @@ async def run(job):
             await import_paths(job)
         elif action in ('check', 'warmup', 'doctor'):
             await check_accounts(job)
+        elif action == 'spam_check':
+            await check_spam_accounts(job)
         elif action == 'invite':
             await invite(job)
         elif action == 'invite_preview':

@@ -18,6 +18,9 @@ spec.loader.exec_module(w)
 class YoutubeTests(unittest.TestCase):
     def setUp(self):
         w.CANCEL = None
+        self.boundaries = patch('speech_boundaries.refine_clips', side_effect=lambda job, info, words, clips: clips)
+        self.boundaries.start()
+        self.addCleanup(self.boundaries.stop)
     def test_child_process_does_not_inherit_openrouter_proxy_variable(self):
         import os
         with patch.dict(os.environ, {'VIDEOBATCH_HTTP_PROXY': 'http://example.invalid:1',
@@ -25,6 +28,10 @@ class YoutubeTests(unittest.TestCase):
             output = w.run([sys.executable, '-c',
                             'import os,json;print(json.dumps({k:v for k,v in os.environ.items() if k in ("VIDEOBATCH_HTTP_PROXY","HTTPS_PROXY")}))'])
         self.assertEqual({'HTTPS_PROXY': 'http://system-proxy.invalid:2'}, json.loads(output))
+
+    def test_process_failure_reports_exit_code_even_without_stderr(self):
+        with self.assertRaisesRegex(RuntimeError, 'код завершения 7.*stderr пуст'):
+            w.run([sys.executable, '-c', 'import sys; sys.exit(7)'])
 
     def test_download_public_only_and_persistent_cache(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -94,87 +101,104 @@ class YoutubeTests(unittest.TestCase):
                     opening_quote=units[first]['text'], closing_quote=units[last]['text'],
                     score=42, complete=True, title='Explanation', reason='The subject is introduced and resolved.')
         item.update(changes)
+        item['id'] = (f"{item['first_unit']}:{item['last_unit']}" if type(item['first_unit']) is int and type(item['last_unit']) is int else None)
         return {'clips': [item]}
 
     @staticmethod
     def selection_units(count=8):
         return w.sentences([dict(start=i*65, end=(i+1)*65-.2, text=f' Topic {i}.') for i in range(count)])
 
-    def test_semantic_proposal_then_independent_review(self):
+    def test_one_semantic_call_selects_complete_timed_source_range(self):
         units = self.selection_units()
         answer = self.selection(units, 4, 6)
         with patch.object(w, 'openrouter_ask', return_value=answer) as ask:
             clips = w.select_youtube_speech(dict(minimum=120, maximum=300, count=4), units, 520)
-        self.assertEqual(2, ask.call_count)
-        proposal, review = [call.args[1] for call in ask.call_args_list]
+        ask.assert_called_once()
+        proposal = ask.call_args.args[1]
         self.assertIn('SEMANTIC_PROPOSAL', proposal)
         self.assertIn('including later discussions', proposal)
         self.assertIn('NOT sensational highlights', proposal)
-        self.assertIn('Exclude introductions', proposal)
-        self.assertIn('Do not force a count', proposal)
-        self.assertNotIn('CANDIDATES=', proposal)
-        self.assertIn('ALLOWED_END_BOUNDS=', proposal)
-        self.assertIn('INDEPENDENT_EDITORIAL_REVIEW', review)
-        evidence = json.loads(review.split('\nREVIEW_EVIDENCE=')[1].split('\nALLOWED_END_BOUNDS=')[0])
-        self.assertEqual(units[2:4], evidence['preceding'])
-        self.assertEqual(units[4:7], evidence['passage'])
-        self.assertEqual(units[7:], evidence['following'])
-        self.assertNotIn('score', evidence)
+        self.assertIn('Partially overlapping excerpts ARE allowed', proposal)
+        self.assertIn('Aim for 4 useful excerpts', proposal)
+        self.assertIn('OPTIONS=', proposal)
+        self.assertNotIn('ALLOWED_END_BOUNDS=', proposal)
+        self.assertIn('entire topic need not be exhausted', proposal)
+        self.assertIn('end on a finished spoken sentence', proposal)
+        self.assertNotIn('INDEPENDENT_EDITORIAL_REVIEW', proposal)
+        self.assertNotIn('opening_quote', proposal)
+        options = dict(json.loads(proposal.split('\nOPTIONS=')[1].split('\nTRANSCRIPT=')[0]))
+        self.assertTrue(120 <= options['4:6'] <= 300)
+        transcript = json.loads(proposal.split('\nTRANSCRIPT=')[1])
+        self.assertEqual([[u['id'], u['start'], u['end'], u['text']] for u in units], transcript)
         self.assertEqual(1, len(clips))
         self.assertEqual(4, clips[0]['first_unit'])
         self.assertTrue(120 <= clips[0]['end'] - clips[0]['start'] <= 300)
 
-    def test_invalid_durations_ids_and_quotes_are_not_repaired(self):
+    def test_invalid_ids_are_logged_and_not_exported(self):
         units = self.selection_units()
         job = dict(minimum=120, maximum=300, count=4)
         cases = [({'first_unit': '0'}, 'ID'), ({'first_unit': True}, 'ID'),
-                 ({'last_unit': 99}, 'ID'), ({'last_unit': -1}, 'ID'),
-                 ({'opening_quote': 'Invented.'}, 'opening_quote'),
-                 ({'closing_quote': units[1]['text'] + ' '}, 'closing_quote')]
+                 ({'last_unit': 99}, 'ID'), ({'last_unit': -1}, 'ID')]
         for changes, expected in cases:
             with self.subTest(changes=changes), patch.object(w, 'openrouter_ask',
                     return_value=self.selection(units, 0, 1, **changes)) as ask, patch.object(w, 'emit') as emit:
-                with self.assertRaisesRegex(ValueError, expected):
-                    w.select_youtube_speech(job, units, 520)
+                self.assertEqual([], w.select_youtube_speech(job, units, 520))
                 self.assertEqual(1, ask.call_count)
-                self.assertIn(expected, emit.call_args.args[1])
+                self.assertTrue(any('неизвестный номер' in str(call) for call in emit.call_args_list))
 
-    def test_review_rejects_mid_argument_and_logs_specific_reason(self):
+    def test_incomplete_proposal_logs_specific_reason_without_review(self):
         units = self.selection_units()
         reason = 'Following sentence supplies the explanation; a next-topic transition is not a conclusion.'
-        answers = [self.selection(units, 0, 1), self.selection(units, 0, 1, complete=False, reason=reason)]
-        with patch.object(w, 'openrouter_ask', side_effect=answers) as ask, patch.object(w, 'emit') as emit:
+        answer = self.selection(units, 0, 1, complete=False, reason=reason)
+        with patch.object(w, 'openrouter_ask', return_value=answer) as ask, patch.object(w, 'emit') as emit:
             clips = w.select_youtube_speech(dict(minimum=120, maximum=300, count=4), units, 520)
         self.assertEqual([], clips)
-        self.assertEqual(2, ask.call_count)
+        ask.assert_called_once()
         self.assertTrue(any(reason in str(call) for call in emit.call_args_list))
 
-    def test_review_adjusts_valid_boundaries_and_checks_adjusted_quotes(self):
+    def test_selected_ids_use_source_text_not_model_quotes(self):
         units = self.selection_units()
         job = dict(minimum=120, maximum=300, count=4)
-        proposal = self.selection(units, 1, 2)
-        reviewed = self.selection(units, 0, 3)
-        with patch.object(w, 'openrouter_ask', side_effect=[proposal, reviewed]):
+        answer = self.selection(units, 0, 3, opening_quote='Invented opening', closing_quote='Invented ending')
+        with patch.object(w, 'openrouter_ask', return_value=answer) as ask:
             clips = w.select_youtube_speech(job, units, 520)
+        ask.assert_called_once()
         self.assertEqual((0, 3), (clips[0]['first_unit'], clips[0]['last_unit']))
-        bad = self.selection(units, 0, 3, opening_quote=units[1]['text'])
-        with patch.object(w, 'openrouter_ask', side_effect=[proposal, bad]):
-            with self.assertRaisesRegex(ValueError, 'review.*opening_quote'):
-                w.select_youtube_speech(job, units, 520)
+        self.assertEqual(' '.join(u['text'] for u in units[:4]), clips[0]['text'])
 
-    def test_review_invalid_boundaries_and_quotes_fail_atomically(self):
+    def test_invalid_proposal_preserves_valid_clips_and_logs_rejection(self):
         units = self.selection_units()
         job = dict(minimum=120, maximum=300, count=4)
         good = self.selection(units, 0, 1)
-        proposals = {'clips': good['clips'] + self.selection(units, 4, 5)['clips']}
-        for changes, expected in (({'last_unit': '5'}, 'ID'), ({'last_unit': 4}, 'длительность'),
-                                  ({'closing_quote': 'Not the source.'}, 'closing_quote')):
+        for changes, expected in (({'last_unit': '5'}, 'ID'), ({'last_unit': 4}, 'длительность')):
             bad = self.selection(units, 4, 5, **changes)
+            proposals = {'clips': good['clips'] + bad['clips']}
             with self.subTest(changes=changes), patch.object(w, 'openrouter_ask',
-                    side_effect=[proposals, good, bad]) as ask:
-                with self.assertRaisesRegex(ValueError, 'review.*' + expected):
-                    w.select_youtube_speech(job, units, 520)
-                self.assertEqual(3, ask.call_count)
+                    return_value=proposals) as ask, patch.object(w, 'emit') as emit:
+                clips = w.select_youtube_speech(job, units, 520)
+                self.assertEqual(['0:1'], [clip['id'] for clip in clips])
+                self.assertTrue(any('неизвестный номер' in str(call) for call in emit.call_args_list))
+                ask.assert_called_once()
+
+    def test_ids_without_quotes_resolve_source_and_short_topics_are_not_extended(self):
+        units = self.selection_units()
+        job = dict(minimum=120, maximum=300, count=4)
+        answer = self.selection(units, 0, 1)
+        answer['clips'][0].pop('opening_quote')
+        answer['clips'][0].pop('closing_quote')
+        with patch.object(w, 'openrouter_ask', return_value=answer) as ask:
+            clips = w.select_youtube_speech(job, units, 520)
+        ask.assert_called_once()
+        self.assertEqual(' '.join(u['text'] for u in units[:2]), clips[0]['text'])
+        for seconds in (55.86, 58.34, 103.79):
+            short_units = w.sentences([
+                dict(start=0, end=seconds, text='Short topic.'),
+                dict(start=seconds + 1, end=240, text='Unrelated discussion.')])
+            with self.subTest(seconds=seconds), patch.object(w, 'openrouter_ask',
+                    return_value=self.selection(short_units, 0, 0)) as ask, patch.object(w, 'emit') as emit:
+                self.assertEqual([], w.select_youtube_speech(job, short_units, 250))
+                ask.assert_called_once()
+                self.assertTrue(any('неизвестный номер' in str(call) for call in emit.call_args_list))
 
     def test_semantic_opening_not_pronoun_blacklist(self):
         units = self.selection_units(2)
@@ -189,15 +213,17 @@ class YoutubeTests(unittest.TestCase):
             self.assertEqual([], w.select_youtube_speech(dict(minimum=120, maximum=300, count=4), units, 130))
             self.assertEqual(1, ask.call_count)
 
-    def test_distinct_nonoverlap_after_review(self):
+    def test_overlapping_passages_preserved_after_single_call(self):
         units = self.selection_units()
         items = [self.selection(units, a, b)['clips'][0] for a, b in ((0, 1), (1, 2), (4, 5))]
-        answers = [{'clips': items}] + [{'clips': [item]} for item in items]
-        with patch.object(w, 'openrouter_ask', side_effect=answers) as ask:
+        with patch.object(w, 'openrouter_ask', return_value={'clips': items}) as ask:
             clips = w.select_youtube_speech(dict(minimum=120, maximum=300, count=3), units, 520)
-        self.assertEqual(4, ask.call_count)
-        self.assertEqual(['0:1', '4:5'], [clip['id'] for clip in clips])
-        self.assertLessEqual(clips[0]['end'], clips[1]['start'])
+        ask.assert_called_once()
+        self.assertEqual(['0:1', '1:2', '4:5'], [clip['id'] for clip in clips])
+        self.assertGreater(clips[0]['end'], clips[1]['start'])
+        with patch.object(w, 'openrouter_ask', return_value={'clips': [items[0],items[0],items[1]]}):
+            clips=w.select_youtube_speech(dict(minimum=120,maximum=300,count=3),units,520)
+        self.assertEqual(['0:1','1:2'],[c['id'] for c in clips])
 
     def test_long_sentence_boundaries_no_forced_count(self):
         units = self.selection_units(3)
@@ -211,9 +237,9 @@ class YoutubeTests(unittest.TestCase):
             self.assertEqual([], w.select_youtube_speech(job, units, 200))
             self.assertEqual(1, ask.call_count)
         unfinished = w.sentences([dict(start=0, end=130, text='Not finished')])
-        with patch.object(w, 'openrouter_ask') as ask:
+        with patch.object(w, 'openrouter_ask', return_value={'clips': []}) as ask:
             self.assertEqual([], w.select_youtube_speech(job, unfinished, 140))
-            ask.assert_not_called()
+            ask.assert_called_once()  # Missing ASR punctuation is not proof of an unfinished thought.
 
     def test_later_window_preserves_original_ids_and_actual_timing(self):
         units = self.selection_units(52)
@@ -221,11 +247,8 @@ class YoutubeTests(unittest.TestCase):
         def choose(job, prompt):
             prompts.append(prompt)
             transcript = json.loads(prompt.split('\nTRANSCRIPT=')[1])
-            if prompt.startswith('SEMANTIC_PROPOSAL'):
-                if transcript[0][0] == 0:
-                    return {'clips': []}
-                if transcript[0][0] > 24:
-                    return {'clips': []}
+            if transcript[0][0] == 0 or transcript[0][0] > 24:
+                return {'clips': []}
             return self.selection(units, 24, 25)
         with patch.object(w, 'openrouter_ask', side_effect=choose):
             clips = w.select_youtube_speech(dict(minimum=120, maximum=300.0, count=4), units, 3380)
@@ -234,16 +257,16 @@ class YoutubeTests(unittest.TestCase):
         self.assertAlmostEqual(1689.98, clips[0]['end'])
         later = next(p for p in prompts if p.startswith('SEMANTIC_PROPOSAL') and
                      json.loads(p.split('\nTRANSCRIPT=')[1])[0][0] == 23)
-        self.assertIn('24', json.loads(later.split('\nALLOWED_END_BOUNDS=')[1].split('\nTRANSCRIPT=')[0]))
+        self.assertIn('24:25', dict(json.loads(later.split('\nOPTIONS=')[1].split('\nTRANSCRIPT=')[0])))
 
-    def test_all_windows_reviewed_before_global_limit(self):
+    def test_all_windows_selected_once_before_global_limit(self):
         units = self.selection_units(52)
         job = dict(minimum=120, maximum=300, count=1)
         first = self.selection(units, 0, 1, score=30)
         later = self.selection(units, 30, 31, score=80)
-        with patch.object(w, 'openrouter_ask', side_effect=[first, first, later, later, {'clips': []}]) as ask:
+        with patch.object(w, 'openrouter_ask', side_effect=[first, later, {'clips': []}]) as ask:
             clips = w.select_youtube_speech(job, units, 3380)
-        self.assertEqual(5, ask.call_count)
+        self.assertEqual(3, ask.call_count)
         self.assertEqual(['30:31'], [clip['id'] for clip in clips])
 
     def test_compact_allowed_bounds_preserve_gaps(self):
@@ -297,10 +320,16 @@ class YoutubeTests(unittest.TestCase):
                        openrouter_key='fake', openrouter_model='fake')
             with patch.object(w, 'download_youtube', return_value=dict(source=str(media))), patch.object(w, 'probe', return_value=dict(width=160, height=90, audio=True, duration=400)), patch.object(w, 'transcribe', return_value=[dict(start=0, end=130, text='Complete.')]), patch.object(w, 'select_youtube_speech', return_value=[dict(start=0, end=130), dict(start=140, end=270)]), patch.object(w, 'export', side_effect=[dict(outputs=['completed.mp4']), RuntimeError('disk full')]):
                 result = w.execute(job)
-            self.assertEqual('error', result['status'])
+            self.assertEqual('partial', result['status'])
             self.assertEqual(['completed.mp4'], result['sources'][0]['outputs'])
-            self.assertEqual('disk full', result['sources'][0]['error'])
+            self.assertIn('disk full', result['sources'][0]['error'])
             self.assertTrue(media.exists())
+            self.boundaries.stop()
+            with patch.object(w, 'download_youtube', return_value=dict(source=str(media))), patch.object(w, 'probe', return_value=dict(width=160, height=90, audio=True, duration=400)), patch.object(w, 'transcribe', return_value=[dict(start=0, end=130, text='Complete.')]), patch.object(w, 'select_youtube_speech', return_value=[dict(start=0, end=130)]), patch('speech_boundaries.refine_clips', side_effect=ValueError('Unverified speech boundary')), patch.object(w, 'export') as export:
+                failed = w.execute(job)
+            self.assertEqual('error', failed['status'])
+            self.assertIn('Unverified speech boundary', failed['sources'][0]['error'])
+            export.assert_not_called()
 
     @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg required')
     def test_real_batch_export_and_retry_preserves_transcript(self):
@@ -337,7 +366,7 @@ class YoutubeTests(unittest.TestCase):
             original_run = w.run
             def commands(args, **kwargs):
                 return downloader(args) if args[:3] == [sys.executable, '-m', 'yt_dlp'] else original_run(args, **kwargs)
-            answer = {'clips': [dict(first_unit=0, last_unit=1, opening_quote='Setup.',
+            answer = {'clips': [dict(id='0:1', first_unit=0, last_unit=1, opening_quote='Setup.',
                                     closing_quote='Explanation and conclusion.', score=90,
                                     complete=True, title='Idea', reason='Complete explanation and conclusion.')]}
             with patch.object(w, 'run', side_effect=commands), patch.dict(sys.modules, {'whisper_runtime': types.SimpleNamespace(create_model=lambda *args: Whisper())}):

@@ -16,7 +16,7 @@ try {
     & (Join-Path $root 'scripts/Sync-StudioUploader.ps1') -KitRoot $kit -NodePath $node | Out-Host
     $manifest=Get-Content -LiteralPath (Join-Path $dest 'STUDIO_UPLOADER_VERSION.json') -Raw | ConvertFrom-Json
     if ($manifest.build -ne '2026-11-06-studio-manual-public-v24' -or $manifest.protocolVersion -ne 2 -or $manifest.liveAccountValidation -ne 'NOT_RUN') { throw 'Invalid manifest' }
-    foreach ($name in @('tools/highlights/worker.py','tools/highlights/prepare.ps1','tools/highlights/requirements.txt')) {
+    foreach ($name in @('tools/highlights/worker.py','tools/highlights/prepare.ps1','tools/highlights/requirements.txt','tools/telegram/worker.py','tools/telegram/wss_transport.py','tools/subtitles/worker.py')) {
         if (!$manifest.files.Where({$_.file -eq $name}).Count -or !(Test-Path -LiteralPath (Join-Path $kit $name))) { throw "Highlights package missing: $name" }
     }
     if ([IO.File]::ReadAllText((Join-Path $manifest.backup 'tools/uploader/worker.js')) -ne 'old-worker') { throw 'Worker backup missing' }

@@ -19,7 +19,12 @@ namespace VideoBatch {
         public string Highlight = "none", Motion = "none";
         public int OutlineWidth;
         public bool Bold = true;
-        public WarmupSubtitleStyle Copy() => (WarmupSubtitleStyle)MemberwiseClone();
+        public SubtitleRandomSettings RandomStyle = new SubtitleRandomSettings();
+        public WarmupSubtitleStyle Copy() {
+            var copy = (WarmupSubtitleStyle)MemberwiseClone();
+            copy.RandomStyle = (RandomStyle ?? new SubtitleRandomSettings()).Copy();
+            return copy;
+        }
         public void Normalize() {
             if (!SubtitlePresets.Fonts.Contains(FontFamily)) FontFamily = "Segoe UI";
             if (Plate != "rounded" && Plate != "solid" && Plate != "none") Plate = "rounded";
@@ -29,7 +34,7 @@ namespace VideoBatch {
             AccentColor = Hex(AccentColor, "#32F56B"); OutlineColor = Hex(OutlineColor, "#000000");
             OutlineWidth = Math.Max(0, Math.Min(10, OutlineWidth));
             if (!new[] { "none", "active", "progressive" }.Contains(Highlight)) Highlight = "none";
-            if (Motion != "none" && Motion != "pop") Motion = "none";
+            if (!new[] { "none", "pop", "fade", "rise", "word-accent" }.Contains(Motion)) Motion = "none";
             if (string.IsNullOrWhiteSpace(PresetId)) PresetId = "classic";
         }
         static string Hex(string value, string fallback) => System.Text.RegularExpressions.Regex.IsMatch(value ?? "", "^#[0-9a-fA-F]{6}$") ? value.ToUpperInvariant() : fallback;
@@ -44,7 +49,7 @@ namespace VideoBatch {
         public double Start, End;
         public List<SubtitleWord> Words;
         public int ActiveWord = -1;
-        public float TextScale = 1;
+        public float TextScale = 1, FrameOpacity = 1, OffsetY, ActiveWordScale = 1;
     }
     public static class WarmupSubtitles {
         // Build complete words using the provider's character alignment. No estimated reading speed.

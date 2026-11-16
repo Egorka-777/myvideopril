@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { chromium } = require("playwright-core");
-const WORKER_BUILD = "2026-10-01-studio-schedule-evidence-v2";
+const WORKER_BUILD = "2026-11-14-studio-public-batch-v3";
 const TRANSPORT = "studio";
 
 const jobPath = process.argv[2];
@@ -476,6 +476,15 @@ function normalizeCaption(value) {
   return String(value || "").replace(/\r\n/g, "\n").trim();
 }
 
+async function readCaption(box) {
+  return box.evaluate(el => {
+    if (el.value != null) return el.value;
+    const blocks = [...el.querySelectorAll('[data-block="true"]')];
+    if (blocks.length) return blocks.map(block => block.textContent || "").join("\n");
+    return el.innerText || el.textContent || "";
+  });
+}
+
 async function fillCaption(page, caption) {
   await dismissTikTokBlockingDialogs(page);
   const captionText = normalizeCaption(caption);
@@ -505,7 +514,7 @@ async function fillCaption(page, caption) {
         ((await box.getAttribute("placeholder").catch(() => "")) || "");
       if (/\btitle\b|назван/i.test(label)) continue;
       found = true;
-      const current=await box.evaluate(el=>el.value!=null?el.value:(el.innerText||el.textContent||""));
+      const current=await readCaption(box);
       if(normalizeCaption(current)===captionText)return;
       await box.click({timeout:3000});await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
       for(const [lineIndex,line] of captionText.split("\n").entries()) {
@@ -513,8 +522,12 @@ async function fillCaption(page, caption) {
         await page.keyboard.type(line,{delay:70});
       }
       await page.waitForTimeout(400);
-      const actual = await box.evaluate(el => el.value != null ? el.value : (el.innerText || el.textContent || "")).catch(() => "");
+      const actual = await readCaption(box);
       if (normalizeCaption(actual) === captionText) return;
+      let mismatch=0;
+      while(mismatch<captionText.length && actual[mismatch]===captionText[mismatch])mismatch++;
+      record("caption_mismatch", "TikTok не подтвердил введённую подпись; повторный ввод остановлен", { expectedLength:captionText.length, actualLength:actual.length, mismatch });
+      throw new Error("TikTok изменил текст при вводе подписи. Повторный ввод остановлен; профиль оставлен открытым.");
     }
   }
   await page.waitForTimeout(500);
@@ -649,7 +662,7 @@ async function waitUploadReady(page) {
   throw new Error("Файл долго не догрузился / кнопка публикации не стала активной. Проверьте открытый профиль.");
 }
 
-async function uploadOne(page, item, index, total) {
+async function uploadOne(page, item, index, total, firstUpload = index === 1) {
   const caption = normalizeCaption(item.caption || item.description || item.title || "");
   const video = item.video;
   if (!video || !fs.existsSync(video)) throw new Error(`Ролик ${index}/${total}: файл не найден.`);
@@ -665,7 +678,11 @@ async function uploadOne(page, item, index, total) {
     "https://www.tiktok.com/creator-center/upload"
   ];
   let opened = false;
-  for (const u of urls) {
+  if(!firstUpload){
+    await require("./tiktok-native-publish").openNextUpload(page);
+    opened=!!await pickFileInput(page);
+  }
+  for (const u of firstUpload?urls:[]) {
     try {
       await gotoStable(page, u, { waitUntil: "domcontentloaded", timeout: 90000 });
       await dismissTikTokBlockingDialogs(page);
@@ -699,10 +716,6 @@ async function uploadOne(page, item, index, total) {
   await fillCaption(page, caption);
   if(item.publishMode==="scheduled")await require("./tiktok-studio-evidence").setNativeSchedule(page,item);
   else await require("./tiktok-native-publish").immediatePublic(page);
-  // A stale first slot is moved together with the remaining batch by C# before startup.
-  // If it expires during this upload, stop instead of silently changing the slot.
-  await fillCaption(page, caption);
-
   send("tiktok", `Пачка ${index}/${total}: публикую…`, { percent: Math.min(95, 50 + Math.round(index / Math.max(1, total) * 45)) });
   await dismissTikTokBlockingDialogs(page);
   const evidence = await publishAndConfirm(page,item,index,total);
@@ -767,9 +780,25 @@ async function main() {
     await releaseTaskPage(page);await browser.close();browser=null;
     finished=true;send("done","Статусы TikTok обновлены без повторной загрузки.",{success:true,percent:100});return;
   }
-  let lastUrl = "";
+  await gotoStable(page,"https://www.tiktok.com/tiktokstudio/upload",{waitUntil:"domcontentloaded",timeout:90000});
+  send("tiktok","Сверяю очередь с существующими публикациями Studio до передачи файлов…");
+  const reconciled=await require("./tiktok-native-publish").reconcileNative(page,pack,{
+    matched:async(result,item,index,total)=>{
+      if(result.review)job.keepProfileOpen=true;
+      send(result.review?"item_review":"item_done",result.review?"Найдена существующая публикация на проверке; повтор пропущен.":"Найдена существующая публичная публикация; повтор пропущен.",
+        {packIndex:index,packTotal:total,localJobId:item.localJobId,videoId:result.id,reconciled:true,requiresPersistenceAck:true});
+      await waitPersistenceAck(item.localJobId);
+    }
+  });
+  if(job.reconcileOnly) {
+    await releaseTaskPage(page);await browser.close();browser=null;
+    finished=true;send("done","Сверка Studio завершена без передачи файлов.",{success:true,percent:100});return;
+  }
+  let lastUrl = "", uploaded=0;
   for (let i = 0; i < pack.length; i++) {
-    lastUrl = await uploadOne(page, pack[i], i + 1, pack.length) || lastUrl;
+    if(reconciled[i])continue;
+    lastUrl = await uploadOne(page, pack[i], i + 1, pack.length, uploaded===0) || lastUrl;
+    uploaded++;
   }
 
   await releaseTaskPage(page).catch(e => send("diagnostic", "Освобождение вкладки: " + e.message));

@@ -13,10 +13,10 @@ const safety = require("../../tools/uploader/youtube-interaction-safety");
       requests.push(route.request().url());
       assert(route.request().url().startsWith("https://www.youtube.com/"), "fixture never contacts a real site");
       if (new URL(route.request().url()).searchParams.get("search_query") === "empty fixture") {
-        await route.fulfill({ contentType: "text/html", body: '<form action="/results"><input name="search_query"></form><ytd-search><ytd-message-renderer>No results</ytd-message-renderer></ytd-search>' });
+        await route.fulfill({ contentType: "text/html", body: '<form action="/results"><input name="search_query"><button id="search-icon-legacy" type="submit">Search</button></form><ytd-search><ytd-message-renderer>No results</ytd-message-renderer></ytd-search>' });
         return;
       }
-      await route.fulfill({ contentType: "text/html", body: `<form action="/results"><input name="search_query"></form>
+      await route.fulfill({ contentType: "text/html", body: `<form action="/results"><input name="search_query"><button id="search-icon-legacy" type="submit">Search</button></form>
         <ytd-search><button aria-label="Search filters" onclick="document.querySelector('ytd-search-filter-renderer').hidden=false">Filters</button>
         <ytd-search-filter-renderer hidden><a id="endpoint" href="/results?search_query=native+shorts&fixture_filter=shorts" onclick="event.preventDefault();window.nativeShorts=true;history.replaceState({},'',this.href);setTimeout(() => { document.querySelector('ytd-reel-item-renderer').hidden=false; }, 400)">Shorts</a></ytd-search-filter-renderer>
         <ytd-video-renderer><a href="/watch?v=abcdefghijk">Ordinary</a><a href="/watch?v=abcdefghijk">Duplicate</a></ytd-video-renderer>
@@ -34,6 +34,24 @@ const safety = require("../../tools/uploader/youtube-interaction-safety");
     // The safety boundary installs a page route. Install this fixture route
     // afterwards (page routes precede context routes) so no network can escape.
     const raw = await context.newPage();
+    const originalNewCDP = context.newCDPSession.bind(context);
+    const diagnosticSessions = [];
+    context.newCDPSession = async target => {
+      const session = await originalNewCDP(target);
+      const record = { session, detached: false };
+      diagnosticSessions.push(record);
+      const detach = session.detach.bind(session);
+      session.detach = async () => { record.detached = true; await detach(); };
+      return session;
+    };
+    const assertDiagnosticCleanup = () => {
+      assert(diagnosticSessions.length > 0);
+      for (const { session, detached } of diagnosticSessions) {
+        assert(detached, "temporary CDP session detached even on search failure");
+        for (const event of ["Page.frameNavigated", "Page.navigatedWithinDocument", "Page.frameRequestedNavigation", "Network.requestWillBeSent"])
+          assert.equal(session.listenerCount(event), 0, event + " listener removed");
+      }
+    };
     const page = deadlinePage(raw, Date.now() + 30000);
     const boundary = await safety.installPlaybackBoundary(page, () => {}, { allowAds: true });
     await raw.route("**/*", fulfillFixture);
@@ -47,6 +65,93 @@ const safety = require("../../tools/uploader/youtube-interaction-safety");
       assert(!requests.some(url => url.includes("sp=")), "no guessed filter URL");
       const empty = await searchKeyword(page, "empty fixture", false);
       assert.deepEqual(empty, []);
+      // Autocomplete consumes Enter and another hidden searchbox precedes the
+      // live modern one. Search must use the visible input and native button.
+      await raw.route("**/*", async route => {
+        requests.push(route.request().url());
+        assert.equal(route.request().url(), "https://www.youtube.com/", "no direct results navigation");
+        await route.fulfill({ contentType: "text/html", body: `
+          <input name="search_query" hidden>
+          <input class="ytSearchboxComponentInput" onkeydown="if(event.key==='Enter'){event.preventDefault();window.swallowedEnter=true}">
+          <button class="ytSearchboxComponentSearchButton" onclick="window.nativeSearchClicks=(window.nativeSearchClicks||0)+1;history.pushState({},'', '/results?search_query='+encodeURIComponent(document.querySelector('.ytSearchboxComponentInput').value));setTimeout(()=>{document.querySelector('ytd-search').innerHTML='<ytd-video-renderer><a href=/watch?v=abcdefghijk>Result</a></ytd-video-renderer>';},300)">Search</button>
+          <ytd-search></ytd-search>` });
+      });
+      const searchEvents = [];
+      const modern = await searchKeyword(page, "трейдинг binodex", false, (stage, text, extra) => searchEvents.push(extra));
+      assert.deepEqual(modern.map(x => x.id), ["abcdefghijk"]);
+      assert.equal(await raw.evaluate(() => window.nativeSearchClicks), 1);
+      assert.equal(await raw.evaluate(() => window.swallowedEnter), undefined);
+      for (const name of ["search_input", "search_fill", "search_submit", "search_results_url", "search_results_ready", "search_harvest"])
+        assert(searchEvents.some(e => e.waitStage === name), name + " completion logged");
+      assert(searchEvents.find(e => e.waitStage === "search_results_ready").waitMs >= 200, "URL readiness does not imply populated results");
+      const submitted = JSON.parse(searchEvents.find(e => e.waitStage === "search_submit_snapshot").reason);
+      assert.equal(submitted.inputs.find(i => i.visible).value, "трейдинг binodex");
+      assert.equal(submitted.buttons.filter(b => b.visible).length, 1);
+      assert(searchEvents.some(e => e.waitStage === "search_navigation" && JSON.parse(e.reason).url.includes("/results")));
+      const origins = searchEvents.filter(e => e.waitStage === "search_navigation_origin").map(e => JSON.parse(e.reason));
+      const homeRequest = origins.find(e => e.event === "document_request" && e.url === "https://www.youtube.com/");
+      const homeCommit = origins.find(e => e.event === "document_commit" && e.url === "https://www.youtube.com/");
+      const resultsTransition = origins.find(e => e.event === "same_document" && e.url.includes("/results"));
+      assert(homeRequest && homeCommit && resultsTransition, "pre-home observation distinguishes request, commit and SPA navigation");
+      assert.equal(homeRequest.loaderId, homeCommit.loaderId);
+      assert.equal(resultsTransition.loaderId, homeCommit.loaderId);
+      assert.equal(resultsTransition.navigationType, "historyApi");
+      assert(homeRequest.initiator.type);
+      assertDiagnosticCleanup();
+      // Failed URL and DOM waits must be distinguished without replacing the
+      // original error, navigating directly or clicking a second time.
+      const originalWait = raw.waitForFunction;
+      for (const failingCall of [1, 2]) {
+        const failure = new Error("fixture readiness failure " + failingCall);
+        const failureEvents = [];
+        let waits = 0;
+        raw.waitForFunction = async (...args) => {
+          if (++waits === failingCall) throw failure;
+          return originalWait.apply(raw, args);
+        };
+        try {
+          await assert.rejects(searchKeyword(page, "трейдинг binodex", false,
+            (stage, text, extra) => failureEvents.push(extra)), error => error === failure);
+        } finally { raw.waitForFunction = originalWait; }
+        const failedStage = failingCall === 1 ? "search_results_url" : "search_results_ready";
+        assert(failureEvents.some(e => e.waitStage === failedStage + "_error" && e.reason.includes(failure.message)));
+        const evidence = JSON.parse(failureEvents.find(e => e.waitStage === failedStage + "_snapshot").reason);
+        assert.equal(evidence.query, "трейдинг binodex");
+        assert.equal(await raw.evaluate(() => window.nativeSearchClicks), 1);
+        assert.equal(raw.listenerCount("framenavigated"), 0, "search listener removed after failure");
+        assertDiagnosticCleanup();
+      }
+      // A real Chromium same-document rollback, stopped by a fixture error
+      // instead of waiting two minutes. No real service and no second click.
+      await raw.route("**/*", route => route.fulfill({ contentType: "text/html", body: `
+        <input name="search_query"><button id="search-icon-legacy" onclick="window.clicks=(window.clicks||0)+1;history.pushState({},'', '/results?search_query='+encodeURIComponent(document.querySelector('input').value));history.replaceState({},'', '/?private_token=DO_NOT_LOG')">Search</button>` }));
+      const rollbackEvents = [];
+      const rollbackFailure = new Error("fixture observed rollback");
+      raw.waitForFunction = async () => { throw rollbackFailure; };
+      try {
+        await assert.rejects(searchKeyword(page, "rollback fixture", false,
+          (stage, text, extra) => rollbackEvents.push(extra)), error => error === rollbackFailure);
+      } finally { raw.waitForFunction = originalWait; }
+      const rollbackOrigins = rollbackEvents.filter(e => e.waitStage === "search_navigation_origin").map(e => JSON.parse(e.reason));
+      const sameDocument = rollbackOrigins.filter(e => e.event === "same_document");
+      assert(sameDocument.some(e => e.url.includes("/results?search_query=rollback%20fixture")));
+      assert.equal(sameDocument.at(-1).url, "https://www.youtube.com/");
+      assert.equal(sameDocument.at(-1).loaderId, sameDocument.find(e => e.url.includes("/results")).loaderId);
+      assert(!JSON.stringify(rollbackOrigins).includes("DO_NOT_LOG"), "origin diagnostics discard non-search query parameters");
+      assert.equal(await raw.evaluate(() => window.clicks), 1);
+      assertDiagnosticCleanup();
+      // Failure to attach diagnostics is explicit and never replaces the action error.
+      context.newCDPSession = async () => { throw new Error("fixture CDP unavailable"); };
+      raw.waitForFunction = async () => { throw rollbackFailure; };
+      const unavailableEvents = [];
+      try {
+        await assert.rejects(searchKeyword(page, "rollback fixture", false,
+          (stage, text, extra) => unavailableEvents.push(extra)), error => error === rollbackFailure);
+      } finally {
+        context.newCDPSession = originalNewCDP;
+        raw.waitForFunction = originalWait;
+      }
+      assert(unavailableEvents.some(e => e.waitStage === "search_navigation_origin" && JSON.parse(e.reason).event === "unavailable"));
       await raw.setContent(`<video></video><ytd-segmented-like-dislike-button-renderer><like-button-view-model><button aria-label="Like" aria-pressed="false" onclick="this.setAttribute('aria-pressed','true');this.setAttribute('aria-label','Unlike');window.likes=(window.likes||0)+1">Like</button></like-button-view-model></ytd-segmented-like-dislike-button-renderer>`);
       await raw.evaluate(() => {
         const v = document.querySelector("video"); let current = -0.5;
@@ -105,7 +210,7 @@ const safety = require("../../tools/uploader/youtube-interaction-safety");
         const id='fixture'+String(i).padStart(4,'0');
         return '<ytd-video-renderer><a href="/watch?v='+id+'">Video '+i+'</a></ytd-video-renderer><a href="/shorts/'+id+'">Short '+i+'</a>';
       }).join('');
-      return route.fulfill({contentType:'text/html',body:`<form action="/results"><input name="search_query"></form><ytd-search>
+      return route.fulfill({contentType:'text/html',body:`<form action="/results"><input name="search_query"><button id="search-icon-legacy" type="submit">Search</button></form><ytd-search>
         <button aria-label="Filters" onclick="document.querySelector('ytd-search-filter-renderer').hidden=false">Filters</button>
         <ytd-search-filter-renderer hidden><a id="endpoint" href="/results?search_query=session&shorts=1">Shorts</a></ytd-search-filter-renderer>${links}</ytd-search>`});
     };

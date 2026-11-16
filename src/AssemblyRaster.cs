@@ -22,6 +22,7 @@ namespace VideoBatch {
         }
         public static RectangleF LayerImageBounds(AssemblyTemplate t, AssemblyLayer layer, Size imageSize) {
             var box=new RectangleF((float)(layer.X*t.Width),(float)(layer.Y*t.Height),(float)(layer.Width*t.Width),(float)(layer.Height*t.Height));
+            if (!layer.PreserveAspectRatio) return box;
             if(!layer.UniformImageScale) return FitImageBounds(box,imageSize);
             var envelope=ImageEnvelope(t,layer);
             if(envelope.IsEmpty) return FitImageBounds(box,imageSize);
@@ -45,12 +46,12 @@ namespace VideoBatch {
         public static void SetImageScale(AssemblyTemplate t,AssemblyLayer layer,double percent) {
             var size=ImageEnvelope(t,layer);
             double w=layer.Width,h=layer.Height;
-            if(!size.IsEmpty) { w=(double)size.Width/t.Width; h=(double)size.Height/t.Height; layer.UniformImageScale=true; }
+            if(!size.IsEmpty && layer.PreserveAspectRatio) { w=(double)size.Width/t.Width; h=(double)size.Height/t.Height; layer.UniformImageScale=true; }
             double factor=percent/100/Math.Max(w,h);
             double cx=layer.X+layer.Width/2,cy=layer.Y+layer.Height/2;
             layer.Width=w*factor; layer.Height=h*factor;
-            layer.X=Math.Max(0,Math.Min(1-layer.Width,cx-layer.Width/2));
-            layer.Y=Math.Max(0,Math.Min(1-layer.Height,cy-layer.Height/2));
+            layer.X=cx-layer.Width/2;
+            layer.Y=cy-layer.Height/2;
             layer.PlacementConfigured=true;
         }
         public static Bitmap Create(AssemblyTemplate t, AssemblyLayerPlan plan) {

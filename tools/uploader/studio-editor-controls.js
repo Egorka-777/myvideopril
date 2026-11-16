@@ -60,10 +60,10 @@ module.exports=function({until,norm,read,typingBudget}){
   if(signal?.aborted){const e=new Error('Studio: ввод остановлен вместе с этапом метаданных.');e.code='STUDIO_EDITOR_CANCELLED';throw e;}
   if(deadline&&Date.now()>=deadline){const e=new Error('Studio: исчерпан общий срок попытки ввода.');e.code='STUDIO_EDITOR_ATTEMPT_TIMEOUT';throw e;}
  }
- async function waitTyped(box,want,{timeoutMs=5000,name='текста',signal,deadline,detectStall=false}={}){
+ async function waitTyped(box,want,{timeoutMs=5000,name='текста',signal,deadline,detectStall=false,readValue=read}={}){
   const expected=norm(want);let actual=null,last=null,stableAt=Date.now();
   try{return await until(async()=>{
-   check(signal,deadline);actual=await read(box);if(actual===expected)return true;
+   check(signal,deadline);actual=await readValue(box);if(actual===expected)return true;
    if(actual!==last){last=actual;stableAt=Date.now();}
    // A settled missing/different suffix will not heal by polling the same DOM
    // for 35s. Repair the keyboard input; exact equality remains mandatory.
@@ -117,8 +117,8 @@ module.exports=function({until,norm,read,typingBudget}){
    result.code=error.code;result.editorState=last;throw result;
   }
  }
- async function typeText(box,text,{delay=45,onProgress=()=>{},onState=()=>{},scope=null,name='текста',activationMs=12000,verifyMs=5000,signal}={}){
-  if(name==='описания'){
+ async function typeText(box,text,{delay=45,onProgress=()=>{},onState=()=>{},scope=null,name='текста',activationMs=12000,verifyMs=5000,signal,readValue=read}={}){
+  if(name==='описания'||name==='комментария'){
    check(signal);
    await activateEditor(box,{timeoutMs:activationMs,name,onState,signal});
    await box.press('Control+A',{timeout:3000});
@@ -137,7 +137,7 @@ module.exports=function({until,norm,read,typingBudget}){
    check(signal);
    await box.press('Tab',{timeout:3000});
    // A completed input loop is not proof that Studio accepted the text.
-   try{await waitTyped(box,text,{timeoutMs:verifyMs,name,signal});}
+   try{await waitTyped(box,text,{timeoutMs:verifyMs,name,signal,readValue});}
    catch(error){
     error.editorDiagnostic={field:name,comparison:error.editorMismatch||null};
     onState('verification_failed','Точный текст описания не подтверждён.',error.editorDiagnostic);

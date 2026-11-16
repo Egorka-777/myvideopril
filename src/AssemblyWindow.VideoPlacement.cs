@@ -26,6 +26,32 @@ namespace VideoBatch {
         }
     }
     public sealed partial class AssemblyCanvas {
+        string platformGuide = "Без разметки";
+        public void SetPlatformGuide(string platform) { platformGuide = platform; Invalidate(); }
+        void DrawPlatformGuide(Graphics g, RectangleF frame) {
+            if (platformGuide == "Без разметки" || template.Width >= template.Height) return;
+            var state = g.Save();
+            g.TranslateTransform(frame.X, frame.Y); g.ScaleTransform(frame.Width / 1080, frame.Height / 1920);
+            using (var shade = new SolidBrush(Color.FromArgb(65, 0, 0, 0))) {
+                g.FillRectangle(shade, 0, 0, 1080, 170);
+                g.FillRectangle(shade, 0, 1530, 1080, 390);
+                g.FillRectangle(shade, 920, 650, 160, 880);
+            }
+            using (var ink = new SolidBrush(Color.FromArgb(185, Color.White)))
+            using (var pen = new Pen(Color.FromArgb(165, Color.White), 4))
+            using (var font = new Font("Segoe UI", 30, FontStyle.Bold, GraphicsUnit.Pixel)) {
+                bool instagram = platformGuide == "Instagram";
+                g.DrawString(instagram ? "Reels                         ◯" : "Подписки     Для вас     ⌕", font, ink, 40, 65);
+                string[] icons = { "♡", "◯", instagram ? "➤" : "↗", "···" };
+                for (int i = 0; i < icons.Length; i++) { g.DrawEllipse(pen, 963, 770 + i * 175, 66, 66); g.DrawString(icons[i], font, ink, 974, 782 + i * 175); }
+                g.DrawString("@username", font, ink, 42, 1550);
+                g.DrawString("Описание видео…", font, ink, 42, 1620);
+                g.DrawString("♫ Оригинальный звук", font, ink, 42, 1690);
+                g.DrawString("⌂           ⌕           +           ♡           ◯", font, ink, 42, 1820);
+                using (var safe = new Pen(Color.FromArgb(140, Theme.Accent), 3) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash }) g.DrawRectangle(safe, 60, 190, 840, 1300);
+            }
+            g.Restore(state);
+        }
         bool baseVideoSelected, draggingBaseVideo, resizingBaseVideo;
         Point baseVideoOrigin;
         double baseVideoOldX, baseVideoOldY, baseVideoOldWidth, baseVideoOldHeight;
@@ -74,13 +100,13 @@ namespace VideoBatch {
             double dx = (e.X - baseVideoOrigin.X) / frame.Width, dy = (e.Y - baseVideoOrigin.Y) / frame.Height;
             if (resizingBaseVideo) {
                 double factor = Math.Abs(dx) >= Math.Abs(dy) ? 1 + dx / baseVideoOldWidth : 1 + dy / baseVideoOldHeight;
-                double maximum = Math.Min((1 - template.BaseVideoX) / baseVideoOldWidth, (1 - template.BaseVideoY) / baseVideoOldHeight);
                 double minimum = Math.Max(.02 / baseVideoOldWidth, .02 / baseVideoOldHeight);
-                factor = Math.Max(minimum, Math.Min(maximum, factor));
-                template.BaseVideoWidth = baseVideoOldWidth * factor; template.BaseVideoHeight = baseVideoOldHeight * factor;
+                factor = Math.Max(minimum, factor);
+                template.BaseVideoWidth = template.BaseVideoPreserveAspectRatio ? baseVideoOldWidth * factor : Math.Max(.02, baseVideoOldWidth + dx);
+                template.BaseVideoHeight = template.BaseVideoPreserveAspectRatio ? baseVideoOldHeight * factor : Math.Max(.02, baseVideoOldHeight + dy);
             } else {
-                template.BaseVideoX = Math.Max(0, Math.Min(1 - template.BaseVideoWidth, baseVideoOldX + dx));
-                template.BaseVideoY = Math.Max(0, Math.Min(1 - template.BaseVideoHeight, baseVideoOldY + dy));
+                template.BaseVideoX = baseVideoOldX + dx;
+                template.BaseVideoY = baseVideoOldY + dy;
             }
             BaseVideoPlacementChanged?.Invoke(); Invalidate(); return true;
         }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -31,6 +32,8 @@ namespace VideoBatch {
             using (linked.Token.Register(Stop)) {
                 var cancel = linked.Token;
                 var queue = new Queue<PreparedProfileBatch>(batches);
+                var profileLocks = batches.Select(b => (b.ProfileId ?? "").Trim()).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(id => id, id => new SemaphoreSlim(1, 1), StringComparer.OrdinalIgnoreCase);
                 int workerCount = Math.Min(maxWorkers, queue.Count);
                 var tasks = new Task[workerCount];
                 for (int w = 0; w < workerCount; w++) {
@@ -45,6 +48,9 @@ namespace VideoBatch {
                                 if (queue.Count == 0) break;
                                 batch = queue.Dequeue();
                             }
+                            var profileLock = profileLocks[(batch.ProfileId ?? "").Trim()];
+                            await profileLock.WaitAsync(cancel).ConfigureAwait(false);
+                            try {
                             Interlocked.Increment(ref _active);
                             ActiveWorkers = _active;
                             var metrics = Metrics.BeginAccount(batch.Channel?.Name ?? "", batch.ProfileId ?? "");
@@ -69,6 +75,7 @@ namespace VideoBatch {
                                     ActiveWorkers = _active;
                                 }
                             }
+                            } finally { profileLock.Release(); }
                         }
                     }, cancel);
                 }

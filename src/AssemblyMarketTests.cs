@@ -34,6 +34,8 @@ namespace VideoBatch {
             t.Scenes[0].Videos = "scene-video-" + index;
             t.Scenes[0].Music = "scene-music-" + index;
             t.Scenes[0].MusicVolume = .2 + index * .1;
+            t.Scenes[0].NativeAudioVolume = .3 + index * .1;
+            t.Scenes[0].BedMusicVolume = .15 + index * .1;
             t.Scenes[0].Layers[0].Source = "scene-layer-" + index;
             t.GlobalLayers = new System.Collections.Generic.List<AssemblyLayer> { new AssemblyLayer { Source = "global-" + index } };
             t.ContinuousVideo = index % 2 != 0;
@@ -55,6 +57,7 @@ namespace VideoBatch {
             Check(t.RandomVideoStart == (index % 2 == 0) && t.LoopShortVideos == (index % 2 != 0) && t.AllowVideoReuse == (index % 2 == 0), "Reuse/start/loop " + index);
             Check(t.Videos == "videos-" + index && t.Music == "music-" + index, "Audio/video sources " + index);
             Check(t.Scenes[0].Videos == "scene-video-" + index && t.Scenes[0].Music == "scene-music-" + index && t.Scenes[0].MusicVolume == .2 + index * .1, "Scene sources/audio " + index);
+            Check(t.Scenes[0].NativeAudioVolume == .3 + index * .1 && t.Scenes[0].BedMusicVolume == .15 + index * .1, "Per-scene native/music volume " + index);
             Check(t.Scenes[0].Layers[0].Source == "scene-layer-" + index && t.GlobalLayers.Single().Source == "global-" + index, "Scene/global objects " + index);
             Check(t.ContinuousVideo == (index % 2 != 0) && t.SecondaryVideos == "secondary-" + index, "Continuous and secondary sources " + index);
             Check(t.SplitLayout == (index % 2 == 0 ? "none" : "vertical") && t.SplitSoftness == .05 + index * .01, "Split settings " + index);

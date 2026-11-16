@@ -597,6 +597,14 @@ namespace VideoBatch {
             tokenRow.Controls.Add(saveToken);
             Add(tokenRow);
 
+            Add(new Label { Text="InterAPI — поиск YouTube Shorts / Long", AutoSize=true, ForeColor=Theme.TextPrimary, Margin=new Padding(0,16,0,4) });
+            var interApiKey=Theme.MakeSearchBox();interApiKey.Width=560;interApiKey.UseSystemPasswordChar=true;
+            interApiKey.Text=WindowsSupport.Unprotect(settings.ProtectedInterApiKey);
+            Add(Labeled("InterAPI API-ключ (interapi.dev)",interApiKey));
+            Add(Theme.MakeButton("Сохранить ключ InterAPI",accent:true,action:()=>{
+                settings.ProtectedInterApiKey=string.IsNullOrWhiteSpace(interApiKey.Text)?"":WindowsSupport.Protect(interApiKey.Text.Trim());
+                save();MessageBox.Show(FindForm(),"Ключ InterAPI сохранён на этом ПК.","Настройки",MessageBoxButtons.OK,MessageBoxIcon.Information);
+            }));
             Add(new Label {
                 Text = "Нейросеть и озвучка (прогревочные ролики)",
                 Font = new Font(Theme.FontPageTitle.FontFamily, 11f, FontStyle.Bold),

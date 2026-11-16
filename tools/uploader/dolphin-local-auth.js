@@ -1,7 +1,7 @@
 "use strict";
 
 const { execSync } = require("child_process");
-const BUILD = "2026-10-29-dolphin-auth-v2";
+const BUILD = "2026-11-11-dolphin-auth-v3";
 
 function discoverDolphinListeningPorts() {
   if (process.platform !== "win32") return [];
@@ -37,7 +37,7 @@ async function loginWithToken(job, requestRaw, report = () => {}, options = {}) 
   const token = typeof job.token === "string" ? job.token.trim() : "";
   if (!token) throw new Error("Нет API-токена Dolphin. Сохраните токен в настройках.");
   const previous = job.localPort;
-  const deadline = Date.now() + (options.timeoutMs || 20000);
+  const deadline = Date.now() + (options.timeoutMs || 45000);
   const checked = new Set(), replies = [];
   let confirmed = false;
   report("Проверка API Dolphin · " + BUILD);
@@ -47,19 +47,27 @@ async function loginWithToken(job, requestRaw, report = () => {}, options = {}) 
     if (remaining <= 0) throw new Error("Проверка API Dolphin превысила лимит времени. Проверьте API-порт в окне Health; подробности — в журнале.");
     checked.add(port);
     job.localPort = port;
-    let auth;
+    const timeoutMs = Math.min(port===Number(previous||3001)?30000:2500, remaining), startedAt = Date.now();
+    let auth, failure = "нет ответа";
     try {
       auth = await requestRaw("/v1.0/auth/login-with-token", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token })
-      }, Math.min(2500, remaining));
-    } catch (_) {
-      // Bodies/errors can echo credentials; log only endpoint/status instead.
+      }, timeoutMs);
+    } catch (error) {
+      // Never log arbitrary messages, names, or codes: they can echo credentials.
+      const code = error && (error.cause && error.cause.code || error.code);
+      if (error && error.name === "AbortError") failure = "таймаут запроса";
+      else if (code === "ECONNREFUSED") failure = "соединение отклонено (ECONNREFUSED)";
+      else if (code === "ECONNRESET") failure = "соединение сброшено (ECONNRESET)";
+      else if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT") failure = "таймаут соединения";
+      else failure = "ошибка запроса";
       auth = { ok: false, status: 0 };
     }
     const status = Number(auth && auth.status) || 0;
     const ok = !!(auth && auth.ok && status >= 200 && status < 300 && auth.data && auth.data.success === true);
-    const detail = status ? "HTTP " + status : "нет ответа / таймаут";
-    report("POST 127.0.0.1:" + port + "/v1.0/auth/login-with-token → " + detail + (ok ? "; success=true" : "; вход не подтверждён"));
+    const detail = status ? "HTTP " + status : failure;
+    report("POST 127.0.0.1:" + port + "/v1.0/auth/login-with-token → " + detail + (ok ? "; success=true" : "; вход не подтверждён") +
+      "; " + (Date.now() - startedAt) + " мс; лимит запроса " + timeoutMs + " мс");
     replies.push(port + ": " + detail);
     return ok;
   }

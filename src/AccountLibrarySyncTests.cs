@@ -21,6 +21,29 @@ namespace VideoBatch {
                 }
             };
         }
+        public static bool RunTikTokImportTests() {
+            var prefs = LinkedFixture();
+            prefs.YouTubeChannels[0].Enabled = false;
+            prefs.TikTokAccounts[0].Caption = "Сохранить подпись";
+            prefs.TikTokAccounts[0].Items.Add(new TikTokItem { Video = "keep.mp4", Caption = "Очередь TikTok" });
+            prefs.YouTubeChannels.Add(new YouTubeChannel { ChannelId = "no-profile", Name = "Без Profile ID", Market = "EN", Enabled = false });
+            prefs.TikTokSyncExcludedProfiles.Add("RU|browser-1");
+            var yt = Store.Clone(prefs.YouTubeChannels);
+            var imported = TikTokProfileSync.ImportAllFromYouTube(prefs);
+            var ru = prefs.TikTokAccounts.Single(a => a.Market == "RU");
+            Check(ru.Name == yt[0].Name && !ru.Enabled && ru.ExpectedIp == yt[0].ExpectedIp, "YouTube name, enabled and IP copied");
+            Check(ru.Caption == "Сохранить подпись" && ru.Items.Single().Video == "keep.mp4", "TikTok caption and queue preserved");
+            Check(prefs.TikTokAccounts.Any(a => a.YouTubeSourceId == "no-profile" && a.ProfileId == "" && !a.Enabled), "account without profile imported");
+            Check(prefs.YouTubeChannels.Select(c => c.Name).SequenceEqual(yt.Select(c => c.Name)), "YouTube unchanged");
+            int count = prefs.TikTokAccounts.Count;
+            prefs = Store.Clone(prefs);
+            TikTokProfileSync.ImportAllFromYouTube(prefs);
+            Check(prefs.TikTokAccounts.Count == count, "repeat import after XML roundtrip has no duplicates");
+            Check(prefs.TikTokAccounts.Single(a => a.YouTubeSourceId == "no-profile").Name == "Без Profile ID", "source identity persists");
+            Console.WriteLine("TikTok import: RU/EN, no Profile ID, enabled flags, queues, source preservation and duplicate-free reload PASS");
+            return true;
+        }
+
         public static bool RunSyncTests() {
             string root = Temp(), oldRoot = Store.Root;
             try {

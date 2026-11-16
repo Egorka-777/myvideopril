@@ -16,7 +16,7 @@ class Program {
     static int Main(string[] args) {
         try {
             if (args[0] == "self-test") {
-                foreach(string method in new[]{"RunImageAppearanceTests","RunPlannerTests","RunPackTests","RunCapacityTests","RunObjectsTests","RunRoutingTests"}) {
+                foreach(string method in new[]{"RunImageAppearanceTests","RunPlannerTests","RunPreviewSceneTests","RunPackTests","RunCapacityTests","RunObjectsTests","RunRoutingTests"}) {
                     bool ok=(bool)typeof(AssemblyRegressionTests).GetMethod(method).Invoke(null,null);Console.Error.WriteLine(method+": "+ok);if(!ok)return 1;
                 }
                 if(!AssemblyHistoryTests.RunSelfTests()||!AssemblyMarketTests.RunSelfTests())return 1;
@@ -24,8 +24,10 @@ class Program {
             }
             if (args[0] == "insertion-test") { Console.WriteLine(AssemblyInsertionTests.RunSelfTests()); return 0; }
             if (args[0] == "profile-ui-test") { Console.WriteLine(AssemblyRegressionTests.RunCustomProfileUiTests()); return 0; }
+            if (args[0] == "background-test") { Console.WriteLine(AssemblyVideoPlacementTests.RunBackgrounds(args[1], args[2])); return 0; }
             if (args[0] == "video-placement-test") { Console.WriteLine(AssemblyVideoPlacementTests.Run(args[1], args[2], args[3])); return 0; }
             if (args[0] == "video-preview-test") { Console.WriteLine(AssemblyVideoPlacementTests.RunEmbeddedPreview(args[1])); return 0; }
+            if (args[0] == "visual-estimate-ui-test") { Console.WriteLine(AssemblyRegressionTests.RunVisualEstimateUiTests()); return 0; }
             if (args[0] == "media-ui-test") { Console.WriteLine(AssemblyRegressionTests.RunMediaEditorTests()); return 0; }
             if (args[0] == "image-ui-test") { Console.WriteLine(AssemblyRegressionTests.RunImageAppearanceUiTests()); return 0; }
             if (args[0] == "animated-ui-test") { Console.WriteLine(AssemblyOverlayPreviewTests.RunAnimatedOverlayUiTests(args[1])); return 0; }

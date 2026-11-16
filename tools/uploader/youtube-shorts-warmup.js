@@ -4,6 +4,7 @@ const safety = require("./youtube-interaction-safety.js");
 const TOTAL_MS = 15 * 60 * 1000;
 const TARGET_VIDEOS = 30;
 const WAIT_MS = 120000;
+const deadlineTargets = new WeakMap();
 
 class WarmupDeadline extends Error {
   constructor() { super("Время прогрева истекло."); }
@@ -101,6 +102,7 @@ function deadlinePage(page, deadline, now = Date.now) {
       };
     } });
     cache.set(target, proxy);
+    deadlineTargets.set(proxy, target);
     return proxy;
   };
   return wrap(page);
@@ -162,41 +164,151 @@ async function openVideoUrl(page, item, report) {
   }, item.id, { timeout: WAIT_MS });
 }
 
+// Read-only evidence: never retry, navigate or let diagnostics mask the action error.
+async function searchSnapshot(page) {
+  let timer;
+  try {
+    return await Promise.race([page.evaluate(() => {
+      const visible = el => !!el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
+      const describe = el => ({ tag: el.tagName, id: el.id, class: String(el.className),
+        value: el.value, disabled: el.disabled, visible: visible(el) });
+      const search = document.querySelector("ytd-search");
+      return {
+        url: location.href, ready: document.readyState, query: new URL(location.href).searchParams.get("search_query"),
+        inputs: [...document.querySelectorAll("input[name='search_query'], input#search, input.ytSearchboxComponentInput")].map(describe),
+        buttons: [...document.querySelectorAll("button#search-icon-legacy, button.ytSearchboxComponentSearchButton")].map(el => {
+          const r = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+          return { ...describe(el), hit: hit && { tag: hit.tagName, id: hit.id, class: String(hit.className) }, hitInside: !!hit && el.contains(hit) };
+        }),
+        search: search && { visible: visible(search), loading: search.hasAttribute("is-loading"),
+          links: [...search.querySelectorAll("a[href*='/watch?v='], a[href*='/shorts/']")].filter(visible).length,
+          messages: [...search.querySelectorAll("ytd-message-renderer, ytd-background-promo-renderer")].filter(visible).map(el => el.innerText.slice(0, 300)) },
+        dialogs: [...document.querySelectorAll("[role='dialog']")].filter(visible).map(el => el.innerText.slice(0, 300))
+      };
+    }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("snapshot timeout 1500ms")), 1500); })]);
+  } catch (error) { return { snapshotError: error.message }; }
+  finally { clearTimeout(timer); }
+}
+
+// One temporary, read-only CDP session per search. No request headers, bodies,
+// cookies or arbitrary query parameters enter the journal.
+async function observeSearchNavigation(page, report, keyword) {
+  const raw = deadlineTargets.get(page) || page;
+  let session;
+  const listeners = [];
+  const safeUrl = value => {
+    try {
+      const u = new URL(value);
+      if (!["www.youtube.com", "youtube.com", "m.youtube.com"].includes(u.hostname)) return u.protocol === "about:" ? "about:blank" : "[non-YouTube]";
+      const query = u.searchParams.get("search_query");
+      return u.origin + u.pathname + (query == null ? "" : "?search_query=" + encodeURIComponent(query));
+    } catch (_) { return "[invalid URL]"; }
+  };
+  const emit = data => journal(report, "search_navigation_origin", 0, JSON.stringify({ keyword, ...data }));
+  const dispose = async () => {
+    if (!session) return;
+    for (const [name, listener] of listeners) session.off(name, listener);
+    try { await session.detach(); }
+    catch (_) { /* A disconnected browser must not replace the search error. */ }
+  };
+  try {
+    session = await raw.context().newCDPSession(raw);
+    await session.send("Page.enable");
+    const { frameTree } = await session.send("Page.getFrameTree");
+    const mainId = frameTree.frame.id;
+    let loaderId = frameTree.frame.loaderId;
+    const on = (name, fn) => { session.on(name, fn); listeners.push([name, fn]); };
+    emit({ event: "attached", frameId: mainId, loaderId, url: safeUrl(frameTree.frame.url) });
+    on("Page.frameNavigated", ({ frame, type }) => {
+      if (frame.id !== mainId) return;
+      loaderId = frame.loaderId;
+      emit({ event: "document_commit", frameId: mainId, loaderId, type, url: safeUrl(frame.url) });
+    });
+    on("Page.navigatedWithinDocument", event => {
+      if (event.frameId === mainId) emit({ event: "same_document", frameId: mainId, loaderId,
+        navigationType: event.navigationType, url: safeUrl(event.url) });
+    });
+    on("Page.frameRequestedNavigation", event => {
+      if (event.frameId === mainId) emit({ event: "navigation_requested", frameId: mainId, loaderId,
+        reason: event.reason, disposition: event.disposition, url: safeUrl(event.url) });
+    });
+    on("Network.requestWillBeSent", event => {
+      if (event.frameId !== mainId || event.type !== "Document") return;
+      // Only a small, sanitized synchronous initiator stack, never source text.
+      const initiator = event.initiator || {};
+      emit({ event: "document_request", frameId: mainId, loaderId: event.loaderId,
+        requestId: event.requestId, url: safeUrl(event.request.url),
+        redirect: !!event.redirectResponse, initiator: { type: initiator.type,
+          url: initiator.url && safeUrl(initiator.url), lineNumber: initiator.lineNumber,
+          stack: (initiator.stack?.callFrames || []).slice(0, 4).map(frame => ({
+            functionName: frame.functionName, url: safeUrl(frame.url), lineNumber: frame.lineNumber, columnNumber: frame.columnNumber
+          })) } });
+    });
+    await session.send("Network.enable");
+    return dispose;
+  } catch (error) {
+    await dispose();
+    // Diagnostics are optional, but missing evidence must be explicit.
+    emit({ event: "unavailable", error: error.name || "Error" });
+    return async () => {};
+  }
+}
+
 async function searchKeyword(page, keyword, shorts, report = () => {}, globalSeen = new Set()) {
+  const snapshot = async (stage, reason) => journal(report, stage + "_snapshot", 0,
+    JSON.stringify({ reason, keyword, shorts, ...await searchSnapshot(page) }));
+  const stage = async (name, action, capture = false) => {
+    const started = Date.now();
+    journal(report, name + "_start", 0, JSON.stringify({ keyword, shorts, url: page.url() }));
+    const pending = setTimeout(() => { void snapshot(name, "pending 10s"); }, 10000);
+    try {
+      const result = await action();
+      journal(report, name, Date.now() - started, "готово");
+      if (capture) await snapshot(name, "completed");
+      return result;
+    } catch (error) {
+      journal(report, name + "_error", Date.now() - started, error.stack || error.message);
+      await snapshot(name, "error");
+      throw error;
+    } finally { clearTimeout(pending); }
+  };
+  const navigation = frame => {
+    if (!frame.parentFrame()) journal(report, "search_navigation", 0, JSON.stringify({ keyword, url: frame.url() }));
+  };
+  const stopObserving = await observeSearchNavigation(page, report, keyword);
+  page.on("framenavigated", navigation);
+  try {
   // Existing worker search helpers build URLs and dismiss generic overlays;
   // they are deliberately not used for this native-search-only workflow.
   // Reset the previous keyword's native filter, staying in this same tab.
-  await page.goto("https://www.youtube.com/", { waitUntil: "domcontentloaded", timeout: WAIT_MS });
-  const input = page.locator("input[name='search_query'], input#search, input.ytSearchboxComponentInput").first();
-  const searchWaitStarted = Date.now();
-  await input.waitFor({ state: "visible", timeout: WAIT_MS });
-  journal(report, "search_input", Date.now() - searchWaitStarted, "поле поиска готово");
-  await input.fill(keyword);
-  await input.press("Enter");
-  const resultsWaitStarted = Date.now();
-  await page.waitForFunction(query => {
+  await stage("search_home", () => page.goto("https://www.youtube.com/", { waitUntil: "domcontentloaded", timeout: WAIT_MS }));
+  const input = page.locator("input[name='search_query']:visible, input#search:visible, input.ytSearchboxComponentInput:visible").first();
+  await stage("search_input", () => input.waitFor({ state: "visible", timeout: WAIT_MS }));
+  await stage("search_fill", () => input.fill(keyword), true);
+  // Submit through YouTube's native button; autocomplete can consume Enter.
+  await stage("search_submit", () => page.locator("button#search-icon-legacy:visible, button.ytSearchboxComponentSearchButton:visible").first().click({ timeout: WAIT_MS }), true);
+  await stage("search_results_url", () => page.waitForFunction(query => {
     const u = new URL(location.href);
-    if (u.pathname !== "/results" || u.searchParams.get("search_query") !== query) return false;
-    const search = document.querySelector("ytd-search");
-    if (!search) return false;
-    const links = search.querySelectorAll("a[href*='/watch?v='], a[href*='/shorts/']");
-    if ([...links].some(a => a.getClientRects().length)) return true;
-    return !search.hasAttribute("is-loading");
-  }, keyword, { timeout: WAIT_MS });
-  journal(report, "search_results_url", Date.now() - resultsWaitStarted, "страница результатов");
+    return u.pathname === "/results" && u.searchParams.get("search_query") === query;
+  }, keyword, { timeout: WAIT_MS }));
   // The URL changes before ytd-search and its links have been populated.
-  await waitForSearchResults(page, false);
+  await stage("search_results_ready", () => waitForSearchResults(page, false), true);
   if (shorts) {
-    await page.getByRole("button", { name: /^(Search filters|Filters|Фильтры поиска|Фильтры)$/i }).first().click({ timeout: 10000 });
+    await stage("search_filter_open", () => page.getByRole("button", { name: /^(Search filters|Filters|Фильтры поиска|Фильтры)$/i }).first().click({ timeout: 10000 }));
     const option = page.locator("ytd-search-filter-renderer").filter({ hasText: /^\s*Shorts\s*$/i }).first().locator("a#endpoint");
-    const filterUrl = new URL(await option.getAttribute("href"), page.url()).href;
+    const filterUrl = new URL(await stage("search_filter_href", () => option.getAttribute("href")), page.url()).href;
     // Click the native endpoint, not the renderer's non-clickable padding.
-    await option.click({ timeout: 10000 });
+    await stage("search_filter_click", () => option.click({ timeout: 10000 }));
     // Search is a SPA transition: URL/DOM readiness, not a document load.
-    await page.waitForFunction(expected => location.href === expected, filterUrl, { timeout: 10000 });
-    await waitForSearchResults(page, true);
+    await stage("search_filter_url", () => page.waitForFunction(expected => location.href === expected, filterUrl, { timeout: 10000 }));
+    await stage("search_shorts_ready", () => waitForSearchResults(page, true), true);
   }
-  return harvestSearchResults(page, shorts, globalSeen, report);
+  return await stage("search_harvest", () => harvestSearchResults(page, shorts, globalSeen, report));
+  } finally {
+    page.off("framenavigated", navigation);
+    await stopObserving();
+  }
 }
 
 // Passed to evaluate so reads, seeks and pauses always target the same

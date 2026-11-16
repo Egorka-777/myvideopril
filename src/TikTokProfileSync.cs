@@ -19,20 +19,26 @@ namespace VideoBatch {
             return n;
         }
 
-        static bool NamesMatch(string a, string b) {
-            string x = NormName(a), y = NormName(b);
-            if (string.IsNullOrWhiteSpace(x) || string.IsNullOrWhiteSpace(y)) return false;
-            return x == y || x.Contains(y) || y.Contains(x);
+        public static TikTokSyncResult ImportAllFromYouTube(Preferences settings) {
+            var result = new TikTokSyncResult();
+            if (settings == null) return result;
+            settings.TikTokSyncExcludedProfiles = new List<string>();
+            foreach (var market in new[] { "RU", "EN" }) {
+                var part = SyncFromYouTube(settings, market, true);
+                result.Linked += part.Linked;
+                result.Imported += part.Imported;
+            }
+            return result;
         }
 
-        public static TikTokSyncResult SyncFromYouTube(Preferences settings, string market) {
+        public static TikTokSyncResult SyncFromYouTube(Preferences settings, string market, bool copyDetails = false) {
             var result = new TikTokSyncResult();
             if (settings == null) return result;
             market = NormMarket(market);
             if (settings.TikTokAccounts == null) settings.TikTokAccounts = new List<TikTokAccount>();
 
             var yt = (settings.YouTubeChannels ?? new List<YouTubeChannel>())
-                .Where(c => c != null && NormMarket(c.Market) == market && !string.IsNullOrWhiteSpace(c.ProfileId))
+                .Where(c => c != null && NormMarket(c.Market) == market)
                 .ToList();
 
             foreach (var c in yt) {
@@ -41,8 +47,12 @@ namespace VideoBatch {
                 if ((settings.TikTokSyncExcludedProfiles ?? new List<string>()).Contains(key, StringComparer.OrdinalIgnoreCase)) continue;
                 var byPid = settings.TikTokAccounts.FirstOrDefault(a =>
                     a != null && NormMarket(a.Market) == market
-                    && string.Equals((a.ProfileId ?? "").Trim(), pid, StringComparison.OrdinalIgnoreCase));
+                    && ((!string.IsNullOrWhiteSpace(c.ChannelId) && a.YouTubeSourceId == c.ChannelId)
+                        || (string.IsNullOrWhiteSpace(a.YouTubeSourceId) && pid.Length > 0 && string.Equals((a.ProfileId ?? "").Trim(), pid, StringComparison.OrdinalIgnoreCase))));
                 if (byPid != null) {
+                    byPid.YouTubeSourceId = c.ChannelId;
+                    byPid.ProfileId = pid;
+                    if (copyDetails) { byPid.Name = c.Name; byPid.Enabled = c.Enabled; byPid.ExpectedIp = c.ExpectedIp ?? ""; }
                     if (!string.IsNullOrWhiteSpace(c.ExpectedIp)) byPid.ExpectedIp = c.ExpectedIp.Trim();
                     if (string.IsNullOrWhiteSpace(byPid.Name) && !string.IsNullOrWhiteSpace(c.Name)) byPid.Name = c.Name.Trim();
                     result.Linked++;
@@ -52,9 +62,12 @@ namespace VideoBatch {
                 var byName = settings.TikTokAccounts.FirstOrDefault(a =>
                     a != null && NormMarket(a.Market) == market
                     && string.IsNullOrWhiteSpace(a.ProfileId)
-                    && NamesMatch(a.Name, c.Name));
+                    && string.IsNullOrWhiteSpace(a.YouTubeSourceId)
+                    && string.Equals(NormName(a.Name), NormName(c.Name), StringComparison.Ordinal));
                 if (byName != null) {
+                    byName.YouTubeSourceId = c.ChannelId;
                     byName.ProfileId = pid;
+                    if (copyDetails) { byName.Name = c.Name; byName.Enabled = c.Enabled; byName.ExpectedIp = c.ExpectedIp ?? ""; }
                     if (!string.IsNullOrWhiteSpace(c.ExpectedIp)) byName.ExpectedIp = c.ExpectedIp.Trim();
                     if (string.IsNullOrWhiteSpace(byName.Name)) byName.Name = c.Name.Trim();
                     if (string.IsNullOrWhiteSpace(byName.Status) || byName.Status.IndexOf("импорт", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -64,8 +77,9 @@ namespace VideoBatch {
                 }
 
                 settings.TikTokAccounts.Add(new TikTokAccount {
-                    Enabled = true,
-                    Name = string.IsNullOrWhiteSpace(c.Name) ? ("TT " + pid) : c.Name.Trim(),
+                    YouTubeSourceId = c.ChannelId,
+                    Enabled = c.Enabled,
+                    Name = c.Name ?? "",
                     ProfileId = pid,
                     ExpectedIp = c.ExpectedIp ?? "",
                     Market = market,
@@ -82,7 +96,7 @@ namespace VideoBatch {
                 bool hasPid = !string.IsNullOrWhiteSpace(a.ProfileId);
                 bool hasVideo = a.Items != null && a.Items.Any(it => it != null && !string.IsNullOrWhiteSpace(it.Video));
                 hasVideo = hasVideo || !string.IsNullOrWhiteSpace(a.Video);
-                return hasPid || hasVideo;
+                return hasPid || hasVideo || !string.IsNullOrWhiteSpace(a.YouTubeSourceId) || yt.Any(c => string.Equals(c.Name, a.Name, StringComparison.Ordinal));
             }).ToList();
             result.RemovedEmpty = before - settings.TikTokAccounts.Count;
 

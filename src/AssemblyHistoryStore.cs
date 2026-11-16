@@ -4,26 +4,31 @@ using System.IO;
 using System.Linq;
 
 namespace VideoBatch {
-    // Stored independently of MP4s and diagnostic recipes. Identity is the ordered
-    // Scene video + image content hashes only (music/title/device metadata are not part of the signature).
+    // Stored independently of MP4s and diagnostic recipes. Keep the concrete plan
+    // so existing history can be projected onto a profile's selected identity dimensions.
     public class AssemblyHistoryScene {
         public string VideoHash;
         public List<string> Images = new List<string>();
     }
     public class AssemblyHistoryRecord {
         public string Signature, MusicHash, Output, TemplateId, StagedPath;
+        public string BackgroundHash;
+        public AssemblyPlan IdentityPlan;
         public bool Pending;
         public List<string> UniqueImages = new List<string>();
         public List<AssemblyHistoryScene> Scenes = new List<AssemblyHistoryScene>();
         public static AssemblyHistoryRecord FromPlan(AssemblyPlan plan, string output, string templateId) {
             return new AssemblyHistoryRecord {
-                Signature=plan.Signature, MusicHash=plan.MusicHash, Output=output, TemplateId=templateId,
+                Signature=plan.Signature, MusicHash=plan.MusicHash, Output=output, TemplateId=templateId, BackgroundHash=plan.Background?.Hash,
+                IdentityPlan=Store.Clone(plan),
                 UniqueImages=new List<string>(plan.UniqueImages),
                 Scenes=plan.Scenes.Select(s => new AssemblyHistoryScene { VideoHash=s.Video.Hash, Images=s.Layers.Select(l => l.Asset.Hash).ToList() }).ToList()
             };
         }
         public AssemblyPlan ToPlan() {
+            if (IdentityPlan != null) return Store.Clone(IdentityPlan);
             return new AssemblyPlan { Signature=Signature, MusicHash=MusicHash,
+                Background=string.IsNullOrEmpty(BackgroundHash) ? null : new AssemblyAsset { Hash=BackgroundHash },
                 Scenes=Scenes.Select(s => new AssemblyScenePlan { Video=new AssemblyVideo { Hash=s.VideoHash },
                     Layers=s.Images.Select(h => new AssemblyLayerPlan { Asset=new AssemblyAsset { Hash=h } }).ToList() }).ToList() };
         }
@@ -40,7 +45,7 @@ namespace VideoBatch {
             if (Environment.OSVersion.Platform==PlatformID.Win32NT) File.SetAttributes(folder,File.GetAttributes(folder)|FileAttributes.Hidden);
         }
         public static void DeleteReports(string output) {
-            foreach (string suffix in new[] {".assembly.xml",".performance.xml",".metadata.txt",".title.txt"}) {
+            foreach (string suffix in new[] {".assembly.xml",".performance.xml",".metadata.txt",".title.txt",".difference.xml"}) {
                 string path=Report(output,suffix); if (File.Exists(path)) File.Delete(path);
             }
         }

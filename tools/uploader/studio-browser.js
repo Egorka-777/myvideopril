@@ -47,7 +47,18 @@ async function connect(chromium, endpoint, report, { timeout = 20000 } = {}) {
 }
 async function waitFor(fn, timeout, message) {
   const end = Date.now() + timeout;
-  do { const value = await bounded(fn, Math.min(5000, Math.max(1, end - Date.now())), message); if (value) return value; await new Promise(r => setTimeout(r, 150)); } while (Date.now() < end);
+  const probeTimeout='STUDIO_READ_PROBE_TIMEOUT';
+  do {
+    try {
+      const value=await bounded(fn,Math.min(5000,Math.max(1,end-Date.now())),probeTimeout);
+      if(value)return value;
+    }catch(error){
+      // Readiness reads can overlap YouTube redirects or a slow renderer.
+      // Only these transient reads are repeated, never file/publish actions.
+      if(error.message!==probeTimeout&&!/Execution context was destroyed|Cannot find context with specified id|most likely because of a navigation/i.test(error.message))throw error;
+    }
+    if(Date.now()<end)await new Promise(r=>setTimeout(r,150));
+  }while(Date.now()<end);
   throw new Error(message);
 }
 async function visible(locator) {
@@ -68,40 +79,35 @@ async function anyVisible(locator) {
 const UPLOADS='ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog';
 const SUCCESS=/^(?:Video published|Video scheduled|Publish complete|Publication scheduled|Видео опубликовано|Видео запланировано|Публикация завершена|Публикация запланирована)[.!]?$/i;
 const SUCCESS_LOOSE=/(?:Video published|Video scheduled|Publish complete|Publication scheduled|Видео опубликовано|Видео запланировано|Публикация завершена|Публикация запланирована)/i;
+// This is Studio's saved publication receipt, not a bare processing indicator.
+const PROCESSING_RECEIPT=/(?:(?:видео|оно) будет опубликовано|(?:video|it) will be published)/i;
 const VIDEO_ID_RE='(?:youtu\\.be\\/|[?&]v=|\\/shorts\\/|\\/video\\/)([A-Za-z0-9_-]{11})(?:\\b|\\/|$)';
 async function collectVideoIds(root){
-  try{return await root.evaluate((el,reSource)=>{
-    const re=new RegExp(reSource);
-    const out=new Set();
-    let steps=0;const stack=[el];const seen=new Set();
-    while(stack.length&&steps++<400){
-      const node=stack.pop();
-      if(!node||seen.has(node))continue;seen.add(node);
-      if(node.nodeType===1){
-        for(const attr of ['href','value']){
-          const v=node.getAttribute&&node.getAttribute(attr);
-          if(v){const m=String(v).match(re);if(m)out.add(m[1]);}
-        }
-        if(node.shadowRoot)stack.push(node.shadowRoot);
-        for(let i=node.childNodes.length-1;i>=0;i--)stack.push(node.childNodes[i]);
-      }
+  // Playwright's locator pierces shadow roots. The former manual walk skipped
+  // DocumentFragment nodes entirely and stopped after 400 unrelated nodes,
+  // missing the completion card's link in Studio's nested components.
+  try{return await root.locator('a[href],input[value]').evaluateAll((nodes,reSource)=>{
+    const re=new RegExp(reSource),out=new Set();
+    for(const node of nodes)for(const attr of ['href','value']){
+      const match=String(node.getAttribute(attr)||'').match(re);if(match)out.add(match[1]);
     }
     return [...out];
-  },VIDEO_ID_RE,{timeout:1200});}
+  },VIDEO_ID_RE);}
   catch{return [];}
 }
 async function findCompletionCopy(root){
   try{
-    const blob=normCompletion(await root.evaluate(el=>(el.innerText||'').slice(0,1200),null,{timeout:800}));
+    const copy=await root.locator('h1,h2,h3,[role=heading],p,div,span,yt-formatted-string,#dialog').evaluateAll(nodes=>nodes.filter(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden').map(el=>el.innerText||'').join('\n'));
+    const blob=normCompletion(copy+' '+await root.evaluate(el=>(el.innerText||'').slice(0,1200),null,{timeout:800}));
     if(!blob)return '';
-    const line=blob.split('\n').map(normCompletion).find(t=>SUCCESS.test(t)||SUCCESS_LOOSE.test(t));
+    const line=blob.split('\n').map(normCompletion).find(t=>SUCCESS.test(t)||SUCCESS_LOOSE.test(t)||PROCESSING_RECEIPT.test(t));
     if(line)return line;
     const m=blob.match(SUCCESS_LOOSE);
     return m?normCompletion(m[0]):'';
   }catch{return '';}
 }
 function normCompletion(text){return String(text||'').replace(/\s+/g,' ').trim();}
-function completionState(copy){return /scheduled|запланир/i.test(copy)?'scheduled':'published';}
+function completionState(copy){return /video scheduled|publication scheduled|видео запланировано|публикация запланирована/i.test(copy)?'scheduled':'published';}
 async function publishActionStillActive(root){
   // The footer is replaced by the completion card during this read. Query all
   // matches in one browser evaluation: a removed button is an empty snapshot,
@@ -123,7 +129,7 @@ async function controlEnabled(button){
 async function publicationState(page,{scope=null,expectedId=''}={}){
   const surfaces=[];
   const candidates=await (scope||page.locator(UPLOADS)).all();
-  for(const root of await page.locator('ytcp-video-share-dialog').all())if(!await root.evaluate(e=>!!e.closest('ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog')))candidates.push(root);
+  for(const root of await page.locator('ytcp-video-share-dialog,ytcp-uploads-still-processing-dialog').all())if(!await root.evaluate(e=>!!e.closest('ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog')))candidates.push(root);
   for(const root of candidates){
     let alive=await root.isVisible();
     if(!alive)alive=await anyVisible(root.locator('h1,h2,h3,[role=heading],#close-button,#done-button,[contenteditable=true],[role=dialog]'));
@@ -135,6 +141,14 @@ async function publicationState(page,{scope=null,expectedId=''}={}){
       const ids=await collectVideoIds(root);
       if(expectedId&&ids.length&&(!ids.includes(expectedId)||ids.some(id=>id!==expectedId)))
         throw new Error('Studio показывает другое видео в окне завершения. Окно не закрывалось; повторная загрузка остановлена.');
+      // The receipt confirms the saved publication instruction, not processing.
+      // Studio may show only the video title/thumbnail, without a link. The
+      // current wizard already has a durable expected ID; reject conflicting
+      // links above, but do not require a link that this receipt does not render.
+      if(PROCESSING_RECEIPT.test(completion)){
+        if(!expectedId||await publishActionStillActive(root)||!await findPublishCloseButton(page,{scope:root}))continue;
+        return {state:completionState(completion),surface:root,ids};
+      }
       return {state:completionState(completion),surface:root,ids};
     }
     const error=await visible(root.locator('[role=alert],#error-message,.error-message').filter({hasText:/couldn.t (?:save|publish)|failed to (?:save|publish)|не удалось (?:сохранить|опубликовать)|upload failed|ошибка загрузки/i}));
@@ -210,8 +224,24 @@ async function disconnect(browser,report=()=>{}){
   // close its default context, or call Dolphin /stop on an incomplete wizard.
   await bounded(()=>browser.close(),2000,'Отключение CDP превысило 2 секунды.').catch(e=>report('diagnostic',e.message));
 }
+async function resolveStudioChannel(page,channelUrl,report){
+  const direct=String(channelUrl||'').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
+  if(direct)return direct;
+  const handle=String(channelUrl||'').match(/youtube\.com\/(\@[^/?#]+)/i)?.[1];
+  if(!handle)return '';
+  report('studio_channel','Определяю ID канала по ссылке '+handle+' в отдельной вкладке YouTube · ожидаю до 60 секунд. Файл пока не передаётся.');
+  const lookup=await page.context().newPage();
+  const deadline=Date.now()+60000;
+  try{
+    await lookup.goto('https://www.youtube.com/'+handle,{waitUntil:'commit',timeout:Math.max(1,deadline-Date.now())});
+    return await waitFor(()=>lookup.evaluate(()=>{
+      const id=window.ytInitialData?.metadata?.channelMetadataRenderer?.externalId||document.querySelector('meta[itemprop="channelId"]')?.content||document.querySelector('link[rel="canonical"]')?.href?.match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1]||'';
+      return /^UC[A-Za-z0-9_-]{22}$/.test(id)?id:null;
+    }),Math.max(1,deadline-Date.now()),'Не удалось определить ID канала '+handle+' за 60 секунд. Файл не передавался; текущий канал Studio не использован вместо указанного.');
+  }finally{await lookup.close();}
+}
 async function openStudio(page, channelUrl, report, {preserveCompleted=false}={}) {
-  const expected = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
+  const expected = await resolveStudioChannel(page,channelUrl,report);
   const url = 'https://studio.youtube.com' + (expected ? '/channel/' + expected : '');
   const onStudio = /^https:\/\/studio\.youtube\.com(?:\/|$)/i.test(page.url() || '');
   const completed=onStudio&&await isPostPublishScreen(page);
@@ -222,19 +252,21 @@ async function openStudio(page, channelUrl, report, {preserveCompleted=false}={}
     return;
   }
   report('studio_open', 'Открываю YouTube Studio · без проверки сторонних IP-сервисов.');
-  if(!completed)await page.goto(url, { waitUntil: 'commit', timeout: 35000 });
+  if(!completed)await page.goto(url, { waitUntil: 'commit', timeout: 60000 });
   // Detection polls are read-only and bounded to five seconds. A legitimate
   // disabled Close can take much longer, so dismiss runs outside that poll.
   for(let attempt=0;attempt<2;attempt++){
     const ready=await waitFor(async()=>{
       const current=page.url();
       if(/accounts\.google\.com/.test(current))throw new Error('Требуется вход в Google в выбранном Dolphin-профиле.');
+      if(await anyVisible(page.getByText(/^\s*(У вас нет доступа к этой странице[.!]?|You (?:do not|don.t) have access to this page[.!]?)\s*$/i)))
+        throw new Error('YouTube Studio: у выбранного Google-аккаунта нет доступа к каналу '+(expected||current)+'. Проверьте аккаунт в Dolphin и ссылку канала в приложении. Файл не передавался.');
       if(expected&&/studio\.youtube\.com\/channel\/UC/.test(current)&&!current.includes('/channel/'+expected))
-        throw new Error('Studio открыл другой канал. Файл не передавался.');
+        throw new Error('Studio открыл другой канал: ожидался '+expected+', открыт '+current.match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1]+'. Проверьте выбранный Google-аккаунт и ссылку канала. Файл не передавался.');
       if(await isPostPublishScreen(page))return {completed:true};
       const button=await createButton(page);
       return button?{button}:null;
-    },90000,'Studio не показал доступную кнопку «Создать» за 90 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
+    },60000,'Studio не показал доступную кнопку «Создать» за 60 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
     if(!ready.completed)break;
     await dismissPublishDialog(page,report);
     if(attempt===1)throw new Error('Studio повторно открыл завершённый мастер вместо главной страницы. Файл не передавался.');
@@ -270,6 +302,7 @@ async function videoInput(page) {
 async function ensureUploadPicker(page, channelUrl) {
   let input = await videoInput(page);
   if (input) return input;
+  if(await uploadWizardOpen(page))return waitFor(()=>videoInput(page),60000,'Studio открыл окно загрузки, но поле выбора файла ещё не готово. Файл не передавался.');
   const channelId = String(channelUrl || '').match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1];
   if (!channelId) return null;
   const urls = [
@@ -278,10 +311,11 @@ async function ensureUploadPicker(page, channelUrl) {
   ];
   for (const url of urls) {
     if (!page.url().includes('/videos/upload') && !(await uploadWizardOpen(page))) {
-      await page.goto(url, { waitUntil: 'commit', timeout: 35000 }).catch(() => {});
+      await page.goto(url, { waitUntil: 'commit', timeout: 60000 }).catch(() => {});
     }
     input = await waitFor(() => videoInput(page), 8000, 'Studio не ответил при открытии страницы загрузки.').catch(() => null);
     if (input) return input;
+    if(await uploadWizardOpen(page))return waitFor(()=>videoInput(page),60000,'Studio открыл окно загрузки, но поле выбора файла ещё не готово. Файл не передавался.');
   }
   return null;
 }
@@ -335,7 +369,7 @@ async function prepareCdpFile(page, input) {
       dispose };
   } catch (e) { await dispose(); throw e; }
 }
-async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '', readyMs=90000, filePickerMs=60000 } = {}) {
+async function openFile(page, file, beforeSelection, report, { forceCdp = false, channelUrl = '', readyMs=60000, filePickerMs=60000 } = {}) {
   file = path.resolve(file);
   if (!fs.existsSync(file)) throw new Error('Не найден файл ' + file);
   if (await isPostPublishScreen(page)) await dismissPublishDialog(page, report);
@@ -358,4 +392,4 @@ async function openFile(page, file, beforeSelection, report, { forceCdp = false,
   await transferFile(page, input, file, report, { forceCdp, beforeTransfer:beforeSelection });
   report('file_selected', 'Файл передан. Ожидаю поле названия в редакторе Studio.');
 }
-module.exports = { assertRuntimePackage,createButton,uploadWizardOpen,installUploadDialogGuard,disconnect,bounded, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };
+module.exports = { assertRuntimePackage,createButton,uploadWizardOpen,installUploadDialogGuard,disconnect,bounded,waitFor, isStudioUpload, handleUploadDialog, connect, openStudio, openFile, videoInput, findMarkedNode, ensureUploadPicker, transferFile, dismissPublishDialog, isPostPublishScreen, findPublishCloseButton, publicationState };

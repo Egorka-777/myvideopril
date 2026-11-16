@@ -15,7 +15,7 @@ namespace VideoBatch {
             string signature="📌 Ссылка на ИИ бота: https://t.me/BinoDexAI_bot?start=t0211\nПлатформа: https://bit.ly/binodex-broker 144";
             Check(YouTubeOwnerPublish.RenderComment(signature,new DateTime(2026,11,3))==signature.Replace("t0211","t0311"),"existing signature: only Telegram ddMM changes; content and prefix preserved");
             Check(YouTubeOwnerPublish.RenderComment("https://t.me/bot?x=1&start=i2902&ref=2110",new DateTime(2026,12,31))=="https://t.me/bot?x=1&start=i3112&ref=2110","date tag between query parameters; leap-day template and year end");
-            foreach(string prefix in new[]{"t","i","trpr","max","m","bar","aleks"}){
+            foreach(string prefix in new[]{"t","i","trpr","max","m","bar","aleks","myput","realtr","zaptr","trsO"}){
                 string saved="https://t.me/BinoDexAI_bot?start="+prefix+"2910";
                 Check(YouTubeOwnerPublish.RenderComment(saved,new DateTime(2026,11,5))==saved.Replace("2910","0511"),"saved account prefix date: "+prefix);
                 Check(YouTubeOwnerPublish.RenderComment(saved,new DateTime(2026,11,6))==saved.Replace("2910","0611"),"next publication day: "+prefix);
@@ -42,8 +42,14 @@ namespace VideoBatch {
                 Reject(()=>YouTubeOwnerPublish.Apply(choice,new UploadMessage{stage="owner_comment_confirmed",videoId=choice.VideoId,localJobId=item.StudioUploadId,commentText=choice.CommentText}));
                 YouTubeOwnerPublish.Apply(choice,new UploadMessage{stage="owner_comment_confirmed",videoId=choice.VideoId,localJobId=item.StudioUploadId,commentText=choice.CommentText,commentId="comment-one"});
                 Check(YouTubeOwnerPublish.ToJob(choice).commentState=="confirmed","repeat skips confirmed comment");Store.Save(prefs);Check(Store.Load().YouTubeChannels.First(c=>c.ProfileId==channel.ProfileId).Items[0].OwnerCommentId=="comment-one","server confirmation survives restart");
-                item.StudioPending=true;Check(!YouTubeOwnerPublish.Candidates(new[]{channel},DateTime.Now).Any(c=>c.Item==item),"unconfirmed upload cannot be published by guess");
+                item.StudioPending=true;item.PublishedVideoId="";item.PublishedUrl="";item.StudioVideoId="video000001";
+                Check(YouTubeOwnerPublish.Candidates(new[]{channel},DateTime.Now).Any(c=>c.Item==item),"manual completion uses saved Studio ID; live publication still verified");
+                Check(YouTubeOwnerPublish.ToJob(choice).publishedVideoId==item.StudioVideoId,"Studio ID accepted without repeat upload");
             }finally{Store.Root=old;try{Directory.Delete(temp,true);}catch{}}
+            var sentItem=new YouTubeItem{PublishedVideoId="video000004",StudioUploadId="sent-job",OwnerCommentState="pending"};
+            var sentChoice=new OwnerPublishSelection{Channel=channel,Item=sentItem,CommentText="Sent text"};
+            YouTubeOwnerPublish.Apply(sentChoice,new UploadMessage{stage="owner_comment_sent",videoId=sentItem.PublishedVideoId,localJobId=sentItem.StudioUploadId,commentText="Sent text"});
+            Check(sentItem.OwnerCommentState=="sent"&&YouTubeOwnerPublish.CommentComplete(sentItem)&&YouTubeOwnerPublish.ToJob(sentChoice).commentState=="confirmed","sent without readback skips duplicate");
             Console.WriteLine("Owner publish: per-account templates, PC date, saved IDs, durable uncertain state and exact response routing PASS");return true;
         }
         public static bool RunUiTests(string folder){

@@ -62,7 +62,8 @@ const L={
 function isShorts(item){return /^(shorts|short)$/.test(String(item.contentKind||'').trim().toLowerCase());}
 function isImmediatePublish(item){
  const mode=String(item.publishMode||'').trim().toLowerCase();
- return mode==='immediate';
+ const at=Number(item.scheduledUnixSeconds);
+ return mode==='immediate'||(mode==='scheduled'&&Number.isFinite(at)&&at>0&&at*1000<=Date.now()+60000);
 }
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function one(locator,{optional=false}={}){
@@ -75,7 +76,7 @@ async function anyVisible(locator){
  return false;
 }
 async function until(fn,timeout=30000,message='Studio не подтвердил состояние'){
- const end=Date.now()+timeout;while(Date.now()<end){const value=await bounded(fn,Math.min(5000,Math.max(1,end-Date.now())),message+' · страница не отвечает');if(value)return value;await pause(150);}throw new Error(message);
+ return require('./studio-browser').waitFor(fn,timeout,message);
 }
 function norm(s){return String(s||'').replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n').trim();}
 async function read(box){return norm(await box.evaluate(e=>e.isContentEditable?e.innerText:('value'in e?e.value:e.textContent)));}
@@ -357,8 +358,8 @@ async function confirmPublishDespiteRunningChecks(page,progress=()=>{},state={cl
  const dialog=await runningChecksDialog(page);if(!dialog)return false;
  if(state.clicked)return true;
  let publish=null;
- for(const btn of await dialog.getByRole('button',{name:/^(Publish|Опубликовать|Schedule|Запланировать)$/i}).all()){
-  if(!await btn.isVisible()||!/^(Publish|Опубликовать|Schedule|Запланировать)$/i.test(norm(await btn.innerText())))continue;
+ for(const btn of await dialog.getByRole('button',{name:/^(Publish|Опубликовать|Schedule|Запланировать|OK|ОК)$/i}).all()){
+  if(!await btn.isVisible()||!/^(Publish|Опубликовать|Schedule|Запланировать|OK|ОК)$/i.test(norm(await btn.innerText())))continue;
   if(await enabled(btn)){publish=btn;break;}
  }
  if(!publish)return true; // A disabled confirmation is a wait, not a failed upload.
@@ -402,7 +403,7 @@ async function publicRadioSelected(node){
 async function publicRadio(scope){
  return one(scope.locator('#public-radio-button,tp-yt-paper-radio-button[name=PUBLIC],[name=PUBLIC]').or(scope.getByRole('radio',{name:L.public})),{optional:true});
 }
-async function clickPublicRadioTarget(scope){
+async function clickPublicRadioTarget(scope,{actionDelayMs=0}={}){
  // Wait for native hit testing without clicking or dismissing a modal. A backdrop
  // alone does not identify an obstruction: it also belongs to the upload wizard.
  const end=Date.now()+120000;
@@ -417,11 +418,13 @@ async function clickPublicRadioTarget(scope){
    if(error.name!=='TimeoutError')throw error;
    await pause(150);continue;
   }
-  // Re-find after trial: Studio may replace its controls during transitions.
+  if(actionDelayMs)await pause(actionDelayMs);
+  // Re-find after trial and pacing: Studio may replace its controls during transitions.
   const current=await publicRadio(scope);
   if(!current)continue;
   const currentCircle=current.locator('#radioContainer');
   await (await currentCircle.count()?currentCircle:current).click({timeout:Math.max(1,end-Date.now())});
+  if(actionDelayMs)await pause(actionDelayMs);
   return;
  }
  const blockers=await scope.page().locator('ytcp-dialog,ytcp-prompt-dialog,tp-yt-paper-dialog,[role=dialog]').evaluateAll(nodes=>nodes.filter(e=>e.getClientRects().length).map(e=>(e.innerText||'').slice(0,240)));
@@ -435,16 +438,16 @@ async function visibilitySubmitButton(scope){
  }
  return one(scope.getByRole('button',{name:/^(OK|ОК|Publish|Опубликовать|Done|Готово)$/i}),{optional:true});
 }
-async function selectPublicRadio(scope,{activateSubmit=false}={}){
- await clickPublicRadioTarget(scope);
+async function selectPublicRadio(scope,{activateSubmit=false,actionDelayMs=0}={}){
+ await clickPublicRadioTarget(scope,{actionDelayMs});
  await until(async()=>{
   const radio=await publicRadio(scope);
   return radio&&await publicRadioSelected(radio);
  },10000,'Studio не выбрал «Открытый доступ»');
  if(activateSubmit)await until(async()=>{const btn=await visibilitySubmitButton(scope);return btn&&await enabled(btn)?btn:null;},120000,'Кнопка подтверждения доступа недоступна');
 }
-async function confirmEditorVisibility(scope){
- await selectPublicRadio(scope,{activateSubmit:true});
+async function confirmEditorVisibility(scope,{actionDelayMs=0}={}){
+ await selectPublicRadio(scope,{activateSubmit:true,actionDelayMs});
  const button=await visibilitySubmitButton(scope);
  if(!button||!await enabled(button))throw new Error('Studio: кнопка подтверждения доступа недоступна');
  const label=norm(await button.innerText());
@@ -463,7 +466,7 @@ async function publishPublic(page,scope,progress=()=>{}){
  return button;
 }
 function videoId(value){return String(value||'').match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([A-Za-z0-9_-]{11})(?:\b|\/|$)/)?.[1]||'';}
-async function readVideoId(scope){const ids=await scope.locator('a[href],input[value]').evaluateAll(nodes=>nodes.map(e=>e.getAttribute('href')||e.getAttribute('value')||''));const unique=[...new Set(ids.map(videoId).filter(Boolean))];if(unique.length!==1)throw new Error('Studio не показал однозначный ID загруженного ролика');return unique[0];}
+async function readVideoId(scope){const ids=await scope.locator('a[href],input[value]').evaluateAll(nodes=>nodes.map(e=>e.getAttribute('href')||e.getAttribute('value')||''));const unique=[...new Set(ids.map(videoId).filter(Boolean))];if(unique.length!==1)throw new Error('Studio не показал однозначный ID загруженного ролика: '+(unique.length?'найдены '+unique.join(', '):'ссылок с ID нет'));return unique[0];}
 async function visibilityControl(page){
  for(const selector of ['#visibility-button','#visibility','ytcp-video-visibility-select','#select-button[aria-label="Изменить параметры доступа к видео"],#select-button[aria-label="Edit video visibility"]']){
   const control=await one(page.locator(selector),{optional:true});
@@ -481,7 +484,10 @@ async function readback(page,item,id,plan,opts,zone){
  async function verifiedMetadata(result){
   try{
    await details(page,scope,item,opts,{verify:true});
-   if(item.thumbnail&&!isShorts(item))await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);
+   if(item.thumbnail&&!isShorts(item)&&!item.thumbnailWarning){
+    try{await require('./youtube-thumbnail').verifyThumbnail(page,item.thumbnail);}
+    catch(error){item.thumbnailWarning=error.message;(opts.progress||(()=>{}))('thumbnail_warning','Превью не подтверждено: '+error.message+'. Публикацию продолжаю.');}
+   }
    return result;
   }catch(error){error.publicationConfirmed=result;throw error;}
  }
@@ -489,7 +495,7 @@ async function readback(page,item,id,plan,opts,zone){
  const summary=await require('./youtube-owner-publish').visibilitySummary(control);
  if(!plan&&L.public.test(summary.trim()))return verifiedMetadata({visibility:'public'});
  await control.click();
- const dialog=await until(()=>one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,[role=dialog]'),{optional:true}),15000,'Studio не открыл окно доступа при проверке сохранения');
+ const dialog=await until(()=>require('./youtube-owner-publish').visibilityDialog(page),15000,'Studio не открыл окно доступа при проверке сохранения');
  if(!plan){
   const radio=await one(dialog.locator('[name=PUBLIC]').or(dialog.getByRole('radio',{name:L.public})),{optional:true});
   const selected=radio&&await radio.evaluate(e=>typeof e.checked==='boolean'?e.checked:e.getAttribute('aria-checked')==='true'||e.hasAttribute('checked'));
@@ -612,7 +618,7 @@ async function runItems(page,pack,opts,host){
   try{
    if(plan)await syncClock(verify,plan,host.progress);
    for(let attempt=0;attempt<2;attempt++){
-    try{return await readback(verify,item,id,plan,opts,zone);}
+    try{return await readback(verify,item,id,plan,{...opts,progress},zone);}
     catch(error){if(error.publicationConfirmed||attempt||verify.isClosed())throw error;progress('studio_verify','Сохранённые данные ещё не подтверждены. Повторяю только чтение существующего ID (2/2).');await pause(600);}
    }
   }
@@ -620,12 +626,21 @@ async function runItems(page,pack,opts,host){
  }
 
  for(let i=0;i<pack.length;i++){
-  const item=pack[i],immediate=isImmediatePublish(item),packIndex=item._packIndex||i+1;
+  const item=pack[i],packIndex=item._packIndex||i+1;
+  let immediate=isImmediatePublish(item);
   let plan=null,zone=null;
   if(!immediate){plan=planFor(item);zone=await syncClock(page,plan,host.progress);}
   else host.progress('upload_mode','Повторная загрузка: обычная публикация без расписания.',{packIndex});
   host.progress('upload',`Studio: ролик ${i+1}/${pack.length}: ${item.title}`,{packIndex});
   const progress=(stage,text,extra={})=>host.progress(stage,text,{packIndex,...extra});
+  async function applyThumbnail(options){
+   try{await host.thumbnail(page,item.thumbnail,options);delete item.thumbnailWarning;}
+   catch(error){
+    await require('./youtube-thumbnail').dismissThumbnailRestriction(page);
+    item.thumbnailWarning=error.message;
+    progress('thumbnail_warning','Превью не применено: '+error.message+'. Продолжаю публикацию без нового превью.',{videoId:item.studioVideoId});
+   }
+  }
   async function finish(id,scope,screenConfirmed=false,persistedPublic=false){
    let metadataFailure=null;
    if(!persistedPublic&&(opts.verifyPersisted===true||!screenConfirmed)){
@@ -637,8 +652,9 @@ async function runItems(page,pack,opts,host){
    if(host.confirmed)await host.confirmed(item,packIndex,result,text);else host.progress('item_confirmed',text,result);
    item.studioPhase='confirmed';item.studioPending=false;results.push(result);usedIds.add(id);
    if(metadataFailure){metadataFailure.code='STUDIO_METADATA_VERIFICATION_FAILED';metadataFailure.message='Публикация/расписание видео '+id+' подтверждены, но метаданные не прошли проверку. '+metadataFailure.message;throw metadataFailure;}
+   if(scope)await dismissPublishDialog(page,progress,{scope,expectedId:id,confirmed:true,timeout:opts.closeTimeout??90000});
    if(opts.newTabPerVideo){
-    progress('studio_ready','Видео подтверждено. Следующий ролик откроется в новой вкладке.');
+    progress('studio_ready','Видео подтверждено, предыдущий мастер закрыт. Следующий ролик откроется в новой вкладке.');
     if(i+1<pack.length){
      const previous=page;page=await bounded(()=>page.context().newPage(),15000,'Не открылась вкладка следующего ролика.');taskOwnedPages.add(page);if(host.usePage)host.usePage(page);
      progress('studio_new_tab','Открыта новая вкладка загрузки следующего ролика.');
@@ -647,7 +663,6 @@ async function runItems(page,pack,opts,host){
     }
     return;
    }
-   if(scope)await dismissPublishDialog(page,progress,{scope,expectedId:id,confirmed:true,timeout:opts.closeTimeout??90000});
    progress('studio_ready','Предыдущий мастер закрыт. Можно переходить к следующему ролику.');
   }
   let scope=null;
@@ -658,6 +673,10 @@ async function runItems(page,pack,opts,host){
    const editor=await until(async()=>{const root=await one(page.locator('ytcp-video-metadata-editor,ytcp-video-details'),{optional:true});return root&&await field(root,'title',true)?root:null;},editorReadyMs,'Studio не показал страницу редактирования черновика.');
    const owner=require('./youtube-owner-publish');
    const savedVisibility=await until(()=>owner.readVisibility(page),30000,'Studio не показал сохранённый доступ черновика.');
+   if(!isShorts(item)&&item.thumbnail){
+    progress('thumbnail','Применяю превью к существующему ролику '+resumeId+'.');
+    await applyThumbnail({scope:page,save:true,verifyReload:true});
+   }
    if(savedVisibility==='public'||savedVisibility==='scheduled'&&!immediate){
     // Publication already persisted: verify it, never press Publish again.
     if(immediate&&savedVisibility==='public'){
@@ -678,7 +697,7 @@ async function runItems(page,pack,opts,host){
     await owner.publish(page,{publishedVideoId:resumeId},{progress});
    }else{
     const control=await until(()=>visibilityControl(page),30000,'Studio не показал управление доступом черновика.');await control.click();
-    const dialog=await until(()=>one(page.locator('ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog'),{optional:true}),15000,'Studio не открыл доступ черновика.');
+    const dialog=await until(()=>owner.visibilityDialog(page),15000,'Studio не открыл доступ черновика.');
     const submit=await schedule(page,dialog,plan,zone,{progress,editor:true});
     await submit.click({timeout:10000});
     await until(async()=>!await scopeAlive(dialog),15000,'Studio не подтвердил закрытие настроек расписания.');await saveEditor();
@@ -707,13 +726,14 @@ async function runItems(page,pack,opts,host){
   const id=item.studioVideoId||await until(async()=>{try{return await readVideoId(scope);}catch{return null;}},60000,'YouTube не показал ID ролика');
   if(usedIds.has(id))throw new Error('Studio повторно открыл предыдущее видео вместо нового');usedIds.add(id);
   if(!item.studioVideoId)await acceptIdentity(item,id,packIndex,host,progress);
-  if(!isShorts(item)&&item.thumbnail)await host.thumbnail(page,item.thumbnail,{scope});
+  if(!isShorts(item)&&item.thumbnail)await applyThumbnail({scope});
   progress('studio_steps','Перехожу через «Далее / Next» к доступу.');await visibility(page,scope,{progress});
   if(opts.waitForChecks===true)await waitChecks(page,{progress,timeout:opts.checksTimeout??1200000});
   else progress('studio_checks','Фоновые проверки YouTube не ожидаю; публикация — когда Studio разрешит действие.');
+  if(!immediate&&isImmediatePublish(item)){immediate=true;plan=null;progress('upload_mode','Время отложки прошло во время загрузки — публикую сейчас.');}
   let submit;
   if(immediate){
-   progress('studio_publish','Публикую Shorts в открытый доступ.');
+   progress('studio_publish','Публикую видео в открытый доступ.');
    submit=await publishPublic(page,scope,progress);
   }else{
    progress('studio_schedule','Устанавливаю дату, время и часовой пояс.');

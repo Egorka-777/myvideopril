@@ -30,6 +30,9 @@ namespace VideoBatch {
             add("soft-plate", "Мягкая плашка", new WarmupSubtitleStyle { FontSize = 58, Plate = "rounded", PlateColor = "#10131A", Opacity = 88 });
             add("karaoke", "Караоке", new WarmupSubtitleStyle { FontSize = 64, Uppercase = true, Plate = "none", OutlineWidth = 4, Highlight = "progressive", AccentColor = "#FFE84A", WordsPerCaption = 4 });
             add("word-pop", "По одному слову", new WarmupSubtitleStyle { FontFamily = "Impact", FontSize = 86, Uppercase = true, Plate = "none", OutlineWidth = 5, WordsPerCaption = 1, Motion = "pop" });
+            add("clean-fade", "Плавное появление", new WarmupSubtitleStyle { FontSize = 58, Plate = "none", OutlineWidth = 2, Motion = "fade" });
+            add("soft-rise", "Мягкий подъём", new WarmupSubtitleStyle { FontSize = 60, Plate = "none", OutlineWidth = 3, Motion = "rise" });
+            add("word-accent", "Акцент на слове", new WarmupSubtitleStyle { FontSize = 64, Plate = "none", OutlineWidth = 3, Motion = "word-accent", AccentColor = "#FFE84A", WordsPerCaption = 4 });
             add("minimal", "Минимализм", new WarmupSubtitleStyle { FontSize = 44, Bold = false, Plate = "none", OutlineWidth = 1, WordsPerCaption = 5 });
             return result;
         }
@@ -77,14 +80,32 @@ namespace VideoBatch {
             if (cue.Words != null) for (int i = 0; i < cue.Words.Count; i++) if (cue.Words[i].Start <= time) active = i;
             double elapsed = Math.Max(0, time - cue.Start);
             float scale = style.Motion != "pop" ? 1 : elapsed < .05 ? .88f : elapsed < .10 ? .97f : 1;
-            return new WarmupCaption { Text = cue.Text, Start = cue.Start, End = cue.End, Words = cue.Words, ActiveWord = active, TextScale = scale };
+            double edge = Math.Min(.18, (cue.End - cue.Start) / 2);
+            float enter = edge <= 0 ? 1 : (float)Math.Min(1, elapsed / edge);
+            float leave = edge <= 0 ? 1 : (float)Math.Max(0, Math.Min(1, (cue.End - time) / edge));
+            float opacity = style.Motion == "fade" || style.Motion == "rise" ? Math.Min(enter, leave) : 1;
+            float offset = style.Motion == "rise" ? style.FontSize * .24f * (1 - enter) * (1 - enter) : 0;
+            float wordScale = 1;
+            if (style.Motion == "word-accent" && active >= 0) {
+                double age = Math.Max(0, time - cue.Words[active].Start);
+                wordScale = 1 + .06f * (float)Math.Max(0, 1 - age / .16);
+            }
+            return new WarmupCaption { Text = cue.Text, Start = cue.Start, End = cue.End, Words = cue.Words, ActiveWord = active,
+                TextScale = scale, FrameOpacity = opacity, OffsetY = offset, ActiveWordScale = wordScale };
         }
         public static List<WarmupCaption> Frames(IEnumerable<WarmupCaption> source, WarmupSubtitleStyle style) {
             var result = new List<WarmupCaption>();
             foreach (var cue in ForStyle(source, style)) {
                 var cuts = new List<double> { cue.Start, cue.End };
-                if (style.Highlight != "none" && cue.Words != null) cuts.AddRange(cue.Words.Select(w => w.Start));
+                if ((style.Highlight != "none" || style.Motion == "word-accent") && cue.Words != null) cuts.AddRange(cue.Words.Select(w => w.Start));
                 if (style.Motion == "pop") { cuts.Add(cue.Start + .05); cuts.Add(cue.Start + .10); }
+                if (style.Motion == "fade" || style.Motion == "rise") {
+                    double edge = Math.Min(.18, (cue.End - cue.Start) / 2);
+                    for (double t = 0; t < edge; t += 1d / 30) { cuts.Add(cue.Start + t); cuts.Add(cue.End - edge + t); }
+                    cuts.Add(cue.Start + edge); cuts.Add(cue.End - edge);
+                }
+                if (style.Motion == "word-accent" && cue.Words != null)
+                    foreach (var word in cue.Words) for (int i = 1; i <= 5; i++) cuts.Add(word.Start + i / 30d);
                 cuts = cuts.Where(t => t >= cue.Start && t <= cue.End).Distinct().OrderBy(t => t).ToList();
                 for (int i = 0; i + 1 < cuts.Count; i++) {
                     if (cuts[i + 1] <= cuts[i]) continue;
@@ -139,22 +160,28 @@ namespace VideoBatch {
             using (var family = new FontFamily(font.FontFamily.Name))
             using (var format = (StringFormat)StringFormat.GenericTypographic.Clone()) {
                 g.Clear(Color.Transparent); g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TranslateTransform(0, cue.OffsetY);
+                Func<Color, Color> faded = color => Color.FromArgb((int)(color.A * cue.FrameOpacity), color.R, color.G, color.B);
                 float scale = cue.TextScale <= 0 ? 1 : cue.TextScale;
                 g.TranslateTransform(plate.Left + plate.Width / 2, plate.Top + plate.Height / 2);
                 g.ScaleTransform(scale, scale); g.TranslateTransform(-(plate.Left + plate.Width / 2), -(plate.Top + plate.Height / 2));
-                if (style.Plate != "none") using (var brush = new SolidBrush(Color.FromArgb(255 * style.Opacity / 100, ColorTranslator.FromHtml(style.PlateColor)))) {
+                if (style.Plate != "none") using (var brush = new SolidBrush(faded(Color.FromArgb(255 * style.Opacity / 100, ColorTranslator.FromHtml(style.PlateColor))))) {
                     if (style.Plate == "solid") g.FillRectangle(brush, plate);
                     else using (var path = Rounded(plate)) g.FillPath(brush, path);
                 }
                 foreach (var word in words) using (var path = new GraphicsPath()) {
                     var face = style.Bold && family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular;
                     path.AddString(word.Text, family, (int)face, style.FontSize, new PointF(word.Box.X, word.Box.Y), format);
-                    using (var shadow = (GraphicsPath)path.Clone()) using (var shift = new Matrix()) using (var brush = new SolidBrush(Color.FromArgb(160, 0, 0, 0))) {
+                    if (word.Index == cue.ActiveWord && cue.ActiveWordScale != 1) using (var transform = new Matrix()) {
+                        float cx = word.Box.Left + word.Box.Width / 2, cy = word.Box.Top + word.Box.Height / 2;
+                        transform.Translate(cx, cy); transform.Scale(cue.ActiveWordScale, cue.ActiveWordScale); transform.Translate(-cx, -cy); path.Transform(transform);
+                    }
+                    using (var shadow = (GraphicsPath)path.Clone()) using (var shift = new Matrix()) using (var brush = new SolidBrush(faded(Color.FromArgb(160, 0, 0, 0)))) {
                         shift.Translate(2, 3); shadow.Transform(shift); g.FillPath(brush, shadow);
                     }
-                    if (style.OutlineWidth > 0) using (var pen = new Pen(ColorTranslator.FromHtml(style.OutlineColor), style.OutlineWidth * 2) { LineJoin = LineJoin.Round }) g.DrawPath(pen, path);
-                    bool accent = style.Highlight == "active" ? word.Index == cue.ActiveWord : style.Highlight == "progressive" && word.Index <= cue.ActiveWord;
-                    using (var brush = new SolidBrush(ColorTranslator.FromHtml(accent ? style.AccentColor : style.TextColor))) g.FillPath(brush, path);
+                    if (style.OutlineWidth > 0) using (var pen = new Pen(faded(ColorTranslator.FromHtml(style.OutlineColor)), style.OutlineWidth * 2) { LineJoin = LineJoin.Round }) g.DrawPath(pen, path);
+                    bool accent = style.Motion == "word-accent" || style.Highlight == "active" ? word.Index == cue.ActiveWord : style.Highlight == "progressive" && word.Index <= cue.ActiveWord;
+                    using (var brush = new SolidBrush(faded(ColorTranslator.FromHtml(accent ? style.AccentColor : style.TextColor)))) g.FillPath(brush, path);
                 }
             }
             return bitmap;
