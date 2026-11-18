@@ -392,12 +392,14 @@ namespace VideoBatch {
     /// <summary>Редактор многострочных подписей TikTok. Разделитель записей — строка ---.</summary>
     public class TitleBankDialog:Dialog {
         public List<string> Titles;TextBox words;ListBox preview;Label counter;
-        public TitleBankDialog(string caption,IList<string> current):base(caption,640){
+        readonly bool lineTitles;
+        public TitleBankDialog(string caption,IList<string> current,bool lineTitles=false):base(caption,640){
+            this.lineTitles=lineTitles;
             ClientSize=new Size(640,640);
             var all=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};Body.Controls.Add(all);
-            all.Controls.Add(Ui.Label("Одна полная подпись может занимать несколько строк. Между подписями оставляйте отдельную строку ---. База сохраняется и используется по кругу.",true));
+            all.Controls.Add(Ui.Label(lineTitles?"Один заголовок на строку, используются по кругу. Если список пуст — название исходного видео.":"Одна полная подпись может занимать несколько строк. Между подписями оставляйте отдельную строку ---. База сохраняется и используется по кругу.",true));
             words=new TextBox{Multiline=true,AcceptsReturn=true,AcceptsTab=true,WordWrap=true,ScrollBars=ScrollBars.Both,Width=580,Height=300,Font=new Font("Consolas",10)};
-            if(current!=null&&current.Count>0)words.Text=string.Join(Environment.NewLine+"---"+Environment.NewLine,current);
+            if(current!=null&&current.Count>0)words.Text=string.Join(lineTitles?Environment.NewLine:Environment.NewLine+"---"+Environment.NewLine,current);
             words.TextChanged+=(s,e)=>RefreshPreview();
             all.Controls.Add(words);
             counter=new Label{AutoSize=true,ForeColor=Ui.Blue,Font=new Font("Segoe UI",10,FontStyle.Bold),Margin=new Padding(0,8,0,4)};
@@ -415,8 +417,9 @@ namespace VideoBatch {
             return System.Text.RegularExpressions.Regex.Split(normalized,@"(?m)^\s*---\s*$")
                 .Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
         }
+        List<string> ReadTitles(){return lineTitles?words.Lines.Select(x=>x.Trim()).Where(x=>x.Length>0).ToList():ParseLines(words.Text);}
         void RefreshPreview(){
-            var lines=ParseLines(words.Text);
+            var lines=ReadTitles();
             preview.BeginUpdate();preview.Items.Clear();
             for(int i=0;i<lines.Count;i++){
                 string t=lines[i];
@@ -428,7 +431,7 @@ namespace VideoBatch {
             counter.ForeColor=lines.Count==0?Color.FromArgb(180,60,40):Color.FromArgb(30,130,70);
         }
         void SaveList(){
-            Titles=ParseLines(words.Text);
+            Titles=ReadTitles();
             var tooLong=Titles.Select((t,i)=>new{t,i}).Where(x=>x.t.Length>4000).ToList();
             if(tooLong.Count>0)throw new Exception("Подпись №"+(tooLong[0].i+1)+" длиннее 4000 символов.");
         }
@@ -620,14 +623,14 @@ namespace VideoBatch {
             var logs=Ui.Table();logs.RowCount=2;logs.RowStyles.Add(new RowStyle(SizeType.Absolute,28));logs.RowStyles.Add(new RowStyle(SizeType.Percent,100));logs.Controls.Add(new Label{Text="Журнал работы",AutoSize=true,Font=new Font("Segoe UI",10,FontStyle.Bold)},0,0);log=new RichTextBox{Dock=DockStyle.Fill,ReadOnly=true,BackColor=Color.White,BorderStyle=BorderStyle.None,Font=new Font("Consolas",9),DetectUrls=true};logs.Controls.Add(log,0,1);root.Controls.Add(logs,0,6);
             var bottom=Ui.Flow();
             uploadHttp=Ui.Button("Быстрая загрузка",null,true);uploadHttp.MinimumSize=new Size(180,42);uploadHttp.BackColor=Theme.Accent;uploadHttp.ForeColor=Color.White;uploadHttp.FlatAppearance.BorderSize=0;uploadHttp.Click+=async(s,e)=>await UploadAllHttp();
-            upload=Ui.Button("Через Studio",null);upload.MinimumSize=new Size(150,42);upload.Click+=async(s,e)=>await UploadAll();
+            upload=Ui.Button("Опубликовать",null);upload.MinimumSize=new Size(150,42);upload.Click+=async(s,e)=>await UploadAll();
             meshWatch=Ui.Button("Смотреть ссылки",null);meshWatch.Visible=false;meshWatch.Click+=async(s,e)=>await CrossWatchMesh(null,null,null,null);
             applyThumb=Ui.Button("Превью шортс",null);applyThumb.Visible=false;applyThumb.Click+=async(s,e)=>await ApplyShortsThumbFrames();
             stop=Ui.Button("Стоп",()=>{stop.Enabled=false;AbortHttpUpload(true);});stop.Visible=false;
             removeQueue=Ui.Button("Удалить из очереди",()=>RemoveSelectedFromQueue());
             retrySafe=Ui.Button("Повторить безопасно",()=>MessageBox.Show(this,"Безопасный повтор доступен только для задач до передачи файла или с подтверждённым отсутствием ролика.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information));
             var openLog=Ui.Button("Лог",()=>{try{if(File.Exists(logFile))Ui.Open(logFile);else throw new Exception("Лог ещё не создан.");}catch(Exception e){Ui.Error(this,e);}});
-            bottom.Controls.Add(uploadHttp);bottom.Controls.Add(upload);bottom.Controls.Add(stop);bottom.Controls.Add(removeQueue);bottom.Controls.Add(retrySafe);bottom.Controls.Add(openLog);
+            bottom.Controls.Add(upload);bottom.Controls.Add(Ui.Button("Заголовки",OpenTitleBanks));bottom.Controls.Add(stop);bottom.Controls.Add(removeQueue);bottom.Controls.Add(retrySafe);bottom.Controls.Add(openLog);
             root.Controls.Add(bottom,0,7);
             LoadSearchFieldsForMarket();LoadGrid();RefreshMarketUi();
             FormClosing+=(s,e)=>{SaveGrid();SaveSearchFields();if(cancellation!=null||uploadsInFlight>0){e.Cancel=true;MessageBox.Show(this,"Сначала остановите текущую операцию (Стоп).","VideoBatch",MessageBoxButtons.OK,MessageBoxIcon.Information);}};
@@ -1119,10 +1122,11 @@ namespace VideoBatch {
             int next=GetTitleCursor(kind,market);
             return MarketLabel(market)+" · "+KindLabel(kind)+": следующий №"+(next+1)+" из "+bank.Count;
         }
-        void OpenTitleBanks(){
+        public void OpenTitleBanks(){OpenTitleBanks(this);}
+        public void OpenTitleBanks(IWin32Window owner){
             SaveGrid();
             using(var dlg=new TitleBanksHubDialog(settings)){
-                if(dlg.ShowDialog(this)!=DialogResult.OK)return;
+                if(dlg.ShowDialog(owner)!=DialogResult.OK)return;
                 Save();
                 Write("База заголовков сохранена · RU Long "+settings.TitleBankLongRu.Count+" · RU Shorts "+settings.TitleBankShortsRu.Count+" · EN Long "+settings.TitleBankLongEn.Count+" · EN Shorts "+settings.TitleBankShortsEn.Count+".");
                 Write("  "+TitleCursorLabel("long","RU")+" · "+TitleCursorLabel("shorts","RU")+" · "+TitleCursorLabel("long","EN")+" · "+TitleCursorLabel("shorts","EN"));

@@ -13,7 +13,7 @@ namespace VideoBatch {
             Add(fields, "Случайный стиль на ролик", randomEnabled);
             randomEnabled.CheckedChanged += (s, e) => { if (loading) return; Style.RandomStyle.Enabled = randomEnabled.Checked; randomPreview = null; UpdatePreview(); };
             Add(fields, "Один стиль на всё видео", new Label { Text = "Диапазоны от / до. Обычные настройки сохраняются.", AutoSize = true });
-            RandomRange(fields, "Размер", "Size", 28, 88, o => o.SizeMin, o => o.SizeMax, (o, a, b) => { o.SizeMin = a; o.SizeMax = b; });
+            RandomRange(fields, "Размер", "Size", 28, 150, o => o.SizeMin, o => o.SizeMax, (o, a, b) => { o.SizeMin = a; o.SizeMax = b; });
             RandomRange(fields, "Положение сверху, %", "Position", 10, 90, o => o.PositionMin, o => o.PositionMax, (o, a, b) => { o.PositionMin = a; o.PositionMax = b; });
             RandomRange(fields, "Слов в группе", "Words", 1, 6, o => o.WordsMin, o => o.WordsMax, (o, a, b) => { o.WordsMin = a; o.WordsMax = b; });
             RandomRange(fields, "Обводка", "Outline", 0, 10, o => o.OutlineMin, o => o.OutlineMax, (o, a, b) => { o.OutlineMin = a; o.OutlineMax = b; });

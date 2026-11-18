@@ -64,6 +64,86 @@ namespace VideoBatch {
             }
             return true;
         }
+        public static bool RunRoundedOverlayUiTests(string assetPath) {
+            var layer=new AssemblyLayer {Source=assetPath,X=.1,Y=.1,Width=.8,Height=.8,CornerRadius=30,PreserveAspectRatio=false};
+            var template=new AssemblyTemplate {Width=200,Height=200,Fps=30};
+            var scene=new AssemblyScenePlan {Scene=new AssemblyScene {Duration=3}};
+            scene.Layers.Add(new AssemblyLayerPlan {Layer=layer,Asset=new AssemblyAsset {Path=assetPath}});
+            string failure=null;
+            using(var form=new Form {ClientSize=new Size(240,240),ShowInTaskbar=false})
+            using(var canvas=new AssemblyCanvas {Dock=DockStyle.Fill}) {
+                form.Controls.Add(canvas); canvas.PreviewError+=message=>failure=message;
+                var background=new Bitmap(200,200); using(var g=Graphics.FromImage(background))g.Clear(Color.Blue);
+                canvas.SetBackground(background); canvas.SetScene(template,scene,layer); form.Show();
+                bool rendered=false; var clock=Stopwatch.StartNew();
+                while(clock.ElapsedMilliseconds<3000) {
+                    Application.DoEvents(); if(failure!=null)throw new Exception(failure);
+                    using(var image=canvas.SubtitleBackground()) {
+                        var middle=image.GetPixel(100,100);
+                        if(middle.R>200 && middle.B<40) {
+                            var corner=image.GetPixel(21,21);
+                            if(corner.B<245 || corner.R>10)throw new Exception("Rounded preview corner hides base video");
+                            rendered=true; break;
+                        }
+                    }
+                    Thread.Sleep(15);
+                }
+                if(!rendered)throw new Exception("Rounded animated preview did not produce a frame");
+                canvas.ClearScene(); form.Close();
+            }
+            Console.WriteLine("Rounded overlay UI PASS: animated red video, transparent corners, blue base visible"); return true;
+        }
+        public static bool RunPlacementBoundsTests() {
+            string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "overlay-bounds-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(root);
+            try {
+                string small = System.IO.Path.Combine(root,"small.png"), large = System.IO.Path.Combine(root,"large.png");
+                using(var b=new Bitmap(100,200)) b.Save(small);
+                using(var b=new Bitmap(400,400)) b.Save(large);
+                foreach(bool uniform in new[]{false,true}) {
+                    var layer=new AssemblyLayer {Source=root,X=-.1,Y=.15,Width=1.5,Height=1.5,UniformImageScale=uniform,PreserveAspectRatio=true};
+                    var t=new AssemblyTemplate {Width=200,Height=400};
+                    var scene=new AssemblyScenePlan {Scene=new AssemblyScene()};
+                    scene.Layers.Add(new AssemblyLayerPlan {Layer=layer,Asset=new AssemblyAsset {Path=small}});
+                    using(var canvas=new AssemblyCanvas {Size=new Size(240,440)}) {
+                        canvas.SetScene(t,scene,layer);
+                        var flags=BindingFlags.Instance|BindingFlags.NonPublic;
+                        var frame=(RectangleF)typeof(AssemblyCanvas).GetProperty("Frame",flags).GetValue(canvas);
+                        Func<RectangleF> box=()=> (RectangleF)typeof(AssemblyCanvas).GetMethod("Box",flags).Invoke(canvas,new object[]{layer});
+                        var expected=AssemblyRaster.LayerImageBounds(t,layer,new Size(100,200));
+                        var before=box();
+                        if(Math.Abs((before.X-frame.X)/frame.Width-expected.X/t.Width)>.0001 || Math.Abs(before.Width/frame.Width-expected.Width/t.Width)>.0001)
+                            throw new Exception("Selection frame differs from render bounds, uniform="+uniform);
+                        int x=(int)Math.Floor(before.Right)-2,y=(int)Math.Floor(before.Bottom)-2;
+                        typeof(AssemblyCanvas).GetMethod("OnMouseDown",flags).Invoke(canvas,new object[]{new MouseEventArgs(MouseButtons.Left,1,x,y,0)});
+                        typeof(AssemblyCanvas).GetMethod("OnMouseMove",flags).Invoke(canvas,new object[]{new MouseEventArgs(MouseButtons.Left,0,x+30,y+30,0)});
+                        var after=box();
+                        if(Math.Abs(after.X-before.X)>.01 || Math.Abs(after.Y-before.Y)>.01 || after.Width<=before.Width || layer.Width<=1)
+                            throw new Exception("Resize moved visible anchor or clamped scale, uniform="+uniform);
+                        var rendered=AssemblyRaster.LayerImageBounds(t,layer,new Size(100,200));
+                        if(Math.Abs(after.Height/frame.Height-rendered.Height/t.Height)>.0001) throw new Exception("Resized frame differs from export");
+                    }
+                }
+                Console.WriteLine("Placement bounds PASS: mixed source dimensions, fit/uniform, scale >100%, negative position, mouse resize anchor and export geometry");
+                return true;
+            } finally {System.IO.Directory.Delete(root,true);}
+        }
+        public static bool RunVideoPackBoundsTests(string packSource) {
+            var template=new AssemblyTemplate {Width=1080,Height=1920};
+            var layer=new AssemblyLayer {Source=packSource,X=-.24706306765973562,Y=.021382127970457132,Width=1.501,Height=1.501,UniformImageScale=true,PreserveAspectRatio=true};
+            var small=AssemblyRaster.LayerImageBounds(template,layer,new Size(720,1280));
+            var large=AssemblyRaster.LayerImageBounds(template,layer,new Size(1080,1920));
+            if(Math.Abs(small.X-large.X)>.01 || Math.Abs(small.Y-large.Y)>.01 || Math.Abs(small.Width-large.Width)>.01 || Math.Abs(small.Height-large.Height)>.01)
+                throw new Exception("Video pack resolution changed visible placement");
+            var landscape=AssemblyRaster.LayerImageBounds(template,layer,new Size(1920,1080));
+            if(landscape.Left<small.Left-.01 || landscape.Top<small.Top-.01 || landscape.Right>small.Right+.01 || landscape.Bottom>small.Bottom+.01)
+                throw new Exception("Different aspect ratio escaped the shared video placement");
+            layer.PreserveAspectRatio=false;
+            var stretched=AssemblyRaster.LayerImageBounds(template,layer,new Size(720,1280));
+            if(Math.Abs(stretched.Width-layer.Width*template.Width)>.01) throw new Exception("Stretch placement changed");
+            Console.WriteLine("Video pack bounds PASS: resolution-independent placement, aspect fit and explicit stretch");
+            return true;
+        }
         static IDictionary Previews(AssemblyCanvas canvas) {
             return (IDictionary)typeof(AssemblyCanvas).GetField("animatedPreviews", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(canvas);
         }

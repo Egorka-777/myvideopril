@@ -110,14 +110,14 @@ namespace VideoBatch {
                 string key = "ad" + i;
                 double duration = (double)item.Frames / t.Fps;
                 int frozen = Math.Max(0, item.Frame - 1);
-                graph.Add("[0:v:0]trim=start_frame=" + frozen + ":end_frame=" + (frozen + 1) + ",setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=" + Core.N(duration) + ",trim=end_frame=" + item.Frames + ",setsar=1[" + key + "freeze]");
+                graph.Add("[0:v:0]trim=start_frame=" + frozen + ":end_frame=" + (frozen + 1) + ",setpts=PTS-STARTPTS,fps=" + t.Fps + ",tpad=stop_mode=clone:stop_duration=" + Core.N(duration) + ",trim=end_frame=" + item.Frames + ",setsar=1[" + key + "freeze]");
                 if (item.VisualPath != null) {
                     var placement = item.Placement;
                     int visualWidth = placement.VisualPlacementConfigured ? Math.Max(2,(int)Math.Round(placement.VisualWidth*media.Width/2)*2) : media.Width;
                     int visualHeight = placement.VisualPlacementConfigured ? Math.Max(2,(int)Math.Round(placement.VisualHeight*media.Height/2)*2) : media.Height;
                     string visualX = placement.VisualPlacementConfigured ? Core.N(placement.VisualX*media.Width) : "(W-w)/2";
                     string visualY = placement.VisualPlacementConfigured ? Core.N(placement.VisualY*media.Height) : "(H-h)/2";
-                    graph.Add("[" + item.VisualInput + ":v:0]setpts=PTS-STARTPTS,fps=" + t.Fps + ",scale=" + visualWidth + ":" + visualHeight + (placement.VisualPreserveAspectRatio ? ":force_original_aspect_ratio=decrease:force_divisible_by=2" : "") + ",setsar=1,format=rgba,trim=duration=" + Core.N(item.VisualSeconds) + ",setpts=PTS+" + Core.N(item.VisualDelay) + "/TB[" + key + "asset]");
+                    graph.Add("[" + item.VisualInput + ":v:0]setpts=PTS-STARTPTS,fps=" + t.Fps + ",scale=" + visualWidth + ":" + visualHeight + (placement.VisualPreserveAspectRatio ? ":force_original_aspect_ratio=decrease:force_divisible_by=2" : "") + ",setsar=1,format=rgba,trim=duration=" + Core.N(item.VisualSeconds) + ",setpts=PTS+" + Core.N(item.VisualDelay) + "/TB,fps=" + t.Fps + "[" + key + "asset]");
                     graph.Add("[" + key + "freeze][" + key + "asset]overlay=x=" + visualX + ":y=" + visualY + ":eof_action=pass:repeatlast=0:enable='gte(t," + Core.N(item.VisualDelay) + ")*lt(t," + Core.N(item.VisualDelay + item.VisualSeconds) + ")',format=yuv420p[" + key + "v]");
                 } else if (item.Image || item.Video) {
                     graph.Add("[" + item.Input + ":v:0]setpts=PTS-STARTPTS,fps=" + t.Fps + ",scale=" + media.Width + ":" + media.Height + ":force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,tpad=stop_mode=clone:stop_duration=" + Core.N(duration) + ",trim=end_frame=" + item.Frames + "[" + key + "asset]");
@@ -128,9 +128,14 @@ namespace VideoBatch {
                 cursor = item.Frame;
             }
             appendMain(cursor, totalFrames);
-            graph.Add(string.Join("", pieces) + "concat=n=" + pieces.Count + ":v=1:a=1[v][a]");
+            graph.Add(string.Join("", pieces) + "concat=n=" + pieces.Count + ":v=1:a=1[rawVideo][a]");
+            graph.Add("[rawVideo]fps=" + t.Fps + ":eof_action=pass[v]");
             double expected = (double)(totalFrames + selected.Sum(i => i.Frames)) / t.Fps;
-            args.AddRange(new[] { "-filter_complex", string.Join(";", graph), "-map", "[v]", "-map", "[a]", "-t", Core.N(expected), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output });
+            var context = new AssemblyRenderContext();
+            await AssemblyRender.SelectEncoder(t, ffmpeg, Path.GetDirectoryName(output), context, ct).ConfigureAwait(false);
+            args.AddRange(new[] { "-filter_complex", string.Join(";", graph), "-map", "[v]", "-map", "[a]", "-t", Core.N(expected) });
+            args.AddRange(AssemblyRender.EncoderArguments(context.Encoder, context.EncoderThreads));
+            args.AddRange(new[] { "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output });
             await Core.Tool(ffmpeg, args, ct, null, 1800).ConfigureAwait(false);
             var result = Core.VideoInfo(await Core.Probe(probe, output, ct).ConfigureAwait(false));
             if (Math.Abs(result.VideoDuration - expected) > .15 || result.Width != media.Width || result.Height != media.Height || !result.HasAudio)

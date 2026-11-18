@@ -200,19 +200,20 @@ namespace VideoBatch {
             var graph = new List<string>(); var audio = new List<string>(); int input = 0;
             double roll = p.RollDuration(t), position = 0;
             bool continuous = t.ContinuousVideo && p.Scenes.All(s => string.IsNullOrWhiteSpace(s.Voiceover));
+            double NativeVolume(AssemblyScene scene) => t.SplitLayout != "none" ? (t.SplitPrimaryAudio(p) ? t.SplitAudioVolume : 0) : t.SceneNativeAudioVolume(scene);
             if (continuous) {
-                if (t.SceneNativeAudioVolume(p.Scenes[0].Scene) > 0)
+                if (NativeVolume(p.Scenes[0].Scene) > 0)
                     AssemblyRender.AppendNativeAudio(p.Scenes[0].Video, 0, roll, 0, t.LoopShortVideos && p.Scenes[0].Video.Duration < roll,
-                        t.SceneNativeAudioVolume(p.Scenes[0].Scene), roll, args, ref input, graph, audio);
-                if (t.SplitLayout != "none" && t.SecondaryNativeAudio && t.SecondaryNativeVolume > 0 && p.SecondaryVideo != null)
+                        NativeVolume(p.Scenes[0].Scene), roll, args, ref input, graph, audio);
+                if (t.SplitLayout != "none" && !t.SplitPrimaryAudio(p) && t.SplitAudioVolume > 0 && p.SecondaryVideo != null)
                     AssemblyRender.AppendNativeAudio(p.SecondaryVideo, 0, roll, 0, t.LoopShortVideos && p.SecondaryVideo.Duration < roll,
-                        t.SecondaryNativeVolume, roll, args, ref input, graph, audio);
+                        t.SplitAudioVolume, roll, args, ref input, graph, audio);
             }
             foreach (var scene in p.Scenes) {
                 double content = AssemblyTimeline.ContentDuration(t, scene);
                 double audioStart = position + (t.HasPreviewScene ? 0 : scene.IncomingPad);
                 if (!scene.Scene.IsPreview && string.IsNullOrWhiteSpace(scene.Voiceover) && !continuous) {
-                    double nativeVolume = t.SceneNativeAudioVolume(scene.Scene);
+                    double nativeVolume = NativeVolume(scene.Scene);
                     if (nativeVolume > 0) {
                         if (t.ContinuousVideo) {
                             AssemblyRender.AppendNativeAudio(scene.Video, position + scene.IncomingPad, content, audioStart,
@@ -227,9 +228,9 @@ namespace VideoBatch {
                         } else AssemblyRender.AppendNativeAudio(scene.Video, AssemblyTimeline.SourceStart(t, scene), content, audioStart,
                             AssemblyTimeline.LoopInput(t, scene), nativeVolume, roll, args, ref input, graph, audio);
                     }
-                    if (t.SplitLayout != "none" && t.SecondaryNativeAudio && t.SecondaryNativeVolume > 0 && p.SecondaryVideo != null)
+                    if (t.SplitLayout != "none" && !t.SplitPrimaryAudio(p) && t.SplitAudioVolume > 0 && p.SecondaryVideo != null)
                         AssemblyRender.AppendNativeAudio(p.SecondaryVideo, position + scene.IncomingPad, content, audioStart,
-                            t.LoopShortVideos && p.SecondaryVideo.Duration < roll, t.SecondaryNativeVolume, roll, args, ref input, graph, audio);
+                            t.LoopShortVideos && p.SecondaryVideo.Duration < roll, t.SplitAudioVolume, roll, args, ref input, graph, audio);
                 }
                 position += AssemblyTimeline.SceneSeconds(scene) + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
             }

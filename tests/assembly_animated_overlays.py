@@ -103,6 +103,8 @@ def render(args, root, key, source, global_layer=False, effect='cut', transforme
                            LoopShortVideos='false', SceneTimingVersion=1,
                            PackStudioVersion=1, ObjectStudioVersion=1).items():
         value(doc, name, text)
+    # Animation pixels must not include the studio's default output fade/zoom.
+    ET.SubElement(doc, 'OutputProcessing')
     scenes = ET.SubElement(doc, 'Scenes')
     target = None
     for index in range(scene_count):

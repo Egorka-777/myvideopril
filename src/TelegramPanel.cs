@@ -125,7 +125,7 @@ namespace VideoBatch {
             DragDrop+=async(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))await Import((string[])e.Data.GetData(DataFormats.FileDrop));};
             try{SeedProxies();var data=store.Load();target.Text=data.target;inviteDelay.Value=Math.Max(10,Math.Min(3600,data.delay<=0?60:data.delay));inviteLimit.Value=Math.Max(1,Math.Min(10000,data.invite_limit<=0?200:data.invite_limit));RefreshData();RefreshProxies();}catch(Exception e){status.Text=e.Message;actions.Enabled=false;unavailable=true;}
         }
-        protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);TryAutoSync();}
+        protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);if(!Visible)autoSyncTried=false;TryAutoSync();}
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);TryAutoSync();}
         void TryAutoSync(){if(Visible&&IsHandleCreated&&proxyGrid!=null&&!unavailable&&!autoSyncTried&&getPreferences!=null){autoSyncTried=true;BeginInvoke(new Action(async()=>{if(!busy&&!string.IsNullOrEmpty(getPreferences()?.ProtectedDolphinToken))await SyncDolphin();}));}}
         Panel Page(string title){
@@ -182,7 +182,7 @@ namespace VideoBatch {
             try {
                 if(busy)return;
                 string[] selected;string proxyId,passcode;bool check;
-                using(var f=new TelegramImportDialog(store,paths)){
+                using(var f=new TelegramImportDialog(store,paths,ProxyChoices)){
                     if(f.ShowDialog(this)!=DialogResult.OK)return;
                     selected=f.Paths;proxyId=f.ProxyId;passcode=f.Passcode;check=f.CheckAfter;
                 }
@@ -361,11 +361,11 @@ namespace VideoBatch {
                 f.AddInfo(string.IsNullOrEmpty(account.phone)?"Телефон не получен":"Телефон: "+account.phone);
                 f.AddInfo("Последняя успешная проверка: "+(string.IsNullOrEmpty(account.last_success_utc)?"нет подтверждения":account.last_success_utc));f.AddInfo("Причина: "+account.last_error);f.AddInfo("Прокси: "+account.proxy_detail);
                 f.AddInfo("Состояние: "+TelegramStore.Status(account.status)+(string.IsNullOrEmpty(account.wait_until)?"":" · до "+account.wait_until));
-                var proxies=new List<Tuple<string,string>>();
-                try{foreach(var a in new AccountLibraryStore().Load().Where(a=>!string.IsNullOrWhiteSpace(a.Proxy)))proxies.Add(Tuple.Create(a.Name,a.Proxy));}catch{}
-                if(proxies.Count>0){var choices=Theme.MakeCombo(new[]{"Взять сохранённый прокси…"}.Concat(proxies.Select(p=>p.Item1+" · "+TelegramStore.ProxyLabel(p.Item2))).ToArray());choices.Width=410;choices.SelectedIndexChanged+=(s,e)=>{if(choices.SelectedIndex>0)proxy.Text=proxies[choices.SelectedIndex-1].Item2;};f.AddControl(choices);}
+                var proxies=ProxyChoices(store.Load());TelegramProxy selectedProxy=null;
+                if(proxies.Count>0){var choices=Theme.MakeCombo(new[]{"Взять прокси профиля…"}.Concat(proxies.Select(p=>p.ToString())).ToArray());choices.Width=410;choices.SelectedIndexChanged+=(s,e)=>{selectedProxy=choices.SelectedIndex>0?proxies[choices.SelectedIndex-1]:null;if(selectedProxy!=null&&selectedProxy.status!="missing")proxy.Text=selectedProxy.url;};f.AddControl(choices);}
                 if(f.ShowDialog(this)!=DialogResult.OK)return;
-                store.Change(d=>{var a=d.accounts.First(x=>x.id==account.id);a.name=name.Text.Trim();string url=string.IsNullOrWhiteSpace(proxy.Text)?"":TelegramProxyCatalog.Normalize(proxy.Text);if(a.proxy!=url){a.proxy=url;a.proxy_id="";TelegramHealth.RouteChanged(a);}a.country=country.Text.Trim();a.note=note.Text.Trim();});RefreshData();RefreshProxies();
+                if(selectedProxy?.status=="missing")throw new InvalidOperationException("Прокси профиля ещё не получен. Обновите профили через «Ещё → Из Dolphin».");
+                store.Change(d=>{var a=d.accounts.First(x=>x.id==account.id);a.name=name.Text.Trim();string url=string.IsNullOrWhiteSpace(proxy.Text)?"":TelegramProxyCatalog.Normalize(proxy.Text);bool changed=a.proxy!=url;if(changed){a.proxy=url;a.proxy_id="";TelegramHealth.RouteChanged(a);}if(selectedProxy!=null&&selectedProxy.url==url)a.proxy_id=selectedProxy.id;a.country=country.Text.Trim();a.note=note.Text.Trim();});RefreshData();RefreshProxies();
             }}catch(Exception e){Failure(e);}
         }
         void RemoveSelected() {

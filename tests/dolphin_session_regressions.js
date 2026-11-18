@@ -52,6 +52,59 @@ const session = require("../tools/uploader/dolphin-session");
     }, report, { delay:async()=>{} });
     assert.equal(recovered,endpoint);
     assert.equal(retry,2);
-    console.log("OK: Dolphin session (persisted reuse, stale/wrong profile, bounded retry, auth, non-destructive failure)");
+    if (process.platform === "win32") {
+      const appDataDir = path.join(dir, "appdata");
+      const profileJob = { ...job, profileId: "836981176" };
+      const profileDir = path.join(appDataDir, "dolphin_anty", "browser_profiles", profileJob.profileId, "data_dir");
+      fs.mkdirSync(profileDir, { recursive: true });
+      const activePortFile = path.join(profileDir, "DevToolsActivePort");
+      const liveEndpoint = `ws://127.0.0.1:${port}/devtools/browser/${browserId}`;
+      const activePort = `${port}\r\n/devtools/browser/${browserId}\r\n`;
+      const alreadyRunning = async apiPath => {
+        assert(apiPath.endsWith(`/${profileJob.profileId}/start?automation=1`));
+        attempts++;
+        return { ok: false, status: 409, data: { code: "PROFILE_ALREADY_RUNNING" } };
+      };
+      let attachCount = 0;
+      const options = { appDataDir, maxAttempts: 1, onAttached: () => { attachCount++; } };
+      // A stale cache must not prevent recovery from this exact profile's file.
+      session.saveEndpoint(profileJob, dir, endpoint, report);
+      fs.writeFileSync(activePortFile, activePort);
+      attempts = 0;
+      assert.equal(await session.startOrAttach(profileJob, dir, alreadyRunning, report, options), liveEndpoint);
+      assert.equal(attempts, 1);
+      assert.equal(attachCount, 1);
+      assert.equal(JSON.parse(fs.readFileSync(session.cachePath(profileJob, dir), "utf8")).endpoint, liveEndpoint);
+      fs.unlinkSync(activePortFile);
+      assert.equal(await session.startOrAttach(profileJob, dir, () => { throw new Error("must reuse recovered cache"); }, report, options), liveEndpoint);
+      assert.equal(attachCount, 2);
+      fs.unlinkSync(session.cachePath(profileJob, dir));
+      // Missing file, malformed port/path, and a stale browser UUID cannot attach.
+      for (const contents of [null, `0\n/devtools/browser/${browserId}`, `65536\n/devtools/browser/${browserId}`,
+        `${port}x\n/devtools/browser/${browserId}`, `${port}\n/json/version`, `${port}\n/devtools/browser/stale-browser`]) {
+        if (contents !== null) fs.writeFileSync(activePortFile, contents);
+        await assert.rejects(session.startOrAttach(profileJob, dir, alreadyRunning, report, options), /Профиль открыт.*CDP/);
+        assert.equal(attachCount, 2);
+        assert.equal(fs.existsSync(session.cachePath(profileJob, dir)), false);
+      }
+      fs.writeFileSync(activePortFile, activePort);
+      // Another profile's file is not a fallback, nor is a traversing profile ID.
+      for (const profileId of ["222", "../836981176", "836981176\n"]) {
+        await assert.rejects(session.startOrAttach({ ...profileJob, profileId }, dir,
+          async () => ({ ok: false, status: 409, data: { code: "PROFILE_ALREADY_RUNNING" } }), report, options), /Профиль открыт.*CDP/);
+      }
+      // A valid file is consulted only for ALREADY_RUNNING, not other API failures.
+      await assert.rejects(session.startOrAttach(profileJob, dir,
+        async () => ({ ok: false, status: 500, data: {} }), report, options), /не подтвердил подключение/);
+      assert.equal(attachCount, 2);
+      assert.equal(fs.existsSync(session.cachePath(profileJob, dir)), false);
+      // Keep the caller's existing three-attempt limit; add no recovery retries.
+      attempts = 0;
+      fs.unlinkSync(activePortFile);
+      await assert.rejects(session.startOrAttach(profileJob, dir, alreadyRunning, report,
+        { ...options, maxAttempts: 3, delay: async () => {} }), /Профиль открыт.*CDP/);
+      assert.equal(attempts, 3);
+    }
+    console.log("OK: Dolphin session (persisted reuse, profile-file recovery, UUID validation, bounded retry, auth, non-destructive failure)");
   } finally { await new Promise(resolve=>server.close(resolve)); fs.rmSync(dir,{recursive:true,force:true}); }
 })().catch(e=>{ console.error(e); process.exitCode=1; });

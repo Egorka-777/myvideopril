@@ -1,10 +1,38 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace VideoBatch {
     public static class ProcessingEngine {
         static string N(double value) { return Core.N(value); }
+        // Shared by every processing entry point. Filters remain on the CPU;
+        // only the final H.264 encode is moved to a tested hardware encoder.
+        public static async Task Accelerate(string ffmpeg,List<string> args,int width,int height,CancellationToken ct,Action<string> status=null,AssemblyRenderContext context=null) {
+            int codec=args.IndexOf("-c:v");
+            if(codec<0 || args[codec+1]!="libx264")return; // Remux/copy paths are untouched.
+            context=context??new AssemblyRenderContext();
+            string work=Path.Combine(Path.GetTempPath(),"vb-encoder-"+Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(work);
+            try {await AssemblyRender.SelectEncoder(new AssemblyTemplate {Width=width,Height=height,Fps=30,RenderMode="auto"},ffmpeg,work,context,ct).ConfigureAwait(false);}
+            finally {Directory.Delete(work,true);}
+            string encoder=context.Encoder;
+            status?.Invoke(encoder=="libx264"?"Кодирование: процессор (GPU-кодировщик недоступен)":"Кодирование: видеокарта · "+encoder+"; фильтры: процессор");
+            AppDiagnostics.Write("Processing","","","encoder",encoder,"info");
+            if(encoder=="libx264")return;
+            args[codec+1]=encoder;
+            int preset=args.IndexOf("-preset");
+            if(preset>=0){if(encoder=="h264_amf")args.RemoveRange(preset,2);else args[preset+1]=encoder=="h264_nvenc"?"p4":"fast";}
+            int quality=args.IndexOf("-crf");
+            if(quality>=0) {
+                string value=args[quality+1];args.RemoveRange(quality,2);
+                if(encoder=="h264_nvenc")args.InsertRange(quality,new[]{"-rc","vbr","-cq",value,"-b:v","0"});
+                else if(encoder=="h264_qsv")args.InsertRange(quality,new[]{"-global_quality",value});
+                else args.InsertRange(quality,new[]{"-quality","speed","-rc","cqp","-qp_i",value,"-qp_p",value});
+            } else if(encoder=="h264_amf")args.InsertRange(args.Count-1,new[]{"-quality","speed"});
+        }
         public static void Apply(Profile p, ProcessingSettings settings, Media media, Random random, DateTime now) {
             if (settings == null || !settings.IsEnabled) return;
             settings.Validate();
@@ -36,6 +64,13 @@ namespace VideoBatch {
                 ModulationFrequency = settings.ModulationFrequency.Sample(random), NoiseSeed = random.Next(),
                 FilmDustSeed = random.Next()
             };
+            s.Gamma=settings.Gamma.Sample(random,100)/100;
+            s.RedShift=settings.RedShift.Sample(random,0)/100; s.GreenShift=settings.GreenShift.Sample(random,0)/100; s.BlueShift=settings.BlueShift.Sample(random,0)/100;
+            s.Geq=settings.Geq.Sample(random,0); s.TemporalBlend=settings.TemporalBlend.Sample(random,0)/100;
+            s.BlurFrame=settings.BlurFrame.Sample(random,100)/100; s.ColorLut=settings.ColorLut.Sample(random,0)/100; s.ColorPreset=settings.ColorPreset;
+            s.Reverb=settings.Reverb.Sample(random,0)/100; s.Flanger=settings.Flanger.Sample(random,0);
+            s.EqLow=settings.EqLow.Sample(random,0); s.EqMid=settings.EqMid.Sample(random,0); s.EqHigh=settings.EqHigh.Sample(random,0);
+            s.Lowpass=settings.Lowpass.Sample(random,0); s.Highpass=settings.Highpass.Sample(random,0);
             if (settings.DeviceMetadata) {
                 var device = ProcessingDevices.Sample(settings.Brands, random);
                 s.Brand = device.Brand; s.Model = device.Model;
@@ -67,7 +102,14 @@ namespace VideoBatch {
             if (Math.Abs(s.Tempo - 1) > .000001) f.AddRange(TempoFilters(s.Tempo));
             if (Math.Abs(s.Volume - 1) > .000001) f.Add("volume=" + N(s.Volume));
             if (s.ModulationDepth > 0) f.Add("volume='if(isnan(t),1,1+" + N(s.ModulationDepth) + "*(0.5-0.5*cos(2*PI*" + N(s.ModulationFrequency) + "*t)))':eval=frame");
-            if (s.Volume > 1 || s.ModulationDepth > 0) f.Add("alimiter=limit=0.95:level=false:latency=1");
+            if(s.Highpass>0)f.Add("highpass=f="+N(s.Highpass));
+            if(s.Lowpass>0)f.Add("lowpass=f="+N(s.Lowpass));
+            if(s.EqLow!=0)f.Add("equalizer=f=120:t=q:w=1:g="+N(s.EqLow));
+            if(s.EqMid!=0)f.Add("equalizer=f=1000:t=q:w=1:g="+N(s.EqMid));
+            if(s.EqHigh!=0)f.Add("equalizer=f=8000:t=q:w=1:g="+N(s.EqHigh));
+            if(s.Reverb>0)f.Add("aecho=in_gain=1:out_gain="+N(1/(1+s.Reverb))+":delays=23|41:decays="+N(s.Reverb*.6)+"|"+N(s.Reverb*.4));
+            if(s.Flanger>0)f.Add("flanger=delay=0:depth=0.1:regen=0:width="+N(s.Flanger)+":speed=0.2");
+            if (s.Volume > 1 || s.ModulationDepth > 0 || s.Reverb>0 || s.Flanger>0 || s.EqLow>0 || s.EqMid>0 || s.EqHigh>0) f.Add("alimiter=limit=0.95:level=false:latency=1");
             f.Add("apad"); f.Add("atrim=duration=" + N(duration)); return string.Join(",", f);
         }
 
@@ -102,6 +144,24 @@ namespace VideoBatch {
             if (p.Gray > 0) vf.Add("hue=s=" + N(1 - p.Gray / 100));
             if (p.Short || Math.Abs(p.Brightness) > .000001 || Math.Abs(p.Contrast - 1) > .000001)
                 vf.Add("eq=brightness=" + N(p.Brightness) + ":contrast=" + N(p.Contrast));
+            if(Math.Abs(s.Gamma-1)>.000001)vf.Add("eq=gamma="+N(s.Gamma));
+            if(s.RedShift!=0 || s.GreenShift!=0 || s.BlueShift!=0)
+                vf.Add("colorchannelmixer=rr="+N(1+s.RedShift)+":gg="+N(1+s.GreenShift)+":bb="+N(1+s.BlueShift));
+            if(s.ColorLut>0) {
+                double k=s.ColorLut;
+                string r="val",g="val",b="val";
+                if(s.ColorPreset=="warm"){r="val*"+N(1+.06*k);b="val*"+N(1-.06*k);}
+                else if(s.ColorPreset=="cool"){r="val*"+N(1-.06*k);b="val*"+N(1+.06*k);}
+                else if(s.ColorPreset=="film"){r=g=b="(val-128)*"+N(1+.12*k)+"+128";}
+                else {r="val*"+N(1+.04*k)+"+"+N(3*k);g="val+"+N(2*k);b="val*"+N(1-.08*k)+"+"+N(4*k);}
+                vf.Add("lutrgb=r='"+r+"':g='"+g+"':b='"+b+"'");
+            }
+            // GEQ changes luma only. Pass chroma planes through instead of evaluating
+            // two identity expressions per pixel; preserve the original yuv444p output.
+            if(s.Geq>0)vf.Add("format=yuv444p,extractplanes=y+u+v[geqY][geqU][geqV];[geqY]geq=lum='clip(lum(X,Y)+"+N(s.Geq)+"*sin(X*0.73+Y*0.37+N*1.7),0,255)'[geqLuma];[geqLuma][geqU][geqV]mergeplanes=0x001020:yuv444p");
+            // Duplicate the first frame before tblend so its one-frame lookback
+            // neither shortens the roll nor shifts audio relative to the image.
+            if(s.TemporalBlend>0)vf.Add("tpad=start=1:start_mode=clone,tblend=all_mode=normal:all_opacity="+N(1-s.TemporalBlend)+",setpts=PTS-STARTPTS");
             if (Math.Abs(s.Sharpness) > .000001) vf.Add("unsharp=5:5:" + N(s.Sharpness / 25) + ":5:5:0");
             if (s.Noise > 0) vf.Add("noise=alls=" + N(s.Noise) + ":allf=t+u:all_seed=" + s.NoiseSeed);
             if (s.FilmDust > 0) {
@@ -117,6 +177,10 @@ namespace VideoBatch {
             // FrameScale's inner scale changes SAR to preserve its input DAR.
             // After pad/crop the output is the requested canvas again, with square pixels.
             vf.Add("setsar=1");
+            if(s.BlurFrame<1) {
+                int fw=Math.Max(2,(int)(w*s.BlurFrame/2)*2),fh=Math.Max(2,(int)(h*s.BlurFrame/2)*2);
+                vf.Add("split=2[frameBackground][frameForeground];[frameBackground]gblur=sigma=12[frameBlur];[frameForeground]scale="+fw+":"+fh+",setsar=1[frameSmall];[frameBlur][frameSmall]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1");
+            }
             bool voice = !string.IsNullOrWhiteSpace(narration), background = !p.Short && !string.IsNullOrWhiteSpace(p.MusicPath);
             bool audio = p.Short || voice || m.HasAudio || background;
             var args = new List<string> { "-hide_banner", "-nostdin", "-n", "-loglevel", "error", "-stats_period", "0.3", "-progress", "pipe:1", "-i", input };

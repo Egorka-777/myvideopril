@@ -16,6 +16,7 @@ namespace VideoBatch {
             public Size Size;
             public string Codec;
             public double Duration;
+            public bool HasAudio;
         }
         static readonly Dictionary<string, Metadata> Cache = new Dictionary<string, Metadata>(StringComparer.OrdinalIgnoreCase);
         public static bool IsAnimated(string path) {
@@ -39,7 +40,7 @@ namespace VideoBatch {
                 if (Math.Abs(rotation) % 180 == 90) { int swap = width; width = height; height = swap; }
                 double duration = Core.Parse(video.duration);
                 if (duration <= 0 && raw.format != null) duration = Core.Parse(raw.format.duration);
-                var result = new Metadata { Length = file.Length, Modified = file.LastWriteTimeUtc.Ticks, Size = new Size(width, height), Codec = video.codec_name, Duration = duration };
+                var result = new Metadata { Length = file.Length, Modified = file.LastWriteTimeUtc.Ticks, Size = new Size(width, height), Codec = video.codec_name, Duration = duration, HasAudio = (raw.streams ?? new ProbeStream[0]).Any(s => s.codec_type == "audio") };
                 Cache[file.FullName] = result;
                 return result;
             }
@@ -48,6 +49,7 @@ namespace VideoBatch {
             if (IsAnimated(path)) return Info(path).Size;
             using (var image = Image.FromFile(path)) return image.Size;
         }
+        public static bool HasAudio(string path) => IsAnimated(path) && Info(path).HasAudio;
         public static double Duration(string path) {
             double seconds = Info(path).Duration;
             if (seconds <= 0) throw new Exception("Не удалось определить длительность анимации: " + path);
@@ -70,6 +72,20 @@ namespace VideoBatch {
                 + "[" + label + "Key]colorkey=0x00ff00:0.3:0.1,alphaextract[" + label + "Mask];"
                 + "[" + label + "Alpha][" + label + "Mask]blend=all_expr='A*B/255'[" + label + "Combined];"
                 + "[" + label + "Rgb][" + label + "Combined]alphamerge,format=rgba";
+        }
+        internal static string CornerFilter(string label, double radius, int width, int height) {
+            radius = Math.Min(radius, Math.Min(width, height) / 2.0);
+            if (radius <= 0) return "";
+            string r = Core.N(radius);
+            string dx = "max(abs(X+0.5-W/2)-(W/2-" + r + "),0)";
+            string dy = "max(abs(Y+0.5-H/2)-(H/2-" + r + "),0)";
+            // Evaluate the geometry once; only multiply the source alpha on subsequent frames.
+            // The source is the framesync master, so its timestamps and finite EOF are retained.
+            return ",format=rgba,split[" + label + "Rgb][" + label + "Alpha];[" + label + "Alpha]alphaextract[" + label + "SourceAlpha];"
+                + "color=c=white:s=" + width + "x" + height + ",format=gray,trim=end_frame=1,"
+                + "geq=lum='255*clip(" + r + "+0.5-sqrt(pow(" + dx + ",2)+pow(" + dy + ",2)),0,1)',loop=loop=-1:size=1:start=0[" + label + "Mask];"
+                + "[" + label + "SourceAlpha][" + label + "Mask]blend=all_mode=multiply:shortest=1[" + label + "Combined];"
+                + "[" + label + "Rgb][" + label + "Combined]alphamerge=shortest=1,format=rgba";
         }
         public static void ApplyGreenScreen(Bitmap image) {
             var data = image.LockBits(new Rectangle(0, 0, image.Width, image.Height), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);

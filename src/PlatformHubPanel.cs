@@ -28,15 +28,18 @@ namespace VideoBatch {
             head.Controls.Add(sub);
             root.Controls.Add(head, 0, 0);
 
-            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Theme.Background, Margin = new Padding(0, 28, 0, 0) };
+            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, BackColor = Theme.Background, Margin = new Padding(0, 28, 0, 0) };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33f));
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33f));
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 33.34f));
             grid.Controls.Add(MakeCard("YouTube", "Загрузка и автопрогрев", AppPlatform.YouTube), 0, 0);
             grid.Controls.Add(MakeCard("TikTok", "Аккаунты и публикации", AppPlatform.TikTok), 1, 0);
             grid.Controls.Add(MakeCard("Telegram", "Аккаунты и приглашения", AppPlatform.Telegram), 0, 1);
             grid.Controls.Add(MakeCard("Видео и монтаж", "Обработка, студия, нарезчик", AppPlatform.Studio), 1, 1);
+            var instagram=Theme.MakeButton("Instagram / Threads",ghost:true,action:()=>PlatformChosen?.Invoke(AppPlatform.Instagram));
+            instagram.Dock=DockStyle.Fill;instagram.Margin=new Padding(10);grid.Controls.Add(instagram,0,2);
             root.Controls.Add(grid, 0, 1);
         }
 

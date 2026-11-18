@@ -6,6 +6,135 @@ using System.Reflection;
 
 namespace VideoBatch {
     public static class AssemblyRegressionTests {
+        public static bool RunTextAndCornerModelTests() {
+            string root = Path.Combine(Path.GetTempPath(), "text-corner-model-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            try {
+                var legacy = new System.Xml.Serialization.XmlSerializer(typeof(AssemblyLayer));
+                var old = (AssemblyLayer)legacy.Deserialize(new StringReader("<AssemblyLayer><Radius>28</Radius></AssemblyLayer>"));
+                if (old.Kind != "image" || old.CornerRadius != 0 || old.Radius != 28) throw new Exception("Legacy corner defaults changed.");
+                string video = Path.Combine(root, "video.mp4"); File.WriteAllText(video, "fixture");
+                var layer = new AssemblyLayer { Kind="text", Text="Привет\nWindows", Font="Arial", FontSize=30, X=.1, Y=.2, Width=.8, Height=.6,
+                    TextColor="#FFCC00", TextOutlineColor="#1200FF", TextOutlineWidth=2, TextBold=true, TextItalic=true, Opacity=.5, CornerRadius=17 };
+                var t = new AssemblyTemplate { Materials=root, Videos=video, Width=180, Height=180, Transition="cut", PackStudioVersion=1 };
+                t.Scenes.Add(new AssemblyScene { Duration=1, Layers=new System.Collections.Generic.List<AssemblyLayer> {layer} });
+                t.GlobalLayers.Add(new AssemblyLayer { Kind="text", Text="Global", FontSize=22 });
+                t.Validate();
+                var plans = AssemblyPlanner.Create(t, new[] { new AssemblyVideo { Path=video, Hash="video", Duration=2 } }, new AssemblyHistory(), new Random(3), 1).Plans;
+                if (plans.Count != 1 || plans[0].Scenes[0].Layers.Count != 1 || plans[0].GlobalLayers.Count != 1 || plans[0].Scenes[0].Layers[0].Asset.Path != "") throw new Exception("Source-free text planning failed.");
+                using (var image = AssemblyRaster.Create(t, new AssemblyLayerPlan { Layer=layer })) {
+                    if (image.GetPixel(0,0).A != 0) throw new Exception("Text canvas is not transparent.");
+                    int colored=0;
+                    for(int y=0;y<image.Height;y++) for(int x=0;x<image.Width;x++) if(image.GetPixel(x,y).A>0) colored++;
+                    if (colored < 100) throw new Exception("Windows font text did not render.");
+                }
+                var key=AssemblyRenderContext.RasterKey(t,new AssemblyLayerPlan {Layer=layer}); layer.Text="Changed";
+                if(key==AssemblyRenderContext.RasterKey(t,new AssemblyLayerPlan {Layer=layer})) throw new Exception("Text raster cache did not invalidate.");
+                key=AssemblyRenderContext.RasterKey(t,new AssemblyLayerPlan {Layer=layer}); layer.TextColor="#00FFFF";
+                if(key==AssemblyRenderContext.RasterKey(t,new AssemblyLayerPlan {Layer=layer})) throw new Exception("Color raster cache did not invalidate.");
+                using(var image=new Bitmap(40,30,System.Drawing.Imaging.PixelFormat.Format32bppArgb)) {
+                    using(var g=Graphics.FromImage(image))g.Clear(Color.FromArgb(128,255,0,0));
+                    AssemblyRaster.ApplyCornerMask(image,10);
+                    if(image.GetPixel(0,0).A!=0 || image.GetPixel(20,15).A!=128 || image.GetPixel(20,0).A!=128)throw new Exception("Rounded mask replaced source alpha.");
+                }
+                AssemblyMarketProfiles.Capture(t,AssemblyProfile.Ru);
+                string file=Path.Combine(root,"settings.xml");AssemblyFiles.Save(file,t);
+                var copy=AssemblyFiles.Load<AssemblyTemplate>(file);AssemblyMarketProfiles.Apply(copy,AssemblyProfile.Ru);
+                var restored=copy.Scenes[0].Layers[0];
+                if(!restored.IsText || restored.Text!=layer.Text || restored.TextColor!=layer.TextColor || restored.TextOutlineColor!=layer.TextOutlineColor || restored.TextOutlineWidth!=2 || !restored.TextBold || !restored.TextItalic || restored.CornerRadius!=17)throw new Exception("Text/corner profile or XML settings lost.");
+                AssemblyWorkspace.Prepare(copy);
+                if(copy.Scenes[0].Layers[0].Source!="")throw new Exception("Workspace assigned a source pack to text.");
+                Console.WriteLine("Text/corner model PASS: legacy XML, source-free scene/global planning, transparent Windows text, cache, alpha mask, profile/XML and workspace.");return true;
+            } finally { Directory.Delete(root,true); }
+        }
+        public static bool RunTextAndCornerRenderTests(string ffmpeg,string probe) {
+            string root=Path.Combine(Path.GetTempPath(),"text-corner-render-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+            var ct=System.Threading.CancellationToken.None;
+            try {
+                string background=Path.Combine(root,"blue.mp4"), still=Path.Combine(root,"overlay.png"), clip=Path.Combine(root,"overlay.mov");
+                Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","color=c=blue:s=180x180:r=30:d=1.2","-c:v","libx264",background},ct).GetAwaiter().GetResult();
+                using(var image=new Bitmap(80,60,System.Drawing.Imaging.PixelFormat.Format32bppArgb)) {
+                    using(var g=Graphics.FromImage(image)) {g.Clear(Color.FromArgb(128,255,0,0));using(var b=new SolidBrush(Color.Lime))g.FillRectangle(b,65,0,15,60);}
+                    image.Save(still,System.Drawing.Imaging.ImageFormat.Png);
+                }
+                Core.Tool(ffmpeg,new[]{"-v","error","-y","-loop","1","-i",still,"-t","1","-r","30","-c:v","qtrle","-pix_fmt","argb",clip},ct).GetAwaiter().GetResult();
+                foreach(string source in new[]{still,clip}) foreach(double radius in new[]{0d,18d}) {
+                    string suffix=Path.GetExtension(source).Substring(1)+radius;
+                    var layer=new AssemblyLayer {Source=source,X=.2,Y=.3,Width=.6,Height=.4,PreserveAspectRatio=false,CornerRadius=radius,Opacity=.6,GreenScreen=true,
+                        Start=.1,End=1.1,AppearanceTransition="fade",AppearanceDuration=.2,ExitTransition="fade",ExitDuration=.2};
+                    var t=new AssemblyTemplate {Width=180,Height=180,Fps=30,SceneTimingVersion=1,Transition="cut",RenderMode="cpu"};
+                    var scene=new AssemblyScene {Duration=1.2};t.Scenes.Add(scene);
+                    var plan=new AssemblyPlan();var s=new AssemblyScenePlan {Scene=scene,Video=new AssemblyVideo {Path=background,Duration=1.2}};plan.Scenes.Add(s);
+                    s.Layers.Add(new AssemblyLayerPlan {Layer=layer,Asset=new AssemblyAsset {Path=source,Hash=AssemblyFiles.Hash(source)}});
+                    var text=new AssemblyLayer {Kind="text",Text="TEXT",Font="Arial",FontSize=26,TextBold=true,TextColor="#FFFFFF",X=0,Y=0,Width=1,Height=.22};
+                    plan.GlobalLayers.Add(new AssemblyLayerPlan {Layer=text});
+                    AssemblyTimeline.Complete(t,plan,new Random(1));
+                    string output=Path.Combine(root,suffix+".mp4");
+                    AssemblyRender.Run(t,plan,ffmpeg,probe,output,Path.Combine(root,suffix),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                    Color Sample(double at,int x,int y) {
+                        string png=Path.Combine(root,"frame.png");
+                        Core.Tool(ffmpeg,new[]{"-v","error","-y","-ss",Core.N(at),"-i",output,"-frames:v","1",png},ct).GetAwaiter().GetResult();
+                        using(var image=new Bitmap(png))return image.GetPixel(x,y);
+                    }
+                    var center=Sample(.6,90,90);var corner=Sample(.6,38,56);var keyed=Sample(.6,135,90);
+                    if(center.R<60 || center.R>95 || center.B<150 || center.B>195)throw new Exception(suffix+" source alpha/opacity incorrect: "+center);
+                    if(radius>0 ? corner.R>15 || corner.B<225 : corner.R<50)throw new Exception(suffix+" corner mask/legacy square incorrect: "+corner);
+                    if(keyed.R>15 || keyed.G>15 || keyed.B<225)throw new Exception(suffix+" chromakey alpha incorrect: "+keyed);
+                    if(Sample(.133,90,90).R>=center.R-10 || Sample(1.066,90,90).R>=center.R-10)throw new Exception(suffix+" fade animation lost.");
+                    string textFrame=Path.Combine(root,"text.png");Core.Tool(ffmpeg,new[]{"-v","error","-y","-ss","0.6","-i",output,"-frames:v","1",textFrame},ct).GetAwaiter().GetResult();
+                    using(var image=new Bitmap(textFrame)) {
+                        int white=0;for(int y=0;y<40;y++)for(int x=0;x<180;x++){var c=image.GetPixel(x,y);if(c.R>190 && c.G>190)white++;}
+                        if(white<80)throw new Exception("Source-free global text missing in full render.");
+                    }
+                }
+                Console.WriteLine("Text/corner real FFmpeg PASS: PNG and animated alpha MOV, radius 0/18 after scaling, opacity, chromakey, entrance/exit fades and source-free global Windows text.");return true;
+            } finally {Directory.Delete(root,true);}
+        }
+        public static bool RunCornerMaskFilterTests(string ffmpeg) {
+            string root=Path.Combine(Path.GetTempPath(),"corner-mask-filter-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+            var ct=System.Threading.CancellationToken.None;
+            string Legacy(string label,double radius,int width,int height) {
+                string r=Core.N(Math.Min(radius,Math.Min(width,height)/2.0));
+                string dx="max(abs(X+0.5-W/2)-(W/2-"+r+"),0)",dy="max(abs(Y+0.5-H/2)-(H/2-"+r+"),0)";
+                return ",format=rgba,split["+label+"Rgb]["+label+"Alpha];["+label+"Alpha]alphaextract,geq=lum='lum(X,Y)*clip("+r+"+0.5-sqrt(pow("+dx+",2)+pow("+dy+",2)),0,1)'["+label+"Mask];["+label+"Rgb]["+label+"Mask]alphamerge,format=rgba";
+            }
+            try {
+                if(AssemblyOverlayMedia.CornerFilter("zero",0,41,31)!="")throw new Exception("Zero radius must remain a no-op.");
+                foreach(string rate in new[]{"1","24","30","60","30000/1001"}) foreach(double radius in new[]{7.25,100d}) {
+                    const int width=41,height=31,frames=6;
+                    string input="testsrc=s=41x31:r="+rate+",format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='mod(X*7+Y*11+N*31,256)',trim=end_frame=6,setpts=PTS+2/TB";
+                    byte[][] alpha=new byte[2][];string[][] timestamps=new string[2][];
+                    for(int variant=0;variant<2;variant++) {
+                        string file=Path.Combine(root,"alpha"+variant+".raw");
+                        string filter="[0:v]null"+(variant==0?Legacy("old",radius,width,height):AssemblyOverlayMedia.CornerFilter("new",radius,width,height))+",alphaextract,split[raw][hash]";
+                        string hash=Core.Tool(ffmpeg,new[]{"-v","error","-y","-filter_complex_threads","1","-f","lavfi","-i",input,"-filter_complex",filter,
+                            "-map","[raw]","-fps_mode","passthrough","-c:v","rawvideo","-f","rawvideo",file,"-map","[hash]","-fps_mode","passthrough","-f","framemd5","-"},ct,null,30).GetAwaiter().GetResult();
+                        alpha[variant]=File.ReadAllBytes(file);
+                        timestamps[variant]=hash.Split('\n').Where(x=>x.Length>0 && x[0]!='#').Select(x=>string.Join(",",x.Split(',').Take(5))).ToArray();
+                    }
+                    if(alpha.Any(x=>x.Length!=width*height*frames) || timestamps[0].Length!=frames || !timestamps[0].SequenceEqual(timestamps[1]))throw new Exception("Corner filter changed finite EOF, frame count or timestamps at "+rate+" fps.");
+                    int antialias=0;
+                    for(int i=0;i<alpha[0].Length;i++) {
+                        if(Math.Abs(alpha[0][i]-alpha[1][i])>1)throw new Exception("Corner alpha differs by more than one quantization level at "+rate+" fps, radius "+radius+", byte "+i);
+                        int pixel=i%(width*height),x=pixel%width,y=pixel/width,n=i/(width*height);
+                        int sourceAlpha=(x*7+y*11+n*31)%256;
+                        if(x==width/2 && y==height/2 && alpha[1][i]!=sourceAlpha)throw new Exception("Corner filter replaced interior source alpha.");
+                        if(alpha[1][i]>0 && alpha[1][i]<sourceAlpha)antialias++;
+                    }
+                    if(antialias==0)throw new Exception("Rounded edge antialiasing disappeared.");
+                }
+                double[] seconds=new double[2];
+                for(int variant=0;variant<2;variant++) {
+                    string filter="[0:v]null"+(variant==0?Legacy("old",90,1080,1920):AssemblyOverlayMedia.CornerFilter("new",90,1080,1920))+"[out]";
+                    var clock=System.Diagnostics.Stopwatch.StartNew();
+                    Core.Tool(ffmpeg,new[]{"-v","error","-filter_complex_threads","1","-f","lavfi","-i","color=c=red@0.5:s=1080x1920:r=30,format=rgba,trim=end_frame=12",
+                        "-filter_complex",filter,"-map","[out]","-f","null","-"},ct,null,120).GetAwaiter().GetResult();
+                    seconds[variant]=clock.Elapsed.TotalSeconds;
+                }
+                Console.WriteLine("Corner mask real FFmpeg PASS: finite EOF without output duration/frame cap, unchanged shifted PTS and 6 frames at 1/24/30/60/29.97 fps, odd dimensions, fractional/clamped radius, varying source alpha and antialias <=1 level.");
+                Console.WriteLine("Corner mask benchmark 1080x1920, 12 frames, one filter thread, process wall time: legacy="+Core.N(seconds[0])+"s optimized="+Core.N(seconds[1])+"s speedup="+Core.N(seconds[0]/seconds[1])+"x.");
+                return true;
+            } finally {Directory.Delete(root,true);}
+        }
         public static bool RunPerSceneDurationRenderTests(string ffmpeg,string probe) {
             string root=Path.Combine(Path.GetTempPath(),"scene-duration-render-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             var ct=System.Threading.CancellationToken.None;
@@ -22,7 +151,59 @@ namespace VideoBatch {
                 string output=Path.Combine(root,"output.mp4");AssemblyRender.Run(t,p,ffmpeg,probe,output,Path.Combine(root,"work"),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
                 var media=Core.VideoInfo(Core.Probe(probe,output,ct).GetAwaiter().GetResult());
                 if(Math.Abs(media.VideoDuration-4.6)>.06 || !media.HasAudio)throw new Exception("Mixed per-scene render duration/audio incorrect: "+media.VideoDuration);
-                Console.WriteLine("Per-scene real FFmpeg PASS: full 1.2s clip + fixed 1s scene + full 1.8s clip + two transitions = 4.6s, audio present.");return true;
+                Console.WriteLine("Per-scene real FFmpeg PASS: full 1.2s clip + fixed 1s scene + full 1.8s clip + two transitions = 4.6s, audio present.");
+                t.Transition="cut";t.Scenes.Clear();
+                var objectScene=new AssemblyScene {Duration=12.5,DurationByVideo=true};t.Scenes.Add(objectScene);
+                var pack=new AssemblyLayer {Name="Объект 1",Source=root,X=0,Y=.5,Width=1,Height=.5};
+                var extra=new AssemblyLayer {Name="Объект 2",X=0,Y=0,Width=.2,Height=.2};
+                objectScene.Layers.AddRange(new[]{pack,extra});
+                foreach(double seconds in new[]{2.4,1.8}) {
+                    var selected=new AssemblyScenePlan {Scene=objectScene,Video=p.Scenes[0].Video};
+                    selected.Layers.Add(new AssemblyLayerPlan {Layer=pack,Asset=new AssemblyAsset {Path=Path.Combine(root,seconds==2.4?"source1.mp4":"source2.mp4")}});
+                    selected.Layers.Add(new AssemblyLayerPlan {Layer=extra,Asset=new AssemblyAsset {Path=Path.Combine(root,"source1.mp4")}});
+                    var objectPlan=new AssemblyPlan();objectPlan.Scenes.Add(selected);
+                    AssemblyTimeline.Complete(t,objectPlan,new Random(1));AssemblyTimeline.ApplyVideoDuration(t,objectPlan);
+                    if(Math.Abs(objectPlan.RollDuration(t)-seconds)>.001)throw new Exception("Object duration still follows background or second object");
+                    string objectOutput=Path.Combine(root,"object-"+Core.N(seconds)+".mp4");
+                    AssemblyRender.Run(t,objectPlan,ffmpeg,probe,objectOutput,Path.Combine(root,"work-"+Core.N(seconds)),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                    var actual=Core.VideoInfo(Core.Probe(probe,objectOutput,ct).GetAwaiter().GetResult());
+                    if(Math.Abs(actual.VideoDuration-seconds)>.06)throw new Exception("Object-driven render duration incorrect: "+actual.VideoDuration);
+                }
+                t.Transition="fade";
+                var previewScene=new AssemblyScene {IsPreview=true,Duration=.5};
+                var previewObject=new AssemblyLayer {Name="Preview video",X=0,Y=0,Width=1,Height=1};
+                previewScene.Layers.Add(previewObject);
+                t.Scenes.Insert(0,previewScene);
+                var introPlan=new AssemblyScenePlan {Scene=previewScene,Video=p.Scenes[0].Video};
+                introPlan.Layers.Add(new AssemblyLayerPlan {Layer=previewObject,Asset=new AssemblyAsset {Path=Path.Combine(root,"source1.mp4")}});
+                var mainPlan=new AssemblyScenePlan {Scene=objectScene,Video=p.Scenes[0].Video};
+                mainPlan.Layers.Add(new AssemblyLayerPlan {Layer=pack,Asset=new AssemblyAsset {Path=Path.Combine(root,"source2.mp4")}});
+                var previewPlan=new AssemblyPlan();previewPlan.Scenes.AddRange(new[]{introPlan,mainPlan});
+                AssemblyTimeline.Complete(t,previewPlan,new Random(1));
+                AssemblySpeechPlan.Prepare(t,previewPlan,ffmpeg,probe,root,ct).GetAwaiter().GetResult();
+                AssemblySpeechPlan.Prepare(t,previewPlan,ffmpeg,probe,root,ct).GetAwaiter().GetResult();
+                if(Math.Abs(introPlan.ContentSeconds-2.4)>.001 || Math.Abs(mainPlan.ContentSeconds-1.8)>.001 || Math.Abs(AssemblyTimeline.MainStart(t,previewPlan)-2.7)>.001)throw new Exception("Object preview/main source durations or transition boundary incorrect");
+                string previewOutput=Path.Combine(root,"preview-object.mp4");
+                AssemblyRender.Run(t,previewPlan,ffmpeg,probe,previewOutput,Path.Combine(root,"preview-work"),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                if(Math.Abs(Core.VideoInfo(Core.Probe(probe,previewOutput,ct).GetAwaiter().GetResult()).VideoDuration-4.5)>.06)throw new Exception("Full preview object + transition + main object render duration incorrect");
+                Console.WriteLine("Preview object real FFmpeg PASS: stored .5s scene plays full 2.4s object, .3s transition, full 1.8s main object; repeated preparation preserves timing.");
+                var migration=new AssemblyTemplate {Materials=Path.Combine(root,"materials"),Videos=Path.Combine(root,"source0.mp4"),Backgrounds=Path.Combine(root,"source1.mp4"),PackStudioVersion=1,ObjectStudioVersion=1};
+                AssemblyWorkspace.Prepare(migration);
+                if(migration.Backgrounds!="" || AssemblyFiles.Pool(migration.Resolve(migration.Videos),AssemblyFiles.VideoExtensions).Count!=2)throw new Exception("Background sources not unified");
+                string migrated=migration.Videos;AssemblyWorkspace.Prepare(migration);
+                if(migration.Videos!=migrated)throw new Exception("Repeated background migration");
+                var emptyOwn=new AssemblyScene {VideoMode="own",Videos=Path.Combine(root,"empty-own")};
+                Directory.CreateDirectory(emptyOwn.Videos);
+                if(migration.VideoSource(emptyOwn)!=emptyOwn.Videos)throw new Exception("Cleared scene silently reused shared background");
+                migration.Videos="";migration.Scenes.Add(objectScene);
+                if(migration.VideoSource(objectScene)!=root)throw new Exception("Scene objects fallback without background failed");
+                AssemblyWorkspace.ClearBackgroundVideos(migration);
+                if(AssemblyFiles.Pool(migration.Resolve(migration.Videos),AssemblyFiles.VideoExtensions).Count!=0 || migration.Backgrounds!="")throw new Exception("Background clear retained media");
+                migration.Scenes.Clear();AssemblyWorkspace.Insert(migration,0);AssemblyWorkspace.Prepare(migration);
+                var restored=Store.Clone(migration);AssemblyWorkspace.Prepare(restored);
+                if(AssemblyFiles.Pool(restored.Resolve(restored.VideoSource(restored.Scenes[0])),AssemblyFiles.VideoExtensions).Count!=0)throw new Exception("Cleared video returned after new scene/reload");
+                Console.WriteLine("Clear PASS: own source does not fall back to shared video; clear background + remove scenes + add scene + XML reload stays empty.");
+                Console.WriteLine("Object duration real FFmpeg PASS: 1.2s main video, first object variants 2.4/1.8s, independent second object; output follows selected first object. Background migration and object-only source fallback PASS.");return true;
             } finally {Directory.Delete(root,true);}
         }
         public static bool RunPerSceneDurationTests() {
@@ -35,14 +216,14 @@ namespace VideoBatch {
             var p=new AssemblyPlan();
             foreach(var scene in t.Scenes)p.Scenes.Add(new AssemblyScenePlan {Scene=scene,Video=new AssemblyVideo {Duration=scene==a?18:scene==c?35:10}});
             AssemblyTimeline.Complete(t,p,new Random(1)); AssemblyTimeline.ApplyVideoDuration(t,p);
-            if(AssemblyTimeline.SceneSeconds(p.Scenes[0])!=3 || AssemblyTimeline.SceneSeconds(p.Scenes[1])!=18 || AssemblyTimeline.SceneSeconds(p.Scenes[2])!=5 || AssemblyTimeline.SceneSeconds(p.Scenes[3])!=35 || Math.Abs(p.RollDuration(t)-61.9)>.001)throw new Exception("Per-scene duration or transition sum failed");
+            if(AssemblyTimeline.SceneSeconds(p.Scenes[0])!=10 || AssemblyTimeline.SceneSeconds(p.Scenes[1])!=18 || AssemblyTimeline.SceneSeconds(p.Scenes[2])!=5 || AssemblyTimeline.SceneSeconds(p.Scenes[3])!=35 || Math.Abs(p.RollDuration(t)-68.9)>.001)throw new Exception("Per-scene duration or transition sum failed");
             var xml=new System.Xml.Serialization.XmlSerializer(typeof(AssemblyTemplate));var text=new StringWriter();xml.Serialize(text,t);
             var copy=(AssemblyTemplate)xml.Deserialize(new StringReader(text.ToString()));
             AssemblyMarketProfiles.Capture(copy,AssemblyProfile.Ru);AssemblyMarketProfiles.Apply(copy,AssemblyProfile.Ru);
             if(!copy.Scenes[1].DurationByVideo || copy.Scenes[2].DurationByVideo || !copy.Scenes[3].DurationByVideo)throw new Exception("Scene timing XML/profile copy failed");
             var legacy=new AssemblyTemplate {DurationByVideo=true};legacy.Scenes.AddRange(new[]{new AssemblyScene {IsPreview=true},new AssemblyScene(),new AssemblyScene()});
             legacy.MigrateVideoDuration();if(legacy.DurationByVideo || !legacy.Scenes[1].DurationByVideo || legacy.Scenes[2].DurationByVideo)throw new Exception("Legacy duration migration failed");
-            Console.WriteLine("Per-scene duration PASS: fixed intro, 18s video, fixed 5s scene, 35s video, transitions, XML and legacy migration.");return true;
+            Console.WriteLine("Per-scene duration PASS: full 10s intro, 18s video, fixed 5s scene, 35s video, transitions, XML and legacy migration.");return true;
         }
         public static bool RunImageAppearanceTests() {
             string root = Path.Combine(Path.GetTempPath(), "image-timing-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
@@ -76,6 +257,71 @@ namespace VideoBatch {
                 return true;
             } finally { Directory.Delete(root,true); }
         }
+        public static bool RunSplitSeamRenderTests(string ffmpeg, string probe) {
+            string root = Path.Combine(Path.GetTempPath(), "split-seam-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var ct = System.Threading.CancellationToken.None;
+            try {
+                string red = Path.Combine(root, "red.mp4"), blue = Path.Combine(root, "blue.mp4");
+                foreach (string color in new[] { "red", "blue" })
+                    Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=" + color + ":s=320x240:r=20:d=0.4", "-c:v", "libx264", Path.Combine(root, color + ".mp4") }, ct).GetAwaiter().GetResult();
+                foreach (string layout in new[] { "horizontal", "vertical" }) foreach (double ratio in new[] { .3, .7 }) foreach (double softness in new[] { 0d, .5 }) {
+                    var t = new AssemblyTemplate { Width=320, Height=240, Fps=20, SplitLayout=layout, SplitRatio=ratio, SplitSoftness=softness, Transition="cut", RenderMode="cpu", SceneTimingVersion=1 };
+                    bool vertical = AssemblySplit.IsVertical(layout);
+                    AssemblySplit.PaneSizes(t, out _, out _, out int line, out int feather);
+                    if (softness == 0 && feather != 0) throw new Exception("Zero softness is not a hard seam.");
+                    string graph = "[0:v]" + AssemblySplit.PaneFilter(t, false, 1) + "[splitA];[1:v]" + AssemblySplit.PaneFilter(t, true, 1) + "[splitB];" + AssemblySplit.BlendFilter(vertical, line, feather, t.Width, t.Height);
+                    if (!graph.Contains("maskedmerge") || !graph.Contains("trim=end_frame=1") || graph.Contains("blend=all_expr")) throw new Exception("Split lost its precomputed native mask.");
+                    string name = layout + ratio + "-" + softness;
+                    string preview = Path.Combine(root, "preview.png");
+                    Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-filter_complex_threads", "1", "-i", red, "-i", blue, "-filter_complex", graph, "-map", "[split]", "-frames:v", "1", "-threads", "1", preview }, ct).GetAwaiter().GetResult();
+                    void Check(string frame) {
+                        using (var image = new Bitmap(frame)) {
+                            for (int pos = Math.Max(0, line - feather / 2 - 4); pos <= Math.Min((vertical ? t.Height : t.Width) - 1, line + feather / 2 + 4); pos++) {
+                                var c = image.GetPixel(vertical ? t.Width / 2 : pos, vertical ? pos : t.Height / 2);
+                                double weight = feather == 0 ? (pos < line ? 0 : 1) : Math.Max(0, Math.Min(1, (pos - line + feather / 2.0) / feather));
+                                int tolerance = feather == 0 && Math.Abs(pos - line) <= 4 ? 60 : 25;
+                                if (Math.Abs(c.R - 253 * (1 - weight)) > tolerance || Math.Abs(c.B - 254 * weight) > tolerance || c.G > 25 || c.R + c.B < 210)
+                                    throw new Exception(name + " seam contains black or wrong color at " + pos + ": " + c);
+                                if (pos == line && feather > 0 && (c.R < 105 || c.B < 105)) throw new Exception(name + " middle does not contain both videos.");
+                            }
+                        }
+                    }
+                    Check(preview);
+                    var scene = new AssemblyScene { Duration=.4 }; t.Scenes.Add(scene);
+                    var plan = new AssemblyPlan { SecondaryVideo=new AssemblyVideo { Path=blue, Duration=.4 } };
+                    plan.Scenes.Add(new AssemblyScenePlan { Scene=scene, Video=new AssemblyVideo { Path=red, Duration=.4 } });
+                    AssemblyTimeline.Complete(t, plan, new Random(1));
+                    string output = Path.Combine(root, name + ".mp4");
+                    AssemblyRender.Run(t, plan, ffmpeg, probe, output, Path.Combine(root, name), AssemblyRaster.Save, ct, null).GetAwaiter().GetResult();
+                    string framePath = Path.Combine(root, "export.png");
+                    Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-ss", "0.2", "-i", output, "-frames:v", "1", "-threads", "1", framePath }, ct).GetAwaiter().GetResult();
+                    Check(framePath);
+                    var info = Core.VideoInfo(Core.Probe(probe, output, ct).GetAwaiter().GetResult());
+                    if (Math.Abs(info.VideoDuration - .4) > .06) throw new Exception(name + " split changed duration.");
+                }
+                foreach (string layout in new[] { "horizontal", "vertical" }) foreach (double ratio in new[] { .3, .7 }) foreach (double zoom in new[] { 1d, 1.15 }) foreach (bool secondary in new[] { false, true }) {
+                    var t = new AssemblyTemplate { Width=320, Height=240, Fps=20, SplitLayout=layout, SplitRatio=ratio };
+                    string[] frames = new string[2];
+                    for (int variant = 0; variant < 2; variant++) {
+                        t.SplitSoftness = variant == 0 ? 0 : .5;
+                        frames[variant] = Path.Combine(root, "framing" + variant + ".png");
+                        Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x480:r=20:d=0.1", "-vf", AssemblySplit.PaneFilter(t, secondary, zoom), "-frames:v", "1", "-threads", "1", frames[variant] }, ct).GetAwaiter().GetResult();
+                    }
+                    AssemblySplit.PaneSizes(t, out _, out _, out int line, out _);
+                    bool vertical = AssemblySplit.IsVertical(layout);
+                    using (var hard = new Bitmap(frames[0])) using (var soft = new Bitmap(frames[1]))
+                        for (int y = 4; y < t.Height - 4; y += 7) for (int x = 4; x < t.Width - 4; x += 7) {
+                            int pos = vertical ? y : x;
+                            if (secondary ? pos < line + 4 : pos >= line - 4) continue;
+                            var a = hard.GetPixel(x, y); var b = soft.GetPixel(x, y);
+                            if (Math.Abs(a.R-b.R)>4 || Math.Abs(a.G-b.G)>4 || Math.Abs(a.B-b.B)>4) throw new Exception("Soft seam moved/scaled original pane: " + layout + " ratio=" + ratio + " zoom=" + zoom + " secondary=" + secondary + " at " + x + "," + y + " " + a + " vs " + b);
+                        }
+                }
+                Console.WriteLine("Split seam real FFmpeg PASS: preview and full export, both orientations, 30/70 and 70/30, zero/wide softness, RGB gradient without black, unchanged duration and original pane framing/scale at zoom 1/1.15.");
+                return true;
+            } finally { Directory.Delete(root, true); }
+        }
+
         public static bool RunSplitPackTests() {
             string root = Path.Combine(Path.GetTempPath(), "split-packs-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try {
@@ -172,8 +418,18 @@ namespace VideoBatch {
                 var batch = AssemblyPlanner.Create(t, videos, new AssemblyHistory(), new Random(3), 1);
                 if (batch.Plans.Count != 1) throw new Exception("Preview scene planner failed: " + batch.Limit);
                 var plan = batch.Plans[0];
-                if (plan.Scenes.Count != 2 || !plan.Scenes[0].Scene.IsPreview || plan.Scenes[0].ContentSeconds != 2 || plan.Scenes[1].ContentSeconds != 9.1) throw new Exception("Preview/main durations not applied");
-                if (Math.Abs(plan.RenderDuration - (2 + 9.1 + .35)) > .02) throw new Exception("Roll duration with preview: " + plan.RenderDuration);
+                if (plan.Scenes.Count != 2 || !plan.Scenes[0].Scene.IsPreview || plan.Scenes[0].ContentSeconds != 2.4 || plan.Scenes[1].ContentSeconds != 9.1) throw new Exception("Preview/main durations not applied");
+                if (Math.Abs(plan.RenderDuration - (2.4 + 9.1 + t.TransitionSeconds)) > .001) throw new Exception("Roll duration with preview: " + plan.RenderDuration);
+                if (Math.Abs(plan.Scenes[0].RenderDuration - (2.4 + t.TransitionSeconds)) > .001 || Math.Abs(AssemblyTimeline.MainStart(t, plan) - (2.4 + t.TransitionSeconds)) > .001) throw new Exception("Full preview lost transition padding/main start");
+                t.DurationByVideo = false;
+                preview.Duration = 5; // Stored editor hint must not reject or extend a shorter selected clip.
+                batch = AssemblyPlanner.Create(t, videos, new AssemblyHistory(), new Random(3), 1);
+                if (batch.Plans.Count != 1) throw new Exception("Short preview source rejected: " + batch.Limit);
+                plan = batch.Plans[0];
+                if (!t.HasVideoDuration || !t.UsesVideoDuration(preview) || plan.Scenes[0].ContentSeconds != 2.4 || AssemblyTimeline.SceneSeconds(plan.Scenes[1]) != 5) throw new Exception("Preview-only source timing changed manual main duration");
+                AssemblySpeechPlan.Prepare(t, plan, "", "", temp, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                AssemblySpeechPlan.Prepare(t, plan, "", "", temp, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                if (plan.Scenes[0].ContentSeconds != 2.4 || Math.Abs(plan.RollDuration(t) - (2.4 + 5 + t.TransitionSeconds)) > .001) throw new Exception("Repeated preparation truncated preview");
                 t.Scenes[1].IsPreview = true;
                 try { t.Validate(); return false; } catch (Exception) { }
                 return true;
@@ -452,6 +708,84 @@ namespace VideoBatch {
             AssemblySpeechPlan.NormalizeSceneVoiceModes(bind);
             if (bind.Scenes[1].VoiceMode != "own" || bind.Scenes[0].VoiceMode != "none" || bind.Scenes[1].Voiceover != sceneTwo) throw new Exception("Scene voice folder discovery failed");
             return true;
+        }
+        public static bool RunTextOverlayUiTests() {
+            string previous=Store.Root, temp=Path.Combine(Path.GetTempPath(),"text-overlay-ui-"+Guid.NewGuid().ToString("N"));
+            try {
+                Directory.CreateDirectory(temp); Store.Root=temp;
+                var initial=AssemblyTemplate.Defaults(); initial.Materials=Path.Combine(temp,"materials"); initial.Output=Path.Combine(temp,"output");
+                AssemblyFiles.Save(Path.Combine(temp,"assembly-template.xml"),initial);
+                using(var window=new AssemblyWindow(true)) {
+                    window.Show(); System.Windows.Forms.Application.DoEvents();
+                    Exception failure=null;
+                    using(var timer=new System.Windows.Forms.Timer {Interval=60}) {
+                        timer.Tick+=(s,e) => {
+                            var dialog=System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().FirstOrDefault(f=>f.Name=="AssemblyTextDialog");
+                            if(dialog==null)return; timer.Stop();
+                            try {
+                                All(dialog).OfType<System.Windows.Forms.TextBox>().Single(c=>c.Name=="OverlayText").Text="Своя надпись\nВторая строка";
+                                var font=All(dialog).OfType<System.Windows.Forms.ComboBox>().Single(c=>c.Name=="OverlayFont");
+                                using(var fonts=new System.Drawing.Text.InstalledFontCollection()) if(fonts.Families.Any(f=>!font.Items.Contains(f.Name)))throw new Exception("System fonts missing");
+                                All(dialog).OfType<System.Windows.Forms.NumericUpDown>().Single(c=>c.Name=="OverlayFontSize").Value=72;
+                                All(dialog).OfType<System.Windows.Forms.CheckBox>().Single(c=>c.Name=="OverlayItalic").Checked=true;
+                                All(dialog).OfType<System.Windows.Forms.NumericUpDown>().Single(c=>c.Name=="OverlayOutlineWidth").Value=3;
+                                All(dialog).OfType<System.Windows.Forms.ComboBox>().Single(c=>c.Name=="OverlayPlate").SelectedIndex=1;
+                                All(dialog).OfType<System.Windows.Forms.NumericUpDown>().Single(c=>c.Name=="OverlayPlateOpacity").Value=65;
+                                All(dialog).OfType<System.Windows.Forms.NumericUpDown>().Single(c=>c.Name=="OverlayLineSpacing").Value=120;
+                                All(dialog).OfType<System.Windows.Forms.Button>().Single(c=>c.Name=="ApplyOverlayText").PerformClick();
+                            } catch(Exception ex) { failure=ex; dialog.DialogResult=System.Windows.Forms.DialogResult.Cancel; }
+                        };
+                        timer.Start(); Invoke(window,"AddTextObject");
+                    }
+                    if(failure!=null)throw failure;
+                    var current=(AssemblyTemplate)Field(window,"template"); var layer=current.Scenes[0].Layers.Single(l=>l.Kind=="text");
+                    if(layer.Text!="Своя надпись\nВторая строка" || layer.FontSize!=72 || !layer.TextItalic || layer.TextOutlineWidth!=3 || layer.TextPlate!="rounded" || layer.TextPlateOpacity!=65 || layer.TextLineSpacing!=120)throw new Exception("Text dialog did not apply");
+                    var canvas=(AssemblyCanvas)Field(window,"canvas");
+                    var images=(System.Collections.Generic.List<Bitmap>)Field(canvas,"images");
+                    if(images.Count==0 || images[images.Count-1]==null)throw new Exception("Text canvas raster missing");
+                    var layerPlan=new AssemblyLayerPlan {Layer=layer,Asset=new AssemblyAsset {Path=""}};
+                    string rasterKey=AssemblyRenderContext.RasterKey(current,layerPlan);
+                    layer.TextPlateOpacity=64;
+                    if(rasterKey==AssemblyRenderContext.RasterKey(current,layerPlan))throw new Exception("Plate opacity missing in raster cache key");
+                    layer.TextPlateOpacity=65; layer.TextLineSpacing=119;
+                    if(rasterKey==AssemblyRenderContext.RasterKey(current,layerPlan))throw new Exception("Line spacing missing in raster cache key");
+                    layer.TextLineSpacing=120;
+                    var box=(RectangleF)typeof(AssemblyCanvas).GetMethod("Box",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(canvas,new object[]{layer});
+                    var point=Point.Round(new PointF(box.Left+box.Width/2,box.Top+box.Height/2)); double x=layer.X,y=layer.Y;
+                    typeof(AssemblyCanvas).GetMethod("OnMouseDown",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(canvas,new object[]{new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,1,point.X,point.Y,0)});
+                    typeof(AssemblyCanvas).GetMethod("OnMouseMove",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(canvas,new object[]{new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,0,point.X+25,point.Y+20,0)});
+                    typeof(AssemblyCanvas).GetMethod("OnMouseUp",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(canvas,new object[]{new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left,1,point.X+25,point.Y+20,0)});
+                    if(layer.X<=x || layer.Y<=y)throw new Exception("Free text drag failed");
+                    using(var timer=new System.Windows.Forms.Timer {Interval=60}) {
+                        timer.Tick+=(s,e) => {
+                            var dialog=System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().FirstOrDefault(f=>f.Name=="AssemblyTextDialog");
+                            if(dialog==null)return; timer.Stop();
+                            All(dialog).OfType<System.Windows.Forms.TextBox>().Single(c=>c.Name=="OverlayText").Text="Cancelled change"; dialog.DialogResult=System.Windows.Forms.DialogResult.Cancel;
+                        }; timer.Start(); Invoke(window,"EditTextObject");
+                    }
+                    if(layer.Text=="Cancelled change")throw new Exception("Cancel changed saved text");
+                    var image=new AssemblyLayer {Name="Radius test",Source="radius-test",CornerRadius=0}; current.Scenes[0].Layers.Add(image);
+                    Invoke(window,"SelectObject",current.Scenes[0].Layers.Count-1);
+                    using(var timer=new System.Windows.Forms.Timer {Interval=60}) {
+                        timer.Tick+=(s,e) => {
+                            var dialog=System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().FirstOrDefault(f=>f.Name=="OverlayCornerDialog");
+                            if(dialog==null)return; timer.Stop();
+                            All(dialog).OfType<System.Windows.Forms.NumericUpDown>().Single(c=>c.Name=="OverlayCornerRadius").Value=48;
+                            All(dialog).OfType<System.Windows.Forms.Button>().Single(c=>c.Name=="ApplyCornerRadius").PerformClick();
+                        }; timer.Start(); Invoke(window,"EditCornerRadius");
+                    }
+                    if(image.CornerRadius!=48)throw new Exception("Corner radius dialog failed");
+                    Invoke(window,"Save");
+                    var saved=AssemblyFiles.Load<AssemblyTemplate>(Path.Combine(temp,"assembly-template.xml"));
+                    var restored=saved.Scenes[0].Layers.Single(l=>l.Kind=="text");
+                    if(restored.Text!=layer.Text || restored.X!=layer.X || restored.FontSize!=72 || !restored.TextItalic || restored.TextPlate!="rounded" || restored.TextPlateOpacity!=65 || restored.TextLineSpacing!=120 || saved.Scenes[0].Layers.Last().CornerRadius!=48)throw new Exception("Text/radius XML state lost");
+                    AssemblyMarketProfiles.Capture(saved,AssemblyProfile.Ru); AssemblyMarketProfiles.Apply(saved,AssemblyProfile.Ru);
+                    var profileText=saved.Scenes[0].Layers.Single(l=>l.Kind=="text");
+                    if(profileText.TextPlate!="rounded" || profileText.TextPlateOpacity!=65 || profileText.TextLineSpacing!=120 || saved.Scenes[0].Layers.Last().CornerRadius!=48)throw new Exception("Profile switch lost text style/radius");
+                    window.Close();
+                }
+                Console.WriteLine("Text overlay UI PASS: system fonts, multiline text, typography, canvas raster, free drag, cancel, corners, saved XML/profile"); return true;
+            } finally {Store.Root=previous; if(Directory.Exists(temp))Directory.Delete(temp,true);}
         }
         public static bool RunImageAppearanceUiTests() {
             string previous = Store.Root, temp = Path.Combine(Path.GetTempPath(), "appearance-ui-" + Guid.NewGuid().ToString("N"));

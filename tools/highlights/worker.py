@@ -460,10 +460,19 @@ def export(job, info):
                     last_percent[0] = percent
                     emit('export', label + f' · {percent}%',
                          100*(clip_index-1+percent/100)/clip_total)
-        # Unique names + partial files, never overwrite an existing export or source.
-        name = "moment_" + time.strftime("%Y%m%d_%H%M%S") + f"_{i+1:02d}_{time.time_ns()%1000000:06d}.mp4"
-        output = destination / name
-        partial = destination / (name + ".partial.mp4")
+        # Keep the source title and use a counter; never overwrite an export or source.
+        stem = re.sub(r'_v\d+_[0-9a-f]{8}$', '', Path(job['source']).stem, flags=re.I)
+        stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', ' ', stem)
+        stem = re.sub(r'\s+', ' ', stem).strip().rstrip('.') or 'Видео'
+        stem = stem[:max(20, min(160, 225-len(str(destination))))].rstrip(' .')
+        number = int(clip_index)
+        while True:
+            name = f'{stem} {number}.mp4'
+            output = destination / name
+            partial = destination / (name + '.partial.mp4')
+            if not output.exists() and not partial.exists():
+                break
+            number += 1
         try:
             run([job["ffmpeg"], "-v", "error", "-nostdin", "-n", "-ss", f"{start:.6f}", "-i", job["source"],
                  "-t", f"{end-start:.6f}", "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",

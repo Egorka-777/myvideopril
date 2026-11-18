@@ -921,8 +921,8 @@ class InviteLedger:
         self.db.close()
 
 
-async def resolve_target(client, text):
-    from telethon import functions, types
+async def resolve_target(client, text, check_permissions=True):
+    from telethon import errors, functions, types
     text = text.strip()
     private = re.fullmatch(r'(?:https?://)?t\.me/(?:\+|joinchat/)([A-Za-z0-9_-]+)', text, re.I)
     if private:
@@ -937,8 +937,13 @@ async def resolve_target(client, text):
         target = await asyncio.wait_for(client.get_entity(text), 35)
     if not isinstance(target, (types.Channel, types.Chat)):
         raise ValueError('Нужна ссылка на группу/канал, а не на пользователя или сообщение')
+    if not check_permissions:
+        return target
     me = await asyncio.wait_for(client.get_me(), 20)
-    perms = await asyncio.wait_for(client.get_permissions(target, me), 35)
+    try:
+        perms = await asyncio.wait_for(client.get_permissions(target, me), 35)
+    except errors.UserNotParticipantError as exc:
+        raise ValueError('Выбранный аккаунт не состоит в группе/канале «'+target.title+'». Добавьте именно этот аккаунт и выдайте право «Добавлять участников»; затем повторите проверку прав') from exc
     if not (perms.is_creator or getattr(perms, 'invite_users', False)):
         raise ValueError('У выбранного аккаунта нет прав добавлять участников. Выдайте право «Добавлять участников» администратору в группе или канале')
     return target
@@ -1118,10 +1123,12 @@ async def invite(job):
     limit = int(job.get('limit', 10000))
     if not 1 <= limit <= 10000:
         raise ValueError('Лимит на запуск: от 1 до 10 000 пользователей')
-    names = names[:limit]
     delay = int(job.get('delay', 60))
-    if not 10 <= delay <= 3600:
+    delay_max = int(job.get('delay_max', delay))
+    if not 10 <= delay <= delay_max <= 3600:
         raise ValueError('Задержка: от 10 до 3600 секунд')
+    if 'delay_max' not in job:
+        delay, delay_max = max(10, delay - 5), min(3600, delay + 5)
     account = accounts[0]
     if account.get('wait_until'):
         from datetime import datetime, timezone
@@ -1132,14 +1139,18 @@ async def invite(job):
     ledger = InviteLedger(Path(job['root']) / 'invites.sqlite')
     try:
         client, me = await open_account(account)
-        target = await resolve_target(client, job.get('target', ''))
-        emit('target', title=target.title, target_id=target.id, text='Права подтверждены: '+target.title)
+        target = await resolve_target(client, job.get('target', ''), check_permissions=False)
+        emit('target', title=target.title, target_id=target.id, text='Группа/канал найдены: '+target.title)
         done = attempted = unresolved = skipped = 0
         if any(name.isdigit() for name in names):
             await asyncio.wait_for(client.get_dialogs(limit=100), 35)
             await asyncio.wait_for(client(functions.contacts.GetContactsRequest(hash=0)), 35)
         for i, name in enumerate(names):
             cancelled()
+            if not client.is_connected():
+                emit('log', text='Сессия отключилась во время паузы; подключаюсь перед следующим пользователем')
+                await client.disconnect()
+                client, me = await open_account(account)
             try:
                 reference = types.PeerUser(int(name)) if name.isdigit() else name
                 user = await asyncio.wait_for(client.get_entity(reference), 35)
@@ -1177,6 +1188,9 @@ async def invite(job):
                     ledger.finish(target.id, user.id, 'confirmed')
                     done += 1
                     emit('invite', username=name, state='confirmed', text='Участие подтверждено')
+            except errors.UserNotParticipantError:
+                ledger.finish(target.id, user.id, 'not_added')
+                emit('invite', username=name, state='not_added', text='Telegram не подтвердил добавление: пользователь не состоит в группе/канале; пропущен')
             except errors.UserAlreadyParticipantError:
                 ledger.finish(target.id, user.id, 'already')
                 emit('invite', username=name, state='already', text='Уже состоит в группе/канале')
@@ -1187,9 +1201,13 @@ async def invite(job):
                 if state != 'privacy':
                     # Stop entire job: no account rotation, retry or silent FloodWait bypass.
                     raise StopJob(text)
+            if done >= limit:
+                break
             if i + 1 < len(names):
-                emit('log', text=f'Ожидание {delay} сек перед следующим пользователем')
-                await pause(delay)
+                from random import randint
+                seconds = randint(delay * 1000, delay_max * 1000) / 1000
+                emit('log', text=f'Ожидание {seconds:.3f} сек перед следующим пользователем')
+                await pause(seconds)
         emit('summary', text=f'Приглашено: {done}; попыток: {attempted}; пропущено: {skipped}; не найдены: {unresolved}', confirmed=done, attempted=attempted, unresolved=unresolved)
     except StopJob:
         raise

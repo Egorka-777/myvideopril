@@ -48,13 +48,25 @@ namespace VideoBatch {
         public int CaptureDaysBack = 30;
         public string MetadataSoftware = "";
         public string[] Brands = (string[])ProcessingDevices.BrandNames.Clone();
+        public ProcessingParameter Gamma = new ProcessingParameter(99,101);
+        public ProcessingParameter RedShift = new ProcessingParameter(-.3,.3), GreenShift = new ProcessingParameter(-.3,.3), BlueShift = new ProcessingParameter(-.3,.3);
+        public ProcessingParameter Geq = new ProcessingParameter(.1,.3);
+        public ProcessingParameter TemporalBlend = new ProcessingParameter(.5,1.5);
+        public ProcessingParameter BlurFrame = new ProcessingParameter(94,95);
+        public ProcessingParameter ColorLut = new ProcessingParameter(3,6);
+        public string ColorPreset = "warm";
+        public ProcessingParameter Reverb = new ProcessingParameter(.5,1.5);
+        public ProcessingParameter EqLow = new ProcessingParameter(-.3,.3), EqMid = new ProcessingParameter(-.3,.3), EqHigh = new ProcessingParameter(-.3,.3);
+        public ProcessingParameter Lowpass = new ProcessingParameter(18000,19500), Highpass = new ProcessingParameter(20,30);
+        public ProcessingParameter Flanger = new ProcessingParameter(.5,1.5);
 
         [XmlIgnore] public bool IsEnabled {
             get { return Parameters().Any(p => p.Enabled) || Mirror || DeviceMetadata || CaptureDateEnabled || !string.IsNullOrWhiteSpace(MetadataSoftware); }
         }
         public IEnumerable<ProcessingParameter> Parameters() {
             return new[] { Crop, Trim, Rotation, Speed, Brightness, Contrast, Sharpness, Noise, FilmDust, FrameScale,
-                Volume, Pitch, Tempo, FadeIn, FadeOut, GridOpacity, Zoom, AudioModulation };
+                Volume, Pitch, Tempo, FadeIn, FadeOut, GridOpacity, Zoom, AudioModulation,
+                Gamma, RedShift, GreenShift, BlueShift, Geq, TemporalBlend, BlurFrame, ColorLut, Reverb, EqLow, EqMid, EqHigh, Lowpass, Highpass, Flanger };
         }
         public void Validate() {
             if(Parameters().Any(p=>p==null))throw new Exception("Отсутствует параметр обработки.");
@@ -67,6 +79,14 @@ namespace VideoBatch {
             Tempo.Validate(50, 200, "Темп аудио, %"); FadeIn.Validate(0, 10, "Затемнение в начале, с");
             FadeOut.Validate(0, 10, "Затемнение в конце, с"); GridOpacity.Validate(0, 50, "Сетка, %");
             Zoom.Validate(100, 130, "Зум, %"); AudioModulation.Validate(0, 50, "Всплески громкости, %");
+            Gamma.Validate(50,150,"Гамма, %");
+            foreach(var channel in new[]{RedShift,GreenShift,BlueShift}) channel.Validate(-10,10,"Сдвиг RGB, %");
+            Geq.Validate(0,5,"GEQ, уровни яркости"); TemporalBlend.Validate(0,20,"Смешивание кадров, %");
+            BlurFrame.Validate(92,99,"Кадр на размытом фоне, %"); ColorLut.Validate(0,100,"Сила LUT, %");
+            if(!new[]{"warm","cool","film","vintage"}.Contains(ColorPreset))throw new Exception("Неизвестный цветовой пресет");
+            Reverb.Validate(0,10,"Эхо, %"); Flanger.Validate(0,10,"Flanger, %");
+            foreach(var band in new[]{EqLow,EqMid,EqHigh})band.Validate(-12,12,"Эквалайзер, дБ");
+            Lowpass.Validate(8000,22000,"Lowpass, Гц"); Highpass.Validate(10,200,"Highpass, Гц");
             if (GridCell == null || ZoomPeriod == null || ModulationFrequency == null) throw new Exception("Отсутствует диапазон эффекта.");
             GridCell.Validate(8, 512, "Размер ячейки сетки, px"); ZoomPeriod.Validate(.5, 30, "Период зума, с");
             ModulationFrequency.Validate(.1, 10, "Частота всплесков, Гц");
@@ -85,7 +105,7 @@ namespace VideoBatch {
             }
         }
         public void EnableMildDefaults() {
-            foreach (var p in Parameters()) p.Enabled = true;
+            foreach (var p in Parameters().TakeWhile(p=>!ReferenceEquals(p,Gamma))) p.Enabled = true; // Preserve the established preset; new effects stay opt-in.
             Mirror = false;
             DeviceMetadata = true;
             CaptureDateEnabled = true;
@@ -105,6 +125,9 @@ namespace VideoBatch {
         public double TrimStart, TrimEnd, Rotation, Sharpness, Noise, FilmDust, FrameScale = 1, Volume = 1, Pitch = 1, Tempo = 1;
         public double FadeIn, FadeOut, GridOpacity, GridCell, Zoom = 1, ZoomPeriod, ZoomX, ZoomY;
         public double ModulationDepth, ModulationFrequency;
+        public double Gamma=1, RedShift, GreenShift, BlueShift, Geq, TemporalBlend, BlurFrame=1, ColorLut;
+        public string ColorPreset="warm";
+        public double Reverb, EqLow, EqMid, EqHigh, Lowpass, Highpass, Flanger;
         public bool Mirror;
         public int NoiseSeed, FilmDustSeed;
         public string Brand = "", Model = "", Software = "";

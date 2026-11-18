@@ -67,7 +67,24 @@ namespace VideoBatch {
         }
         public static List<WarmupCaption> ForStyle(IEnumerable<WarmupCaption> source, WarmupSubtitleStyle style) {
             var cues = (source ?? Enumerable.Empty<WarmupCaption>()).Where(c => c != null).ToList();
-            if (cues.Count == 0 || cues.Any(c => c.Words == null || c.Words.Count == 0)) return cues;
+            if (cues.Count == 0) return cues;
+            if (cues.Any(c => c.Words == null || c.Words.Count == 0)) {
+                var grouped = new List<WarmupCaption>();
+                int count = Math.Max(1, Math.Min(6, style.WordsPerCaption));
+                foreach (var cue in cues) {
+                    if (cue.Words != null && cue.Words.Count > 0) { grouped.AddRange(ForStyle(new[] { cue }, style)); continue; }
+                    var parts = (cue.Text ?? "").Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                    // Group untimed edited text within its existing window, without
+                    // claiming estimated word timing as provider alignment.
+                    for (int i = 0; i < parts.Length; i += count) {
+                        int end = Math.Min(parts.Length, i + count);
+                        grouped.Add(new WarmupCaption { Text = string.Join(" ", parts.Skip(i).Take(end - i)),
+                            Start = cue.Start + (cue.End - cue.Start) * i / parts.Length,
+                            End = cue.Start + (cue.End - cue.Start) * end / parts.Length });
+                    }
+                }
+                return grouped;
+            }
             var words = cues.SelectMany(c => c.Words).ToList();
             return WarmupSubtitles.Cues(new WarmupAlignment {
                 characters = words.Select(w => w.Text + " ").ToArray(),
@@ -118,49 +135,88 @@ namespace VideoBatch {
 
     // Same glyph paths, outline, wrapping and word states in the editor and PNG overlays.
     public static class SubtitleTypography {
-        sealed class WordBox { public string Text; public RectangleF Box; public int Index; }
-        public static bool UsesTypography(WarmupSubtitleStyle style) => style.OutlineWidth > 0 || style.Highlight != "none" || style.Motion != "none" || !style.Bold || style.FontFamily == "Impact" || style.FontFamily == "Arial Black";
-        static List<WordBox> Layout(string text, WarmupSubtitleStyle style, int width, int height, out RectangleF plate) {
+        sealed class WordBox { public string Text; public RectangleF Box; public int Index; public float GlyphLeft, GlyphTop; }
+        public static bool UsesTypography(WarmupSubtitleStyle style) => true;
+        static List<WordBox> Layout(string text, WarmupSubtitleStyle style, int width, int height, out RectangleF plate, out float fontSize) {
             style = style.Copy(); style.Normalize();
             text = style.Uppercase ? (text ?? "").ToUpper(CultureInfo.GetCultureInfo("ru-RU")) : text ?? "";
             var words = text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-            var result = new List<WordBox>();
             using (var image = new Bitmap(1, 1)) using (var g = Graphics.FromImage(image))
-            using (var font = new Font(style.FontFamily, style.FontSize, style.Bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var family = new FontFamily(style.FontFamily))
             using (var format = (StringFormat)StringFormat.GenericTypographic.Clone()) {
-                format.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces;
-                float maxWidth = width * .84f, space = g.MeasureString(" ", font, int.MaxValue, format).Width;
-                float lineHeight = font.GetHeight(g) * 1.10f, x = 0, y = 0;
-                var lines = new List<List<WordBox>> { new List<WordBox>() };
-                for (int i = 0; i < words.Length; i++) {
-                    float wordWidth = Math.Min(maxWidth, g.MeasureString(words[i], font, int.MaxValue, format).Width);
-                    if (x > 0 && x + wordWidth > maxWidth) { x = 0; y += lineHeight; lines.Add(new List<WordBox>()); }
-                    var item = new WordBox { Text = words[i], Box = new RectangleF(x, y, wordWidth, lineHeight), Index = i };
-                    lines.Last().Add(item); result.Add(item); x += wordWidth + space;
+                format.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces | StringFormatFlags.NoWrap;
+                var face = style.Bold && family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular;
+                fontSize = style.FontSize;
+                List<WordBox> result;
+                // Preserve the chosen size unless the complete text cannot fit in two lines.
+                // Measure real outlines, not clamped word widths: even a single long word must fit.
+                if (!TryLayout(words, style, width, height, fontSize, g, family, face, format, out result, out plate)) {
+                    float low = 0, high = fontSize;
+                    for (int i = 0; i < 20; i++) {
+                        float candidate = (low + high) / 2;
+                        if (TryLayout(words, style, width, height, candidate, g, family, face, format, out result, out plate)) low = candidate;
+                        else high = candidate;
+                    }
+                    fontSize = low;
+                    TryLayout(words, style, width, height, fontSize, g, family, face, format, out result, out plate);
                 }
-                float totalHeight = Math.Max(lineHeight, y + lineHeight);
-                float top = Math.Max(24, Math.Min(height - totalHeight - 24, height * style.Position / 100f - totalHeight / 2));
+                return result;
+            }
+        }
+        static bool TryLayout(string[] words, WarmupSubtitleStyle style, int width, int height, float size, Graphics g,
+            FontFamily family, FontStyle face, StringFormat format, out List<WordBox> result, out RectangleF plate) {
+            result = new List<WordBox>(); plate = RectangleF.Empty;
+            using (var font = new Font(family, size, face, GraphicsUnit.Pixel)) {
+                float maxWidth = width * .84f, space = g.MeasureString(" ", font, int.MaxValue, format).Width;
+                float pitch = font.GetHeight(g) * style.LineSpacing / 100f, x = 0;
+                float inkTop = float.MaxValue, inkBottom = float.MinValue;
+                var lines = new List<List<WordBox>> { new List<WordBox>() };
+                for (int i = 0; i < words.Length; i++) using (var path = new GraphicsPath()) {
+                    path.AddString(words[i], family, (int)face, size, PointF.Empty, format);
+                    var ink = path.GetBounds();
+                    float wordWidth = ink.Width;
+                    if (wordWidth > maxWidth) return false;
+                    if (x > 0 && x + wordWidth > maxWidth) {
+                        if (lines.Count == 2) return false;
+                        x = 0; lines.Add(new List<WordBox>());
+                    }
+                    var item = new WordBox { Text = words[i], Index = i, GlyphLeft = ink.Left,
+                        Box = new RectangleF(x, (lines.Count - 1) * pitch, wordWidth, ink.Height) };
+                    lines.Last().Add(item); result.Add(item); x += wordWidth + space;
+                    inkTop = Math.Min(inkTop, ink.Top); inkBottom = Math.Max(inkBottom, ink.Bottom);
+                }
+                // Anchor the plate and word animation to visible glyphs, not font-cell whitespace.
+                float inkHeight = words.Length == 0 ? 0 : inkBottom - inkTop;
+                float totalHeight = inkHeight + (lines.Count - 1) * pitch;
+                float motionRoom = (style.Motion == "rise" ? size * .24f : 0) + (style.Motion == "word-accent" ? inkHeight * .03f : 0);
+                float margin = Math.Min(24, height * .1f);
+                if (totalHeight + motionRoom > height - margin * 2) return false;
+                float top = Math.Max(margin, Math.Min(height - margin - totalHeight - motionRoom,
+                    height * style.Position / 100f - totalHeight / 2));
                 foreach (var line in lines) {
                     float span = line.Count == 0 ? 0 : line.Last().Box.Right;
-                    foreach (var item in line) item.Box = new RectangleF((width - span) / 2 + item.Box.X, top + item.Box.Y, item.Box.Width, item.Box.Height);
+                    foreach (var item in line) {
+                        item.GlyphTop = words.Length == 0 ? 0 : inkTop;
+                        item.Box = new RectangleF((width - span) / 2 + item.Box.X, top + item.Box.Y, item.Box.Width, inkHeight);
+                    }
                 }
                 float left = result.Count == 0 ? width / 2 : result.Min(w => w.Box.Left);
                 float right = result.Count == 0 ? left : result.Max(w => w.Box.Right);
                 plate = new RectangleF(left - 22, top - 12, right - left + 44, totalHeight + 24);
+                return true;
             }
-            return result;
         }
-        public static RectangleF Bounds(string text, WarmupSubtitleStyle style, int width, int height) { Layout(text, style, width, height, out RectangleF plate); return plate; }
+        public static RectangleF Bounds(string text, WarmupSubtitleStyle style, int width, int height) { Layout(text, style, width, height, out RectangleF plate, out float size); return plate; }
         public static Bitmap Paint(WarmupCaption cue, WarmupSubtitleStyle style, int width, int height) {
             style = style.Copy(); style.Normalize();
-            var words = Layout(cue.Text, style, width, height, out RectangleF plate);
+            var words = Layout(cue.Text, style, width, height, out RectangleF plate, out float fontSize);
             var bitmap = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
             using (var g = Graphics.FromImage(bitmap))
-            using (var font = new Font(style.FontFamily, style.FontSize, style.Bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var family = new FontFamily(font.FontFamily.Name))
+            using (var family = new FontFamily(style.FontFamily))
             using (var format = (StringFormat)StringFormat.GenericTypographic.Clone()) {
+                format.FormatFlags |= StringFormatFlags.MeasureTrailingSpaces | StringFormatFlags.NoWrap;
                 g.Clear(Color.Transparent); g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.TranslateTransform(0, cue.OffsetY);
+                g.TranslateTransform(0, cue.OffsetY * fontSize / style.FontSize);
                 Func<Color, Color> faded = color => Color.FromArgb((int)(color.A * cue.FrameOpacity), color.R, color.G, color.B);
                 float scale = cue.TextScale <= 0 ? 1 : cue.TextScale;
                 g.TranslateTransform(plate.Left + plate.Width / 2, plate.Top + plate.Height / 2);
@@ -171,7 +227,7 @@ namespace VideoBatch {
                 }
                 foreach (var word in words) using (var path = new GraphicsPath()) {
                     var face = style.Bold && family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular;
-                    path.AddString(word.Text, family, (int)face, style.FontSize, new PointF(word.Box.X, word.Box.Y), format);
+                    path.AddString(word.Text, family, (int)face, fontSize, new PointF(word.Box.X - word.GlyphLeft, word.Box.Y - word.GlyphTop), format);
                     if (word.Index == cue.ActiveWord && cue.ActiveWordScale != 1) using (var transform = new Matrix()) {
                         float cx = word.Box.Left + word.Box.Width / 2, cy = word.Box.Top + word.Box.Height / 2;
                         transform.Translate(cx, cy); transform.Scale(cue.ActiveWordScale, cue.ActiveWordScale); transform.Translate(-cx, -cy); path.Transform(transform);

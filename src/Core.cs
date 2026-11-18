@@ -90,6 +90,8 @@ namespace VideoBatch {
         /// <summary>RU | EN | RU-Inst | EN-Inst в «Моя студия».</summary>
         public string AssemblyStudioProfile="RU";
         public string AssemblyElevenLabsKey="";
+        public string ProtectedTranslationGeminiKey="", TranslationLastProject="";
+        public VideoTranslationOptions TranslationOptions = new VideoTranslationOptions();
         /// <summary>Активная вкладка Shorts/Long в workspace (не скрывает каналы).</summary>
         public string YouTubeKindView="shorts";
         public bool YouTubeLongScheduled20260923Migrated;
@@ -107,6 +109,7 @@ namespace VideoBatch {
         /// <summary>Теги YouTube для HTTP-загрузки (через запятую). Пусто — берётся значение по умолчанию при сохранении настроек.</summary>
         public string YouTubeDefaultTagsRu="", YouTubeDefaultTagsEn="";
         // Базы заголовков: один раз заполняете, дальше приложение само берёт нужное число (база не съедается).
+        public List<string> ProcessingTitles=new List<string>();
         public List<string> TitleBankLongRu=new List<string>(), TitleBankLongEn=new List<string>();
         public List<string> TitleBankShortsRu=new List<string>(), TitleBankShortsEn=new List<string>();
         public int TitleCursorLongRu, TitleCursorLongEn, TitleCursorShortsRu, TitleCursorShortsEn;
@@ -750,6 +753,7 @@ namespace VideoBatch {
         public double BackgroundDb=-18;
         public bool Shorts; public int Count=5;public string Output,FFmpeg,FFprobe;public Profile[] Profiles=Profile.Defaults(); public ShortSettings Ranges=new ShortSettings();
         public ProcessingSettings Processing=new ProcessingSettings();
+        public List<string> Titles=new List<string>();
     }
     public static class Core {
         public static readonly CultureInfo Inv=CultureInfo.InvariantCulture;
@@ -881,23 +885,27 @@ namespace VideoBatch {
                     try{string ready=await VideoSdr.EnsureReady(job.FFmpeg,job.FFprobe,input,ct).ConfigureAwait(false);media=VideoInfo(await Probe(job.FFprobe,ready,ct).ConfigureAwait(false));if(job.Shorts){media.Duration=media.VideoDuration;profiles=RandomProfiles(job.Ranges,job.Count,tracks,media.Duration,random,job.Processing!=null&&job.Processing.IsEnabled);}else {profiles=Store.Clone(job.Profiles).Take(job.Count).ToList();foreach(var p in profiles){p.Short=false;p.MusicPath="";}
                         if(tracks.Count>0){var pool=tracks.OrderBy(t=>random.Next()).ToList();var used=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
                             for(int i=0;i<profiles.Count;i++){var p=profiles[i];var t=pool[i%pool.Count];int visit=used.ContainsKey(t.Path)?used[t.Path]:0;used[t.Path]=visit+1;double room=Math.Max(0,t.Duration-media.Duration/p.Speed);int uses=(profiles.Count-1-i%pool.Count)/pool.Count+1;
-                                p.MusicPath=t.Path;p.MusicStart=room>0?(uses==1?random.NextDouble()*room:room*visit/(uses-1)):t.Duration*visit/uses;p.MusicVolume=Math.Pow(10,job.BackgroundDb/20);
+                                p.MusicPath=t.Path;p.MusicStart=room>0?(uses==1?random.NextDouble()*room:room*visit/(uses-1)):t.Duration*visit/uses;p.MusicVolume=job.Shorts?job.Ranges.Volume/100:Math.Pow(10,job.BackgroundDb/20);
                             }
                         }
                     }}
                     catch(OperationCanceledException){throw;}catch(Exception e){result.Errors.Add(Path.GetFileName(input)+": "+e.Message);done+=job.Count;continue;}
+                    var processingEncoder=new AssemblyRenderContext();
                     foreach(var profile in profiles) {
                         ct.ThrowIfCancellationRequested();string partial=null;
                         ProcessingEngine.Apply(profile,job.Processing,media,random,DateTime.Now);
                         try {
-                            string name=Path.GetFileNameWithoutExtension(input);if(name.Length>60)name=name.Substring(0,60);
-                            string filename=name+"_v"+profile.Slot+"_"+Guid.NewGuid().ToString("N").Substring(0,8)+"."+profile.Format;
-                            string dest=Path.Combine(job.Output,filename);partial=Path.Combine(job.Output,".processing_"+filename);
+                            var titles=(job.Titles??new List<string>()).Where(t=>!string.IsNullOrWhiteSpace(t)).ToList();
+                            string name=titles.Count==0?VideoBatchOutputPaths.SourceTitle(input):titles[done%titles.Count];
+                            string dest=VideoBatchOutputPaths.NamedOutput(job.Output,name,profile.Format);
+                            string filename=Path.GetFileName(dest);partial=Path.Combine(job.Output,".processing_"+filename);
                             var binding=job.Narrations.FirstOrDefault(b=>b.Video==input&&b.Slot==profile.Slot);string narration=binding==null?"":Store.TryRepairStoredPath(binding.Audio);
                             if(!profile.Short&&narration!=""&&!File.Exists(narration))throw new Exception("Не найдена назначенная озвучка.");
                             string label="Файл "+(done+1)+" из "+total+" · "+Path.GetFileName(input);int baseDone=done;double duration=ProcessingEngine.OutputDuration(profile,media);
                             progress.Report(new Update(label,100.0*done/total));
-                            await Tool(job.FFmpeg,Arguments(input,partial,profile,media,narration),ct,line=>{if(line.StartsWith("out_time_us=")){double value=Parse(line.Substring(12))/1000000/duration;progress.Report(new Update(label,100.0*(baseDone+Math.Min(.99,Math.Max(0,value)))/total));}}).ConfigureAwait(false);
+                            var encodeArgs=Arguments(input,partial,profile,media,narration);
+                            await ProcessingEngine.Accelerate(job.FFmpeg,encodeArgs,media.Width,media.Height,ct,message=>progress.Report(new Update(label+" · "+message,100.0*baseDone/total)),processingEncoder).ConfigureAwait(false);
+                            await Tool(job.FFmpeg,encodeArgs,ct,line=>{if(line.StartsWith("out_time_us=")){double value=Parse(line.Substring(12))/1000000/duration;progress.Report(new Update(label,100.0*(baseDone+Math.Min(.99,Math.Max(0,value)))/total));}}).ConfigureAwait(false);
                             ct.ThrowIfCancellationRequested();if(!File.Exists(partial)||new FileInfo(partial).Length==0)throw new Exception("Не создан результат.");
                             if(profile.Processing!=null && (profile.Processing.HasCaptureDate || !string.IsNullOrEmpty(profile.Processing.Brand) || !string.IsNullOrWhiteSpace(profile.Processing.Software)))
                                 VideoMetadata.Verify(await Probe(job.FFprobe,partial,ct).ConfigureAwait(false),profile.Processing,null,profile.Format!="mkv");

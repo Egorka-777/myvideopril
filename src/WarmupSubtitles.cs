@@ -18,6 +18,7 @@ namespace VideoBatch {
         public string PresetId = "classic", AccentColor = "#32F56B", OutlineColor = "#000000";
         public string Highlight = "none", Motion = "none";
         public int OutlineWidth;
+        public int LineSpacing = 100; // Percentage of the font's natural line height.
         public bool Bold = true;
         public SubtitleRandomSettings RandomStyle = new SubtitleRandomSettings();
         public WarmupSubtitleStyle Copy() {
@@ -28,7 +29,8 @@ namespace VideoBatch {
         public void Normalize() {
             if (!SubtitlePresets.Fonts.Contains(FontFamily)) FontFamily = "Segoe UI";
             if (Plate != "rounded" && Plate != "solid" && Plate != "none") Plate = "rounded";
-            FontSize = Math.Max(28, Math.Min(88, FontSize)); Position = Math.Max(10, Math.Min(90, Position));
+            FontSize = Math.Max(28, Math.Min(150, FontSize)); Position = Math.Max(10, Math.Min(90, Position));
+            LineSpacing = Math.Max(60, Math.Min(150, LineSpacing));
             WordsPerCaption = Math.Max(1, Math.Min(6, WordsPerCaption)); Opacity = Math.Max(0, Math.Min(100, Opacity));
             TextColor = Hex(TextColor, "#FFFFFF"); PlateColor = Hex(PlateColor, "#171717");
             AccentColor = Hex(AccentColor, "#32F56B"); OutlineColor = Hex(OutlineColor, "#000000");

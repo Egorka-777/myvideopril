@@ -10,7 +10,7 @@ namespace VideoBatch {
         readonly FlowLayoutPanel cards;
         readonly List<WarmupCaption> cues;
         readonly ComboBox font, plate, highlight, motion;
-        readonly NumericUpDown size, position, words, opacity, outline;
+        readonly NumericUpDown size, position, words, opacity, outline, lineSpacing;
         readonly CheckBox enabled, uppercase, bold;
         readonly Button textColor, plateColor, accentColor, outlineColor;
         readonly Label selected;
@@ -52,18 +52,20 @@ namespace VideoBatch {
             enabled = new CheckBox { Text = "Включены", AutoSize = true }; uppercase = new CheckBox { Text = "Заглавные буквы", AutoSize = true }; bold = new CheckBox { Text = "Жирный шрифт", AutoSize = true };
             font = Theme.MakeCombo(SubtitlePresets.Fonts); plate = Theme.MakeCombo(new[] { "Без плашки", "Скруглённая", "Прямая" });
             highlight = Theme.MakeCombo(new[] { "Без выделения", "Текущее слово", "Караоке" }); motion = Theme.MakeCombo(new[] { "Без анимации", "Лёгкое увеличение", "Плавное появление", "Мягкий подъём", "Акцент на слове" });
-            size = Number(28, 88); position = Number(10, 90); words = Number(1, 6); opacity = Number(0, 100); outline = Number(0, 10);
+            lineSpacing = Number(60, 150); lineSpacing.Name = "SubtitleLineSpacing";
+            size = Number(28, 150); position = Number(10, 90); words = Number(1, 6); opacity = Number(0, 100); outline = Number(0, 10);
             textColor = ColorButton("TextColor", () => Style.TextColor, c => Style.TextColor = c);
             plateColor = ColorButton("PlateColor", () => Style.PlateColor, c => Style.PlateColor = c);
             accentColor = ColorButton("AccentColor", () => Style.AccentColor, c => Style.AccentColor = c);
             outlineColor = ColorButton("OutlineColor", () => Style.OutlineColor, c => Style.OutlineColor = c);
             Add(fields, "Субтитры", enabled); Add(fields, "Шрифт", font); Add(fields, "Начертание", bold); Add(fields, "Регистр", uppercase);
-            Add(fields, "Размер", size); Add(fields, "Положение сверху, %", position); Add(fields, "Слов в группе", words);
+            Add(fields, "Размер", size); Add(fields, "Положение сверху, %", position); Add(fields, "Слов в группе · до 2 строк", words);
+            Add(fields, "Межстрочный интервал, %", lineSpacing);
             Add(fields, "Цвет текста", textColor); Add(fields, "Выделение слов", highlight); Add(fields, "Цвет выделения", accentColor);
             Add(fields, "Анимация", motion); Add(fields, "Обводка", outline); Add(fields, "Цвет обводки", outlineColor);
             Add(fields, "Плашка", plate); Add(fields, "Цвет плашки", plateColor); Add(fields, "Плотность плашки, %", opacity);
             foreach (var control in new ComboBox[] { font, plate, highlight, motion }) control.SelectedIndexChanged += (s, e) => Changed();
-            foreach (var control in new NumericUpDown[] { size, position, words, opacity, outline }) control.ValueChanged += (s, e) => Changed();
+            foreach (var control in new NumericUpDown[] { size, position, words, opacity, outline, lineSpacing }) control.ValueChanged += (s, e) => Changed();
             foreach (var control in new CheckBox[] { enabled, uppercase, bold }) control.CheckedChanged += (s, e) => Changed();
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
             AddRandomFields(fields);
@@ -74,6 +76,8 @@ namespace VideoBatch {
             leftActions.Controls.Add(Theme.MakeButton("Сохранить мой стиль", ghost: true, action: SaveCustom));
             if (canEditCaptions) leftActions.Controls.Add(Theme.MakeButton("Текст и таймкоды", ghost: true, action: () => { EditCaptions = true; DialogResult = DialogResult.OK; Close(); }));
             selected = new Label { AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 0) }; leftActions.Controls.Add(selected); root.Controls.Add(leftActions, 0, 1);
+            preview.PositionChanged += value => { enabled.Checked = true; position.Value = value; };
+            preview.AccessibleDescription = "Перетащите мышью по кадру, чтобы изменить высоту субтитров.";
             LoadFields(); LoadCards();
             timer.Tick += (s, e) => UpdatePreview(); timer.Start();
             FormClosed += (s, e) => timer.Stop();
@@ -97,7 +101,7 @@ namespace VideoBatch {
                 enabled.Checked = Style.Enabled; uppercase.Checked = Style.Uppercase; bold.Checked = Style.Bold; font.SelectedItem = Style.FontFamily;
                 plate.SelectedIndex = Style.Plate == "none" ? 0 : Style.Plate == "rounded" ? 1 : 2;
                 highlight.SelectedIndex = Style.Highlight == "none" ? 0 : Style.Highlight == "active" ? 1 : 2; motion.SelectedIndex = Array.IndexOf(new[] { "none", "pop", "fade", "rise", "word-accent" }, Style.Motion);
-                size.Value = Style.FontSize; position.Value = Style.Position; words.Value = Style.WordsPerCaption; opacity.Value = Style.Opacity; outline.Value = Style.OutlineWidth;
+                lineSpacing.Value = Style.LineSpacing; size.Value = Style.FontSize; position.Value = Style.Position; words.Value = Style.WordsPerCaption; opacity.Value = Style.Opacity; outline.Value = Style.OutlineWidth;
                 UpdateColors(); LoadRandomFields();
             } finally { loading = false; }
             UpdatePreview();
@@ -110,7 +114,7 @@ namespace VideoBatch {
         void Changed() {
             if (loading) return;
             Style.Enabled = enabled.Checked; Style.FontFamily = Convert.ToString(font.SelectedItem); Style.Uppercase = uppercase.Checked; Style.Bold = bold.Checked;
-            Style.FontSize = (int)size.Value; Style.Position = (int)position.Value; Style.WordsPerCaption = (int)words.Value; Style.Opacity = (int)opacity.Value; Style.OutlineWidth = (int)outline.Value;
+            Style.LineSpacing = (int)lineSpacing.Value; Style.FontSize = (int)size.Value; Style.Position = (int)position.Value; Style.WordsPerCaption = (int)words.Value; Style.Opacity = (int)opacity.Value; Style.OutlineWidth = (int)outline.Value;
             Style.Plate = plate.SelectedIndex == 0 ? "none" : plate.SelectedIndex == 1 ? "rounded" : "solid";
             Style.Highlight = highlight.SelectedIndex == 0 ? "none" : highlight.SelectedIndex == 1 ? "active" : "progressive"; Style.Motion = new[] { "none", "pop", "fade", "rise", "word-accent" }[Math.Max(0, motion.SelectedIndex)];
             Style.Normalize(); randomPreview = null; UpdatePreview();
@@ -169,6 +173,35 @@ namespace VideoBatch {
         readonly Image background;
         Bitmap caption;
         string key;
+        bool dragging;
+        public event Action<int> PositionChanged;
+        RectangleF FrameRect {
+            get {
+                float scale = Math.Min((Width - 12f) / canvasWidth, (Height - 12f) / canvasHeight);
+                return scale <= 0 ? RectangleF.Empty : new RectangleF((Width - canvasWidth * scale) / 2, (Height - canvasHeight * scale) / 2, canvasWidth * scale, canvasHeight * scale);
+            }
+        }
+        protected override void OnMouseDown(MouseEventArgs e) {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left || !FrameRect.Contains(e.Location)) return;
+            dragging = true; Capture = true; MovePosition(e.Location);
+        }
+        protected override void OnMouseMove(MouseEventArgs e) {
+            base.OnMouseMove(e);
+            Cursor = dragging || FrameRect.Contains(e.Location) ? Cursors.SizeNS : Cursors.Default;
+            if (dragging) MovePosition(e.Location);
+        }
+        protected override void OnMouseUp(MouseEventArgs e) {
+            base.OnMouseUp(e);
+            if (e.Button != MouseButtons.Left) return;
+            dragging = false; Capture = false;
+        }
+        protected override void OnMouseCaptureChanged(EventArgs e) { base.OnMouseCaptureChanged(e); if (!Capture) dragging = false; }
+        void MovePosition(Point point) {
+            var frame = FrameRect;
+            if (frame.Height <= 0) return;
+            PositionChanged?.Invoke((int)Math.Round(Math.Max(10, Math.Min(90, (point.Y - frame.Y) / frame.Height * 100))));
+        }
         public SubtitleStylePreview(int width, int height, Image image) { canvasWidth = width; canvasHeight = height; background = image == null ? null : new Bitmap(image); DoubleBuffered = true; }
         public void Set(WarmupSubtitleStyle style, List<WarmupCaption> source, double elapsed) {
             var cues = SubtitlePresets.ForStyle(source, style); if (cues.Count == 0) return;
@@ -181,8 +214,8 @@ namespace VideoBatch {
             Invalidate();
         }
         protected override void OnPaint(PaintEventArgs e) {
-            e.Graphics.Clear(Theme.Background); float scale = Math.Min((Width - 12f) / canvasWidth, (Height - 12f) / canvasHeight);
-            if (scale <= 0) return; var box = new RectangleF((Width - canvasWidth * scale) / 2, (Height - canvasHeight * scale) / 2, canvasWidth * scale, canvasHeight * scale);
+            e.Graphics.Clear(Theme.Background); var box = FrameRect;
+            if (box.IsEmpty) return;
             using (var brush = new SolidBrush(Color.FromArgb(20, 27, 40))) e.Graphics.FillRectangle(brush, box);
             if (background != null) e.Graphics.DrawImage(background, box); if (caption != null) e.Graphics.DrawImage(caption, box);
         }

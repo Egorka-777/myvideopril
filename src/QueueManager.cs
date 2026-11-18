@@ -127,8 +127,12 @@ namespace VideoBatch {
                 if(!channels.TryGetValue(pid,out var first)){channels[pid]=job.ch;continue;}
                 bool same=ReferenceEquals(first,job.ch)||(!string.IsNullOrWhiteSpace(first.ChannelId)&&!string.IsNullOrWhiteSpace(job.ch.ChannelId)
                     &&string.Equals(first.ChannelId.Trim(),job.ch.ChannelId.Trim(),StringComparison.OrdinalIgnoreCase));
-                if(!same)foreach(var channel in new[]{first,job.ch})
-                    if(string.IsNullOrWhiteSpace(channel.ChannelUrl))throw new Exception("Канал «"+channel.Name+"»: не указана ссылка на YouTube-канал. В Dolphin-профиле «"+pid+"» используются несколько каналов. Укажите ссылку канала, чтобы загрузка выбрала правильный канал.");
+                if(!same){
+                    foreach(var channel in new[]{first,job.ch})
+                        if(string.IsNullOrWhiteSpace(channel.ChannelUrl))throw new Exception("Канал «"+channel.Name+"»: не указана ссылка на YouTube-канал. В Dolphin-профиле «"+pid+"» используются несколько каналов. Укажите ссылку канала, чтобы загрузка выбрала правильный канал.");
+                    if(string.Equals(ChannelRoute(first),ChannelRoute(job.ch),StringComparison.OrdinalIgnoreCase))
+                        throw new Exception("Каналы «"+first.Name+"» и «"+job.ch.Name+"» направлены в один YouTube-канал и Dolphin-профиль «"+pid+"». Исправьте ссылку или выберите одну строку: их пачки не будут объединены.");
+                }
             }
         }
 

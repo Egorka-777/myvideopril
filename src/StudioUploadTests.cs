@@ -79,6 +79,12 @@ namespace VideoBatch {
             }
             first.ChannelUrl="https://www.youtube.com/channel/UC2ZegEqor59rDcragScoNMg";
             other.ChannelUrl="https://www.youtube.com/channel/UCTWETG4b_LbmXYfsRNZ7dzQ";
+            string distinctUrl=other.ChannelUrl;
+            other.ChannelUrl=first.ChannelUrl+"/";
+            string duplicateRouteError="";
+            try{QueueManager.Prepare(jobs,stage,plan,(title,index,total)=>title,studioSchedule:true);}catch(Exception e){duplicateRouteError=e.Message;}
+            Check(duplicateRouteError.Contains(first.Name)&&duplicateRouteError.Contains(other.Name)&&duplicateRouteError.Contains("пачки не будут объединены")&&staged==0&&planned==0,"different local channels sharing one actual route never merge their batches");
+            other.ChannelUrl=distinctUrl;
             var separate=QueueManager.Prepare(jobs,stage,plan,(title,index,total)=>title,studioSchedule:true);
             Check(separate.Count==2&&separate.All(b=>b.Items.Count==1)&&separate[0].Channel.ChannelUrl!=separate[1].Channel.ChannelUrl,"shared Dolphin profile retains both channel routes and duplicate media");
             first.ChannelId="channel-a";other.ChannelId="channel-b";

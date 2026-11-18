@@ -28,11 +28,15 @@ namespace VideoBatch {
         public List<AssemblySpeechLine> SpeechLines = new List<AssemblySpeechLine>();
         public string SecondaryVideos = "", SplitLayout = "none", Voiceover = "";
         public bool SplitSharedPool, SplitFixHalves = true;
+        public string SplitAudioMode = "";
+        public double SplitAudioVolume = 1;
         public bool PrimaryNativeAudio = true, SecondaryNativeAudio = true;
         public double PrimaryNativeVolume = 1, SecondaryNativeVolume = 1;
         public bool NativeAudioLeveled;
         public List<AssemblyAudioLevel> NativeAudioLevels = new List<AssemblyAudioLevel>();
         public double VoicePitchSemitones;
+        public ProcessingParameter BackgroundAudioPitch = new ProcessingParameter(-2,2);
+        public string AudioProcessingSourceId = "";
         public double SplitRatio = .5, SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
@@ -162,11 +166,16 @@ namespace VideoBatch {
                 PlaybackMode = l.PlaybackMode,
                 RepeatPause = l.RepeatPause, RepeatInterval = l.RepeatInterval,
                 PhotoDuration = l.PhotoDuration,
+                AudioEnabled = l.AudioEnabled, AudioPitch = Store.Clone(l.AudioPitch),
                 ExitTransition = l.ExitTransition,
                 ExitDuration = l.ExitDuration,
                 GreenScreen = l.GreenScreen,
                 UniformImageScale = l.UniformImageScale, PreserveAspectRatio = l.PreserveAspectRatio,
                 ImagePart = l.ImagePart,
+                Kind = l.Kind, Text = l.Text, TextColor = l.TextColor, TextOutlineColor = l.TextOutlineColor,
+                TextOutlineWidth = l.TextOutlineWidth, TextBold = l.TextBold, TextItalic = l.TextItalic,
+                TextUppercase = l.TextUppercase, TextPlate = l.TextPlate, TextPlateColor = l.TextPlateColor,
+                TextPlateOpacity = l.TextPlateOpacity, TextLineSpacing = l.TextLineSpacing, CornerRadius = l.CornerRadius,
                 Font = l.Font,
                 FontSize = l.FontSize,
                 Radius = l.Radius,
@@ -249,11 +258,14 @@ namespace VideoBatch {
             slice.SplitLayout = t.SplitLayout;
             slice.SplitSharedPool = t.SplitSharedPool;
             slice.SplitFixHalves = t.SplitFixHalves;
+            slice.SplitAudioMode = t.SplitAudioMode; slice.SplitAudioVolume = t.SplitAudioVolume;
             slice.PrimaryNativeAudio = t.PrimaryNativeAudio; slice.SecondaryNativeAudio = t.SecondaryNativeAudio;
             slice.PrimaryNativeVolume = t.PrimaryNativeVolume; slice.SecondaryNativeVolume = t.SecondaryNativeVolume;
             slice.NativeAudioLeveled = t.NativeAudioLeveled;
             slice.NativeAudioLevels = AssemblyAudioLeveling.Copy(t.NativeAudioLevels);
             slice.VoicePitchSemitones = t.VoicePitchSemitones;
+            slice.BackgroundAudioPitch = Store.Clone(t.BackgroundAudioPitch);
+            slice.AudioProcessingSourceId = t.AudioProcessingSourceId;
             slice.SplitRatio = t.SplitRatio;
             slice.SplitPrimaryZoom = t.SplitPrimaryZoom;
             slice.SplitSecondaryZoom = t.SplitSecondaryZoom;
@@ -290,11 +302,14 @@ namespace VideoBatch {
             t.SplitLayout = slice.SplitLayout;
             t.SplitSharedPool = slice.SplitSharedPool;
             t.SplitFixHalves = slice.SplitFixHalves;
+            t.SplitAudioMode = slice.SplitAudioMode; t.SplitAudioVolume = slice.SplitAudioVolume;
             t.PrimaryNativeAudio = slice.PrimaryNativeAudio; t.SecondaryNativeAudio = slice.SecondaryNativeAudio;
             t.PrimaryNativeVolume = slice.PrimaryNativeVolume; t.SecondaryNativeVolume = slice.SecondaryNativeVolume;
             t.NativeAudioLeveled = slice.NativeAudioLeveled;
             t.NativeAudioLevels = AssemblyAudioLeveling.Copy(slice.NativeAudioLevels);
             t.VoicePitchSemitones = slice.VoicePitchSemitones;
+            t.BackgroundAudioPitch = Store.Clone(slice.BackgroundAudioPitch);
+            t.AudioProcessingSourceId = slice.AudioProcessingSourceId;
             t.SplitRatio = slice.SplitRatio <= 0 ? .5 : slice.SplitRatio;
             t.SplitPrimaryZoom = slice.SplitPrimaryZoom <= 0 ? 1 : slice.SplitPrimaryZoom;
             t.SplitSecondaryZoom = slice.SplitSecondaryZoom <= 0 ? 1 : slice.SplitSecondaryZoom;

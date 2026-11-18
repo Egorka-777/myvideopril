@@ -38,7 +38,7 @@ namespace VideoBatch {
                 ct.ThrowIfCancellationRequested();
                 string ready = await VideoSdr.EnsureReady(ffmpeg, probe, path, ct).ConfigureAwait(false);
                 var m = Core.VideoInfo(await Core.Probe(probe, ready, ct).ConfigureAwait(false));
-                result.Add(new AssemblyVideo { Path = ready, Duration = m.VideoDuration, HasAudio = m.HasAudio, Hash = AssemblyFiles.Hash(ready) });
+                result.Add(new AssemblyVideo { Path = ready, SourcePath = path, Duration = m.VideoDuration, HasAudio = m.HasAudio, Hash = AssemblyFiles.Hash(ready) });
             }
             var audioPaths=AssemblyFiles.Pool(t.Resolve(t.Music),AssemblyFiles.MusicExtensions).Concat(t.Scenes.SelectMany(s => AssemblyFiles.Pool(t.Resolve(s.Music),AssemblyFiles.MusicExtensions))).ToList();
             foreach (var line in t.SpeechLines ?? new List<AssemblySpeechLine>()) {
@@ -111,7 +111,7 @@ namespace VideoBatch {
         }
         // Retained only as a reference for controlled before/after benchmarks.
         public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
-            if(p.Background != null || p.Scenes.SelectMany(s => s.Layers).Any(l => AssemblyOverlayMedia.IsAnimated(l.Asset.Path)) || t.HasVideoDuration || t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
+            if(p.Background != null || p.Scenes.SelectMany(s => s.Layers).Any(l => (!l.Layer.IsText && AssemblyOverlayMedia.IsAnimated(l.Asset.Path))) || t.HasVideoDuration || t.ContinuousVideo || t.SplitLayout!="none" || p.GlobalLayers.Count>0 || !string.IsNullOrWhiteSpace(p.Voiceover) || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Music) || !string.IsNullOrWhiteSpace(s.Voiceover)) || t.SubtitleStyle.Enabled && p.Captions.Count>0) {
                 await AssemblyRender.Run(t,p,ffmpeg,ffprobe,output,work,rasterize,ct,progress).ConfigureAwait(false);return;
             }
             Directory.CreateDirectory(work); var paths = new List<string>();
@@ -158,6 +158,7 @@ namespace VideoBatch {
                         for (int i = 0; i < batch.Plans.Count; i++) {
                             int global=result.Outputs.Count;
                             ct.ThrowIfCancellationRequested(); var plan = batch.Plans[i];
+                            plan.SplitAudioBottom = (history.Outputs.Count % 2) != 0;
                             string itemWork = Path.Combine(work, global.ToString()); Directory.CreateDirectory(itemWork);
                             string partial = Path.Combine(itemWork, "result.mp4");
                             string destination = null;
@@ -168,10 +169,12 @@ namespace VideoBatch {
                                     f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + targetCount + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / targetCount)); }, videos, random, mix).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 progress.Report(new Update("Ролик " + (global + 1) + " · обработка изображения и звука…", 100.0 * global / targetCount));
-                                await AssemblyProcessing.Apply(t, ffmpeg, ffprobe, partial, random, ct, AssemblyTimeline.MainStart(t, plan)).ConfigureAwait(false);
+                                await AssemblyProcessing.Apply(t, ffmpeg, ffprobe, partial, random, ct, AssemblyTimeline.MainStart(t, plan), renderContext,
+                                    f=>progress.Report(new Update("Ролик "+(global+1)+" · обработка изображения и звука · "+(f*100).ToString("0",Core.Inv)+"%",100.0*global/targetCount))).ConfigureAwait(false);
                                 // Tag and validate the private file before making it visible as a result.
                                 string chosenTitle=AssemblyOutputTags.PickTitle(t.TitleBank,random,usedTitles);
-                                destination = AssemblyFiles.SafeImportDestination(t.Output, Path.Combine(t.Output, VideoBatchOutputPaths.AssemblyVideoFileName(t, global, chosenTitle)));
+                                if(string.IsNullOrWhiteSpace(chosenTitle))chosenTitle=VideoBatchOutputPaths.SourceTitle(plan.Scenes[0].Video.SourcePath??plan.Scenes[0].Video.Path);
+                                destination = VideoBatchOutputPaths.NamedOutput(t.Output,chosenTitle,"mp4");
                                 var metadata=await AssemblyOutputTags.Apply(ffmpeg,ffprobe,partial,chosenTitle,t.OutputMetadata,random,ct).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 if (AssemblySpeechPlan.SubtitlesEnabled(t))

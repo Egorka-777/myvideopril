@@ -81,8 +81,8 @@ class Limits(unittest.IsolatedAsyncioTestCase):
             job=dict(root=root,accounts=[dict(id='a')],target='@group',users='123456\nuserone\nusertwo',delay=10,limit=2)
             with patch.object(w,'client_for',return_value=client),patch.object(w,'emit',lambda e,**d:events.append((e,d))),patch.object(w,'pause',pause):await w.invite(job)
         sent=[r for r in client.calls if isinstance(r,functions.channels.InviteToChannelRequest)]
-        self.assertEqual(len(sent),1);self.assertEqual(sent[0].users[0].id,101)
-        summary=events[-1][1];self.assertEqual(summary['confirmed'],1);self.assertEqual(summary['unresolved'],1)
+        self.assertEqual(len(sent),2);self.assertEqual([r.users[0].id for r in sent],[101,102])
+        summary=events[-1][1];self.assertEqual(summary['confirmed'],2);self.assertEqual(summary['unresolved'],1)
     async def test_private_invite_link_never_auto_joins(self):
         from telethon import functions,types
         client=FakeClient()

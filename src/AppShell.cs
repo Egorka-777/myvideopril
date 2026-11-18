@@ -42,8 +42,10 @@ namespace VideoBatch {
         StatisticsPanel statsPanel;
         SettingsPanel settingsPanel;
         AssemblyWindow assemblyStudio;
+        VideoTranslationWindow translationWindow;
         HighlightsPanel highlightsPanel;
         TelegramPanel telegramPanel;
+        InstagramPanel instagramPanel;
         YouTubeWarmupPanel youtubeWarmupPanel;
         WarmupVideoPanel warmupVideoPanel;
         MainWindow processingWindow;
@@ -115,6 +117,13 @@ namespace VideoBatch {
                     e.Cancel=true; if (waitingForHighlights) return; waitingForHighlights=true;
                     try { await telegramPanel.StopBeforeClose(); BeginInvoke(new Action(Close)); } finally { waitingForHighlights=false; } return;
                 }
+                if (translationWindow?.HasWork == true) {
+                    e.Cancel = true;
+                    MessageBox.Show(this, "Остановите автоперевод перед закрытием приложения.", "Автоперевод", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    navigation.Navigate(NavSection.AutoTranslation); return;
+                }
+                try { translationWindow?.SaveState(); }
+                catch (Exception ex) { e.Cancel = true; Ui.Error(this, ex); return; }
                 SaveSettings(); youtubeBackend?.Dispose(); tiktokBackend?.Dispose();
             };
         }
@@ -124,7 +133,7 @@ namespace VideoBatch {
             int y = 0;
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
             y = AddNavGroup(panel, "Аккаунты", y, NavItem("Профили", NavSection.Profiles));
-            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram));
+            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("Автоперевод", NavSection.AutoTranslation), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram), NavItem("Instagram / Threads", NavSection.Instagram));
             y = AddNavGroup(panel, "YouTube", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогрев роликами", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
             return panel;
@@ -299,6 +308,12 @@ namespace VideoBatch {
                 case NavSection.Proxy: next=profilesWorkspace;proxyPanel.RefreshData();selectProfilesPage(2);break;
                 case NavSection.VideoAssembly: next = assemblyStudio; break;
                 case NavSection.Highlights: next = highlightsPanel; break;
+                case NavSection.AutoTranslation:
+                    if (translationWindow == null) { translationWindow = new VideoTranslationWindow(settings, embedded: true); AddPanel(translationWindow); }
+                    next = translationWindow; break;
+                case NavSection.Instagram:
+                    if(instagramPanel==null){instagramPanel=new InstagramPanel(settings);AddPanel(instagramPanel);}
+                    next=instagramPanel;instagramPanel.RefreshProfiles();break;
                 case NavSection.Telegram: next = telegramPanel; telegramPanel.RefreshData(); break;
                 case NavSection.YouTube: next = youtubeWorkspace; youtubeWorkspace.OnNavigated(); break;
                 case NavSection.TikTok: next = tiktokWorkspace; tiktokWorkspace.OnNavigated(); break;

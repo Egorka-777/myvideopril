@@ -165,7 +165,7 @@ namespace VideoBatch {
             var result = new List<LayerImage>();
             foreach (var layer in layers.Where(l => l.Enabled)) {
                 ct.ThrowIfCancellationRequested();
-                var paths = AssemblyFiles.Pool(t.Resolve(layer.Source), t.PictureExtensions);
+                var paths = layer.IsText ? new List<string> { "" } : AssemblyFiles.Pool(t.Resolve(layer.Source), t.PictureExtensions);
                 if (paths.Count == 0) { notes.Add("Пустая пачка объекта «" + layer.Name + "» не участвует."); continue; }
                 string path = paths[0];
                 if (layer.Fixed && !string.IsNullOrWhiteSpace(layer.FixedAssetHash)) {

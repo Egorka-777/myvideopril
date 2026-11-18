@@ -171,10 +171,10 @@ namespace VideoBatch {
             var stopBtn = Theme.MakeButton("Стоп", ghost: true, action: () => backend.Stop());
             stopBtn.ForeColor = Theme.Warning;
             httpUploadBtn = Theme.MakeButton("Быстрая загрузка", ghost: true, action: () => QueueUpload(true));
-            studioUploadBtn = Theme.MakeButton("Через Studio", accent: true, action: () => QueueUpload(false));
+            studioUploadBtn = Theme.MakeButton("Опубликовать", accent: true, action: () => QueueUpload(false));
             var bottom = Theme.MakeBottomBar(
                 (studioUploadBtn, true),
-                (httpUploadBtn, false),
+                (Theme.MakeButton("Заголовки", ghost: true, action: () => backend.Window.OpenTitleBanks(this)), false),
                 (Theme.MakeButton("Смотреть ссылки", ghost: true, action: async () => await RunLinkWatch()), false),
                 (crossWatchBtn = Theme.MakeButton(CrossWatchButtonLabel(), ghost: true, action: async () => await RunCrossLinkWatch()), false),
                 (stopBtn, false));

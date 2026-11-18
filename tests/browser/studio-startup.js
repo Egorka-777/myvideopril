@@ -33,6 +33,13 @@ const S=require('../../tools/uploader/youtube-studio-upload');
     console.log('PASS native Studio picker',lang,shadow?'shadow CDP':'Playwright');
    }
   }
+  // Hashtag suggestions react to per-character key events and can alter a title.
+  // Insert the complete title in one native text transaction instead.
+  await page.setContent('<div contenteditable="true" id="title">old filename</div><script>window.titleKeys=0;document.querySelector("#title").addEventListener("keypress",()=>titleKeys++);</script>');
+  const hashtagTitle='Бинодекс бинарные опционы BinoDex #трейдинг #крипта #binodex';
+  await S.typeText(page.locator('#title'),hashtagTitle,{name:'названия',delay:55,verifyMs:1000});
+  assert.equal(await S.read(page.locator('#title')),hashtagTitle);
+  assert.equal(await page.evaluate(()=>titleKeys),0,'Title must not trigger character-by-character hashtag suggestions');
   // A slow read must not replace the real deadline with the five-second probe limit.
   let probes=0;const slowStart=Date.now();
   assert.equal(await B.waitFor(()=>++probes===1?new Promise(()=>{}):true,6500,'actual deadline'),true);

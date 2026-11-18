@@ -6,6 +6,40 @@ using System.Windows.Forms;
 
 namespace VideoBatch {
     public static class ProcessingRegressionTests {
+        public static bool RunExtendedEffects(string ffmpeg,string ffprobe) {
+            string root=Path.Combine(Path.GetTempPath(),"vb-effects-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var ct=System.Threading.CancellationToken.None;
+            try {
+                string input=Path.Combine(root,"input.mp4");
+                Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","testsrc2=s=320x180:r=30:d=2","-f","lavfi","-i","sine=frequency=440:sample_rate=48000:duration=2","-c:v","libx264","-c:a","aac","-metadata","comment=fixture-original",input},ct,null,60).GetAwaiter().GetResult();
+                var media=Core.VideoInfo(Core.Probe(ffprobe,input,ct).GetAwaiter().GetResult());
+                foreach(string preset in new[]{"warm","cool","film","vintage"}) {
+                    var settings=new ProcessingSettings {ColorPreset=preset};
+                    foreach(var item in settings.Parameters().SkipWhile(p=>!ReferenceEquals(p,settings.Gamma)))item.Enabled=true;
+                    settings.Pitch.Enabled=settings.Sharpness.Enabled=true;
+                    var copy=Store.Clone(settings);copy.Validate();
+                    if(copy.ColorPreset!=preset||!copy.TemporalBlend.Enabled)throw new Exception("Extended settings roundtrip");
+                    var profile=new Profile {Short=false,Resolution="source",Fps="source",Metadata="clear",Format="mp4",Speed=1};
+                    ProcessingEngine.Apply(profile,copy,media,new Random(42),DateTime.Now);
+                    string output=Path.Combine(root,preset+".mp4");
+                    var args=ProcessingEngine.Arguments(input,output,profile,media,null);
+                    string joined=string.Join(" ",args);
+                    foreach(string filter in new[]{"geq=","tblend=","lutrgb=","gblur=","aecho=","equalizer=","lowpass=","highpass=","flanger=","unsharp="})
+                        if(!joined.Contains(filter))throw new Exception("Missing filter "+filter);
+                    string videoFilters=args[args.IndexOf("-vf")+1],audioFilters=args[args.IndexOf("-filter_complex")+1];
+                    ProcessingEngine.Accelerate(ffmpeg,args,media.Width,media.Height,ct,Console.WriteLine).GetAwaiter().GetResult();
+                    if(args[args.IndexOf("-vf")+1]!=videoFilters||args[args.IndexOf("-filter_complex")+1]!=audioFilters)throw new Exception("GPU selection changed effects");
+                    Core.Tool(ffmpeg,args,ct,null,120).GetAwaiter().GetResult();
+                    Console.WriteLine("Test encoder: "+args[args.IndexOf("-c:v")+1]);
+                    var result=Core.VideoInfo(Core.Probe(ffprobe,output,ct).GetAwaiter().GetResult());
+                    if(result.Width!=320||result.Height!=180||!result.HasAudio||Math.Abs(result.VideoDuration-2)>.06)throw new Exception("Effect output dimensions/audio/timing: "+result.VideoDuration);
+                    Core.Tool(ffmpeg,new[]{"-v","error","-i",output,"-f","null","-"},ct,null,60).GetAwaiter().GetResult();
+                    Console.WriteLine("Extended effects FFmpeg PASS: "+preset+", video/audio decoded, duration preserved");
+                }
+                if(ProcessingSettings.MildDefaults().Geq.Enabled||AssemblyProcessing.Defaults().ColorLut.Enabled)throw new Exception("New effects enabled implicitly");
+                return true;
+            } finally {Directory.Delete(root,true);}
+        }
         public static bool RunAssemblySync(string ffmpeg, string ffprobe) {
             string root = Path.Combine(Path.GetTempPath(), "vb-assembly-sync-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try {
@@ -115,6 +149,26 @@ namespace VideoBatch {
                 return true;
             } finally { Store.Root = oldRoot; if (Directory.Exists(temp)) Directory.Delete(temp, true); }
         }
+        public static bool RunUnifiedUiTests() {
+            foreach(bool shorts in new[]{false,true}) {
+                var prefs=new Preferences {Shorts=shorts};Store.Normalize(prefs);
+                prefs.Processing.Noise.Enabled=true;prefs.Processing.Noise.Values=new Range(1.2,2.3);
+                prefs.Ranges.Volume=56;prefs.BackgroundDb=-17;
+                string before=new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(prefs);
+                using(var dialog=new ProcessingDialog(prefs.Processing,exportSettings:prefs)) {
+                    dialog.SelectAudioTab();
+                    var flags=BindingFlags.Instance|BindingFlags.NonPublic;
+                    var tabs=(TabControl)typeof(ProcessingDialog).GetField("tabs",flags).GetValue(dialog);
+                    if(tabs.SelectedTab.Text!="Аудио"||!tabs.TabPages.Cast<TabPage>().Any(p=>p.Text=="Экспорт"))throw new Exception("Unified tabs missing");
+                    typeof(ProcessingDialog).GetMethod("Read",flags).Invoke(dialog,null);
+                    if(!dialog.Settings.Noise.Enabled||dialog.Settings.Noise.Values.Min!=1.2)throw new Exception("Enabled effects lost");
+                    if(shorts && dialog.ExportRanges.Volume!=56 || !shorts && dialog.MusicVolumeDb!=-17)throw new Exception("Music volume lost");
+                    dialog.SelectMetadataTab();if(tabs.SelectedTab.Text!="Метаданные")throw new Exception("Metadata tab selection");
+                    if(before!=new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(prefs))throw new Exception("Dialog changed source before save");
+                }
+            }
+            Console.WriteLine("Unified UI PASS: short/long export, audio shortcut, active effects and original settings preserved");return true;
+        }
         public static bool RunUiSelfTests() {
             string oldRoot=Store.Root;
             string temp=Path.Combine(Path.GetTempPath(),"videobatch-processing-ui-"+Guid.NewGuid().ToString("N"));
@@ -132,7 +186,9 @@ namespace VideoBatch {
                         foreach (Control child in c.Controls) walk(child);
                     };
                     walk(dialog);
-                    return tabs == 4 && ranges == 39 && dialog.Settings.IsEnabled;
+                    typeof(ProcessingDialog).GetMethod("Read",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(dialog,null);
+                    return tabs == 4 && ranges == dialog.Settings.Parameters().Count()*2+7 && dialog.Settings.IsEnabled
+                        && dialog.Settings.ColorPreset=="warm" && !dialog.Settings.Geq.Enabled;
                 }
             } finally { Store.Root=oldRoot;if(Directory.Exists(temp))Directory.Delete(temp,true); }
         }

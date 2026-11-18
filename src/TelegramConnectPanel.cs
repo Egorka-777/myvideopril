@@ -38,7 +38,7 @@ namespace VideoBatch {
             proxyGrid.SelectionChanged+=(s,e)=>{if(proxyGrid.CurrentRow?.Tag is TelegramProxy p)proxyHint.Text=p.source+(p.id==store.Load().default_proxy_id?" · Для новых аккаунтов":"")+" · "+(string.IsNullOrEmpty(p.detail)?"Ещё не проверялся":p.detail)+(string.IsNullOrEmpty(p.checked_at)?"":" · "+p.checked_at);};
             layout.Controls.Add(proxyGrid,0,2);page.Controls.Add(layout);
         }
-        TelegramProxy CurrentProxy()=>proxyGrid.CurrentRow?.Tag as TelegramProxy??throw new InvalidOperationException("Выберите прокси в списке");
+        TelegramProxy CurrentProxy(){var proxy=proxyGrid.CurrentRow?.Tag as TelegramProxy??throw new InvalidOperationException("Выберите прокси в списке");if(proxy.status=="missing")throw new InvalidOperationException("Прокси профиля ещё не получен. Обновите профили через «Ещё → Из Dolphin».");return proxy;}
         void SeedProxies() {
             var legacy=store.Load().accounts.Where(a=>a.proxy_id==""&&!string.IsNullOrWhiteSpace(a.proxy)).ToList();
             var library=new List<AccountRecord>();try{library=new AccountLibraryStore().Load().Where(a=>!string.IsNullOrWhiteSpace(a.Proxy)).ToList();}catch(IOException){proxyHint.Text="Не удалось прочитать прокси из общего раздела аккаунтов. Можно добавить вручную.";}
@@ -52,7 +52,7 @@ namespace VideoBatch {
         void RefreshProxies() {
             if(proxyGrid==null)return;
             var data=store.Load();string current=(proxyGrid.CurrentRow?.Tag as TelegramProxy)?.id;proxyGrid.Rows.Clear();
-            foreach(var p in data.proxies){
+            foreach(var p in ProxyChoices(data)){
                 string state=p.status=="ready"?"Доступен":p.status=="failed"?"Ошибка соединения":new[]{"partial","limited"}.Contains(p.status)?"Частичный доступ":"Не проверен";
                 int row=proxyGrid.Rows.Add(TelegramProxyCatalog.SafeName(p.name,p.url),TelegramProxyCatalog.Protocol(p.url),TelegramStore.ProxyLabel(p.url),TelegramProxyCatalog.Login(p.url),TelegramHealth.Dot(p.status)+" "+state,TelegramProxyCatalog.Assigned(data,p),TelegramProxyCatalog.Blocked(data,p));
                 proxyGrid.Rows[row].Tag=p;proxyGrid.Rows[row].Cells[4].Style.ForeColor=p.status=="ready"?Theme.Success:p.status=="failed"?Theme.Error:new[]{"limited","partial"}.Contains(p.status)?Theme.Warning:Theme.TextMuted;
@@ -82,19 +82,25 @@ namespace VideoBatch {
                 proxyHint.Text="Получаем прокси Dolphin…";var prefs=getPreferences?.Invoke()??Store.Load();
                 string token=WindowsSupport.Unprotect(prefs.ProtectedDolphinToken);
                 var profiles=ProfileCatalog.Build(prefs).Where(p=>!string.IsNullOrWhiteSpace(p.ProfileId)).Select(p=>new KeyValuePair<string,string>(p.ProfileId,p.DisplayName));
-                var result=await TelegramProxyCatalog.FetchDolphin(token,profiles,cancel:proxyCancel.Token);
-                store.Change(d=>{foreach(var p in result.Proxies)TelegramProxyCatalog.Add(d,p.url,p.name,p.source,p.source_id,p.country);});
+                var result=await TelegramProxyCatalog.FetchDolphin(token,profiles,cancel:proxyCancel.Token,includeCatalog:false);
+                store.Change(d=>{foreach(var p in result.Proxies)TelegramProxyCatalog.SyncProfile(d,p);});
                 proxyHint.Text="Получено: "+result.Proxies.Count+". Профили браузера не запускались."+(result.Warnings.Count==0?"":" Не всё получено: "+result.Warnings.First());
                 if(result.Warnings.Count>0)Log("","","proxy",proxyHint.Text);
             }catch(OperationCanceledException){proxyHint.Text="Получение прокси остановлено";}
             catch(Exception e){proxyHint.Text=e is InvalidOperationException?e.Message:"Не удалось получить прокси Dolphin. Можно добавить строку вручную.";Log("","","proxy",proxyHint.Text);}
             finally{busy=false;foreach(var b in workButtons)b.Enabled=true;grid.Enabled=true;proxyGrid.Enabled=true;RefreshProxies();RefreshData();}
         }
+        List<TelegramProxy> ProxyChoices(TelegramData data) {
+            var choices=TelegramProxyCatalog.ProfileChoices(data,getPreferences?.Invoke()??Store.Load());
+            choices.AddRange(data.proxies.Where(p=>!p.source_id.StartsWith("dolphin:",StringComparison.Ordinal)
+                && !(p.source_ids??new List<string>()).Any(id=>id.StartsWith("dolphin:profile:",StringComparison.Ordinal))));
+            return choices;
+        }
         void AssignProxy() {
             if(busy)return;
             try{var ids=Selected().Select(a=>a.id).ToArray();using(var f=new TelegramFields("Прокси аккаунтов","Настройка применяется только к выбранным аккаунтам.")){
-                var choices=TelegramImportDialog.ProxyChoices(store.Load());f.AddControl(choices);
-                if(f.ShowDialog(this)!=DialogResult.OK)return;string id=((TelegramProxy)choices.SelectedItem).id;
+                var data=store.Load();var choices=TelegramImportDialog.ProxyChoices(data,ProxyChoices(data));f.AddControl(choices);
+                if(f.ShowDialog(this)!=DialogResult.OK)return;var selected=(TelegramProxy)choices.SelectedItem;if(selected.status=="missing")throw new InvalidOperationException("Прокси профиля ещё не получен. Обновите профили через «Ещё → Из Dolphin».");string id=selected.id;
                 store.Change(d=>TelegramProxyCatalog.Assign(d,ids,id));RefreshData();RefreshProxies();
             }}catch(Exception e){Failure(e);}
         }
@@ -121,14 +127,14 @@ namespace VideoBatch {
         public string ProxyId=>((TelegramProxy)proxies.SelectedItem).id;
         public string Passcode=>passcode.Text;
         public bool CheckAfter=>check.Checked;
-        public static ComboBox ProxyChoices(TelegramData data){
+        public static ComboBox ProxyChoices(TelegramData data,IEnumerable<TelegramProxy> choices=null){
             var combo=Theme.MakeCombo(new string[0]);combo.Width=450;combo.DisplayMember="";combo.DrawMode=DrawMode.OwnerDrawFixed;combo.ItemHeight=28;
             combo.DrawItem+=(sender,e)=>{if(e.Index<0)return;var c=(ComboBox)sender;using(var brush=new SolidBrush((e.State&DrawItemState.Selected)!=0?Theme.Selected:Theme.Elevated))e.Graphics.FillRectangle(brush,e.Bounds);TextRenderer.DrawText(e.Graphics,c.Items[e.Index].ToString(),Theme.FontBody,new Rectangle(e.Bounds.X+8,e.Bounds.Y,e.Bounds.Width-12,e.Bounds.Height),Theme.TextPrimary,TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);};
-            combo.Items.Add(new TelegramProxy{id="",name="Без прокси",url=""});foreach(var p in data.proxies)combo.Items.Add(p);
+            combo.Items.Add(new TelegramProxy{id="",name="Без прокси",url=""});foreach(var p in choices??data.proxies)combo.Items.Add(p);
             combo.SelectedIndex=0;for(int i=1;i<combo.Items.Count;i++)if(((TelegramProxy)combo.Items[i]).id==data.default_proxy_id)combo.SelectedIndex=i;
             return combo;
         }
-        public TelegramImportDialog(TelegramStore store,string[] initial=null):base("Добавить аккаунт","Выберите файл или перетащите сюда папку TData."){
+        public TelegramImportDialog(TelegramStore store,string[] initial=null,Func<TelegramData,List<TelegramProxy>> choices=null):base("Добавить аккаунт","Выберите файл или перетащите сюда папку TData."){
             Height=520;
             this.store=store;Name="TelegramImport";
             AddControl(Theme.MakeMenuButton("Открыть…",new[]{
@@ -136,8 +142,8 @@ namespace VideoBatch {
                 ("Папка TData",new Action(()=>{var dir=Ui.PickFolder(this,null,"Выберите папку TData или папку аккаунта");if(dir!=null)SetPaths(new[]{dir});}))
             }));
             files=new Label{Width=450,Height=44,AutoEllipsis=true,ForeColor=Theme.TextSecondary};AddControl(files);SetPaths(initial??new string[0]);
-            AddInfo("Прокси для новых аккаунтов");proxies=ProxyChoices(store.Load());proxies.Name="ImportProxy";AddControl(proxies);
-            AddControl(Theme.MakeButton("＋ Добавить прокси",ghost:true,action:()=>{using(var f=new TelegramProxyDialog())if(f.ShowDialog(this)==DialogResult.OK){string selected="";store.Change(d=>{foreach(var value in f.Values)selected=TelegramProxyCatalog.Add(d,value,f.ProxyName).id;});proxies.Items.Clear();var data=store.Load();proxies.Items.Add(new TelegramProxy{id="",name="Без прокси"});foreach(var p in data.proxies)proxies.Items.Add(p);proxies.SelectedItem=data.proxies.First(p=>p.id==selected);}}));
+            AddInfo("Профиль YouTube / TikTok или сохранённый прокси");var initialData=store.Load();proxies=ProxyChoices(initialData,choices?.Invoke(initialData));proxies.Name="ImportProxy";AddControl(proxies);
+            AddControl(Theme.MakeButton("＋ Добавить прокси",ghost:true,action:()=>{using(var f=new TelegramProxyDialog())if(f.ShowDialog(this)==DialogResult.OK){string selected="";store.Change(d=>{foreach(var value in f.Values)selected=TelegramProxyCatalog.Add(d,value,f.ProxyName).id;});proxies.Items.Clear();var data=store.Load();proxies.Items.Add(new TelegramProxy{id="",name="Без прокси"});foreach(var p in choices?.Invoke(data)??data.proxies)proxies.Items.Add(p);proxies.SelectedItem=proxies.Items.Cast<TelegramProxy>().First(p=>p.id==selected);}}));
             check=new CheckBox{Text="Проверить после добавления",Checked=true,AutoSize=true,Margin=new Padding(0,12,0,12),ForeColor=Theme.TextPrimary};AddControl(check);
             var advanced=new Panel{Width=450,Height=0,Visible=false};
             passcode=Theme.MakeSearchBox();passcode.UseSystemPasswordChar=true;passcode.Dock=DockStyle.Bottom;
@@ -145,7 +151,7 @@ namespace VideoBatch {
             AddControl(Theme.MakeButton("Дополнительно",ghost:true,action:()=>{advanced.Visible=!advanced.Visible;advanced.Height=advanced.Visible?65:0;}));AddControl(advanced);
             AddInfo("Для .session положите парный JSON рядом с тем же именем. TData импортируется папкой или ZIP.");
             AllowDrop=true;DragEnter+=(s,e)=>e.Effect=e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;DragDrop+=(s,e)=>SetPaths((string[])e.Data.GetData(DataFormats.FileDrop));
-            FormClosing+=(s,e)=>{if(DialogResult==DialogResult.OK&&Paths.Length==0){e.Cancel=true;DialogResult=DialogResult.None;MessageBox.Show(this,"Выберите файлы или папку аккаунтов","Telegram");}};
+            FormClosing+=(s,e)=>{if(DialogResult!=DialogResult.OK)return;string error=Paths.Length==0?"Выберите файлы или папку аккаунтов":((TelegramProxy)proxies.SelectedItem).status=="missing"?"Прокси профиля ещё не получен. Закройте окно и обновите профили через «Ещё → Из Dolphin».":null;if(error!=null){e.Cancel=true;DialogResult=DialogResult.None;MessageBox.Show(this,error,"Telegram");}};
         }
         void SetPaths(string[] paths){Paths=paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();files.Text=Paths.Length==0?"Пока ничего не выбрано · можно перетащить сюда":Paths.Length==1?Path.GetFileName(Paths[0].TrimEnd(Path.DirectorySeparatorChar)):"Выбрано источников: "+Paths.Length;}
     }

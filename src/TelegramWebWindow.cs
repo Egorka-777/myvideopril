@@ -19,12 +19,12 @@ namespace VideoBatch {
         Task monitor;
         public int Port{get;private set;}
         public string Secret{get;}=Guid.NewGuid().ToString("N")+Guid.NewGuid().ToString("N");
-        public async Task Start(TelegramStore store,string proxy,Action<Dictionary<string,object>> onRoute=null){
+        public async Task Start(TelegramStore store,string proxy,Action<Dictionary<string,object>> onRoute=null,string service="telegram"){
             string python=Path.Combine(store.Root,"venv","Scripts","python.exe");
             if(!TelegramRunner.Prepared(store))throw new InvalidOperationException("Подготовьте Telegram в настройках приложения");
             var start=new ProcessStartInfo(python,Core.Quote(Path.Combine(TelegramRunner.Scripts(),"web_proxy.py"))){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
             process=Process.Start(start);input=new StreamWriter(process.StandardInput.BaseStream,new UTF8Encoding(false)){AutoFlush=true};
-            var json=new JavaScriptSerializer();await input.WriteLineAsync(json.Serialize(new{proxy,secret=Secret}));
+            var json=new JavaScriptSerializer();await input.WriteLineAsync(json.Serialize(new{proxy,secret=Secret,service}));
             var errors=process.StandardError.ReadToEndAsync();
             var line=process.StandardOutput.ReadLineAsync();if(await Task.WhenAny(line,Task.Delay(15000))!=line)throw new IOException("Локальный маршрут прокси не запустился вовремя");
             var result=json.Deserialize<Dictionary<string,object>>(await line??"{}");

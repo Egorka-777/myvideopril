@@ -13,12 +13,13 @@ import threading
 from worker import proxy_connector
 
 
-def allowed_host(host):
+def allowed_host(host,service='telegram'):
     value=host.lower().rstrip('.')
-    return bool(re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)*',value)) and (value=='telegram.org' or value.endswith('.telegram.org'))
+    domains={'telegram':('telegram.org',),'instagram':('instagram.com','threads.com','threads.net','cdninstagram.com','fbcdn.net')}.get(service,())
+    return bool(re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)*',value)) and any(value==domain or value.endswith('.'+domain) for domain in domains)
 
 
-def route_hosts(host):
+def route_hosts(host,service='telegram'):
     """Same-DC official aliases only; never another proxy or another DC.
 
     Web A uses zwsN (Ajaxy/telegram-tt, gramjs/Utils.ts), while the public
@@ -26,25 +27,31 @@ def route_hosts(host):
     Browser TLS/SNI and certificate verification are left untouched.
     """
     host=host.lower().rstrip('.')
+    if service!='telegram':return [host]
     match=re.fullmatch(r'[kz]ws([1-5])(-1)?\.web\.telegram\.org',host)
     if not match:return [host]
     name={1:'pluto',2:'venus',3:'aurora',4:'vesta',5:'flora'}[int(match[1])]
     return [host,name+(match[2] or '')+'.web.telegram.org']
 
 
-def safe_host(host):
+def safe_host(host,service='telegram'):
+    if service=='instagram':
+        host=host.lower().rstrip('.')
+        return host if allowed_host(host,service) else 'other.instagram.com'
     if re.fullmatch(r'(?:(?:[kz]ws[1-5]|pluto|venus|aurora|vesta|flora)(?:-1)?\.)?web\.telegram\.org',host):
         return host
     return 'other.telegram.org'
 
 
 class Bridge:
-    def __init__(self, proxy, secret, allow_host=allowed_host, on_route=None):
+    def __init__(self, proxy, secret, allow_host=None, on_route=None, service='telegram'):
+        if service not in ('telegram','instagram'):raise ValueError('Unsupported bridge service')
+        self.service=service
         self.connector=proxy_connector(proxy)
         if self.connector is None:
             raise ValueError('Bridge requires configured upstream proxy')
         self.secret=secret
-        self.allow_host=allow_host
+        self.allow_host=allow_host if allow_host is not None else lambda host:allowed_host(host,service)
         self.connections=set()
         self.on_route=on_route or (lambda **data:None)
         self.preferred={}
@@ -52,19 +59,19 @@ class Bridge:
     async def connect(self,host):
         from python_socks import ProxyError,ProxyConnectionError,ProxyTimeoutError
         failure=None
-        targets=route_hosts(host)
+        targets=route_hosts(host,self.service)
         targets.sort(key=lambda target:target!=self.preferred.get(host))
         for target in targets:
             try:
                 sock=await asyncio.wait_for(self.connector.connect(dest_host=target,dest_port=443,timeout=6),6)
-                self.on_route(host=safe_host(host),target=safe_host(target),status='ready',code='tunnel_ready')
+                self.on_route(host=safe_host(host,self.service),target=safe_host(target,self.service),status='ready',code='tunnel_ready')
                 self.preferred[host]=target
                 return sock
             except asyncio.CancelledError:raise
             except (OSError,TimeoutError,ProxyError,ProxyConnectionError,ProxyTimeoutError) as exc:
                 failure=exc
-                self.on_route(host=safe_host(host),target=safe_host(target),status='failed',code='proxy_tunnel')
-        raise ConnectionError('Telegram Web proxy tunnel failed') from failure
+                self.on_route(host=safe_host(host,self.service),target=safe_host(target,self.service),status='failed',code='proxy_tunnel')
+        raise ConnectionError(('Instagram' if self.service=='instagram' else 'Telegram')+' Web proxy tunnel failed') from failure
 
     async def handle(self, reader, writer):
         self.connections.add(writer)
@@ -124,7 +131,7 @@ class Bridge:
 async def serve(job):
     def report(**data):
         print(json.dumps(dict(event='route',**data)),flush=True)
-    bridge=Bridge(job.get('proxy',''),job['secret'],on_route=report)
+    bridge=Bridge(job.get('proxy',''),job['secret'],on_route=report,service=job.get('service','telegram'))
     stopped=threading.Event()
     def watch():
         for line in sys.stdin:

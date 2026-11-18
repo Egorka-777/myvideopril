@@ -11,6 +11,56 @@ namespace VideoBatch {
     // Explicit FFmpeg integration regression; callable by the existing reflection test host.
     public static class AssemblyScopedRenderTests {
         static void Require(bool condition,string message) { if(!condition)throw new Exception(message); }
+        public static bool RunSplitAudio(string ffmpeg, string ffprobe) {
+            string root=Path.Combine(Path.GetTempPath(),"split-audio-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+            var ct=CancellationToken.None;
+            try {
+                var sources=new List<AssemblyVideo>();
+                foreach(int hz in new[]{440,880}) {
+                    string file=Path.Combine(root,hz+".mp4");
+                    Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","color=c="+(hz==440?"red":"blue")+":s=180x320:r=30:d="+(hz==440?"1":"1.6"),"-f","lavfi","-i","sine=frequency="+hz+":sample_rate=48000:duration="+(hz==440?"1":"1.6"),"-c:v","libx264","-c:a","aac",file},ct).GetAwaiter().GetResult();
+                    sources.Add(new AssemblyVideo{Path=file,Hash=hz.ToString(),Duration=hz==440?1:1.6,HasAudio=true});
+                }
+                foreach(string mode in new[]{"top","bottom","alternate"}) foreach(bool swapped in new[]{false,true}) foreach(bool bottom in mode=="alternate"?new[]{false,true}:new[]{false}) {
+                    var t=new AssemblyTemplate{Width=180,Height=320,Fps=30,SplitLayout="vertical",Transition="cut",SceneTimingVersion=1,RenderMode="auto",SplitAudioMode=mode,SplitAudioVolume=.5};
+                    var scene=new AssemblyScene{Duration=1,DurationByVideo=true,NativeAudioVolume=1};t.Scenes.Add(scene);
+                    var p=new AssemblyPlan{SecondaryVideo=sources[1],SplitSwapped=swapped,SplitAudioBottom=bottom};p.Scenes.Add(new AssemblyScenePlan{Scene=scene,Video=sources[0]});AssemblyTimeline.Complete(t,p,new Random(1));
+                    string key=mode+swapped+bottom,output=Path.Combine(root,key+".mp4");
+                    AssemblyRender.Run(t,p,ffmpeg,ffprobe,output,Path.Combine(root,key),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                    string pcm=Path.Combine(root,"audio.pcm");Core.Tool(ffmpeg,new[]{"-v","error","-y","-i",output,"-vn","-ac","1","-ar","8000","-f","s16le",pcm},ct).GetAwaiter().GetResult();
+                    byte[] data=File.ReadAllBytes(pcm);
+                    Func<int,double> power=hz=>{double re=0,im=0;for(int i=1600;i<5600;i++){double sample=BitConverter.ToInt16(data,i*2);re+=sample*Math.Cos(2*Math.PI*hz*i/8000);im+=sample*Math.Sin(2*Math.PI*hz*i/8000);}return re*re+im*im;};
+                    bool second=(mode=="bottom" || mode=="alternate"&&bottom)!=swapped;
+                    Require(power(second?880:440)>power(second?440:880)*100,"Mixed or wrong audio: "+key);
+                    var media=Core.VideoInfo(Core.Probe(ffprobe,output,ct).GetAwaiter().GetResult());
+                    Require(Math.Abs(media.VideoDuration-(second?1.6:1))<.05,"Duration did not follow sounding video: "+key+" = "+media.VideoDuration);
+                    Console.WriteLine("Split audio PASS: "+key+" => "+(second?880:440)+"Hz only");
+                }
+                var unique=new AssemblyTemplate{Materials=root,Videos=sources[0].Path,SecondaryVideos=sources[1].Path,SplitLayout="vertical",Transition="cut",SplitAudioMode="top"};unique.Scenes.Add(new AssemblyScene{Duration=1});
+                var picked=AssemblyPlanner.Create(unique,sources,new AssemblyHistory(),new Random(1),1).Plans.Single();
+                var used=new AssemblyHistory();used.Combinations.Add(picked.Signature);
+                foreach(string mode in new[]{"bottom","alternate"}) {unique.SplitAudioMode=mode;Require(AssemblyPlanner.Create(unique,sources,used,new Random(1),1).Plans.Count==0,"Changing audio resurrected a used pair");}
+                Console.WriteLine("Split audio identity PASS: sound changes do not resurrect used pairs");
+                var batchTemplate=new AssemblyTemplate{Materials=root,Videos=sources[0].Path,SecondaryVideos=sources[1].Path,SplitLayout="vertical",Transition="cut",SplitAudioMode="alternate",Width=180,Height=320,Fps=30,Count=1,Output=Path.Combine(root,"batch"),OutputProcessing=new ProcessingSettings()};
+                batchTemplate.Scenes.Add(new AssemblyScene{Duration=1});
+                string third=Path.Combine(root,"third.mp4");Core.Tool(ffmpeg,new[]{"-v","error","-y","-i",sources[1].Path,"-vf","eq=brightness=0.1","-c:v","libx264","-c:a","copy",third},ct).GetAwaiter().GetResult();
+                string pool=Path.Combine(root,"second-pool");Directory.CreateDirectory(pool);File.Copy(sources[1].Path,Path.Combine(pool,"one.mp4"));File.Copy(third,Path.Combine(pool,"two.mp4"));batchTemplate.SecondaryVideos=pool;
+                var progress=new Progress<Update>(_=>{});
+                string ledger=Path.Combine(root,"history");
+                for(int turn=0;turn<2;turn++) {
+                    var result=AssemblyEngine.Run(batchTemplate,ffmpeg,ffprobe,ledger,AssemblyRaster.Save,progress,ct).GetAwaiter().GetResult();Require(result.Outputs.Count==1,"Alternating batch missing output: "+string.Join(";",result.Errors));
+                    string pcm=Path.Combine(root,"batch.pcm");Core.Tool(ffmpeg,new[]{"-v","error","-y","-i",result.Outputs[0],"-vn","-ac","1","-ar","8000","-f","s16le",pcm},ct).GetAwaiter().GetResult();byte[] data=File.ReadAllBytes(pcm);
+                    Func<int,double> energy=hz=>{double re=0,im=0;for(int i=1600;i<5600;i++){double s=BitConverter.ToInt16(data,i*2);re+=s*Math.Cos(2*Math.PI*hz*i/8000);im+=s*Math.Sin(2*Math.PI*hz*i/8000);}return re*re+im*im;};
+                    Require(energy(turn==0?440:880)>energy(turn==0?880:440)*100,"Alternation did not persist across batches");
+                }
+                Console.WriteLine("Split audio batch PASS: consecutive one-roll batches alternate across saved history");
+                var saved=new AssemblyTemplate{SplitAudioMode="alternate",SplitAudioVolume=.65};AssemblyMarketProfiles.Capture(saved,AssemblyProfile.Ru);
+                string xml=Path.Combine(root,"template.xml");AssemblyFiles.Save(xml,saved);saved=AssemblyFiles.Load<AssemblyTemplate>(xml);AssemblyMarketProfiles.Apply(saved,AssemblyProfile.Ru);
+                Require(saved.SplitAudioMode=="alternate"&&saved.SplitAudioVolume==.65,"Split audio profile/XML lost");
+                Require(new AssemblyTemplate().EffectiveSplitAudioMode=="top","Legacy mixed audio not migrated to one source");
+                return true;
+            } finally {Directory.Delete(root,true);}
+        }
         public static bool Run(string ffmpeg,string ffprobe) {
             string root=Path.Combine(Path.GetTempPath(),"assembly-scoped-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
             try { RunAsync(ffmpeg,ffprobe,root).GetAwaiter().GetResult();return true; }

@@ -18,7 +18,9 @@ namespace VideoBatch {
         Settings,
         AccountLibrary,
         Highlights,
-        Telegram
+        Telegram,
+        AutoTranslation,
+        Instagram
     }
 
     public sealed class NavigationService {
@@ -42,9 +44,11 @@ namespace VideoBatch {
                 case NavSection.VideoProcessing: return "Обработка видео";
                 case NavSection.VideoAssembly: return "Сборка роликов";
                 case NavSection.Highlights: return "Нарезчик";
+                case NavSection.AutoTranslation: return "Автоперевод";
                 case NavSection.YouTube: return "YouTube";
                 case NavSection.TikTok: return "TikTok";
                 case NavSection.Telegram: return "Telegram";
+                case NavSection.Instagram: return "Instagram / Threads";
                 case NavSection.Warmup: return "Автопрогрев";
                 case NavSection.WarmupClips: return "Прогрев роликами";
                 case NavSection.ViewsSearch: return "Просмотры и поиск";

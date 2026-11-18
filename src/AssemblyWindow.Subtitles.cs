@@ -57,7 +57,8 @@ namespace VideoBatch {
             stack.Controls.Add(subtitleUppercase);
 
             subtitleFont = Theme.MakeCombo(SubtitlePresets.Fonts); SubtitleField(stack, "Шрифт", subtitleFont);
-            subtitleSize = SubtitleSlider(stack, "Размер текста", 28, 88, 0, 56, "");
+            subtitleSize = SubtitleSlider(stack, "Размер текста", 28, 150, 0, 56, "");
+            subtitleLineSpacing = SubtitleSlider(stack, "Межстрочный интервал", 60, 150, 0, 100, "%");
             subtitlePanelPosition = SubtitleSlider(stack, "Положение сверху", 10, 90, 0, 72, "%");
             subtitleWords = SubtitleSlider(stack, "Слов в группе", 1, 6, 0, 3, "");
             subtitlePlate = Theme.MakeCombo(new[] { "Скруглённая", "Прямая", "Без плашки" }); SubtitleField(stack, "Плашка", subtitlePlate);
@@ -90,7 +91,7 @@ namespace VideoBatch {
             bottom.Controls.Add(subtitlePanelMessage, 0, 0); bottom.Controls.Add(done, 1, 0);
             root.Controls.Add(bottom, 0, 1);
 
-            foreach (var n in new NumericUpDown[] { subtitleSize, subtitlePanelPosition, subtitleWords, subtitleOpacity })
+            foreach (var n in new NumericUpDown[] { subtitleSize, subtitlePanelPosition, subtitleWords, subtitleOpacity, subtitleLineSpacing })
                 n.ValueChanged += (s, e) => PushSubtitleStyleToPreview();
             subtitleFont.SelectedIndexChanged += (s, e) => PushSubtitleStyleToPreview();
             subtitlePlate.SelectedIndexChanged += (s, e) => PushSubtitleStyleToPreview();
@@ -161,6 +162,7 @@ namespace VideoBatch {
                 subtitleFont.SelectedItem = style.FontFamily;
                 if (subtitleFont.SelectedIndex < 0) subtitleFont.SelectedIndex = 0;
                 subtitlePlate.SelectedIndex = style.Plate == "none" ? 2 : style.Plate == "solid" ? 1 : 0;
+                subtitleLineSpacing.Value = style.LineSpacing;
                 subtitleSize.Value = style.FontSize;
                 subtitlePanelPosition.Value = style.Position;
                 subtitleWords.Value = style.WordsPerCaption;
@@ -179,6 +181,7 @@ namespace VideoBatch {
             style.Enabled = subtitleEnabled.Checked;
             style.Uppercase = subtitleUppercase != null && subtitleUppercase.Checked;
             style.FontFamily = Convert.ToString(subtitleFont.SelectedItem);
+            style.LineSpacing = (int)subtitleLineSpacing.Value;
             style.FontSize = (int)subtitleSize.Value;
             style.Position = (int)subtitlePanelPosition.Value;
             style.WordsPerCaption = (int)subtitleWords.Value;
@@ -217,6 +220,7 @@ namespace VideoBatch {
                 style.Enabled = subtitleEnabled.Checked;
                 style.Uppercase = subtitleUppercase != null && subtitleUppercase.Checked;
                 style.FontFamily = Convert.ToString(subtitleFont.SelectedItem);
+                style.LineSpacing = (int)subtitleLineSpacing.Value;
                 style.FontSize = (int)subtitleSize.Value;
                 style.Position = (int)subtitlePanelPosition.Value;
                 style.WordsPerCaption = (int)subtitleWords.Value;

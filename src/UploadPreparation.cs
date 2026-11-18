@@ -208,6 +208,7 @@ namespace VideoBatch {
                         partial = Path.Combine(folder, ".preparing-" + edition + ".mp4");
                         var profile = ProfileForUpload(metadata, random, DateTime.Now, effects);
                         var args = Arguments(source, partial, profile, media, edition, effects);
+                        if(effects)await ProcessingEngine.Accelerate(ffmpeg,args,media.Width,media.Height,linked.Token).ConfigureAwait(false);
                         int index = i, last = -1;
                         await Core.Tool(ffmpeg, args, linked.Token, line => {
                             if (!line.StartsWith("out_time_us=", StringComparison.Ordinal)) return;

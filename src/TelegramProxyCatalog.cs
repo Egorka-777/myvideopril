@@ -59,7 +59,8 @@ namespace VideoBatch {
         public static TelegramProxy Add(TelegramData data,string raw,string name="",string source="Вручную",string sourceId="",string country="") {
             string url=Normalize(raw);
             var item=sourceId!=""?data.proxies.FirstOrDefault(p=>p.source_id==sourceId||(p.source_ids!=null&&p.source_ids.Contains(sourceId))):null;
-            item=item??data.proxies.FirstOrDefault(p=>p.url==url);
+            item=item??data.proxies.FirstOrDefault(p=>p.url==url&&p.source!="Профили YouTube / TikTok"&&(!string.IsNullOrEmpty(sourceId)
+                || !(p.source_ids??new List<string>()).Any(id=>id.StartsWith("dolphin:profile:",StringComparison.Ordinal))));
             if(item==null){item=new TelegramProxy();data.proxies.Add(item);}
             bool changed=item.url!=url;if(changed){item.status="unchecked";item.detail="";item.checked_at="";}
             item.url=url;item.name=SafeName(name,url);item.source=source;item.country=country;
@@ -67,6 +68,35 @@ namespace VideoBatch {
             if(sourceId!=""){if(item.source_id=="")item.source_id=sourceId;if(!item.source_ids.Contains(sourceId))item.source_ids.Add(sourceId);}
             // Update only accounts explicitly bound to this entry; never reassign at random.
             foreach(var account in data.accounts.Where(a=>a.proxy_id==item.id)){account.proxy=url;if(changed)TelegramHealth.RouteChanged(account);}
+            return item;
+        }
+        public static List<TelegramProxy> ProfileChoices(TelegramData data,Preferences settings) {
+            var choices=new List<TelegramProxy>();
+            foreach(var profile in ProfileCatalog.Build(settings).Where(p=>!string.IsNullOrWhiteSpace(p.ProfileId))) {
+                string key="dolphin:profile:"+profile.ProfileId;
+                var proxy=data.proxies.FirstOrDefault(p=>p.source_id==key
+                    && (p.source_ids??new List<string>()).Count(id=>id.StartsWith("dolphin:profile:",StringComparison.Ordinal))<=1);
+                if(proxy==null){choices.Add(new TelegramProxy{id=key,name=profile.DisplayName+" · прокси не получен",source_id=key,source="Профили YouTube / TikTok",status="missing"});continue;}
+                // Names come from the shared profile catalog, not a proxy endpoint label.
+                proxy.name=profile.DisplayName;
+                choices.Add(proxy);
+            }
+            return choices;
+        }
+        public static TelegramProxy SyncProfile(TelegramData data,TelegramProxy incoming) {
+            var item=data.proxies.FirstOrDefault(p=>p.source_id==incoming.source_id
+                && (p.source_ids??new List<string>()).Count(id=>id.StartsWith("dolphin:profile:",StringComparison.Ordinal))<=1);
+            // Migrate a formerly merged row only when it represents this profile alone.
+            if(item==null)item=data.proxies.FirstOrDefault(p=>p.source_ids!=null&&p.source_ids.Contains(incoming.source_id)
+                && p.source_ids.Count(id=>id.StartsWith("dolphin:profile:",StringComparison.Ordinal))==1);
+            if(item==null){item=new TelegramProxy();data.proxies.Add(item);}
+            bool changed=item.url!=incoming.url;
+            item.source_id=incoming.source_id;item.source_ids=new List<string>{incoming.source_id};
+            item.name=SafeName(incoming.name,incoming.url);item.source="Профили YouTube / TikTok";item.country=incoming.country;
+            item.url=incoming.url;
+            if(changed){item.status="unchecked";item.detail="";item.checked_at="";}
+            foreach(var account in data.accounts.Where(a=>a.proxy_id==item.id))
+                if(account.proxy!=item.url){account.proxy=item.url;TelegramHealth.RouteChanged(account);}
             return item;
         }
         public static void Assign(TelegramData data,IEnumerable<string> accountIds,string proxyId) {
@@ -90,7 +120,7 @@ namespace VideoBatch {
             string name=Str(row,"name");var last=Object(row.TryGetValue("lastCheck",out var l)?l:null);
             return new TelegramProxy{url=Normalize(type+"://"+auth+host+":"+port),name=label!=""?label:name,source="Dolphin",source_id=sourceId,country=Str(last,"country")};
         }
-        public static async Task<TelegramProxySync> FetchDolphin(string token,IEnumerable<KeyValuePair<string,string>> profiles,HttpMessageHandler handler=null,CancellationToken cancel=default(CancellationToken),int timeoutMs=25000) {
+        public static async Task<TelegramProxySync> FetchDolphin(string token,IEnumerable<KeyValuePair<string,string>> profiles,HttpMessageHandler handler=null,CancellationToken cancel=default(CancellationToken),int timeoutMs=25000,bool includeCatalog=true) {
             if(string.IsNullOrWhiteSpace(token))throw new InvalidOperationException("В настройках приложения не сохранён токен Dolphin. Добавьте его там или вставьте прокси вручную.");
             var result=new TelegramProxySync();
             using(var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel))
@@ -104,7 +134,7 @@ namespace VideoBatch {
                         var value=json.DeserializeObject(await response.Content.ReadAsStringAsync().ConfigureAwait(false));return Object(value)??throw new InvalidOperationException("Dolphin вернул неожиданный формат ответа");
                     }
                 }
-                try {
+                if(includeCatalog) try {
                     for(int page=1;page<=100;page++) {
                         var body=await get("/proxy?limit=100&page="+page).ConfigureAwait(false);
                         if(!(body.TryGetValue("data",out var rows)&&rows is object[] array))throw new InvalidOperationException("Dolphin не вернул список прокси");

@@ -20,7 +20,7 @@ namespace VideoBatch {
             settings.Validate();
             return settings;
         }
-        public static async Task Apply(AssemblyTemplate template, string ffmpeg, string probe, string input, Random random, CancellationToken ct, double untouchedPrefix = 0) {
+        public static async Task Apply(AssemblyTemplate template, string ffmpeg, string probe, string input, Random random, CancellationToken ct, double untouchedPrefix = 0, AssemblyRenderContext renderContext = null, Action<double> progress = null) {
             var settings = Effective(template.OutputProcessing);
             // A deliberately leveled batch must retain its chosen common level.
             if (template.NativeAudioLeveled) { settings.Volume.Enabled = false; settings.AudioModulation.Enabled = false; }
@@ -32,7 +32,14 @@ namespace VideoBatch {
             if (untouchedPrefix > 0) profile.Speed = 1; // Never shift the intro boundary or burned subtitle timing.
             string output = Path.Combine(Path.GetDirectoryName(input), "processed-" + Guid.NewGuid().ToString("N") + ".mp4");
             try {
-                await Core.Tool(ffmpeg, ProcessingEngine.Arguments(input, output, profile, media, null, untouchedPrefix), ct, null, 1800).ConfigureAwait(false);
+                var context = renderContext ?? new AssemblyRenderContext();
+                await AssemblyRender.SelectEncoder(template, ffmpeg, Path.GetDirectoryName(input), context, ct).ConfigureAwait(false);
+                var args = ProcessingEngine.Arguments(input, output, profile, media, null, untouchedPrefix);
+                await ProcessingEngine.Accelerate(ffmpeg,args,media.Width,media.Height,ct,context:context).ConfigureAwait(false);
+                double duration=ProcessingEngine.OutputDuration(profile,media);
+                await Core.Tool(ffmpeg, args, ct, line=>{
+                    if(line.StartsWith("out_time_us="))progress?.Invoke(Math.Max(0,Math.Min(.99,Core.Parse(line.Substring(12))/1000000/duration)));
+                }, 1800).ConfigureAwait(false);
                 var result = Core.VideoInfo(await Core.Probe(probe, output, ct).ConfigureAwait(false));
                 if (result.Width != media.Width || result.Height != media.Height || Math.Abs(result.VideoDuration - ProcessingEngine.OutputDuration(profile, media)) > .2 || media.HasAudio && !result.HasAudio)
                     throw new Exception("Обработка сборки: результат не прошёл проверку. Размер " + result.Width + "×" + result.Height + " (ожидался " + media.Width + "×" + media.Height + "), длительность " + Core.N(result.VideoDuration) + " с (ожидалась " + Core.N(ProcessingEngine.OutputDuration(profile, media)) + " с), звук " + result.HasAudio + " (исходный " + media.HasAudio + ").");

@@ -118,14 +118,14 @@ module.exports=function({until,norm,read,typingBudget}){
   }
  }
  async function typeText(box,text,{delay=45,onProgress=()=>{},onState=()=>{},scope=null,name='текста',activationMs=12000,verifyMs=5000,signal,readValue=read}={}){
-  if(name==='описания'||name==='комментария'){
+  if(name==='названия'||name==='описания'||name==='комментария'){
    check(signal);
    await activateEditor(box,{timeoutMs:activationMs,name,onState,signal});
    await box.press('Control+A',{timeout:3000});
    await box.press('Delete',{timeout:3000});
    // Insert each complete line as one native transaction. Studio's social
-   // suggestions can invalidate their Range during character-by-character
-   // warning/link input. Shift+Enter preserves exact contenteditable newlines
+   // suggestions can alter hashtag titles or invalidate their Range during
+   // character-by-character input. Shift+Enter preserves exact contenteditable newlines
    // (multiline insertText creates DIV paragraphs with extra innerText breaks).
    const lines=String(text??'').replace(/\r\n?/g,'\n').split('\n');
    for(let i=0;i<lines.length;i++){
@@ -140,7 +140,7 @@ module.exports=function({until,norm,read,typingBudget}){
    try{await waitTyped(box,text,{timeoutMs:verifyMs,name,signal,readValue});}
    catch(error){
     error.editorDiagnostic={field:name,comparison:error.editorMismatch||null};
-    onState('verification_failed','Точный текст описания не подтверждён.',error.editorDiagnostic);
+    onState('verification_failed','Точный текст поля '+name+' не подтверждён.',error.editorDiagnostic);
     throw error;
    }
    return;

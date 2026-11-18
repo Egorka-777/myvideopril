@@ -63,7 +63,9 @@ namespace VideoBatch {
             bool hasTitle=!string.IsNullOrWhiteSpace(title);
             bool needsTags=hasTitle || sample!=null && (sample.HasCaptureDate || !string.IsNullOrEmpty(sample.Brand) || !string.IsNullOrWhiteSpace(sample.Software));
             if (!needsTags) return VideoMetadata.Report(await Core.Probe(ffprobe,videoPath,ct).ConfigureAwait(false));
-            string temp=videoPath+".tags-"+Guid.NewGuid().ToString("N")+".mp4";
+            // Do not append to the full output name: existing translation project
+            // directories can put the atomic replacement source beyond MAX_PATH.
+            string temp=Path.Combine(Path.GetDirectoryName(videoPath),"tags-"+Guid.NewGuid().ToString("N")+".mp4");
             var args=new List<string> {"-hide_banner","-nostdin","-y","-loglevel","error","-i",videoPath,"-map","0","-c","copy","-map_metadata","-1","-map_metadata:s","-1","-map_chapters","-1"};
             if (hasTitle) args.AddRange(new[] {"-metadata","title="+title,"-metadata","description="+title});
             VideoMetadata.Add(args,sample,true);

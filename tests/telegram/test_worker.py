@@ -41,6 +41,7 @@ class FakeClient:
         self.me=types.User(id=999,first_name='Owner')
     async def connect(self): self.connected=True
     async def disconnect(self): self.connected=False
+    def is_connected(self): return self.connected
     async def is_user_authorized(self): return True
     async def get_me(self): return self.me
     async def get_permissions(self,entity,user):
@@ -164,7 +165,7 @@ class Imports(unittest.IsolatedAsyncioTestCase):
 class Queue(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);w.CANCEL.clear();self.events=[];self.waits=[]
-        self.job=dict(root=str(self.root),action='invite',accounts=[dict(id='a'*64)],target='@group',users='@userone\n@usertwo\n@userthree',delay=15)
+        self.job=dict(root=str(self.root),action='invite',accounts=[dict(id='a'*64)],target='@group',users='@userone\n@usertwo\n@userthree',delay=15,delay_max=15)
     async def asyncTearDown(self):self.tmp.cleanup()
     async def execute(self,client):
         async def pause(seconds):self.waits.append(seconds)
@@ -177,6 +178,76 @@ class Queue(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.waits,[15,15]);self.assertFalse(client.connected)
         again=FakeClient();await self.execute(again)
         self.assertEqual(again.calls,[])
+    async def test_sender_not_member_has_clear_error_before_invites(self):
+        class NotMember(FakeClient):
+            async def get_permissions(self, entity, user):
+                raise errors.UserNotParticipantError(request=None)
+        client=NotMember()
+        with self.assertRaisesRegex(ValueError,'Выбранный аккаунт не состоит'):
+            await w.resolve_target(client,'@group')
+        self.assertEqual(client.calls,[])
+
+    async def test_not_added_recipient_continues_without_false_success(self):
+        class NotAdded(FakeClient):
+            async def __call__(self, request):
+                if isinstance(request,functions.channels.GetParticipantRequest) and len(self.calls)==1:
+                    self.calls.append(request)
+                    raise errors.UserNotParticipantError(request=None)
+                return await super().__call__(request)
+        await self.execute(NotAdded())
+        results=[d for e,d in self.events if e=='invite']
+        self.assertEqual([d['state'] for d in results],['not_added','confirmed','confirmed'])
+        self.assertEqual(self.waits,[15,15])
+        db=sqlite3.connect(self.root/'invites.sqlite')
+        self.assertEqual(db.execute('select state from invites where user=101').fetchone()[0],'not_added')
+        db.close()
+
+    async def test_privacy_and_missing_username_continue(self):
+        class Restricted(FakeClient):
+            async def get_entity(self,value):
+                if value=='usertwo':raise errors.UsernameNotOccupiedError(request=None)
+                return await super().get_entity(value)
+            async def __call__(self,request):
+                if isinstance(request,functions.channels.InviteToChannelRequest) and not self.calls:
+                    self.calls.append(request)
+                    raise errors.UserPrivacyRestrictedError(request=None)
+                return await super().__call__(request)
+        await self.execute(Restricted())
+        self.assertEqual([d['state'] for e,d in self.events if e=='invite'],['privacy','unresolved','confirmed'])
+
+    async def test_limit_counts_confirmed_not_unresolved_or_privacy(self):
+        self.job['limit']=1
+        self.job['delay']=55;self.job['delay_max']=65
+        class Skip(FakeClient):
+            async def get_entity(self,value):
+                if value=='userone':raise errors.UsernameNotOccupiedError(request=None)
+                return await super().get_entity(value)
+            async def __call__(self,request):
+                if isinstance(request,functions.channels.InviteToChannelRequest) and not self.calls:
+                    self.calls.append(request)
+                    raise errors.UserPrivacyRestrictedError(request=None)
+                return await super().__call__(request)
+        with patch('random.randint',return_value=55123):
+            await self.execute(Skip())
+        self.assertEqual(self.waits,[55.123])
+        self.assertEqual([d['state'] for e,d in self.events if e=='invite'],['unresolved','privacy','confirmed'])
+        self.assertEqual(len(self.waits),1)
+        self.assertTrue(all(55<=s<=65 for s in self.waits))
+
+    async def test_ui_delay_uses_five_second_range(self):
+        self.job['delay']=60
+        self.job.pop('delay_max')
+        with patch('random.randint',return_value=60457) as random_delay:
+            await self.execute(FakeClient())
+        random_delay.assert_called_with(55000,65000)
+        self.assertEqual(self.waits,[60.457,60.457])
+
+    async def test_stops_at_confirmed_limit(self):
+        self.job['limit']=1
+        client=FakeClient();await self.execute(client)
+        self.assertEqual(len(client.calls),2)
+        self.assertEqual(self.waits,[])
+
     async def test_flood_stops_without_second_user(self):
         client=FakeClient(errors.FloodWaitError(request=None,capture=777))
         with self.assertRaises(w.StopJob):await self.execute(client)
@@ -208,8 +279,10 @@ class Queue(unittest.IsolatedAsyncioTestCase):
         self.job['accounts'].append(dict(id='b'*64))
         with self.assertRaises(ValueError):await self.execute(FakeClient())
         self.job['accounts'].pop();client=FakeClient();client.target.creator=False;client.target.admin_rights=None
-        with self.assertRaises(ValueError):await self.execute(client)
-        self.assertEqual(client.calls,[])
+        async def forbidden(*args):raise AssertionError('Invite must not precheck admin rights')
+        client.get_permissions=forbidden
+        await self.execute(client)
+        self.assertEqual(len(client.calls),6)
     async def test_saved_cooldown_stops_before_connect(self):
         self.job['accounts'][0]['wait_until']='2099-01-01T00:00:00+00:00'
         client=FakeClient()

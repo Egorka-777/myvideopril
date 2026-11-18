@@ -49,13 +49,16 @@ namespace VideoBatch {
             client = httpClient ?? OutboundHttp.Create(proxyUrl, TimeSpan.FromMinutes(3), false);
         }
 
-        public async Task<List<ElevenLabsVoice>> ListMaleVoicesAsync(CancellationToken ct) {
+        public Task<List<ElevenLabsVoice>> ListMaleVoicesAsync(CancellationToken ct) => ListVoicesAsync("male", ct);
+
+        public async Task<List<ElevenLabsVoice>> ListVoicesAsync(string gender, CancellationToken ct, bool defaultOnly = false) {
+            if (gender != "male" && gender != "female") throw new ArgumentException("Выберите мужской или женский голос.", nameof(gender));
             var voices = new List<ElevenLabsVoice>();
             var ids = new HashSet<string>(StringComparer.Ordinal);
             var tokens = new HashSet<string>(StringComparer.Ordinal);
             string token = null;
             do {
-                string url = Root + "/v2/voices?page_size=100&gender=male&include_total_count=false";
+                string url = Root + "/v2/voices?page_size=100&gender=" + gender + "&include_total_count=false" + (defaultOnly ? "&voice_type=default" : "");
                 if (token != null) url += "&next_page_token=" + Uri.EscapeDataString(token);
                 using (var request = Request(HttpMethod.Get, url))
                 using (var response = await client.SendAsync(request, ct).ConfigureAwait(false)) {
@@ -64,9 +67,9 @@ namespace VideoBatch {
                     ct.ThrowIfCancellationRequested();
                     if (page.voices == null) throw new Exception("ElevenLabs: в ответе отсутствует список голосов.");
                     foreach (var voice in page.voices) {
-                        string gender;
+                        string voiceGender;
                         if (voice != null && !string.IsNullOrWhiteSpace(voice.voice_id) && voice.labels != null &&
-                            voice.labels.TryGetValue("gender", out gender) && string.Equals(gender, "male", StringComparison.OrdinalIgnoreCase) && ids.Add(voice.voice_id))
+                            voice.labels.TryGetValue("gender", out voiceGender) && string.Equals(voiceGender, gender, StringComparison.OrdinalIgnoreCase) && ids.Add(voice.voice_id))
                             voices.Add(voice);
                     }
                     if (!page.has_more) break;
@@ -88,11 +91,12 @@ namespace VideoBatch {
             }
         }
 
-        public async Task<ElevenLabsSpeech> GenerateAsync(string text, string voiceId, ElevenLabsVoiceSettings settings, bool withTimestamps, CancellationToken ct) {
+        public async Task<ElevenLabsSpeech> GenerateAsync(string text, string voiceId, ElevenLabsVoiceSettings settings, bool withTimestamps, CancellationToken ct, string modelId = "eleven_multilingual_v2", string languageCode = null) {
             if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("Введите текст для озвучки.", nameof(text));
             string url = Root + "/v1/text-to-speech/" + VoicePath(voiceId) +
                 (withTimestamps ? "/with-timestamps" : "") + "?output_format=mp3_44100_128";
-            var body = new Dictionary<string, object> { { "text", text }, { "model_id", "eleven_multilingual_v2" } };
+            var body = new Dictionary<string, object> { { "text", text }, { "model_id", modelId } };
+            if (!string.IsNullOrWhiteSpace(languageCode)) body.Add("language_code", languageCode);
             if (settings != null) body.Add("voice_settings", settings);
             using (var request = Request(HttpMethod.Post, url)) {
                 request.Content = new StringContent(Json().Serialize(body), Encoding.UTF8, "application/json");

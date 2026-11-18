@@ -50,15 +50,24 @@ namespace VideoBatch {
             return AssemblyProfile.ShortLabel(AssemblyProfile.Normalize(scope), t);
         }
 
-        public static string AssemblyVideoFileName(AssemblyTemplate t, int index, string titleHint = null) {
-            string stem = "Ролик " + AssemblyChannelLabel(t) + " · " + (index + 1).ToString("000") + " · " + DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss");
-            if (!string.IsNullOrWhiteSpace(titleHint)) {
-                string shortTitle = titleHint.Trim();
-                if (shortTitle.Length > 36) shortTitle = shortTitle.Substring(0, 36).Trim() + "…";
-                stem += " · " + shortTitle;
+        public static string SourceTitle(string path) {
+            string title=Path.GetFileNameWithoutExtension(path??"");
+            var old=Regex.Match(title,@"^Ролик .+? · \d+ · \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2} · (.+) · [0-9a-f]{8}$",RegexOptions.IgnoreCase);
+            if(old.Success)title=old.Groups[1].Value;
+            title=Regex.Replace(title,@"_v\d+_[0-9a-f]{8}$","",RegexOptions.IgnoreCase);
+            return SanitizeFileStem(title);
+        }
+        public static string NamedOutput(string folder,string title,string extension) {
+            string stem=SanitizeFileStem(title);
+            int limit=Math.Max(20,Math.Min(160,235-folder.Length));
+            if(stem.Length>limit)stem=stem.Substring(0,limit).TrimEnd(' ','.');
+            for(int i=1;;i++) {
+                string path=Path.Combine(folder,stem+" "+i+"."+extension.TrimStart('.'));
+                if(!File.Exists(path)&&!File.Exists(Path.Combine(folder,".processing_"+Path.GetFileName(path))))return path;
             }
-            stem += " · " + Guid.NewGuid().ToString("N").Substring(0, 8);
-            return SanitizeFileStem(stem) + ".mp4";
+        }
+        public static string AssemblyVideoFileName(AssemblyTemplate t, int index, string titleHint = null) {
+            return Path.GetFileName(NamedOutput(t.Output,string.IsNullOrWhiteSpace(titleHint)?"Ролик":titleHint,"mp4"));
         }
 
         public static string WarmupVideoFileName(string market) {

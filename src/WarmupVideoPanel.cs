@@ -97,7 +97,7 @@ namespace VideoBatch {
             captionEditor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             captionFont = Theme.MakeCombo(SubtitlePresets.Fonts);
             captionPlate = Theme.MakeCombo(new[] { "Скруглённая", "Прямая", "Без плашки" });
-            captionSize = StyleNumber("warmup-subtitle-size", 28, 88); captionPosition = StyleNumber("warmup-subtitle-position", 10, 90);
+            captionSize = StyleNumber("warmup-subtitle-size", 28, 150); captionPosition = StyleNumber("warmup-subtitle-position", 10, 90);
             captionWords = StyleNumber("warmup-subtitle-words", 1, 6); captionOpacity = StyleNumber("warmup-subtitle-opacity", 0, 100);
             captionEditor.Controls.Add(SettingRow("Шрифт", captionFont)); captionEditor.Controls.Add(SettingRow("Размер текста", captionSize));
             captionEditor.Controls.Add(SettingRow("Положение сверху, % (или тяните в превью)", captionPosition)); captionEditor.Controls.Add(SettingRow("Слов за раз", captionWords));

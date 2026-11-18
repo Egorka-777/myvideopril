@@ -30,6 +30,7 @@ class Program {
             if (args[0] == "visual-estimate-ui-test") { Console.WriteLine(AssemblyRegressionTests.RunVisualEstimateUiTests()); return 0; }
             if (args[0] == "media-ui-test") { Console.WriteLine(AssemblyRegressionTests.RunMediaEditorTests()); return 0; }
             if (args[0] == "image-ui-test") { Console.WriteLine(AssemblyRegressionTests.RunImageAppearanceUiTests()); return 0; }
+            if (args[0] == "placement-bounds-test") { Console.WriteLine(AssemblyOverlayPreviewTests.RunPlacementBoundsTests()); return 0; }
             if (args[0] == "animated-ui-test") { Console.WriteLine(AssemblyOverlayPreviewTests.RunAnimatedOverlayUiTests(args[1])); return 0; }
             if (args[0] == "warm-sdr") { VideoSdr.WarmFolder(args[1], args[2], args[3], CancellationToken.None).GetAwaiter().GetResult(); Console.WriteLine("OK"); return 0; }
             var t = AssemblyFiles.Load<AssemblyTemplate>(args[1]);

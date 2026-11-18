@@ -86,6 +86,18 @@ async function readCached(job, directory, fetchImpl) {
   } catch (_) { return null; }
 }
 
+async function readProfileEndpoint(job, appDataDir, fetchImpl) {
+  const profileId = String(job.profileId);
+  if (process.platform !== "win32" || !appDataDir || !profileId || /[^0-9]/.test(profileId)) return null;
+  try {
+    const file = path.join(appDataDir, "dolphin_anty", "browser_profiles", profileId, "data_dir", "DevToolsActivePort");
+    const [port, browserPath] = fs.readFileSync(file, "utf8").split(/\r?\n/);
+    if (!port || /[^0-9]/.test(port) || Number(port) < 1 || Number(port) > 65535) return null;
+    const endpoint = `ws://127.0.0.1:${port}${browserPath}`;
+    return await endpointAlive(endpoint, fetchImpl) ? endpoint : null;
+  } catch (_) { return null; }
+}
+
 function saveEndpoint(job, directory, endpoint, report) {
   if (!localBrowserEndpoint(endpoint)) throw new Error("Dolphin вернул некорректный локальный адрес CDP.");
   try {
@@ -133,6 +145,15 @@ async function startOrAttach(job, directory, request, report = () => {}, options
     // Lost start response: another worker may have obtained and cached its endpoint.
     const recovered = await readCached(job, directory, fetchImpl);
     if (recovered) return recovered;
+    if (alreadyRunning) {
+      const profileEndpoint = await readProfileEndpoint(job, options.appDataDir || process.env.APPDATA, fetchImpl);
+      if (profileEndpoint) {
+        saveEndpoint(job, directory, profileEndpoint, report);
+        if (options.onAttached) options.onAttached();
+        report("dolphin", "Профиль уже открыт — адрес CDP восстановлен из DevToolsActivePort профиля (CDP проверен).");
+        return profileEndpoint;
+      }
+    }
     if (attempt < attempts && (alreadyRunning || !response.status || response.status >= 500 || response.status === 429)) {
       report("dolphin", "Адрес CDP пока недоступен; повтор подключения без закрытия профиля.");
       await (options.delay || (ms => new Promise(resolve => setTimeout(resolve, ms))))(1500);

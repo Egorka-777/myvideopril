@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace VideoBatch {
@@ -27,6 +28,16 @@ namespace VideoBatch {
             var envelope=ImageEnvelope(t,layer);
             if(envelope.IsEmpty) return FitImageBounds(box,imageSize);
             float scale=Math.Min(box.Width/envelope.Width,box.Height/envelope.Height);
+            var files=AssemblyFiles.Pool(t.Resolve(layer.Source),AssemblyFiles.PictureExtensions);
+            if(files.Exists(AssemblyOverlayMedia.IsAnimated)) {
+                // The editor initially shows the first pack variant. Keep its visible
+                // placement, and fit every video variant into that same rectangle:
+                // encoded resolution must not change the on-screen size.
+                var reference=AssemblyOverlayMedia.Size(files[0]);
+                float referenceWidth=reference.Width*scale,referenceHeight=reference.Height*scale;
+                var target=new RectangleF(box.X+(box.Width-referenceWidth)/2,box.Y+(box.Height-referenceHeight)/2,referenceWidth,referenceHeight);
+                return FitImageBounds(target,imageSize);
+            }
             float width=imageSize.Width*scale,height=imageSize.Height*scale;
             return new RectangleF(box.X+(box.Width-width)/2,box.Y+(box.Height-height)/2,width,height);
         }
@@ -62,7 +73,9 @@ namespace VideoBatch {
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     var l = plan.Layer;
                     var box = new RectangleF((float)(l.X * t.Width), (float)(l.Y * t.Height), (float)(l.Width * t.Width), (float)(l.Height * t.Height));
-                    if (Path.GetExtension(plan.Asset.Path).Equals(".txt", StringComparison.OrdinalIgnoreCase)) {
+                    if (l.IsText) {
+                        DrawText(g, l, box);
+                    } else if (Path.GetExtension(plan.Asset.Path).Equals(".txt", StringComparison.OrdinalIgnoreCase)) {
                         string text = File.ReadAllText(plan.Asset.Path, Encoding.UTF8).Trim();
                         if (text.Length == 0 || text.Length > 4000) throw new Exception("TXT должен содержать от 1 до 4000 символов: " + plan.Asset.Path);
                         using (var path = Rounded(box, (float)l.Radius))
@@ -91,11 +104,79 @@ namespace VideoBatch {
                                 var matrix = new ColorMatrix(); matrix.Matrix33 = (float)l.Opacity; attrs.SetColorMatrix(matrix);
                                 g.DrawImage(image, new[] { new PointF(target.Left,target.Top), new PointF(target.Right,target.Top), new PointF(target.Left,target.Bottom) }, new RectangleF(0, 0, image.Width, image.Height), GraphicsUnit.Pixel, attrs);
                             }
+                            if (l.CornerRadius > 0) ApplyCornerMask(bitmap, target, l.CornerRadius);
                         }
                     }
                 }
                 return bitmap;
             } catch { bitmap.Dispose(); throw; }
+        }
+        // Bounds and font sizes use output-frame pixels; preview callers may scale Graphics.
+        public static void DrawText(Graphics graphics, AssemblyLayer layer, RectangleF bounds) {
+            if (string.IsNullOrEmpty(layer.Text)) return;
+            var state = graphics.Save();
+            try {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var family = new FontFamily(layer.Font))
+                using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.None })
+                using (var path = new GraphicsPath()) {
+                    FontStyle style = (layer.TextBold ? FontStyle.Bold : FontStyle.Regular) | (layer.TextItalic ? FontStyle.Italic : FontStyle.Regular);
+                    string text=layer.TextUppercase ? layer.Text.ToUpperInvariant() : layer.Text;
+                    if(layer.TextLineSpacing==100) path.AddString(text, family, (int)style, (float)layer.FontSize, bounds, format);
+                    else {
+                        using(var font=new Font(family,(float)layer.FontSize,style,GraphicsUnit.Pixel)) {
+                            var lines=new System.Collections.Generic.List<string>();
+                            foreach(var paragraph in text.Replace("\r","").Split('\n')) {
+                                string line="";
+                                foreach(var word in paragraph.Split(new[]{' '},StringSplitOptions.None)) {
+                                    string candidate=line.Length==0?word:line+" "+word;
+                                    if(line.Length>0 && graphics.MeasureString(candidate,font).Width>bounds.Width) {lines.Add(line); line=word;} else line=candidate;
+                                }
+                                lines.Add(line);
+                            }
+                            float pitch=font.GetHeight(graphics)*layer.TextLineSpacing/100f;
+                            float top=bounds.Y+(bounds.Height-(font.GetHeight(graphics)+(lines.Count-1)*pitch))/2;
+                            using(var lineFormat=new StringFormat {Alignment=StringAlignment.Center,LineAlignment=StringAlignment.Near,FormatFlags=StringFormatFlags.NoWrap})
+                                for(int i=0;i<lines.Count;i++)path.AddString(lines[i],family,(int)style,(float)layer.FontSize,new RectangleF(bounds.X,top+i*pitch,bounds.Width,font.GetHeight(graphics)*2),lineFormat);
+                        }
+                    }
+                    if(layer.TextPlate!="none") {
+                        using(var plate=Rounded(bounds,layer.TextPlate=="rounded"?(float)layer.Radius:0))
+                        using(var brush=new SolidBrush(TextColor(layer.TextPlateColor,layer.Opacity*layer.TextPlateOpacity/100.0)))graphics.FillPath(brush,plate);
+                    }
+                    if (layer.TextOutlineWidth > 0) {
+                        using (var pen = new Pen(TextColor(layer.TextOutlineColor, layer.Opacity), (float)(layer.TextOutlineWidth * 2)) { LineJoin = LineJoin.Round }) graphics.DrawPath(pen, path);
+                    }
+                    using (var brush = new SolidBrush(TextColor(layer.TextColor, layer.Opacity))) graphics.FillPath(brush, path);
+                }
+            } finally { graphics.Restore(state); }
+        }
+        static Color TextColor(string html, double opacity) {
+            var color = ColorTranslator.FromHtml(html);
+            return Color.FromArgb((int)Math.Round(color.A * opacity), color.R, color.G, color.B);
+        }
+        public static void ApplyCornerMask(Bitmap image, double radius) {
+            ApplyCornerMask(image, new RectangleF(0, 0, image.Width, image.Height), radius);
+        }
+        // Multiply rather than replace alpha, preserving transparent media and opacity.
+        public static void ApplyCornerMask(Bitmap image, RectangleF bounds, double radius) {
+            radius = Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2);
+            if (radius <= 0) return;
+            var data = image.LockBits(new Rectangle(0, 0, image.Width, image.Height), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+            try {
+                var row = new byte[image.Width * 4];
+                for (int y = 0; y < image.Height; y++) {
+                    IntPtr address = IntPtr.Add(data.Scan0, y * data.Stride);
+                    Marshal.Copy(address, row, 0, row.Length);
+                    double dy = Math.Max(Math.Abs(y + .5 - (bounds.Top + bounds.Height / 2)) - (bounds.Height / 2 - radius), 0);
+                    for (int x = 0; x < image.Width; x++) {
+                        double dx = Math.Max(Math.Abs(x + .5 - (bounds.Left + bounds.Width / 2)) - (bounds.Width / 2 - radius), 0);
+                        double alpha = Math.Max(0, Math.Min(1, radius + .5 - Math.Sqrt(dx * dx + dy * dy)));
+                        row[x * 4 + 3] = (byte)(row[x * 4 + 3] * alpha);
+                    }
+                    Marshal.Copy(row, 0, address, row.Length);
+                }
+            } finally { image.UnlockBits(data); }
         }
         public static void Save(AssemblyTemplate t, AssemblyLayerPlan plan, string path) {
             using (var bitmap = Create(t, plan)) bitmap.Save(path, ImageFormat.Png);

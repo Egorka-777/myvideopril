@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -7,7 +8,7 @@ using System.Windows.Forms;
 namespace VideoBatch {
     public sealed partial class AssemblyWindow {
         void ImageScopeMenu() {
-            ShowChoices("Где показывать изображение?", packChips, new[] {
+            ShowChoices("Где показывать объект?", packChips, new[] {
                 Tuple.Create("Эта сцена", (Action)(() => SetImageScope(false)), !globalEditing),
                 Tuple.Create("Общее изображение · весь ролик", (Action)(() => SetImageScope(true)), globalEditing),
                 Tuple.Create(globalEditing ? "Перенести слой в сцену" : "Перенести слой в общее изображение", (Action)MoveImageScope, false)
@@ -32,9 +33,9 @@ namespace VideoBatch {
         }
         void OpenVideoEditor() {
             LeaveSubtitleWorkspaceIfOpen();
-            using (var form = MediaDialog("Видео · источник и два экрана", 640)) {
+            using (var form = MediaDialog("Фоновое видео · источник и два экрана", 640)) {
                 var body = MediaBody(form);
-                body.Controls.Add(new Label { Text = "Откуда брать основное видео", AutoSize = true, Font = Theme.FontCardTitle });
+                body.Controls.Add(new Label { Text = "Фоновое видео — основа под объектами сцен", AutoSize = true, Font = Theme.FontCardTitle });
                 var scope = new ComboBox { Name = "VideoScope", DropDownStyle = ComboBoxStyle.DropDownList, Width = 560 };
                 scope.Items.AddRange(new object[] { "Отрывок для каждой сцены", "Одно непрерывное видео на весь ролик", "Отдельная папка у выбранной сцены" });
                 scope.SelectedIndex = template.ContinuousVideo ? 1 : SelectedScene?.VideoMode == "own" ? 2 : 0;
@@ -65,7 +66,7 @@ namespace VideoBatch {
                 }
                 RefreshCounts();
                 body.Controls.Add(primaryCount);
-                var files = Button("📁  Основное видео · открыть папку", () => {
+                var files = Button("📁  Фоновое видео · открыть папку", () => {
                     if (scope.SelectedIndex == 2 && SelectedScene != null) OpenPool(3); else OpenPool(0);
                     RefreshCounts();
                 }); files.Width = 560; body.Controls.Add(files);
@@ -86,7 +87,16 @@ namespace VideoBatch {
                     template.SecondaryVideos = source; Changed(true); Save(); RefreshCounts();
                 }); secondary.Width = 560; body.Controls.Add(secondary);
                 body.Controls.Add(secondList);
-                AddNativeAudioControls(body, false);
+                body.Controls.Add(new Label { Text = "Звук двух экранов · только одно видео", Width = 560, Height = 24, Font = Theme.FontCardTitle });
+                var splitAudio = new ComboBox { Name = "SplitAudioMode", DropDownStyle = ComboBoxStyle.DropDownList, Width = 560 };
+                splitAudio.Items.AddRange(new object[] { "Только верх / лево", "Только низ / право", "По очереди: верх, низ — для новых связок" });
+                splitAudio.SelectedIndex = template.EffectiveSplitAudioMode == "bottom" ? 1 : template.EffectiveSplitAudioMode == "alternate" ? 2 : 0;
+                body.Controls.Add(splitAudio);
+                var splitVolume = Value(0, 200, 0); splitVolume.Value = (decimal)(template.SplitAudioVolume * 100); splitVolume.Visible = false;
+                body.Controls.Add(new AssemblySlider("Громкость выбранного видео", splitVolume, "%") { Width = 560 });
+                splitAudio.SelectedIndexChanged += (s, e) => { template.SplitAudioMode = new[] { "top", "bottom", "alternate" }[splitAudio.SelectedIndex]; Changed(false); Save(); };
+                splitVolume.ValueChanged += (s, e) => { template.SplitAudioVolume = (double)splitVolume.Value / 100; Changed(false); Save(); };
+                body.Controls.Add(new Label { Text = "Звук зависит от положения видео, а не номера пачки. Смена звука не создаёт новую связку и не разрешает повтор пары.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
                 body.Controls.Add(Button("Пачка 2 · заменить файлы", () => {
                     var paths = PickFiles(0); if (paths == null) return;
                     string source = template.SecondaryVideos;
@@ -94,8 +104,13 @@ namespace VideoBatch {
                     template.SecondaryVideos = source; Changed(true); Save(); RefreshCounts();
                 }));
                 body.Controls.Add(Button("Пачка 2 · очистить", () => { template.SecondaryVideos = ""; Changed(true); Save(); RefreshCounts(); }));
-                body.Controls.Add(new Label { Text = "Одинаковый файл не попадёт в обе половины. Использованные связки не повторяются. Звук следует за своей пачкой при смене мест.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
-                files.Text = "Пачка 1 · добавить / заменить файлы";
+                body.Controls.Add(new Label { Text = "Одинаковый файл не попадёт в обе половины. Использованные связки не повторяются. Источник звука выбирается отдельно: верх, низ или по очереди.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
+                files.Text = "Фоновое видео · добавить / заменить файлы";
+                body.Controls.Add(Button("Очистить всё фоновое видео",()=>{
+                    AssemblyWorkspace.ClearBackgroundVideos(template);
+                    picker.SplitLayout="none";Changed(true);Save();RefreshCounts();
+                    status.Text="Все источники фонового видео отключены. Объекты сцен не изменены.";
+                }));
                 secondary.Text = "Пачка 2 · добавить файлы";
                 sharedPool.Text = "Дополнительно: объединить обе пачки в общий набор";
                 sharedPool.CheckedChanged += (s, e) => { template.SplitSharedPool = sharedPool.Checked; Changed(true); Save(); RefreshCounts(); };
@@ -224,22 +239,50 @@ namespace VideoBatch {
             var level = new NumericUpDown { Minimum = 0, Maximum = 200, Width = 65, Value = (decimal)((primary ? template.PrimaryNativeVolume : template.SecondaryNativeVolume) * 100) };
             row.Controls.Add(on);
             if (!primary) { row.Controls.Add(level); row.Controls.Add(new Label { Text = "%", AutoSize = true }); }
-            else { on.Text="Включить звук основных видео"; level.Dispose(); }
+            else { on.Text="Звук основных видео · без деления экрана"; level.Dispose(); }
             body.Controls.Add(row);
             on.CheckedChanged += (s, e) => { if (primary) template.PrimaryNativeAudio = on.Checked; else template.SecondaryNativeAudio = on.Checked; Changed(false); Save(); };
             if (!primary) level.ValueChanged += (s, e) => { template.SecondaryNativeVolume = (double)level.Value / 100; Changed(false); Save(); };
+        }
+        void AddSourcePitchControls(FlowLayoutPanel body) {
+            body.Controls.Add(new Label {Text="Обработка голоса · без изменения скорости и длительности",AutoSize=true,Font=Theme.FontCardTitle});
+            var sources=new ComboBox {Name="AudioProcessingSource",DropDownStyle=ComboBoxStyle.DropDownList,Width=560};
+            var layers=new List<AssemblyLayer> {null};sources.Items.Add("Фоновое видео");
+            for(int i=0;i<template.Scenes.Count;i++)for(int j=0;j<template.Scenes[i].Layers.Count;j++) {
+                var layer=template.Scenes[i].Layers[j];
+                if(layer.IsText || !Pool(layer.Source,AssemblyFiles.PictureExtensions).Any(AssemblyOverlayMedia.IsAnimated))continue;
+                layers.Add(layer);sources.Items.Add(SceneLabel(template.Scenes[i],i)+" · Объект "+(j+1));
+            }
+            body.Controls.Add(sources);
+            var sound=new CheckBox {Text="Включить звук выбранной пачки",AutoSize=true,ForeColor=Theme.TextPrimary};body.Controls.Add(sound);
+            var on=new CheckBox {Text="Изменять высоту голоса · случайно в диапазоне",AutoSize=true,ForeColor=Theme.TextPrimary};body.Controls.Add(on);
+            var row=new FlowLayoutPanel {AutoSize=true,Width=560};
+            var min=new NumericUpDown {Name="AudioPitchMin",Minimum=-12,Maximum=12,DecimalPlaces=1,Increment=.5m,Width=100};
+            var max=new NumericUpDown {Name="AudioPitchMax",Minimum=-12,Maximum=12,DecimalPlaces=1,Increment=.5m,Width=100};
+            row.Controls.Add(new Label {Text="От",AutoSize=true});row.Controls.Add(min);row.Controls.Add(new Label {Text="до",AutoSize=true});row.Controls.Add(max);row.Controls.Add(new Label {Text="полутонов (− ниже, + выше)",AutoSize=true});body.Controls.Add(row);
+            bool binding=false;
+            Func<ProcessingParameter> selected=()=>layers[sources.SelectedIndex]?.AudioPitch??template.BackgroundAudioPitch;
+            Action load=()=>{binding=true;var layer=layers[sources.SelectedIndex];var p=selected();sound.Visible=layer!=null;sound.Checked=layer?.AudioEnabled??true;on.Checked=p.Enabled;min.Value=(decimal)p.Values.Min;max.Value=(decimal)p.Values.Max;binding=false;};
+            sources.SelectedIndexChanged+=(s,e)=>{load();template.AudioProcessingSourceId=layers[sources.SelectedIndex]?.ObjectId??"background";Save();};
+            Action save=()=>{if(binding)return;var p=selected();p.Enabled=on.Checked;p.Values=new Range((double)min.Value,(double)max.Value);if(layers[sources.SelectedIndex]!=null)layers[sources.SelectedIndex].AudioEnabled=sound.Checked;Changed(false);Save();};
+            on.CheckedChanged+=(s,e)=>{if(!binding && on.Checked && layers[sources.SelectedIndex]!=null)sound.Checked=true;save();};sound.CheckedChanged+=(s,e)=>save();
+            min.ValueChanged+=(s,e)=>{if(binding)return;if(min.Value>max.Value)max.Value=min.Value;save();};
+            max.ValueChanged+=(s,e)=>{if(binding)return;if(max.Value<min.Value)min.Value=max.Value;save();};
+            int initial=template.AudioProcessingSourceId=="background"?0:layers.FindIndex(l=>l!=null && l.ObjectId==template.AudioProcessingSourceId && SelectedScene!=null && SelectedScene.Layers.Contains(l));
+            if(initial<0 && SelectedLayer!=null)initial=layers.IndexOf(SelectedLayer);
+            sources.SelectedIndex=Math.Max(0,initial);
         }
         void OpenAudioEditor() {
             LeaveSubtitleWorkspaceIfOpen();
             using (var form = MediaDialog("Настройки звука · " + AssemblyProfile.ShortLabel(studioProfile, template), 740)) {
                 var body = MediaBody(form);
                 body.Controls.Add(new Label { Text = "Фоновая музыка играет непрерывно весь ролик. Все уровни ниже регулируются только для выбранной сцены. 0% отключает звук в этой сцене.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
-                AddVoicePitchControls(body);
+                AddSourcePitchControls(body);
                 AddAudioLevelingControls(body, form);
                 body.Controls.Add(new Label { Text = SelectedScene == null ? "Выбери сцену." : "ЗВУК · " + SceneLabel(SelectedScene, sceneIndex), Width = 560, Height = 30, Font = Theme.FontCardTitle, Margin = new Padding(0, 14, 0, 0) });
                 if (SelectedScene != null) {
                     double initialNative = template.SceneNativeAudioVolume(SelectedScene);
-                    var nativeOn = new CheckBox { Text = "Включить звук видео этой сцены", Width = 560, Height = 30, Checked = initialNative > 0, ForeColor = Theme.TextPrimary };
+                    var nativeOn = new CheckBox { Text = "Звук сцены · фон и включённые видеообъекты", Width = 560, Height = 30, Checked = initialNative > 0, ForeColor = Theme.TextPrimary };
                     var nativeLevel = Value(0, 200, 0); nativeLevel.Value = (decimal)(initialNative * 100); nativeLevel.Visible = false;
                     body.Controls.Add(nativeOn); body.Controls.Add(nativeLevel);
                     body.Controls.Add(new AssemblySlider("Громкость звука видео этой сцены", nativeLevel, "%") { Width = 560, Name = "SceneNativeAudioSlider" });

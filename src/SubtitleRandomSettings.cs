@@ -27,7 +27,7 @@ namespace VideoBatch {
             if (!style.Enabled || !options.Enabled) return style;
             if (options.Fonts == null || options.Fonts.Length == 0 || options.Colors == null || options.Colors.Length == 0 || options.Motions == null || options.Motions.Length == 0 || options.Plates == null || options.Plates.Length == 0 || options.Highlights == null || options.Highlights.Length == 0)
                 throw new Exception("Случайные субтитры: выберите хотя бы один вариант в каждом списке.");
-            style.FontSize = Between(random, options.SizeMin, options.SizeMax, 28, 88);
+            style.FontSize = Between(random, options.SizeMin, options.SizeMax, 28, 150);
             style.Position = Between(random, options.PositionMin, options.PositionMax, 10, 90);
             style.OutlineWidth = Between(random, options.OutlineMin, options.OutlineMax, 0, 10);
             style.Opacity = Between(random, options.OpacityMin, options.OpacityMax, 0, 100);

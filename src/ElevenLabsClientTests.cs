@@ -34,6 +34,9 @@ namespace VideoBatch {
                 var voices = await client.ListMaleVoicesAsync(CancellationToken.None);
                 Check(voices.Count == 2 && voices[0].ToString() == "Male One" && voices[1].voice_id == "m2", "male labels only and duplicate IDs removed");
                 Check(api.Paths[0].Contains("gender=male") && api.Paths[0].Contains("page_size=100") && api.Paths[1].Contains("next_page_token=a%20%2B%26"), "pagination token escaped");
+                api.Reply = (request, ct) => Task.FromResult(Json("{\"voices\":[{\"voice_id\":\"f1\",\"name\":\"Female One\",\"labels\":{\"gender\":\"female\"}},{\"voice_id\":\"m1\",\"labels\":{\"gender\":\"male\"}}],\"has_more\":false}"));
+                var female = await client.ListVoicesAsync("female", CancellationToken.None, defaultOnly: true);
+                Check(female.Count == 1 && female[0].voice_id == "f1" && api.Paths.Last().Contains("gender=female") && api.Paths.Last().Contains("voice_type=default"), "female voice filtering uses documented endpoint");
                 api.Reply = (request, ct) => Task.FromResult(Json("{\"stability\":0.2,\"similarity_boost\":0.8,\"style\":0.3,\"speed\":1.1,\"use_speaker_boost\":false}"));
                 var settings = await client.GetVoiceSettingsAsync("m1", CancellationToken.None);
                 Check(api.Paths.Last() == "/v1/voices/m1/settings" && settings.stability == .2 && settings.use_speaker_boost == false, "read voice settings");
@@ -52,6 +55,12 @@ namespace VideoBatch {
                 var timed = await client.GenerateAsync("4", "m1", null, true, CancellationToken.None);
                 Check(api.Paths.Last() == "/v1/text-to-speech/m1/with-timestamps?output_format=mp3_44100_128", "timestamp endpoint");
                 Check(timed.Alignment.characters.Single() == "4" && timed.SubtitleAlignment.characters.Length == 4 && timed.Text == "4", "both alignments and original text retained");
+                api.Reply = async (request, ct) => {
+                    var body = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(await request.Content.ReadAsStringAsync());
+                    Check((string)body["model_id"] == "eleven_v3" && (string)body["language_code"] == "bn", "Bengali model and language code request");
+                    return Json("{\"audio_base64\":\"AQID\",\"alignment\":{\"characters\":[\"বাংলা\"],\"character_start_times_seconds\":[0],\"character_end_times_seconds\":[0.5]}}");
+                };
+                await client.GenerateAsync("বাংলা", "m1", null, true, CancellationToken.None, "eleven_v3", "bn");
                 var captions = WarmupSubtitles.Cues(timed.SubtitleAlignment, 1, 3);
                 Check(captions.Count == 1 && captions[0].Text == "four" && captions[0].End == .5, "existing editable caption mechanism reused");
                 foreach (var status in new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, (HttpStatusCode)429, HttpStatusCode.Redirect }) {
