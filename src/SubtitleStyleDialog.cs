@@ -10,8 +10,9 @@ namespace VideoBatch {
         readonly FlowLayoutPanel cards;
         readonly List<WarmupCaption> cues;
         readonly ComboBox font, plate, highlight, motion;
-        readonly NumericUpDown size, position, words, opacity, outline, lineSpacing;
+        readonly NumericUpDown size, position, words, opacity, outline, lineSpacing, thickness, paddingX, paddingY;
         readonly CheckBox enabled, uppercase, bold;
+        public bool ExportSubtitleText { get; private set; }
         readonly Button textColor, plateColor, accentColor, outlineColor;
         readonly Label selected;
         readonly Timer timer = new Timer { Interval = 50 };
@@ -21,20 +22,23 @@ namespace VideoBatch {
         public bool EditCaptions { get; private set; }
         public bool RecognizeAudio { get; private set; }
 
-        public SubtitleStyleDialog(WarmupSubtitleStyle current, IEnumerable<WarmupCaption> captions = null, Image background = null, int canvasWidth = 1080, int canvasHeight = 1920, bool canEditCaptions = false, bool canRecognizeAudio = false) {
+        public SubtitleStyleDialog(WarmupSubtitleStyle current, IEnumerable<WarmupCaption> captions = null, Image background = null, int canvasWidth = 1080, int canvasHeight = 1920, bool canEditCaptions = false, bool canRecognizeAudio = false, bool? exportSubtitleText = null) {
             Style = (current ?? new WarmupSubtitleStyle()).Copy(); Style.Normalize();
             cues = (captions ?? Enumerable.Empty<WarmupCaption>()).Where(c => c != null).ToList();
             if (cues.Count == 0) cues.Add(new WarmupCaption { Text = "Твой стиль — твои слова", Start = 0, End = 3,
                 Words = new List<SubtitleWord> { new SubtitleWord { Text = "Твой", Start = 0, End = .6 }, new SubtitleWord { Text = "стиль", Start = .7, End = 1.3 }, new SubtitleWord { Text = "—", Start = 1.3, End = 1.4 }, new SubtitleWord { Text = "твои", Start = 1.5, End = 2 }, new SubtitleWord { Text = "слова", Start = 2.1, End = 2.9 } } });
             Text = "Субтитры"; Name = "SubtitleStyleDialog"; BackColor = Theme.Background; ForeColor = Theme.TextPrimary;
-            Font = Theme.FontBody; StartPosition = FormStartPosition.CenterParent; Size = new Size(1050, 750); MinimumSize = new Size(850, 590); MaximizeBox = false;
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 2, RowCount = 2 };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56)); Controls.Add(root);
-            preview = new SubtitleStylePreview(canvasWidth, canvasHeight, background) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 16, 8) }; root.Controls.Add(preview, 0, 0);
+            Font = Theme.FontBody; StartPosition = FormStartPosition.CenterParent; Size = new Size(1120, 800); MinimumSize = new Size(850, 590);
+            var area = Screen.FromControl(this).WorkingArea;
+            Size = new Size(Math.Min(Width, area.Width - 24), Math.Min(Height, area.Height - 40));
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), ColumnCount = 2, RowCount = 2 };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100)); Controls.Add(root);
+            var previewCard = Theme.MakeCard(); previewCard.Dock = DockStyle.Fill; previewCard.Margin = new Padding(0, 0, 20, 0);
+            preview = new SubtitleStylePreview(canvasWidth, canvasHeight, background) { Dock = DockStyle.Fill, Margin = Padding.Empty }; previewCard.Controls.Add(preview); root.Controls.Add(previewCard, 0, 0);
             var tabs = new TableLayoutPanel { Dock = DockStyle.Fill, Name = "SubtitleStyleTabs", ColumnCount = 1, RowCount = 2, BackColor = Theme.Card };
             tabs.RowStyles.Add(new RowStyle(SizeType.AutoSize)); tabs.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var switches = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, Padding = new Padding(8) };
+            var switches = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Padding = new Padding(12), Margin = Padding.Empty };
             var pages = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card };
             var gallery = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card, Padding = new Padding(8) };
             var settings = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card, Padding = new Padding(12), AutoScroll = true, Visible = false };
@@ -46,35 +50,50 @@ namespace VideoBatch {
             switches.Controls.Add(stylesTab); switches.Controls.Add(settingsTab); tabs.Controls.Add(switches, 0, 0); tabs.Controls.Add(pages, 0, 1); root.Controls.Add(tabs, 1, 0);
             if (canRecognizeAudio) switches.Controls.Add(Theme.MakeButton("Распознать аудио", ghost: true, action: () => { RecognizeAudio = true; DialogResult = DialogResult.OK; Close(); }));
             cards = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, BackColor = Theme.Card }; gallery.Controls.Add(cards);
-            cards.ClientSizeChanged += (s, e) => { foreach (Control card in cards.Controls) card.Width = Math.Max(170, (cards.ClientSize.Width - 36) / 2); };
-            var fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Padding = new Padding(0, 0, 12, 0) };
-            fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 53)); fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 47)); settings.Controls.Add(fields);
+            cards.ClientSizeChanged += (s, e) => ResizeCards();
+            var fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(4, 0, 12, 0) };
+            fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); settings.Controls.Add(fields);
             enabled = new CheckBox { Text = "Включены", AutoSize = true }; uppercase = new CheckBox { Text = "Заглавные буквы", AutoSize = true }; bold = new CheckBox { Text = "Жирный шрифт", AutoSize = true };
             font = Theme.MakeCombo(SubtitlePresets.Fonts); plate = Theme.MakeCombo(new[] { "Без плашки", "Скруглённая", "Прямая" });
             highlight = Theme.MakeCombo(new[] { "Без выделения", "Текущее слово", "Караоке" }); motion = Theme.MakeCombo(new[] { "Без анимации", "Лёгкое увеличение", "Плавное появление", "Мягкий подъём", "Акцент на слове" });
+            thickness = Number(0, 10); thickness.Name = "SubtitleTextThickness";
+            paddingX = Number(0, 100); paddingX.Name = "SubtitlePlatePaddingX";
+            paddingY = Number(0, 100); paddingY.Name = "SubtitlePlatePaddingY";
             lineSpacing = Number(60, 150); lineSpacing.Name = "SubtitleLineSpacing";
             size = Number(28, 150); position = Number(10, 90); words = Number(1, 6); opacity = Number(0, 100); outline = Number(0, 10);
             textColor = ColorButton("TextColor", () => Style.TextColor, c => Style.TextColor = c);
             plateColor = ColorButton("PlateColor", () => Style.PlateColor, c => Style.PlateColor = c);
             accentColor = ColorButton("AccentColor", () => Style.AccentColor, c => Style.AccentColor = c);
             outlineColor = ColorButton("OutlineColor", () => Style.OutlineColor, c => Style.OutlineColor = c);
+            SubtitleSection(fields, "Текст и типографика");
             Add(fields, "Субтитры", enabled); Add(fields, "Шрифт", font); Add(fields, "Начертание", bold); Add(fields, "Регистр", uppercase);
+            Add(fields, "Толщина букв, px", thickness);
             Add(fields, "Размер", size); Add(fields, "Положение сверху, %", position); Add(fields, "Слов в группе · до 2 строк", words);
             Add(fields, "Межстрочный интервал, %", lineSpacing);
+            SubtitleSection(fields, "Цвет и движение");
             Add(fields, "Цвет текста", textColor); Add(fields, "Выделение слов", highlight); Add(fields, "Цвет выделения", accentColor);
             Add(fields, "Анимация", motion); Add(fields, "Обводка", outline); Add(fields, "Цвет обводки", outlineColor);
+            SubtitleSection(fields, "Плашка и отступы");
             Add(fields, "Плашка", plate); Add(fields, "Цвет плашки", plateColor); Add(fields, "Плотность плашки, %", opacity);
+            Add(fields, "Отступ плашки слева / справа, px", paddingX); Add(fields, "Отступ плашки сверху / снизу, px", paddingY);
             foreach (var control in new ComboBox[] { font, plate, highlight, motion }) control.SelectedIndexChanged += (s, e) => Changed();
-            foreach (var control in new NumericUpDown[] { size, position, words, opacity, outline, lineSpacing }) control.ValueChanged += (s, e) => Changed();
+            foreach (var control in new NumericUpDown[] { size, position, words, opacity, outline, lineSpacing, thickness, paddingX, paddingY }) control.ValueChanged += (s, e) => Changed();
             foreach (var control in new CheckBox[] { enabled, uppercase, bold }) control.CheckedChanged += (s, e) => Changed();
-            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 18, 0, 0), Margin = Padding.Empty };
             AddRandomFields(fields);
             var apply = Theme.MakeButton("Применить", accent: true, action: () => { if (!ValidateRandomChoices()) return; DialogResult = DialogResult.OK; Close(); });
             var cancel = Theme.MakeButton("Отмена", ghost: true, action: () => { DialogResult = DialogResult.Cancel; Close(); });
             actions.Controls.Add(apply); actions.Controls.Add(cancel); root.Controls.Add(actions, 1, 1); AcceptButton = apply; CancelButton = cancel;
-            var leftActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true };
+            var leftActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true, Padding = new Padding(0, 18, 12, 0), Margin = Padding.Empty };
             leftActions.Controls.Add(Theme.MakeButton("Сохранить мой стиль", ghost: true, action: SaveCustom));
             if (canEditCaptions) leftActions.Controls.Add(Theme.MakeButton("Текст и таймкоды", ghost: true, action: () => { EditCaptions = true; DialogResult = DialogResult.OK; Close(); }));
+            if (exportSubtitleText.HasValue) {
+                ExportSubtitleText = exportSubtitleText.Value;
+                var exportText = new CheckBox { Name = "ExportSubtitleText", Text = "Сохранять текст рядом с видео (.txt)", AutoSize = true, Checked = ExportSubtitleText };
+                Theme.StyleCheckBox(exportText);
+                exportText.CheckedChanged += (s, e) => ExportSubtitleText = exportText.Checked;
+                leftActions.Controls.Add(exportText);
+            }
             selected = new Label { AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 0) }; leftActions.Controls.Add(selected); root.Controls.Add(leftActions, 0, 1);
             preview.PositionChanged += value => { enabled.Checked = true; position.Value = value; };
             preview.AccessibleDescription = "Перетащите мышью по кадру, чтобы изменить высоту субтитров.";
@@ -83,10 +102,31 @@ namespace VideoBatch {
             FormClosed += (s, e) => timer.Stop();
         }
         static NumericUpDown Number(int min, int max) => new NumericUpDown { Minimum = min, Maximum = max, Width = 150, BackColor = Theme.Card, ForeColor = Theme.TextPrimary, BorderStyle = BorderStyle.FixedSingle };
+        static void SubtitleSection(TableLayoutPanel fields, string title) {
+            int row = fields.RowCount++; fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            fields.Controls.Add(new Label { Text = title, Font = Theme.FontCardTitle, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 20, 0, 8) }, 0, row);
+        }
         static void Add(TableLayoutPanel fields, string label, Control control) {
             int row = fields.RowCount++; fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            fields.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(0, 8, 4, 8) }, 0, row);
-            control.Dock = DockStyle.Top; control.Margin = new Padding(0, 4, 0, 4); fields.Controls.Add(control, 1, row);
+            fields.Controls.Add(new Label { Text = label, AutoSize = true, Dock = DockStyle.Top, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 10, 0, 4) }, 0, row);
+            if (control is NumericUpDown number) control = SliderNumber(number);
+            int valueRow = fields.RowCount++; fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            control.Dock = DockStyle.Top; control.Margin = new Padding(0, 0, 0, 8); fields.Controls.Add(control, 0, valueRow);
+        }
+        void ResizeCards() {
+            int available = Math.Max(120, cards.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 8);
+            int columns = available >= 380 ? 2 : 1;
+            foreach (Control card in cards.Controls) card.Width = Math.Max(120, available / columns - 8);
+        }
+        static Control SliderNumber(NumericUpDown number) {
+            var panel = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 2, Margin = Padding.Empty };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
+            var slider = new TrackBar { Minimum = (int)number.Minimum, Maximum = (int)number.Maximum, Value = (int)number.Value, TickStyle = TickStyle.None, AutoSize = false, Height = 30, Dock = DockStyle.Fill, Margin = Padding.Empty, Name = number.Name + "Slider" };
+            number.Width = 64; number.Dock = DockStyle.Top; number.Margin = Padding.Empty;
+            slider.ValueChanged += (s, e) => { if (number.Value != slider.Value) number.Value = slider.Value; };
+            number.ValueChanged += (s, e) => { if (slider.Value != (int)number.Value) slider.Value = (int)number.Value; };
+            number.Enter += (s, e) => number.Select(0, number.Text.Length);
+            panel.Controls.Add(slider, 0, 0); panel.Controls.Add(number, 1, 0); return panel;
         }
         Button ColorButton(string name, Func<string> read, Action<string> write) {
             var button = Theme.MakeButton("Выбрать", ghost: true); button.Name = "Subtitle" + name;
@@ -101,6 +141,7 @@ namespace VideoBatch {
                 enabled.Checked = Style.Enabled; uppercase.Checked = Style.Uppercase; bold.Checked = Style.Bold; font.SelectedItem = Style.FontFamily;
                 plate.SelectedIndex = Style.Plate == "none" ? 0 : Style.Plate == "rounded" ? 1 : 2;
                 highlight.SelectedIndex = Style.Highlight == "none" ? 0 : Style.Highlight == "active" ? 1 : 2; motion.SelectedIndex = Array.IndexOf(new[] { "none", "pop", "fade", "rise", "word-accent" }, Style.Motion);
+                thickness.Value = Style.TextThickness; paddingX.Value = Style.PlatePaddingX; paddingY.Value = Style.PlatePaddingY;
                 lineSpacing.Value = Style.LineSpacing; size.Value = Style.FontSize; position.Value = Style.Position; words.Value = Style.WordsPerCaption; opacity.Value = Style.Opacity; outline.Value = Style.OutlineWidth;
                 UpdateColors(); LoadRandomFields();
             } finally { loading = false; }
@@ -114,6 +155,7 @@ namespace VideoBatch {
         void Changed() {
             if (loading) return;
             Style.Enabled = enabled.Checked; Style.FontFamily = Convert.ToString(font.SelectedItem); Style.Uppercase = uppercase.Checked; Style.Bold = bold.Checked;
+            Style.TextThickness = (int)thickness.Value; Style.PlatePaddingX = (int)paddingX.Value; Style.PlatePaddingY = (int)paddingY.Value;
             Style.LineSpacing = (int)lineSpacing.Value; Style.FontSize = (int)size.Value; Style.Position = (int)position.Value; Style.WordsPerCaption = (int)words.Value; Style.Opacity = (int)opacity.Value; Style.OutlineWidth = (int)outline.Value;
             Style.Plate = plate.SelectedIndex == 0 ? "none" : plate.SelectedIndex == 1 ? "rounded" : "solid";
             Style.Highlight = highlight.SelectedIndex == 0 ? "none" : highlight.SelectedIndex == 1 ? "active" : "progressive"; Style.Motion = new[] { "none", "pop", "fade", "rise", "word-accent" }[Math.Max(0, motion.SelectedIndex)];
@@ -127,6 +169,7 @@ namespace VideoBatch {
                     card.Click += (s, e) => { var random = Style.RandomStyle.Copy(); Style = preset.Style.Copy(); Style.RandomStyle = random; Style.Enabled = true; selected.Text = preset.Name; LoadFields(); foreach (SubtitlePresetCard item in cards.Controls) item.IsSelected = item.PresetId == Style.PresetId; cards.Invalidate(true); };
                     cards.Controls.Add(card);
                 }
+                ResizeCards();
             } catch (Exception ex) { MessageBox.Show(this, "Не удалось прочитать ваши стили: " + ex.Message, "Субтитры"); }
         }
         void SaveCustom() {

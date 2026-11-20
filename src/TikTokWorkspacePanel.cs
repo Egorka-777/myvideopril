@@ -37,6 +37,41 @@ namespace VideoBatch {
         readonly Panel accountBadge;
 
         readonly HashSet<string> preparationKeys = new HashSet<string>();
+        readonly Dictionary<string,TikTokWebWindow> webWindows=new Dictionary<string,TikTokWebWindow>();
+        bool openingWeb;
+        bool openingAndroid;
+        readonly Button openAndroid;
+        async Task OpenTikTokAndroid(){
+            if(openingAndroid)return;
+            var account=grid.CurrentRow?.Tag as TikTokAccount;
+            if(account==null){AppendLog("Выберите аккаунт TikTok.");return;}
+            string id=(account.ProfileId??"").Trim();
+            openingAndroid=true;openAndroid.Enabled=false;
+            try{
+                await AndroidProfileLauncher.Open(settings,id,account.Name,"com.zhiliaoapp.musically",line=>{if(!IsDisposed)AppendLog(line);});
+            }catch(Exception error){
+                if(!IsDisposed)AppendLog(error is InvalidOperationException?error.Message:"Не удалось открыть Android; подробности в журнале.");
+                AppDiagnostics.Write("Android",id,"","open_error",error.GetType().Name,"error");
+            }finally{openingAndroid=false;if(!IsDisposed)openAndroid.Enabled=true;}
+        }
+        async Task OpenTikTokWeb(){
+            if(openingWeb)return;
+            var account=grid.CurrentRow?.Tag as TikTokAccount;
+            if(account==null){AppendLog("Выберите аккаунт TikTok.");return;}
+            string id=(account.ProfileId??"").Trim();
+            if(string.IsNullOrEmpty(id)){AppendLog("У аккаунта нет Dolphin Profile ID.");return;}
+            if(webWindows.TryGetValue(id,out var existing)&&!existing.IsDisposed){existing.Show();existing.Activate();return;}
+            openingWeb=true;
+            try{
+                AppendLog("Получаю назначенный профилю прокси для TikTok WebView2…");
+                var route=await TelegramProxyCatalog.FetchDolphin(WindowsSupport.Unprotect(settings.ProtectedDolphinToken),new[]{new KeyValuePair<string,string>(id,account.Name)},includeCatalog:false);
+                var proxy=route.Proxies.SingleOrDefault();
+                if(proxy==null)throw new InvalidOperationException(route.Warnings.Count>0?string.Join("; ",route.Warnings):"Профилю не назначен прокси. Прямое соединение не используется.");
+                var window=new TikTokWebWindow(id,account.Name,proxy.url);webWindows[id]=window;
+                window.FormClosed+=(s,e)=>{if(webWindows.TryGetValue(id,out var current)&&ReferenceEquals(current,window))webWindows.Remove(id);};window.Show(FindForm());
+            }catch(Exception error){AppendLog(error is InvalidOperationException?error.Message:"Не удалось открыть TikTok WebView2; подробности в журнале.");AppDiagnostics.Write("TikTok",id,"","web_open_error",error.GetType().Name,"error");}
+            finally{openingWeb=false;}
+        }
         string marketView = "RU";
 
         string statusFilterValue = "Все статусы";
@@ -91,7 +126,9 @@ namespace VideoBatch {
 
             marketHint = new Label { AutoSize = true, ForeColor = Theme.TextPrimary, Font = Theme.FontPageTitle, Text = "TikTok" };
 
-            var topStack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, BackColor = Theme.Background };
+            var topStack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3, BackColor = Theme.Background };
+            topStack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            topStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             topStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -108,7 +145,16 @@ namespace VideoBatch {
             var headerActions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Theme.Background };
 
             headerActions.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: AddVideos));
+            var openWeb=Theme.MakeButton("Открыть TikTok",ghost:true,action:async()=>await OpenTikTokWeb());openWeb.Name="OpenTikTokWeb";headerActions.Controls.Add(openWeb);
+            openAndroid=Theme.MakeButton("Открыть Android",ghost:true,action:async()=>await OpenTikTokAndroid());openAndroid.Name="OpenTikTokAndroid";headerActions.Controls.Add(openAndroid);
 
+            var fillProfile=Theme.MakeButton("Оформить профиль",accent:true,action:()=>{
+                var account=ProfilePresetActions.ChooseAccount(this,"TikTok",settings.TikTokAccounts??new List<TikTokAccount>(),
+                    a=>a.Name+" · "+a.Market+" · Dolphin "+a.ProfileId);
+                if(account!=null)ProfilePresetActions.OpenAndroid(this,"TikTok",account.ProfileId,account.Name,AppendLog);
+            });fillProfile.Name="FillTikTokProfile";
+            var profileBar=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Margin=Padding.Empty};
+            profileBar.Controls.Add(fillProfile);
             headerActions.Controls.Add(Theme.MakeMenuButton("Ещё",
 
                 ("Поиск аккаунта…", PromptSearch),
@@ -186,9 +232,11 @@ namespace VideoBatch {
 
 
 
-            topStack.Controls.Add(headerBar, 0, 0);
+            topStack.Controls.Add(profileBar, 0, 0);
 
-            topStack.Controls.Add(contextCard, 0, 1);
+            topStack.Controls.Add(headerBar, 0, 1);
+
+            topStack.Controls.Add(contextCard, 0, 2);
 
             root.Controls.Add(topStack, 0, 0);
 
@@ -258,7 +306,7 @@ namespace VideoBatch {
             foreach (DataGridViewColumn column in grid.Columns) column.ReadOnly = column.Name != "on";
             grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && grid.Columns[e.ColumnIndex].Name != "on") AddVideos(); };
             grid.CellPainting += (sender, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == grid.Columns["status"].Index && grid.Rows[e.RowIndex].Tag is TikTokAccount a) UploadPreparation.PaintProgress(e, UploadPreparation.TikTokKey(a)); };
-            Disposed += (sender, e) => { foreach (var key in preparationKeys.ToArray()) UploadPreparation.Cancel(key); };
+            Disposed += (sender, e) => { foreach (var key in preparationKeys.ToArray()) UploadPreparation.Cancel(key);foreach(var window in webWindows.Values.ToArray())if(!window.IsDisposed)window.Close(); };
 
             grid.CellValueChanged += (s, e) => { if (e.ColumnIndex >= 0 && grid.Columns[e.ColumnIndex].Name == "on") SyncEnabledFromGrid(); };
 

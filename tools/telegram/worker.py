@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from time import monotonic as dialogue_clock
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, unquote
 
@@ -65,17 +66,15 @@ def watch_input(cancel_on_eof=False):
         CANCEL.set()  # Interactive authorization must not outlive its parent.
 
 
-async def fresh_login_token(account, attempt, timeout=45):
+async def fresh_login_token(account, attempt):
     emit('web_token_request', id=account['id'], attempt=attempt,
          text='Сессия подключена. Читаем свежий QR из выбранного веб-окна…')
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while True:
         cancelled()
         try:
             return LOGIN_TOKENS.get_nowait()
         except queue.Empty:
             await asyncio.sleep(.1)
-    raise ValueError('Telegram Web не передал свежий QR за 45 сек. Обновите веб-окно и повторите вход')
 
 
 def parse_proxy(value):
@@ -696,11 +695,13 @@ def connection_candidates(account):
     return result
 
 
-async def open_account(account):
+async def open_account(account, *, single_attempt=False):
     from telethon.sessions import StringSession
     from python_socks import ProxyError
     await account_route(account)
     candidates = connection_candidates(account)
+    if single_attempt:
+        candidates = candidates[:1]  # Dialogue jobs never reconnect or retry another route.
     started = time.monotonic()
     failure = None
     wss_failure = None
@@ -949,6 +950,328 @@ async def resolve_target(client, text, check_permissions=True):
     return target
 
 
+AI_DIALOGUE_PREFIX = '[ИИ-диалог] '
+DIALOGUE_MEDIA = {'.jpg', '.jpeg', '.png', '.mp4', '.mov', '.webm'}
+DIALOGUE_STICKERS = {'.webp', '.tgs', '.webm'}
+
+
+def dialogue_controls(job):
+    """Run-local counts only. Daily hours use the COMPUTER'S local time, not UTC.
+
+    enabled gates both start_utc (timezone-aware ISO8601, empty = now) and the
+    daily [hour_start, hour_end) window; overnight windows are supported.
+    No OS/Telegram scheduler is registered: closing the app stops this timer.
+    """
+    limits = job.get('limits', {})
+    schedule = job.get('schedule', {})
+    if not isinstance(limits, dict) or not isinstance(schedule, dict):
+        raise ValueError('limits и schedule должны быть объектами')
+    caps = {key: limits.get(key, 0) for key in ('per_account_hour', 'per_account_run', 'per_target_run')}
+    if any(type(n) is not int or n < 0 for n in caps.values()):
+        raise ValueError('Лимиты должны быть целыми числами ≥ 0; 0 — без лимита')
+    enabled = schedule.get('enabled', False)
+    start, end = schedule.get('hour_start', 0), schedule.get('hour_end', 24)
+    if type(enabled) is not bool or type(start) is not int or type(end) is not int or not 0 <= start <= 23 or not 0 <= end <= 24:
+        raise ValueError('Расписание: начало 0–23, конец 0–24, часы локального времени компьютера')
+    if enabled and start == end:
+        raise ValueError('Начало и конец окна расписания не должны совпадать')
+    stamp = schedule.get('start_utc', '')
+    if not isinstance(stamp, str):
+        raise ValueError('start_utc: ISO8601 с часовым поясом или пустая строка')
+    until = 0
+    if stamp:
+        try:
+            parsed = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+            if parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+                raise ValueError()
+            until = parsed.timestamp()
+        except (ValueError, OverflowError):
+            raise ValueError('start_utc: дата ISO8601 в UTC (Z или +00:00)') from None
+    return caps, dict(enabled=enabled, start_utc=until, hour_start=start, hour_end=end)
+
+
+class DialogueGate:
+    """Sliding hourly window covers confirmed outgoing messages in THIS run only."""
+    def __init__(self, caps, schedule):
+        self.caps, self.schedule = caps, schedule
+        self.sent = {}
+
+    def delay(self, account_id, sending):
+        from datetime import timedelta
+        schedule = self.schedule
+        if schedule['enabled']:
+            now = time.time()
+            if now < schedule['start_utc']:
+                return schedule['start_utc'] - now, 'start', 'Ожидание времени запуска'
+            local = datetime.fromtimestamp(now)
+            start, end = schedule['hour_start'], schedule['hour_end']
+            opened = start <= local.hour < end if start < end else local.hour >= start or local.hour < end
+            if not opened:
+                opening = local.replace(hour=start, minute=0, second=0, microsecond=0)
+                if opening <= local:
+                    opening += timedelta(days=1)
+                return opening.timestamp() - now, 'schedule', 'Ожидание локального окна расписания'
+        if sending and self.caps['per_account_hour']:
+            now = dialogue_clock()
+            stamps = self.sent.setdefault(account_id, [])
+            stamps[:] = [stamp for stamp in stamps if stamp > now - 3600]
+            if len(stamps) >= self.caps['per_account_hour']:
+                return stamps[0] + 3600 - now, 'hour_limit', 'Ожидание часового лимита текущего запуска'
+        return 0, '', ''
+
+    async def wait(self, account_id, sending=False):
+        while True:
+            cancelled()
+            seconds, reason, text = self.delay(account_id, sending)
+            if seconds <= 0:
+                return
+            emit('dialogue_waiting', account_id=account_id, reason=reason, seconds=seconds, text=text)
+            await pause(seconds)
+
+    def record(self, account_id):
+        self.sent.setdefault(account_id, []).append(dialogue_clock())
+
+
+def dialogue_file(step, key, extensions):
+    value = step.get(key, '')
+    if not isinstance(value, str):
+        raise ValueError(key + ': нужен путь к локальному файлу')
+    if not value:
+        return ''
+    # Reject remote URLs and UNC network shares, not just missing local paths.
+    if re.match(r'^[a-z][a-z0-9+.-]*://', value, re.I) or value.startswith(('\\\\', '//')):
+        raise ValueError(key + ': разрешён только локальный файл, не URL')
+    path = Path(value)
+    if path.suffix.lower() not in extensions or not path.is_file():
+        raise ValueError(key + ': файл не найден или неподдерживаемое расширение')
+    return str(path.resolve())
+
+
+def dialogue_plan(job):
+    """Validate the entire finite script before connecting, joining or sending."""
+    import math
+    from telethon.sessions import StringSession
+    accounts = job.get('accounts')
+    if not isinstance(accounts, list) or not accounts:
+        raise ValueError('Выберите аккаунты для ИИ-диалога')
+    selected = {}
+    for account in accounts:
+        if not isinstance(account, dict):
+            raise ValueError('Неверный аккаунт ИИ-диалога')
+        identity = account.get('id')
+        if not isinstance(identity, str) or not identity.strip() or identity in selected:
+            raise ValueError('ID аккаунтов должны быть непустыми и уникальными')
+        api_data(account)
+        parse_proxy(account.get('proxy'))
+        if not isinstance(account.get('session'), str) or not account['session']:
+            raise ValueError('Нет сессии аккаунта ИИ-диалога')
+        session = StringSession(account['session'])
+        if not session.auth_key or not valid_endpoint(session.server_address, session.port):
+            raise ValueError('Неверная сессия аккаунта ИИ-диалога')
+        selected[identity] = account
+    target = job.get('target')
+    if not isinstance(target, str) or not re.fullmatch(r'https://t\.me/(?:\+|joinchat/)[A-Za-z0-9_-]+', target):
+        raise ValueError('Для ИИ-диалога нужна пригласительная ссылка https://t.me/+…')
+    delays = [job.get('delay_min'), job.get('delay_max')]
+    if any(type(n) not in (int, float) or not math.isfinite(n) or n < 0 for n in delays) or delays[0] > delays[1]:
+        raise ValueError('Задержки должны быть конечными числами: 0 ≤ минимум ≤ максимум')
+    caps, schedule = dialogue_controls(job)
+    steps = job.get('steps')
+    if not isinstance(steps, list) or not steps:
+        raise ValueError('Сценарий ИИ-диалога пуст')
+    totals = {identity: 0 for identity in selected}
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict) or not isinstance(step.get('account_id'), str) or step['account_id'] not in selected:
+            raise ValueError('Каждый шаг должен ссылаться на выбранный аккаунт')
+        media = dialogue_file(step, 'media_path', DIALOGUE_MEDIA)
+        sticker = dialogue_file(step, 'sticker_path', DIALOGUE_STICKERS)
+        if media and sticker:
+            raise ValueError('media_path и sticker_path нельзя использовать одновременно')
+        totals[step['account_id']] += 2 if sticker else 1
+        text = step.get('text')
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError('Текст каждого шага обязателен')
+        try:
+            units = len((AI_DIALOGUE_PREFIX + text).encode('utf-16-le')) // 2
+        except UnicodeError:
+            raise ValueError('Текст шага содержит недопустимые символы') from None
+        maximum = 1024 if media else 4096
+        if units > maximum:
+            raise ValueError(f'Текст вместе с меткой ИИ-диалога превышает {maximum} символов')
+        reply = step.get('reply_to')
+        if type(reply) is not int or not 0 <= reply <= index:
+            raise ValueError('reply_to: 0 или номер предыдущего шага, начиная с 1')
+    if caps['per_account_run'] and any(n > caps['per_account_run'] for n in totals.values()):
+        raise ValueError('Сценарий превышает per_account_run; стикер считается как два сообщения')
+    if caps['per_target_run'] and sum(totals.values()) > caps['per_target_run']:
+        raise ValueError('Сценарий превышает per_target_run; стикер считается как два сообщения')
+    return accounts, target, steps, delays
+
+
+def dialogue_group(target):
+    from telethon import types
+    if not (isinstance(target, types.Chat) or isinstance(target, types.Channel) and target.megagroup and not target.broadcast):
+        raise ValueError('ИИ-диалог разрешён только в группе, не у пользователя или в вещательном канале')
+    return target
+
+
+async def join_dialogue_group(client, url):
+    """Check membership, import once, then require confirmed membership (no polling)."""
+    from telethon import errors, functions, types
+    invite_hash = url.rsplit('/', 1)[-1].lstrip('+')
+    async def check():
+        cancelled()
+        return await asyncio.wait_for(client(functions.messages.CheckChatInviteRequest(invite_hash)), 35)
+    result = await check()
+    if isinstance(result, types.ChatInviteAlready):
+        return dialogue_group(result.chat)
+    if isinstance(result, types.ChatInvitePeek):
+        dialogue_group(result.chat)
+    elif not isinstance(result, types.ChatInvite) or result.broadcast or result.channel and not result.megagroup:
+        raise ValueError('Пригласительная ссылка должна вести в группу, не в вещательный канал')
+    if getattr(result, 'request_needed', False):
+        raise ValueError('Для вступления требуется одобрение администратора; подтвердите участие вручную')
+    cancelled()
+    try:
+        await asyncio.wait_for(client(functions.messages.ImportChatInviteRequest(invite_hash)), 35)
+    except errors.UserAlreadyParticipantError:
+        pass  # Membership may have changed since the check; do not repeat the import.
+    except errors.InviteRequestSentError as exc:
+        raise ValueError('Заявка на вступление ожидает одобрения администратора; диалог не запущен') from exc
+    result = await check()
+    if not isinstance(result, types.ChatInviteAlready):
+        raise ValueError('Участие в группе не подтверждено; возможно, заявка ожидает одобрения')
+    return dialogue_group(result.chat)
+
+
+async def dialogue_reply_id(client, target, sent):
+    """Basic-group message IDs are local to each account, unlike channel IDs."""
+    from telethon import types
+    if isinstance(target, types.InputPeerChannel):
+        return sent['id']
+    history = await asyncio.wait_for(client.get_messages(target, limit=100), 35)
+    matches = [m.id for m in history if m.sender_id == sent['sender_id']
+               and m.date == sent['date'] and m.message == sent['text']]
+    if len(matches) != 1:
+        raise ValueError('Не удалось однозначно найти реплику для ответа в истории отправителя')
+    return matches[0]
+
+
+async def ai_dialogue(job):
+    """Owner-approved, visibly labelled script only; no listeners or write retries."""
+    from random import uniform
+    accounts, url, steps, delays = dialogue_plan(job)
+    targets, message_ids = {}, []
+    gate = DialogueGate(*dialogue_controls(job))
+    total = sum(2 if step.get('sticker_path') else 1 for step in steps)
+    sent_count = 0
+    client = None
+    group_identity = None
+    account = None
+    stage = 'connect'
+    try:
+        for account in accounts:
+            while True:
+                stage = 'wait_join'
+                await gate.wait(account['id'])
+                stage = 'connect'
+                client, me = await open_account(account, single_attempt=True)
+                if gate.delay(account['id'], False)[0] <= 0:
+                    break
+                await client.disconnect()
+                client = None
+            emit('account', id=account['id'], status='ready', user_id=me.id, text='Telegram подтвердил аккаунт')
+            stage = 'join'
+            cancelled()
+            target = await join_dialogue_group(client, url)
+            identity = (type(target), target.id)
+            if group_identity is not None and identity != group_identity:
+                raise ValueError('Аккаунты разрешили ссылку в разные группы; диалог остановлен')
+            group_identity = identity
+            targets[account['id']] = await client.get_input_entity(target)
+            # Store only a peer descriptor: WSS connections expire while other
+            # accounts connect. Each operation gets its own short-lived session.
+            emit('dialogue_joined', account_id=account['id'], target_id=target.id, title=target.title)
+            await client.disconnect()
+            client = None
+        for index, step in enumerate(steps):
+            account = next(a for a in accounts if a['id'] == step['account_id'])
+            if index:
+                stage = 'delay'
+                seconds = uniform(*delays)
+                if seconds:
+                    emit('dialogue_waiting', account_id=account['id'], reason='delay', seconds=seconds,
+                         text='Ожидание паузы между шагами')
+                await pause(seconds)
+            labelled = AI_DIALOGUE_PREFIX + step['text']
+            parts = ['media'] if step.get('media_path') else ['text']
+            if step.get('sticker_path'):
+                parts.append('sticker')
+            for part in parts:
+                # Never keep a WSS session idle during schedule/hourly waits.
+                # Only read/connection work can repeat if a window closes;
+                # a write request is ALWAYS attempted exactly once.
+                while True:
+                    stage = 'wait_send'
+                    await gate.wait(account['id'], sending=True)
+                    stage = 'connect_sender'
+                    client, sender = await open_account(account, single_attempt=True)
+                    reply = message_ids[index] if part == 'sticker' else message_ids[step['reply_to'] - 1] if step['reply_to'] else None
+                    reply_id = None
+                    if reply:
+                        stage = 'resolve_reply'
+                        reply_id = await dialogue_reply_id(client, targets[account['id']], reply)
+                    if gate.delay(account['id'], True)[0] <= 0:
+                        break
+                    await client.disconnect()
+                    client = None
+                cancelled()
+                stage = 'send'
+                if part == 'text':
+                    request = client.send_message(targets[account['id']], labelled,
+                                                  reply_to=reply_id, parse_mode=None, link_preview=False)
+                elif part == 'media':
+                    request = client.send_file(targets[account['id']], str(Path(step['media_path']).resolve()),
+                                               caption=labelled, reply_to=reply_id, parse_mode=None)
+                else:
+                    from telethon import types
+                    extension = Path(step['sticker_path']).suffix.lower()
+                    mime = {'.webp': 'image/webp', '.tgs': 'application/x-tgsticker', '.webm': 'video/webm'}[extension]
+                    request = client.send_file(targets[account['id']], str(Path(step['sticker_path']).resolve()),
+                                               reply_to=reply_id, parse_mode=None, force_document=True,
+                                               mime_type=mime, attributes=[types.DocumentAttributeSticker(
+                                                   alt='', stickerset=types.InputStickerSetEmpty())])
+                message = await asyncio.wait_for(request, 35)
+                gate.record(account['id'])
+                sent_count += 1
+                if part != 'sticker':
+                    # Sticker steps retain the LABEL text/date/id as their main
+                    # reference, including account-local lookup in basic groups.
+                    message_ids.append(dict(id=message.id, sender_id=sender.id,
+                                            date=message.date, text=labelled))
+                emit('dialogue_sent', step=index + 1, part=part, account_id=account['id'], message_id=message.id)
+                await client.disconnect()
+                client = None
+        emit('dialogue_complete', sent=sent_count)
+        emit('summary', text=f'ИИ-диалог завершён: отправлено {sent_count}', sent=sent_count, failures=0)
+    except Exception as exc:
+        state, text, seconds = error_info(exc)
+        if isinstance(exc, (ValueError, StopJob, SessionConnectionError)):
+            text = str(exc)
+        if account is not None and not isinstance(exc, StopJob):
+            emit('account', id=account['id'], status=state, text=text, seconds=seconds,
+                 code=getattr(exc, 'cause_code', type(exc).__name__))
+        emit('dialogue_failed', stage=stage, sent=sent_count, total=total,
+             account_id=account['id'] if account else '', code=type(exc).__name__,
+             text=f'ИИ-диалог остановлен; подтверждено сообщений: {sent_count}. Последний запрос мог выполниться; автоматического повтора нет. '+text)
+        emit('summary', text=f'ИИ-диалог не завершён: подтверждено {sent_count} из {total}', sent=sent_count, failures=1)
+        raise
+    finally:
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(client.disconnect(), 3)
+
+
 async def invite_preview(job):
     accounts = job.get('accounts', [])
     if len(accounts) != 1:
@@ -999,6 +1322,8 @@ async def web_login(job):
                 await asyncio.wait_for(client(functions.auth.AcceptLoginTokenRequest(base64.urlsafe_b64decode(token+'='*((-len(token))%4)))), 12)
                 break
             except Exception as exc:
+                if isinstance(exc, ConnectionError):
+                    emit('log', id=account['id'], code=type(exc).__name__, text='Подтверждение QR: '+('MTProto-соединение закрыто до отправки запроса' if str(exc)=='Cannot send requests while disconnected' else 'соединение прервано при запросе'))
                 if refresh and type(exc).__name__ == 'AuthTokenExpiredError' and attempt < 3:
                     emit('stage', id=account['id'], text='QR истёк. Ожидаем новый QR, сессию повторно не подключаем…')
                     continue
@@ -1041,7 +1366,17 @@ def profile_plan(job):
 async def apply_profile_template(job):
     """One selected owner session, native API, no other users/chats or write retries."""
     from telethon import functions
+    preset=job.get('action')=='profile_preset'
+    about=None
+    if preset:
+        profile=job.get('profile',{})
+        about=profile.get('about')
+        if profile.get('last_name')!='':raise ValueError('Пресет использует полное имя и пустую фамилию')
+        if not isinstance(about,str) or any(c in about for c in '\r\n'):
+            raise ValueError('Биография должна быть строкой без переносов')
+        if not profile.get('avatar'):raise ValueError('Выберите фото пресета')
     account,first,last,image,digest=profile_plan(job)
+    if preset:first=job['profile']['first_name']  # Preserve the exact display name, never truncate.
     client=None;me=None;stage='connect';submitted=False
     try:
         client,me=await open_account(account)
@@ -1051,9 +1386,21 @@ async def apply_profile_template(job):
         old_photo=str(getattr(getattr(me,'photo',None),'photo_id',''))
         photo_id=old_photo
         cancelled()
-        if (me.first_name or '',me.last_name or '')!=(first,last):
-            stage='names';submitted=True;emit('stage',id=account['id'],text='Изменяю имя и фамилию…')
-            await asyncio.wait_for(client(functions.account.UpdateProfileRequest(first_name=first,last_name=last)),20)
+        if preset:
+            # Official limits: core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1set_name.html
+            # Bio limits are account-specific: core.telegram.org/api/premium#double-limits-about-length
+            stage='validate'
+            config=await asyncio.wait_for(client(functions.help.GetAppConfigRequest(hash=0)),12)
+            key='about_length_limit_premium' if getattr(me,'premium',False) else 'about_length_limit_default'
+            limit=next((entry.value.value for entry in config.config.value if entry.key==key),None)
+            if not isinstance(limit,(int,float)) or limit<=0:raise ValueError('Telegram не сообщил лимит биографии')
+            if len(about)>limit:raise ValueError(f'Биография — до {int(limit)} символов для этого аккаунта; текст не сокращён')
+            cancelled()
+        if preset or (me.first_name or '',me.last_name or '')!=(first,last):
+            stage='names';submitted=True;emit('stage',id=account['id'],text='Изменяю имя и биографию…' if preset else 'Изменяю имя и фамилию…')
+            fields=dict(first_name=first,last_name=last)
+            if preset:fields['about']=about
+            await asyncio.wait_for(client(functions.account.UpdateProfileRequest(**fields)),20)
         if image is not None and not (account.get('profile_avatar_hash')==digest and account.get('profile_photo_id')==old_photo and old_photo):
             cancelled();stage='upload';emit('stage',id=account['id'],text='Загружаю фото шаблона…')
             upload=await asyncio.wait_for(client.upload_file(image,file_name='profile.jpg'),30)
@@ -1072,6 +1419,22 @@ async def apply_profile_template(job):
         if confirmed is None:raise ProfileChangeError('Telegram не подтвердил сохранённые имя, фамилию или фото')
         confirmed_photo=str(getattr(getattr(confirmed,'photo',None),'photo_id',''))
         verified_hash=digest if image is not None else account.get('profile_avatar_hash','') if account.get('profile_photo_id')==confirmed_photo else ''
+        if preset:
+            full=await asyncio.wait_for(client(functions.users.GetFullUserRequest(id='me')),12)
+            if full.full_user.id!=me.id or (full.full_user.about or '')!=about:
+                raise ProfileChangeError('Telegram не подтвердил сохранённую биографию')
+            cancelled()
+            # Telegram recompresses photos: verify the returned photo ID and that
+            # its full-size image can actually be downloaded, not source-byte equality.
+            downloaded=await asyncio.wait_for(client.download_profile_photo(confirmed,file=bytes,download_big=True),20)
+            if not isinstance(downloaded,bytes) or not downloaded.startswith(b'\xff\xd8') or not downloaded.endswith(b'\xff\xd9'):
+                raise ProfileChangeError('Не удалось скачать подтверждённое фото Telegram')
+            cancelled()
+            emit('profile_preset_updated',id=account['id'],first_name=first,last_name=last,about=about,
+                 photo_id=confirmed_photo,avatar_sha256=verified_hash,downloaded_avatar_sha256=hashlib.sha256(downloaded).hexdigest(),
+                 text='Имя, пустая фамилия, биография и скачанное фото проверены Telegram')
+            emit('summary',text='Пресет применён к выбранному аккаунту и полностью проверен Telegram')
+            return
         emit('profile_updated',id=account['id'],first_name=first,last_name=last,photo_id=confirmed_photo,avatar_sha256=verified_hash,
              text='Имя, фамилия и фото проверены Telegram' if image is not None else 'Имя и фамилия проверены Telegram; фото сохранено')
         emit('summary',text='Шаблон применён к выбранному аккаунту и проверен Telegram')
@@ -1268,10 +1631,12 @@ async def run(job):
             await check_proxies(job)
         elif action == 'web_login':
             await web_login(job)
-        elif action == 'profile_template':
+        elif action in ('profile_template', 'profile_preset'):
             await apply_profile_template(job)
         elif action == 'invite_link':
             await invite_link(job)
+        elif action == 'ai_dialogue':
+            await ai_dialogue(job)
         else:
             raise ValueError('Неизвестное действие Telegram')
         emit('complete', text='Задача завершена')
@@ -1289,7 +1654,8 @@ def main():
         emit('error', text='Слишком большое задание'); return 1
     try:
         job = json.loads(line)
-        threading.Thread(target=watch_input, args=(job.get('action') == 'web_login' and job.get('refresh_token') is True,), daemon=True).start()
+        cancel_on_eof = job.get('action') == 'ai_dialogue' or job.get('action') == 'web_login' and job.get('refresh_token') is True
+        threading.Thread(target=watch_input, args=(cancel_on_eof,), daemon=True).start()
         asyncio.run(run(job))
         return 0
     except StopJob as exc:

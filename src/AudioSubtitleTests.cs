@@ -18,13 +18,25 @@ namespace VideoBatch {
             string hash = AssemblyFiles.Hash(audio), file = LocalAudioTranscription.CacheFile(hash);
             Directory.CreateDirectory(Path.GetDirectoryName(file));
             File.WriteAllText(file, new JavaScriptSerializer().Serialize(new AssemblySpeechPlan.SpeechTiming {
-                AudioHash = hash, Text = text, Alignment = Alignment(), Source = "faster-whisper/small"
+                AudioHash = hash, Text = text, Alignment = Alignment(), Source = "faster-whisper/small", Version = LocalAudioTranscription.Version
             }));
         }
         public static bool RunSelfTests() {
             string previous = Store.Root, folder = Path.Combine(Path.GetTempPath(), "vb-audio-cache-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(folder);
             try {
+                var exportTemplate = new AssemblyTemplate { ExportSubtitleText = false, SubtitleStyle = new WarmupSubtitleStyle { Enabled = true } };
+                var exportCopy = Store.Clone(exportTemplate);
+                Check(!exportCopy.ExportSubtitleText && exportCopy.SubtitleStyle.Enabled, "text export setting persists independently of burned subtitles");
+                AssemblySpeechPlan.EnsureTranscript(exportCopy, null, null, null, null, CancellationToken.None, null).GetAwaiter().GetResult();
+                exportTemplate.ExportSubtitleText = true; exportTemplate.SubtitleStyle.Enabled = false;
+                Check(Store.Clone(exportTemplate).ExportSubtitleText && !Store.Clone(exportTemplate).SubtitleStyle.Enabled, "text export can be enabled without burned subtitles");
+                string templateFile = Path.Combine(folder, "export-template.xml");
+                AssemblyFiles.Save(templateFile, exportCopy);
+                Check(!AssemblyFiles.Load<AssemblyTemplate>(templateFile).ExportSubtitleText, "text export checkbox survives XML template reload");
+                string exportedVideo = Path.Combine(folder, "export.mp4");
+                AssemblySpeechPlan.SaveTranscript(exportedVideo, new AssemblyPlan { Captions = new List<WarmupCaption> { new WarmupCaption { Start = 0, End = 1, Text = "Текст ролика" } } }, 0);
+                Check(File.ReadAllText(Path.ChangeExtension(exportedVideo, ".txt")).Trim() == "Текст ролика", "enabled export writes transcript beside video");
                 Store.Root = folder; string source = Path.Combine(folder, "мой голос.mp3"); File.WriteAllText(source, "original audio bytes");
                 var template = new AssemblyTemplate(); Check(!AssemblySpeechPlan.HasTiming(source), "new imported audio has no timing");
                 Cache(source); string hash = AssemblyFiles.Hash(source);
@@ -36,6 +48,24 @@ namespace VideoBatch {
                 File.WriteAllText(source, "trimmed/replaced audio bytes"); Check(!AssemblySpeechPlan.HasTiming(source), "replaced/cut audio cannot reuse old source timing");
                 Cache(source); string replacement = AssemblyFiles.Hash(source);
                 File.WriteAllText(LocalAudioTranscription.CacheFile(replacement), "{broken"); Check(!AssemblySpeechPlan.HasTiming(source), "corrupt timing is a cache miss");
+                var voiceTemplate = new AssemblyTemplate { Materials = Path.Combine(folder, "materials") };
+                var scene = new AssemblyScene { Folder = "scene", VoiceMode = "own" };
+                voiceTemplate.Scenes.Add(scene);
+                string first = Path.Combine(folder, "first.mp3"), second = Path.Combine(folder, "second.mp3");
+                File.WriteAllText(first, "first voice"); File.WriteAllText(second, "second voice");
+                string pack = "";
+                AssemblyWorkspace.Import(voiceTemplate, ref pack, "scene/voice", new[] { first }, AssemblyFiles.MusicExtensions, true);
+                string oldPack = pack;
+                AssemblyWorkspace.Import(voiceTemplate, ref pack, "scene/voice", new[] { second }, AssemblyFiles.MusicExtensions, false);
+                scene.Voiceover = pack;
+                Check(AssemblySpeechPlan.SceneVoiceOptions(voiceTemplate, scene).Count == 2, "add voice preserves existing alternatives");
+                AssemblyWorkspace.Import(voiceTemplate, ref pack, "scene/voice", new[] { second }, AssemblyFiles.MusicExtensions, true);
+                scene.Voiceover = pack;
+                Check(AssemblySpeechPlan.SceneVoiceOptions(voiceTemplate, scene).Count == 1, "replace voice activates only the new pack for recognition and assembly");
+                Check(AssemblyFiles.Pool(voiceTemplate.Resolve(oldPack), AssemblyFiles.MusicExtensions).Count == 2, "replace preserves old files on disk");
+                string activePack = pack;
+                AssemblyWorkspace.Import(voiceTemplate, ref pack, "scene/voice", new string[0], AssemblyFiles.MusicExtensions, true);
+                Check(pack == activePack, "empty replacement preserves active pack");
                 var cancelled = new CancellationToken(true); bool stopped = false;
                 try { LocalAudioTranscription.PrepareAsync(new[] { source }, cancelled).GetAwaiter().GetResult(); } catch (OperationCanceledException) { stopped = true; }
                 Check(stopped, "cancel before model/process launch");

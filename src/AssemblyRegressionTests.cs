@@ -46,6 +46,40 @@ namespace VideoBatch {
                 Console.WriteLine("Text/corner model PASS: legacy XML, source-free scene/global planning, transparent Windows text, cache, alpha mask, profile/XML and workspace.");return true;
             } finally { Directory.Delete(root,true); }
         }
+        public static bool RunSceneOverlayAndCaptionRenderTests(string ffmpeg, string probe) {
+            string root = Path.Combine(Path.GetTempPath(), "scene-caption-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var ct = System.Threading.CancellationToken.None;
+            try {
+                string video = Path.Combine(root, "blue.mp4"), picture = Path.Combine(root, "red.png");
+                Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=180x320:r=30:d=1", "-c:v", "libx264", video }, ct).GetAwaiter().GetResult();
+                using (var image = new Bitmap(40, 40)) { using (var g = Graphics.FromImage(image)) g.Clear(Color.Red); image.Save(picture); }
+                var t = new AssemblyTemplate { Width=180, Height=320, Fps=30, SceneTimingVersion=1, Transition="cut", RenderMode="cpu" };
+                t.SubtitleStyle = new WarmupSubtitleStyle { FontFamily="Arial", FontSize=28, Position=50, Plate="solid", PlateColor="#00FF00", Opacity=100, Motion="none" };
+                var p = new AssemblyPlan();
+                for (int i=0; i<3; i++) {
+                    var scene = new AssemblyScene { Duration=1, VoiceMode="none" }; t.Scenes.Add(scene);
+                    var s = new AssemblyScenePlan { Scene=scene, Video=new AssemblyVideo { Path=video, Duration=1 } }; p.Scenes.Add(s);
+                    if (i==2) foreach (double y in new[] { .1, .75 }) s.Layers.Add(new AssemblyLayerPlan {
+                        Layer=new AssemblyLayer { X=.2, Y=y, Width=.3, Height=.15, PreserveAspectRatio=false },
+                        Asset=new AssemblyAsset { Path=picture, Hash=AssemblyFiles.Hash(picture) }
+                    });
+                }
+                AssemblyTimeline.Complete(t,p,new Random(1));
+                t.Captions.Add(new AssemblyCaption { Text="TEST", Start=.1, End=.8 });
+                string output=Path.Combine(root,"output.mp4");
+                AssemblyRender.Run(t,p,ffmpeg,probe,output,Path.Combine(root,"work"),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                foreach (string time in new[] { "0.4", "2", "2.5" }) {
+                    string frame=Path.Combine(root,"frame.png");
+                    Core.Tool(ffmpeg,new[] { "-v","error","-y","-ss",time,"-i",output,"-frames:v","1",frame },ct).GetAwaiter().GetResult();
+                    using(var image=new Bitmap(frame)) {
+                        int green=0; for(int y=120;y<200;y++) for(int x=0;x<180;x++) { var c=image.GetPixel(x,y); if(c.G>150 && c.R<100 && c.B<100)green++; }
+                        if(time=="0.4" ? green<100 : green>0) throw new Exception("Caption scene boundary failed at "+time);
+                        if(time!="0.4" && (image.GetPixel(50,45).R<180 || image.GetPixel(50,255).R<180)) throw new Exception("Zero-start objects did not appear together at "+time);
+                    }
+                }
+                Console.WriteLine("Real render PASS: both zero-start objects visible on first frame of scene 3; captions visible in scene 1 only."); return true;
+            } finally { Directory.Delete(root,true); }
+        }
         public static bool RunTextAndCornerRenderTests(string ffmpeg,string probe) {
             string root=Path.Combine(Path.GetTempPath(),"text-corner-render-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
             var ct=System.Threading.CancellationToken.None;
@@ -225,6 +259,63 @@ namespace VideoBatch {
             legacy.MigrateVideoDuration();if(legacy.DurationByVideo || !legacy.Scenes[1].DurationByVideo || legacy.Scenes[2].DurationByVideo)throw new Exception("Legacy duration migration failed");
             Console.WriteLine("Per-scene duration PASS: full 10s intro, 18s video, fixed 5s scene, 35s video, transitions, XML and legacy migration.");return true;
         }
+        public static bool RunTransparentEntranceTests(string ffmpeg, string root) {
+            string picture=Path.Combine(root,"transparent-entrance.png"), output=Path.Combine(root,"transparent-entrance.rgba");
+            const int width=96, height=160, frameBytes=width*height*4, frames=15;
+            string Sample(string source,string scale) {
+                string xy="min(W-1,max(0,((X-W/2)/"+scale+"+W/2))),min(H-1,max(0,((Y-H/2)/"+scale+"+H/2)))";
+                return "if(eq(PLANE,0),"+source+"0("+xy+"),if(eq(PLANE,1),"+source+"1("+xy+"),if(eq(PLANE,2),"+source+"2("+xy+"),"+source+"3("+xy+"))))";
+            }
+            try {
+                using(var image=new Bitmap(width,height,System.Drawing.Imaging.PixelFormat.Format32bppArgb)) {
+                    for(int y=0;y<height;y++) for(int x=0;x<width;x++) {
+                        int alpha=x>=13 && x<75 && y>=51 && y<109 ? new[]{1,64,128,220,255}[(x+y)%5] : 0;
+                        image.SetPixel(x,y,Color.FromArgb(alpha,(x*7)%256,(y*11)%256,((x+y)*13)%256));
+                    }
+                    image.Save(picture,System.Drawing.Imaging.ImageFormat.Png);
+                }
+                foreach(string effect in new[]{"cut","fade","swipe","smoothleft","zoomin"})
+                    if(AssemblyEngine.TransitionFilter(effect)!=AssemblyEngine.TransitionFilter(effect,true)) throw new Exception("Non-custom entrance changed: "+effect);
+                foreach(string effect in new[]{"zoomsoft","zoomout","pull"}) {
+                    string strength=effect=="pull"?"1.4":effect=="zoomout"?".22":".28";
+                    string outgoing="(1"+(effect=="zoomout"?"-":"+")+strength+"*(1-P)*(1-P))", incoming="(1+"+strength+"*P*P)", weight="(P*P*(3-2*P))";
+                    string expected="transition=custom:expr='"+Sample("a",outgoing)+"*"+weight+"+"+Sample("b",incoming)+"*(1-"+weight+")'";
+                    string baseline=AssemblyEngine.TransitionFilter(effect), optimized=AssemblyEngine.TransitionFilter(effect,true);
+                    if(baseline!=expected) throw new Exception("Scene transition expression changed: "+effect);
+                    if(optimized!="transition=custom:expr='"+Sample("b",incoming)+"*(1-"+weight+")'") throw new Exception("Overlay expression did not remove only the zero term: "+effect);
+                    var template=new AssemblyTemplate {Width=width,Height=height,Fps=30};
+                    var layer=new AssemblyLayerPlan {Layer=new AssemblyLayer {AppearanceTransition=effect,AppearanceDuration=.35},Asset=new AssemblyAsset {Path=picture},Raster=picture};
+                    var graph=new System.Collections.Generic.List<string>(); var args=new System.Collections.Generic.List<string>(); int input=0;
+                    AssemblyRender.AppendLayerOverlay(template,layer,0,.5,"1","base","over","yuv420",args,ref input,graph);
+                    if(!string.Join(";",graph).Contains("xfade="+optimized+":duration=")) throw new Exception("Static overlay did not select specialized expression: "+effect);
+                    graph.Clear(); args.Clear();
+                    // Exercise animated graph generation with the same known-size image fixture; moving pixels are checked below.
+                    typeof(AssemblyRender).GetMethod("AppendAnimatedLayerOverlay",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,
+                        new object[]{template,layer,0d,.5,"1","base","over","yuv420",args,0,graph});
+                    if(!string.Join(";",graph).Contains("xfade="+optimized+":duration=")) throw new Exception("Animated overlay did not select specialized expression: "+effect);
+                    foreach(bool moving in new[]{false,true}) {
+                        byte[] reference=null;
+                        foreach(string transition in new[]{baseline,optimized}) {
+                            string filters="color=c=black@0:s=96x160:r=30:d=0.5,format=gbrap,settb=1/30[a];[0:v]format=gbrap,loop=loop=-1:size=1:start=0,trim=duration=0.5,setpts=N/(30*TB),fps=30,settb=1/30"
+                                +(moving?",hflip=enable='gte(n,6)'":"")+",premultiply=inplace=1[b];[a][b]xfade="+transition+":duration=0.35:offset=0,unpremultiply=inplace=1,format=rgba[o]";
+                            Core.Tool(ffmpeg,new[]{"-v","error","-nostdin","-y","-filter_complex_threads","1","-threads","1","-framerate","30","-i",picture,"-filter_complex",filters,"-map","[o]","-frames:v","15","-threads","1","-f","rawvideo",output},System.Threading.CancellationToken.None,null,30).GetAwaiter().GetResult();
+                            var pixels=File.ReadAllBytes(output);
+                            if(pixels.Length!=frameBytes*frames) throw new Exception("Transition frame count changed");
+                            if(reference==null) reference=pixels;
+                            else if(!reference.SequenceEqual(pixels)) throw new Exception("RGBA transition frames differ: "+effect+", moving="+moving);
+                        }
+                        for(int pos=3;pos<frameBytes;pos+=4) if(reference[pos]!=0) throw new Exception("First frame is not transparent");
+                        foreach(int frame in new[]{5,14}) {
+                            bool alpha=false;
+                            for(int pos=frame*frameBytes+3;pos<(frame+1)*frameBytes;pos+=4) if(reference[pos]>0 && reference[pos]<255) {alpha=true;break;}
+                            if(!alpha) throw new Exception("Partial alpha lost at frame "+frame);
+                        }
+                        Console.WriteLine("PASS transparent entrance: "+effect+", moving="+moving+", all 15 RGBA frames byte-identical (first/middle/last included)");
+                    }
+                }
+                return true;
+            } finally {if(File.Exists(picture))File.Delete(picture);if(File.Exists(output))File.Delete(output);}
+        }
         public static bool RunImageAppearanceTests() {
             string root = Path.Combine(Path.GetTempPath(), "image-timing-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try {
@@ -234,6 +325,15 @@ namespace VideoBatch {
                 string image = Path.Combine(images, "badge.png"); File.WriteAllText(image, "image");
                 File.WriteAllText(Path.Combine(images, "second.png"), "second image");
                 var layer = new AssemblyLayer { Source=images, Start=8, AppearanceTransition="swipe", AppearanceDuration=.5, GreenScreen=true, PlaybackMode="repeat", RepeatPause=120, PhotoDuration=4.5, ExitTransition="fade", ExitDuration=.7 };
+                var peer = new AssemblyLayer { X=.3, End=20, Source="unchanged" };
+                peer.CopyAnimationFrom(layer, true);
+                if (!peer.IndividualAnimation || peer.Start != 8 || peer.AppearanceTransition != "swipe" || peer.PlaybackMode != "repeat" || peer.ExitDuration != .7 || peer.X != .3 || peer.End != 20 || peer.Source != "unchanged") throw new Exception("Individual animation copied unrelated object fields");
+                layer.Start = 0; layer.AppearanceTransition = "cut";
+                peer.CopyAnimationFrom(layer, false);
+                if (peer.IndividualAnimation || peer.Start != 0 || peer.AppearanceTransition != "cut") throw new Exception("Common animation did not overwrite individual settings");
+                var fresh = new AssemblyLayer();
+                if (fresh.Start != 0 || fresh.PlaybackMode != "continuous" || fresh.AppearanceTransition != "cut" || fresh.ExitTransition != "cut" || fresh.IndividualAnimation) throw new Exception("New object must show immediately for the whole scene");
+                layer.Start = 8; layer.AppearanceTransition = "swipe"; layer.IndividualAnimation = true;
                 var t = new AssemblyTemplate { Materials=root, Videos=root, DurationByVideo=true, Transition="cut", RandomVideoStart=true };
                 t.Scenes.Add(new AssemblyScene { Duration=4, Layers=new System.Collections.Generic.List<AssemblyLayer> {layer} });
                 var videos = new[] { new AssemblyVideo { Path=video, Hash="a", Duration=.6 }, new AssemblyVideo { Path=other, Hash="b", Duration=71.25 } };
@@ -253,6 +353,7 @@ namespace VideoBatch {
                 string path = Path.Combine(root,"settings.xml"); AssemblyFiles.Save(path,t);
                 var copy = AssemblyFiles.Load<AssemblyTemplate>(path); AssemblyMarketProfiles.Apply(copy,AssemblyProfile.Ru);
                 var restored = copy.Scenes[0].Layers[0];
+                if (!restored.IndividualAnimation) throw new Exception("Individual animation marker lost in XML");
                 if (!copy.DurationByVideo || restored.Start != 8 || restored.AppearanceTransition != "swipe" || restored.AppearanceDuration != .5 || !restored.GreenScreen || restored.PlaybackMode!="repeat" || restored.RepeatPause!=120 || restored.PhotoDuration!=4.5 || restored.ExitTransition!="fade" || restored.ExitDuration!=.7) throw new Exception("Timing settings lost in profile/XML");
                 return true;
             } finally { Directory.Delete(root,true); }

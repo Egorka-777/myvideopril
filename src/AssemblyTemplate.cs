@@ -21,6 +21,13 @@ namespace VideoBatch {
         public bool GreenScreen;
         public double X = .08, Y = .35, Width = .84, Height = .25, Opacity = 1;
         public double Start = 0, End = 0; // End=0 means until the end of this scene.
+        public bool IndividualAnimation;
+        public void CopyAnimationFrom(AssemblyLayer source, bool individual) {
+            Start = source.Start; AppearanceTransition = source.AppearanceTransition; AppearanceDuration = source.AppearanceDuration;
+            PlaybackMode = source.PlaybackMode; RepeatPause = source.RepeatPause; PhotoDuration = source.PhotoDuration;
+            RepeatInterval = source.RepeatInterval; ExitTransition = source.ExitTransition; ExitDuration = source.ExitDuration;
+            IndividualAnimation = individual;
+        }
         public string AppearanceTransition = "cut";
         public double AppearanceDuration = .35;
         // Missing fields in existing XML retain the original continuous playback.
@@ -142,6 +149,7 @@ namespace VideoBatch {
         public double SplitRatio = .5;
         public double SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
+        public bool ExportSubtitleText = true;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
         internal AssemblyTemplate WithVideoSubtitleStyle(Random random) {
             var copy = (AssemblyTemplate)MemberwiseClone();

@@ -168,7 +168,7 @@ namespace VideoBatch {
                     graph.Add("color=c=black@0:s=" + t.Width + "x" + t.Height + ":r=" + t.Fps + ":d=" + length
                         + ",format=gbrap,settb=1/" + t.Fps + "[" + blank + "]");
                     graph.Add("[" + source + "]format=gbrap," + loop + ",settb=1/" + t.Fps + ",premultiply=inplace=1[" + image + "]");
-                    graph.Add("[" + blank + "][" + image + "]xfade=" + AssemblyEngine.TransitionFilter(effect) + ":duration=" + seconds
+                    graph.Add("[" + blank + "][" + image + "]xfade=" + AssemblyEngine.TransitionFilter(effect, transparentOutgoing: true) + ":duration=" + seconds
                         + ":offset=0,unpremultiply=inplace=1,format=rgba,setpts=PTS+" + Core.N(start) + "/TB,fps=" + t.Fps + "[" + animated + "]");
                 }
                 source = animated;
@@ -219,7 +219,7 @@ namespace VideoBatch {
                     graph.Add("color=c=black@0:s=" + t.Width + "x" + t.Height + ":r=" + t.Fps + ":d=" + Core.N(duration + 2.0 / t.Fps)
                         + ",format=gbrap,settb=1/" + t.Fps + "[" + blank + "]");
                     graph.Add("[" + image + "]format=gbrap,premultiply=inplace=1[" + premultiplied + "]");
-                    graph.Add("[" + blank + "][" + premultiplied + "]xfade=" + AssemblyEngine.TransitionFilter(effect) + ":duration=" + Core.N(duration)
+                    graph.Add("[" + blank + "][" + premultiplied + "]xfade=" + AssemblyEngine.TransitionFilter(effect, transparentOutgoing: true) + ":duration=" + Core.N(duration)
                         + ":offset=0,unpremultiply=inplace=1,format=rgba,trim=duration=" + Core.N(length) + ",setpts=PTS+" + Core.N(start) + "/TB[" + source + "]");
                 }
             } else graph.Add("[" + image + "]setpts=PTS+" + Core.N(start) + "/TB[" + source + "]");

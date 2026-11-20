@@ -10,15 +10,30 @@ namespace VideoBatch {
         void OpenInsertions() {
             Safe(() => {
                 using (var dialog = new Form { Text = "Рекламная пауза", Name = "AssemblyInsertions", StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(1080, 560), MinimumSize = new Size(850, 450), BackColor = Theme.Card, ForeColor = Theme.TextPrimary }) {
-                    var note = new Label { Dock = DockStyle.Top, Height = 85, Padding = new Padding(10), Text = "Основной ролик и весь его звук останавливаются; после рекламы продолжаются с того же места.\nПустое время — случайное место по всему ролику. Секунда — точное время; «Диапазон» + от / до — случайно в диапазоне.\nВремя — по исходному ролику. Папка: один случайный файл на паузу и ролик. Связка: аудио в первой колонке + визуал. Сдвиг +2: анимация позже; −2: раньше. Визуал повторяется на длину аудио." };
+                    dialog.Font = Theme.FontBody; dialog.AutoScaleMode = AutoScaleMode.Dpi;
+                    dialog.MinimizeBox = false; dialog.ShowInTaskbar = false; dialog.BackColor = Theme.Background;
+                    var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(20) };
+                    root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                    root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                    var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+                    body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                    body.RowStyles.Add(new RowStyle(SizeType.AutoSize)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                    var note = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 0, 0, 16), Text = "Основной ролик и весь его звук останавливаются; после рекламы продолжаются с того же места.\nПустое время — случайное место по всему ролику. Секунда — точное время; «Диапазон» + от / до — случайно в диапазоне.\nВремя — по исходному ролику. Папка: один случайный файл на паузу и ролик. Связка: аудио в первой колонке + визуал. Сдвиг +2: анимация позже; −2: раньше. Визуал повторяется на длину аудио." };
                     var grid = new DataGridView { Name = "InsertionRows", Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = true, BackgroundColor = Theme.Card, DefaultCellStyle = new DataGridViewCellStyle { ForeColor = Color.Black, BackColor = Color.White }, RowHeadersWidth = 25 };
-                    grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Source", HeaderText = "Файл / папка", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+                    Theme.StyleGrid(grid);
+                    grid.RowHeadersVisible = true;
+                    grid.RowHeadersDefaultCellStyle.BackColor = Theme.Elevated; grid.RowHeadersDefaultCellStyle.ForeColor = Theme.TextSecondary;
+                    grid.RowHeadersDefaultCellStyle.SelectionBackColor = Theme.Selected; grid.RowHeadersDefaultCellStyle.SelectionForeColor = Theme.TextPrimary;
+                    grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+                    grid.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.True;
+                    grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Source", HeaderText = "Файл / папка", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 180 });
                     grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Random", HeaderText = "Диапазон", Width = 75 });
                     grid.Columns.Add("Start", "Секунда / от"); grid.Columns.Add("End", "До, с"); grid.Columns.Add("Duration", "Фото, с");
                     grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Visual", HeaderText = "Визуал / папка", Width = 220 });
                     grid.Columns.Add("Offset", "Сдвиг визуала, с");
                     foreach (var item in template.Insertions ?? new List<AssemblyInsertion>()) { int index = grid.Rows.Add(item.Source, item.RandomTime, item.RandomWholeVideo ? "" : item.Start.ToString(CultureInfo.CurrentCulture), item.RandomWholeVideo ? "" : item.End.ToString(CultureInfo.CurrentCulture), item.ImageDuration.ToString(CultureInfo.CurrentCulture), item.VisualSource, item.VisualOffset.ToString(CultureInfo.CurrentCulture)); grid.Rows[index].Tag = item.Copy(); }
-                    var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 150, Padding = new Padding(6), WrapContents = true };
+                    var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(0, 12, 0, 0), Margin = Padding.Empty, WrapContents = true };
+                    var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 12, 0, 0), Margin = Padding.Empty };
                     Action<string> add = path => grid.Rows.Add(path, false, "", "", "5", "", "0");
                     Func<DataGridViewRow, AssemblyInsertion> read = row => ReadInsertion(
                         row.Tag as AssemblyInsertion, template, row.Cells["Source"].Value, row.Cells["Visual"].Value,
@@ -35,15 +50,20 @@ namespace VideoBatch {
                     var preview = Button("Просмотреть связку", () => { });
                     preview.Click += async (s,e) => { preview.Enabled = false; try { grid.EndEdit(); if (grid.CurrentRow != null) { var row = grid.CurrentRow; var item = read(row); await PreviewInsertion(dialog, item); row.Tag = item; } } catch (Exception ex) { Ui.Error(dialog, ex); } finally { preview.Enabled = true; } }; buttons.Controls.Add(preview);
                     buttons.Controls.Add(Button("Удалить", () => { foreach (DataGridViewRow row in grid.SelectedRows) grid.Rows.Remove(row); }));
-                    buttons.Controls.Add(Button("Сохранить", () => Safe(() => {
+                    var save = Theme.MakeButton("Сохранить", accent: true, action: () => Safe(() => {
                         grid.EndEdit(); var items = new List<AssemblyInsertion>();
                         foreach (DataGridViewRow row in grid.Rows) {
                             items.Add(read(row));
                         }
                         template.Insertions = items; Changed(false); Save(); dialog.DialogResult = DialogResult.OK; dialog.Close();
-                    })));
-                    buttons.Controls.Add(shiftSlider);
-                    dialog.Controls.Add(grid); dialog.Controls.Add(note); dialog.Controls.Add(buttons);
+                    }));
+                    var cancel = Theme.MakeButton("Отмена", ghost: true, action: () => { dialog.DialogResult = DialogResult.Cancel; dialog.Close(); });
+                    footer.Controls.Add(save); footer.Controls.Add(cancel); dialog.CancelButton = cancel;
+                    buttons.SetFlowBreak(buttons.Controls[buttons.Controls.Count - 1], true);
+                    shiftSlider.Margin = new Padding(0, 12, 0, 0); buttons.Controls.Add(shiftSlider);
+                    body.Controls.Add(note, 0, 0); body.Controls.Add(grid, 0, 1);
+                    root.Controls.Add(body, 0, 0); root.Controls.Add(buttons, 0, 1); root.Controls.Add(footer, 0, 2);
+                    dialog.Controls.Add(root);
                     dialog.ShowDialog(this);
                 }
             });
@@ -70,18 +90,25 @@ namespace VideoBatch {
                                 double scale = Math.Min((double)background.Width/size.Width,(double)background.Height/size.Height);
                                 layer.Width=size.Width*scale/background.Width; layer.Height=size.Height*scale/background.Height; layer.X=(1-layer.Width)/2; layer.Y=(1-layer.Height)/2;
                             }
-                            using (var editor = new Form { Text = "Размещение визуала связки", ClientSize = new Size(800,700), StartPosition = FormStartPosition.CenterParent, BackColor = Theme.Background, ForeColor = Theme.TextPrimary })
+                            using (var editor = new Form { Text = "Размещение визуала связки", ClientSize = new Size(800,700), MinimumSize = new Size(600, 480), StartPosition = FormStartPosition.CenterParent, Font = Theme.FontBody, AutoScaleMode = AutoScaleMode.Dpi, ShowInTaskbar = false, BackColor = Theme.Background, ForeColor = Theme.TextPrimary })
                             using (var placementCanvas = new AssemblyCanvas { Dock = DockStyle.Fill }) {
                                 var scene = new AssemblyScenePlan { Scene = new AssemblyScene { Duration = 60 } }; scene.Scene.Layers.Add(layer); scene.Layers.Add(new AssemblyLayerPlan { Layer = layer, Asset = new AssemblyAsset { Path = visual } });
                                 placementCanvas.SetScene(previewTemplate,scene,layer); placementCanvas.SetBackground(new Bitmap(background));
                                 placementCanvas.PlacementChanged += () => placementCanvas.SetScene(previewTemplate,scene,layer);
                                 placementCanvas.PreviewError += message => editor.Text = "Размещение визуала · " + message;
-                                var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 85, WrapContents = true };
+                                var editorRoot = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(16) };
+                                editorRoot.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                                editorRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); editorRoot.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                                var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(0, 12, 0, 0), WrapContents = true };
                                 var keep = new CheckBox { Text = "Сохранять пропорции", Checked = layer.PreserveAspectRatio, AutoSize = true, ForeColor = Theme.TextPrimary }; keep.CheckedChanged += (s,e) => { layer.PreserveAspectRatio=keep.Checked; placementCanvas.SetScene(previewTemplate,scene,layer); };
-                                actions.Controls.Add(keep);
-                                actions.Controls.Add(new Label { Text = "Тяните визуал мышью; нижний правый угол — размер. Выход за кадр обрезается.", AutoSize = true, ForeColor = Theme.TextSecondary });
-                                actions.Controls.Add(Button("Сохранить размещение", () => { editor.DialogResult=DialogResult.OK; editor.Close(); }, true));
-                                editor.Controls.Add(placementCanvas); editor.Controls.Add(actions);
+                                Theme.StyleCheckBox(keep); actions.Controls.Add(keep); actions.SetFlowBreak(keep, true);
+                                var placementHint = new Label { Text = "Тяните визуал мышью; нижний правый угол — размер. Выход за кадр обрезается.", AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 12) };
+                                actions.SizeChanged += (s, e) => placementHint.MaximumSize = new Size(Math.Max(1, actions.ClientSize.Width - 8), 0);
+                                actions.Controls.Add(placementHint); actions.SetFlowBreak(placementHint, true);
+                                var savePlacement = Theme.MakeButton("Сохранить размещение", accent: true, action: () => { editor.DialogResult=DialogResult.OK; editor.Close(); });
+                                var cancelPlacement = Theme.MakeButton("Отмена", ghost: true, action: () => { editor.DialogResult=DialogResult.Cancel; editor.Close(); });
+                                actions.Controls.Add(savePlacement); actions.Controls.Add(cancelPlacement); editor.CancelButton = cancelPlacement;
+                                editorRoot.Controls.Add(placementCanvas, 0, 0); editorRoot.Controls.Add(actions, 0, 1); editor.Controls.Add(editorRoot);
                                 if (editor.ShowDialog(owner) != DialogResult.OK) return;
                                 insertion.VisualPlacementConfigured=true; insertion.VisualPreserveAspectRatio=layer.PreserveAspectRatio;
                                 insertion.VisualX=layer.X; insertion.VisualY=layer.Y; insertion.VisualWidth=layer.Width; insertion.VisualHeight=layer.Height;
@@ -94,7 +121,7 @@ namespace VideoBatch {
                     await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-loop", "1", "-i", System.IO.Path.Combine(folder,"background.png"), "-t", ".1", "-vf", "scale=540:960:force_original_aspect_ratio=decrease:force_divisible_by=2", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", main }, lifetime.Token, null, 60);
                     var t = new AssemblyTemplate { Materials = template.Materials, Fps = 30 }; var copy = insertion.Copy(); copy.Start = 0; copy.RandomTime = false; copy.RandomWholeVideo = false; t.Insertions.Add(copy);
                     await AssemblyInsertions.Apply(t, ffmpeg, probe, main, output, lifetime.Token, new Random());
-                    using (var player = new Form { Text = "Предпросмотр связки · анимация + аудио", ClientSize = new Size(760,620), StartPosition = FormStartPosition.CenterParent, BackColor = Color.Black })
+                    using (var player = new Form { Text = "Предпросмотр связки · анимация + аудио", ClientSize = new Size(760,620), MinimumSize = new Size(480, 400), StartPosition = FormStartPosition.CenterParent, Font = Theme.FontBody, ShowInTaskbar = false, BackColor = Theme.Background })
                     using (var browser = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill }) {
                         player.Controls.Add(browser);
                         player.Shown += async (s,e) => { try {

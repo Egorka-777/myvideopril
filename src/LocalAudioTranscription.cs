@@ -14,7 +14,7 @@ namespace VideoBatch {
     // Shared local speech runtime. Captions remain compatible with ElevenLabs
     // alignments, style presets and existing renderers.
     public static class LocalAudioTranscription {
-        public const string Version = "2026-11-04-imported-audio-v1";
+        public const string Version = "2026-11-20-complete-utterance-timing-v3";
         static readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
         static string Root => Path.Combine(Store.Root, "subtitles");
         public static string CacheFile(string hash) => Path.Combine(Root, "cache", hash + ".json");

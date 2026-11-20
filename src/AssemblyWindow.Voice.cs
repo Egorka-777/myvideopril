@@ -51,14 +51,17 @@ namespace VideoBatch {
                 var area = Screen.FromControl(owner).WorkingArea;
                 Size = new Size(Math.Min(Width, area.Width - 24), Math.Min(Height, area.Height - 40));
 
-                var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), RowCount = 3, ColumnCount = 1 };
-                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 300));
-                root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+                var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), RowCount = 3, ColumnCount = 1 };
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                root.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+                root.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
+                root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
                 Controls.Add(root);
 
+                var settingsCard = Theme.MakeCard(); settingsCard.Dock = DockStyle.Fill; settingsCard.Margin = new Padding(0, 0, 0, 16);
                 settings = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
-                root.Controls.Add(settings, 0, 0);
+                settingsCard.Controls.Add(settings); root.Controls.Add(settingsCard, 0, 0);
+                settings.Controls.Add(new Label { Text = "Голос и генерация", Font = Theme.FontCardTitle, Height = 32, Margin = new Padding(0, 0, 0, 8) });
 
                 folderLabel = new Label { AutoSize = false, Height = 52, ForeColor = Theme.TextSecondary };
                 UpdateFolderLabel();
@@ -98,14 +101,20 @@ namespace VideoBatch {
                 };
                 lines.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Текст фразы", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
                 lines.Columns.Add(new DataGridViewTextBoxColumn { Name = "File", HeaderText = "Файл", Width = 220, ReadOnly = true });
+                Theme.StyleGrid(lines);
+                lines.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+                lines.AlternatingRowsDefaultCellStyle.BackColor = Theme.Card;
+                lines.Margin = Padding.Empty;
+                lines.Columns["Text"].MinimumWidth = 240;
+                lines.Columns["File"].MinimumWidth = 140;
                 root.Controls.Add(lines, 0, 1);
                 LoadLines(owner.template.SpeechLines);
 
-                var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+                var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Padding = new Padding(0, 16, 0, 0), Margin = Padding.Empty };
                 bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
-                message = new Label { Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, Text = KeyHint() };
-                save = Button("Сохранить и закрыть", Close); save.Dock = DockStyle.Fill;
+                bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+                message = new Label { Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, Text = KeyHint(), Margin = new Padding(0, 0, 20, 0), TextAlign = ContentAlignment.MiddleLeft };
+                save = Button("Сохранить и закрыть", Close); save.Dock = DockStyle.Fill; save.Margin = new Padding(0, 4, 0, 4);
                 bottom.Controls.Add(message, 0, 0); bottom.Controls.Add(save, 1, 0);
                 root.Controls.Add(bottom, 0, 2);
 
@@ -170,7 +179,7 @@ namespace VideoBatch {
             }
 
             void Field(string caption, Control control) {
-                if (caption != null) settings.Controls.Add(new Label { Text = caption, AutoSize = false, Height = caption.Length > 70 ? 42 : 26, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 6, 0, 0) });
+                if (caption != null) settings.Controls.Add(new Label { Text = caption, AutoSize = false, Height = 30, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 4) });
                 if (control != null) { control.Width = 560; control.Margin = new Padding(0, 0, 0, 6); settings.Controls.Add(control); }
             }
 
@@ -182,7 +191,7 @@ namespace VideoBatch {
             static NumericUpDown Value(decimal min, decimal max, int decimals) => new NumericUpDown { Minimum = min, Maximum = max, DecimalPlaces = decimals, Increment = decimals == 0 ? 1 : .1m };
 
             static Button Button(string text, Action action = null, bool accent = false) {
-                var b = new AssemblyStudioButton(text, action, accent);
+                var b = Theme.MakeButton(text, accent: accent, ghost: !accent, action: action);
                 b.AutoSize = false; b.Height = 38; b.MinimumSize = new Size(120, 38);
                 return b;
             }
@@ -286,7 +295,12 @@ namespace VideoBatch {
             }
 
             void ResizeFields() {
-                foreach (Control control in settings.Controls) control.Width = Math.Max(280, settings.ClientSize.Width - 30);
+                foreach (Control control in settings.Controls) {
+                    control.Width = Math.Max(240, settings.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 8);
+                    if (control is Label label) label.Height = TextRenderer.MeasureText(label.Text, label.Font, new Size(label.Width, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + 8;
+                    else if (control is Button button) button.Height = Math.Max(40, TextRenderer.MeasureText(button.Text, button.Font, new Size(Math.Max(120, button.Width - 32), int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + 16);
+                    else if (control is FlowLayoutPanel row) row.MaximumSize = new Size(control.Width, 0);
+                }
             }
         }
     }

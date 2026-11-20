@@ -21,7 +21,7 @@ namespace VideoBatch {
             File.WriteAllText(Path.ChangeExtension(video, ".txt"), text + Environment.NewLine, new System.Text.UTF8Encoding(true));
         }
         public static async Task EnsureTranscript(AssemblyTemplate t, AssemblyPlan plan, string video, string ffmpeg, string work, CancellationToken ct, Action<string> progress) {
-            if (!SubtitlesEnabled(t)) return;
+            if (!t.ExportSubtitleText) return;
             double start = AssemblyTimeline.MainStart(t, plan);
             if (!string.IsNullOrWhiteSpace(TranscriptText(plan, start))) return;
             progress?.Invoke("Готовлю текст основного видео без вступления…");
@@ -36,7 +36,7 @@ namespace VideoBatch {
             if (string.IsNullOrWhiteSpace(TranscriptText(plan, start))) throw new Exception("Речь в основном видео не распознана; текстовый файл не создан.");
         }
         public sealed class SpeechTiming {
-            public string AudioHash, Text, Source;
+            public string AudioHash, Text, Source, Version;
             public WarmupAlignment Alignment;
         }
         public static void SaveTiming(string audio, string text, WarmupAlignment alignment) {
@@ -280,6 +280,7 @@ namespace VideoBatch {
                 try {
                     var timing = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Deserialize<SpeechTiming>(File.ReadAllText(file));
                     if (timing?.AudioHash != hash || timing.Alignment == null) continue;
+                    if (timing.Source == "faster-whisper/small" && timing.Version != LocalAudioTranscription.Version) continue;
                     if (timing.Source != "faster-whisper/small" && text != null && timing.Text != text) continue;
                     double length = duration > 0 ? duration : (timing.Alignment.character_end_times_seconds ?? new double[0]).DefaultIfEmpty(0).Max();
                     return WarmupSubtitles.Cues(timing.Alignment, length, t.SubtitleStyle?.WordsPerCaption ?? 3);

@@ -447,7 +447,7 @@ namespace VideoBatch {
             SetDolphinState("checking", "Dolphin · проверяю API…");
             AppDiagnostics.Write("Dolphin", "", checkId, "connection_start", DolphinLocalApi.Build);
             try {
-                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20))) {
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30))) {
                     var live = Store.Load();
                     settings.ProtectedDolphinToken = live.ProtectedDolphinToken;
                     settings.DolphinPort = live.DolphinPort;
@@ -465,7 +465,7 @@ namespace VideoBatch {
                 }
             } catch (Exception ex) {
                 detail = ex is OperationCanceledException
-                    ? "Проверка Dolphin превысила 20 секунд. Проверьте API-порт в окне Health; затем нажмите обновление."
+                    ? "Проверка Dolphin превысила 30 секунд. Проверьте API-порт в окне Health; затем нажмите обновление."
                     : (ex.Message ?? "Dolphin недоступен");
                 string msg = detail;
                 if (msg.Length > 72) msg = msg.Substring(0, 69) + "…";

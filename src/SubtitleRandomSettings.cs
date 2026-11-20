@@ -6,6 +6,7 @@ namespace VideoBatch {
         public bool Enabled;
         public int SizeMin = 44, SizeMax = 72, PositionMin = 65, PositionMax = 80;
         public int OutlineMin = 2, OutlineMax = 5, OpacityMin = 80, OpacityMax = 95, WordsMin = 2, WordsMax = 5;
+        public int ThicknessMin = 0, ThicknessMax = 3, PaddingXMin = 22, PaddingXMax = 40, PaddingYMin = 12, PaddingYMax = 24;
         public string[] Fonts = SubtitlePresets.Fonts.ToArray();
         public string[] Colors = { "#FFFFFF", "#FFE84A", "#32F56B", "#65D9FF" };
         public string[] Motions = { "none", "pop", "fade", "rise", "word-accent" };
@@ -28,6 +29,9 @@ namespace VideoBatch {
             if (options.Fonts == null || options.Fonts.Length == 0 || options.Colors == null || options.Colors.Length == 0 || options.Motions == null || options.Motions.Length == 0 || options.Plates == null || options.Plates.Length == 0 || options.Highlights == null || options.Highlights.Length == 0)
                 throw new Exception("Случайные субтитры: выберите хотя бы один вариант в каждом списке.");
             style.FontSize = Between(random, options.SizeMin, options.SizeMax, 28, 150);
+            style.TextThickness = Between(random, options.ThicknessMin, options.ThicknessMax, 0, 10);
+            style.PlatePaddingX = Between(random, options.PaddingXMin, options.PaddingXMax, 0, 100);
+            style.PlatePaddingY = Between(random, options.PaddingYMin, options.PaddingYMax, 0, 100);
             style.Position = Between(random, options.PositionMin, options.PositionMax, 10, 90);
             style.OutlineWidth = Between(random, options.OutlineMin, options.OutlineMax, 0, 10);
             style.Opacity = Between(random, options.OpacityMin, options.OpacityMax, 0, 100);

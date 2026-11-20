@@ -14,9 +14,10 @@ namespace VideoBatch {
             Safe(() => {
                 if (subtitleWorkspaceActive) { LeaveSubtitleWorkspace(); if (subtitleWorkspaceActive) return; }
                 using (var background = canvas.SubtitleBackground())
-                using (var dialog = new SubtitleStyleDialog(template.SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }, PreviewCaptionCues(), background, template.Width, template.Height, template.Captions?.Count > 0, true)) {
+                using (var dialog = new SubtitleStyleDialog(template.SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }, PreviewCaptionCues(), background, template.Width, template.Height, template.Captions?.Count > 0, true, template.ExportSubtitleText)) {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;
                     template.SubtitleStyle = dialog.Style.Copy();
+                    template.ExportSubtitleText = dialog.ExportSubtitleText;
                     loading = true; subtitlePosition.Value = template.SubtitleStyle.Position; loading = false;
                     Changed(false); Save(); ApplySubtitlePreview(); RequestTimingHints(); RefreshInfo();
                     if (dialog.EditCaptions) { EnterSubtitleWorkspace(); subtitleCaptions.Visible = true; }
@@ -40,19 +41,33 @@ namespace VideoBatch {
         void BuildSubtitleWorkspace() {
             subtitlePanel = new Panel { Name = "AssemblySubtitleEditor", Dock = DockStyle.Fill, Visible = false, BackColor = Theme.Card, Padding = new Padding(12, 8, 12, 8) };
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             subtitlePanel.Controls.Add(root);
 
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Card };
             var stack = new FlowLayoutPanel { Dock = DockStyle.Top, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = 360 };
             scroll.Controls.Add(stack);
-            scroll.ClientSizeChanged += (s, e) => stack.Width = Math.Max(280, scroll.ClientSize.Width - 20);
+            scroll.ClientSizeChanged += (s, e) => {
+                int width = Math.Max(1, scroll.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4);
+                stack.MinimumSize = new Size(width, 0); stack.MaximumSize = new Size(width, 0); stack.Width = width;
+            };
+            stack.SizeChanged += (s, e) => {
+                foreach (Control child in stack.Controls) {
+                    int width = Math.Max(1, stack.Width - child.Margin.Horizontal);
+                    if (child is Label || child is CheckBox) child.MaximumSize = new Size(width, 0);
+                    else { child.Width = width; if (child is FlowLayoutPanel) child.MaximumSize = new Size(width, 0); }
+                }
+            };
             root.Controls.Add(scroll, 0, 0);
 
             stack.Controls.Add(new Label { Text = "Субтитры · " + AssemblyProfile.ShortLabel(studioProfile, template), Font = Theme.FontCardTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 0, 0, 8) });
-            stack.Controls.Add(new Label { Text = "Слева — крупное превью ролика. Тяните плашку субтитров или двигайте положение.", Width = 360, Height = 36, ForeColor = Theme.TextSecondary });
+            stack.Controls.Add(new Label { Text = "Слева — крупное превью ролика. Тяните плашку субтитров или двигайте положение.", AutoSize = true, MaximumSize = new Size(360, 0), ForeColor = Theme.TextSecondary });
             subtitleEnabled = new CheckBox { AutoSize = true, Text = "Показывать субтитры в ролике", Margin = new Padding(0, 6, 0, 4) };
             stack.Controls.Add(subtitleEnabled);
+            subtitleExportText = new CheckBox { Name = "ExportSubtitleText", AutoSize = true, Text = "Сохранять текст рядом с видео (.txt)", Margin = new Padding(0, 0, 0, 8), Checked = template.ExportSubtitleText };
+            subtitleExportText.CheckedChanged += (s, e) => { if (!loading && !subtitlePanelLoading) { template.ExportSubtitleText = subtitleExportText.Checked; Changed(false); } };
+            stack.Controls.Add(subtitleExportText);
             subtitleUppercase = new CheckBox { AutoSize = true, Text = "Все буквы заглавные", Margin = new Padding(0, 0, 0, 8) };
             stack.Controls.Add(subtitleUppercase);
 
@@ -73,22 +88,32 @@ namespace VideoBatch {
             colors.Controls.Add(SubtitleButton("Цвет плашки", () => PickSubtitleColor(true)));
             stack.Controls.Add(colors);
 
-            stack.Controls.Add(new Label { Text = "Для готовых аудиофайлов нажмите «Распознать аудио» в окне субтитров. Сохранённые таймкоды используются автоматически.", Width = 360, Height = 52, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 4) });
+            stack.Controls.Add(new Label { Text = "Для готовых аудиофайлов нажмите «Распознать аудио» в окне субтитров. Сохранённые таймкоды используются автоматически.", AutoSize = true, MaximumSize = new Size(360, 0), ForeColor = Theme.TextSecondary, Margin = new Padding(0, 8, 0, 4) });
             subtitleCaptions = new DataGridView {
                 Visible = false, Width = 360, Height = 220, AutoGenerateColumns = false, AllowUserToAddRows = true, AllowUserToDeleteRows = true,
                 BackgroundColor = Theme.Card, DefaultCellStyle = new DataGridViewCellStyle { ForeColor = Color.Black, BackColor = Color.White, WrapMode = DataGridViewTriState.True },
                 AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
-            subtitleCaptions.Columns.Add(new DataGridViewTextBoxColumn { Name = "Start", HeaderText = "Начало, с", Width = 72 });
+            Theme.StyleGrid(subtitleCaptions);
+            subtitleCaptions.RowHeadersVisible = true;
+            subtitleCaptions.RowHeadersWidth = 25;
+            subtitleCaptions.RowHeadersDefaultCellStyle.BackColor = Theme.Elevated; subtitleCaptions.RowHeadersDefaultCellStyle.ForeColor = Theme.TextSecondary;
+            subtitleCaptions.RowHeadersDefaultCellStyle.SelectionBackColor = Theme.Selected; subtitleCaptions.RowHeadersDefaultCellStyle.SelectionForeColor = Theme.TextPrimary;
+            subtitleCaptions.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+            subtitleCaptions.ColumnHeadersDefaultCellStyle.Padding = new Padding(4, 0, 4, 0);
+            subtitleCaptions.DefaultCellStyle.Padding = new Padding(4);
+            subtitleCaptions.Columns.Add(new DataGridViewTextBoxColumn { Name = "Start", HeaderText = "Начало, с", Width = 82 });
             subtitleCaptions.Columns.Add(new DataGridViewTextBoxColumn { Name = "End", HeaderText = "Конец, с", Width = 72 });
             subtitleCaptions.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Текст", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
             stack.Controls.Add(subtitleCaptions);
 
-            var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
-            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
-            subtitlePanelMessage = new Label { Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, Text = "Изменения сохраняются автоматически." };
-            var done = Button("← К сценам", LeaveSubtitleWorkspace); done.AutoSize = false; done.Dock = DockStyle.Fill;
-            bottom.Controls.Add(subtitlePanelMessage, 0, 0); bottom.Controls.Add(done, 1, 0);
+            var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, AutoSize = true, Padding = new Padding(0, 12, 0, 0) };
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            bottom.RowStyles.Add(new RowStyle(SizeType.AutoSize)); bottom.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            subtitlePanelMessage = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, Text = "Изменения сохраняются автоматически.", Margin = new Padding(0, 0, 0, 10) };
+            bottom.SizeChanged += (s, e) => subtitlePanelMessage.MaximumSize = new Size(Math.Max(1, bottom.ClientSize.Width), 0);
+            var done = Theme.MakeButton("← К сценам", ghost: true, action: LeaveSubtitleWorkspace); done.Anchor = AnchorStyles.Right;
+            bottom.Controls.Add(subtitlePanelMessage, 0, 0); bottom.Controls.Add(done, 0, 1);
             root.Controls.Add(bottom, 0, 1);
 
             foreach (var n in new NumericUpDown[] { subtitleSize, subtitlePanelPosition, subtitleWords, subtitleOpacity, subtitleLineSpacing })
@@ -105,11 +130,12 @@ namespace VideoBatch {
                 SetSubtitlePosition((int)subtitlePanelPosition.Value);
             };
 
+            Theme.StyleCheckBox(subtitleEnabled); Theme.StyleCheckBox(subtitleExportText); Theme.StyleCheckBox(subtitleUppercase);
             contentHost.Controls.Add(subtitlePanel);
         }
 
         static void SubtitleField(FlowLayoutPanel panel, string caption, Control control) {
-            panel.Controls.Add(new Label { Text = caption, AutoSize = false, Height = 22, ForeColor = Theme.TextSecondary });
+            panel.Controls.Add(new Label { Text = caption, AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 4, 0, 6) });
             control.Width = 360; control.Margin = new Padding(0, 0, 0, 6); panel.Controls.Add(control);
         }
 
@@ -158,6 +184,7 @@ namespace VideoBatch {
             try {
                 var style = (template.SubtitleStyle ?? new WarmupSubtitleStyle { Enabled = false }).Copy(); style.Normalize();
                 subtitleEnabled.Checked = style.Enabled;
+                subtitleExportText.Checked = template.ExportSubtitleText;
                 subtitleUppercase.Checked = style.Uppercase;
                 subtitleFont.SelectedItem = style.FontFamily;
                 if (subtitleFont.SelectedIndex < 0) subtitleFont.SelectedIndex = 0;

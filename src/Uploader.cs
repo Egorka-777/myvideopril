@@ -179,6 +179,8 @@ namespace VideoBatch {
             AppDiagnostics.Write(label,job.profileId,"","preflight","Проверка runtime загрузчика");
             try { if(string.Equals(workerPath,WorkerTikTok,StringComparison.OrdinalIgnoreCase))CheckFilesTikTok();else CheckFiles(); }
             catch(Exception e){AppDiagnostics.Write(label,job.profileId,"","error",e.ToString(),"error");throw;}
+            job.localPort = await DolphinLocalApi.ResolvePortAsync(job.token, job.localPort, cancel,
+                line => AppDiagnostics.Write(label, job.profileId, "", "dolphin", line)).ConfigureAwait(false);
             Directory.CreateDirectory(Path.Combine(Store.Root,"jobs"));
             string file=Path.Combine(Store.Root,"jobs","upload-"+Guid.NewGuid().ToString("N")+".json");
             string protectedToken=job.token;job.token=null;
@@ -187,6 +189,7 @@ namespace VideoBatch {
             try {
                 var info=new ProcessStartInfo(Node,Core.Quote(workerPath)+" "+Core.Quote(file)){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,RedirectStandardInput=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8,WorkingDirectory=Root};
                 info.EnvironmentVariables["VIDEOBATCH_DOLPHIN_TOKEN"]=protectedToken;
+                info.EnvironmentVariables["VIDEOBATCH_DOLPHIN_AUTH_PORT"]=job.localPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 if(string.Equals(workerPath,Worker,StringComparison.OrdinalIgnoreCase))info.EnvironmentVariables.Remove("TZ");
                 process=new Process{StartInfo=info};if(!process.Start())throw new Exception("Не удалось запустить модуль "+label+".");
                 var stderr=process.StandardError.ReadToEndAsync();
@@ -772,6 +775,8 @@ namespace VideoBatch {
             t=cleanParts.Count>0?string.Join(" . ",cleanParts):t;
             foreach(var ch in Path.GetInvalidFileNameChars())t=t.Replace(ch,' ');
             t=System.Text.RegularExpressions.Regex.Replace(t,@"\s+"," ").Trim();
+            // Filename separators must not make an otherwise valid title exceed YouTube's limit.
+            if(t.Length>100)t=t.Replace(" . ",".");
             return t;
         }
         static void ValidateTitleLength(string title,string context){

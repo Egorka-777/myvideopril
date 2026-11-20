@@ -30,6 +30,7 @@ namespace VideoBatch {
         public ProcessingDialog(ProcessingSettings source, bool metadataOnly = false, bool assemblyOutput = false, bool preserveTimeline = false, Preferences exportSettings = null) : base(metadataOnly ? "Метаданные роликов" : "Параметры и эффекты", 690) {
             this.preserveTimeline = preserveTimeline;
             ClientSize = new Size(850, 690); MinimumSize = new Size(800, 580);
+            Font = Theme.FontBody; Body.AutoScroll = false;
             Settings = Store.Clone(source ?? new ProcessingSettings()); Settings.Validate();
             var layout = Ui.Table(); layout.RowCount = 3;
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -145,6 +146,7 @@ namespace VideoBatch {
             tabs.ItemSize = new Size(140, 36);
             tabs.SizeMode = TabSizeMode.Fixed;
             tabs.DrawItem += DrawTab;
+            if (!metadataOnly) tabs.ClientSizeChanged += (s, e) => tabs.ItemSize = new Size(Math.Max(90, Math.Min(140, (tabs.ClientSize.Width - 8) / Math.Max(1, tabs.TabCount))), 36);
             if (metadataOnly) {
                 tabs.Appearance=TabAppearance.FlatButtons; tabs.SizeMode=TabSizeMode.Fixed;
                 tabs.ItemSize=new Size(1,1); // One page: the window title already names this section.
@@ -160,6 +162,8 @@ namespace VideoBatch {
         void ApplyAsphalt(Control control) {
             control.BackColor=control is TextBox || control is NumericUpDown ? Theme.Elevated : Theme.Background;
             control.ForeColor=control is Label ? Theme.TextSecondary : Theme.TextPrimary;
+            if (control is CheckBox check) Theme.StyleCheckBox(check);
+            if (control is ComboBox) control.BackColor = Theme.Elevated;
             if (control is TabPage page) page.UseVisualStyleBackColor=false;
             if(control is TabControl nested && !ReferenceEquals(nested,tabs)) {
                 nested.DrawMode=TabDrawMode.OwnerDrawFixed;nested.ItemSize=new Size(140,32);nested.SizeMode=TabSizeMode.Fixed;
@@ -176,6 +180,20 @@ namespace VideoBatch {
         static FlowLayoutPanel Page(TabControl tabs, string title) {
             var page = new TabPage(title) { Padding = new Padding(12) };
             var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            Action resize = () => {
+                int width = Math.Max(1, flow.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4);
+                foreach (Control child in flow.Controls) {
+                    if (child is Label label) label.MaximumSize = new Size(width, 0);
+                    else if (child is TableLayoutPanel table) {
+                        table.Width = width;
+                        foreach (Control field in table.Controls) {
+                            if ((field is CheckBox || field is Label) && table.GetColumn(field) == 0)
+                                field.MaximumSize = new Size(Math.Max(1, (int)(width * table.ColumnStyles[0].Width / 100) - field.Margin.Horizontal), 0);
+                        }
+                    } else if (child is FlowLayoutPanel group) { group.MaximumSize = new Size(width, 0); group.Width = width; }
+                }
+            };
+            flow.ClientSizeChanged += (s, e) => resize(); flow.ControlAdded += (s, e) => resize();
             page.Controls.Add(flow); tabs.TabPages.Add(page); return flow;
         }
         static void Hint(FlowLayoutPanel panel, string text) { var l = Ui.Label(text, true); l.MaximumSize = new Size(730, 0); l.Margin = new Padding(0, 12, 0, 8); panel.Controls.Add(l); }

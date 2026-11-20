@@ -201,10 +201,12 @@ const { loginWithToken } = require("./dolphin-local-auth");
 async function startOrConnectProfile() {
   send("dolphin", "Подключаюсь к Dolphin…", { percent: 3 });
   const studioUpload=isStudioUploadJob(job);
-  await loginWithToken(job, apiRaw, text => send("dolphin", text));
+  if (process.env.VIDEOBATCH_DOLPHIN_AUTH_PORT === String(job.localPort))
+    send("dolphin", "Используется сессия Dolphin, подтверждённая приложением · порт " + job.localPort);
+  else await loginWithToken(job, apiRaw, text => send("dolphin", text));
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
-    { onAttached: () => { profileOwned = false; }, ...(job.highlightsSearch?{maxAttempts:1,allowStopRestart:false}:studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:false}:{}) }
+    { onAttached: () => { profileOwned = false; }, ...(job.highlightsSearch?{maxAttempts:1,allowStopRestart:false}:studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:true}:{}) }
   );
   profileStarted = true;
   return endpoint;

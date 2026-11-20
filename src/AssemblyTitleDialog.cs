@@ -13,7 +13,10 @@ namespace VideoBatch {
 
         public AssemblyTitleDialog(IList<string> current) {
             Text = "Заголовки для сборки";
-            ClientSize = new Size(640, 560);
+            ClientSize = new Size(640, 620);
+            MinimumSize = new Size(540, 480);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            MinimizeBox = false; MaximizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
             Font = Theme.FontBody;
             BackColor = Theme.Background;
@@ -31,7 +34,8 @@ namespace VideoBatch {
             input = new TextBox {
                 Multiline = true, AcceptsReturn = true, WordWrap = true, ScrollBars = ScrollBars.Vertical,
                 Width = 580, Height = 220, BackColor = Theme.Elevated, ForeColor = Theme.TextPrimary,
-                BorderStyle = BorderStyle.FixedSingle, Font = new Font("Consolas", 10)
+                BorderStyle = BorderStyle.FixedSingle, Font = Theme.FontBody,
+                Margin = new Padding(0, 0, 0, 8)
             };
             if (current != null && current.Count > 0) input.Text = string.Join(", ", current);
             input.TextChanged += (s, e) => RefreshPreview();
@@ -46,10 +50,19 @@ namespace VideoBatch {
             preview = new ListBox { Width = 580, Height = 160, BackColor = Theme.Elevated, ForeColor = Theme.TextPrimary, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
             body.Controls.Add(preview);
             root.Controls.Add(body, 0, 0);
+            body.ClientSizeChanged += (s, e) => {
+                int width = Math.Max(1, body.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4);
+                foreach (Control child in body.Controls) {
+                    if (child is Label) child.MaximumSize = new Size(width, 0);
+                    else { child.Width = width; if (child is FlowLayoutPanel) child.MaximumSize = new Size(width, 0); }
+                }
+            };
 
             var bottom = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new Padding(0, 8, 0, 0) };
-            bottom.Controls.Add(Theme.MakeButton("Сохранить", accent: true, action: Save));
-            bottom.Controls.Add(Theme.MakeButton("Отмена", ghost: true, action: () => { DialogResult = DialogResult.Cancel; Close(); }));
+            var save = Theme.MakeButton("Сохранить", accent: true, action: Save);
+            var cancel = Theme.MakeButton("Отмена", ghost: true, action: () => { DialogResult = DialogResult.Cancel; Close(); });
+            bottom.Controls.Add(save); bottom.Controls.Add(cancel);
+            AcceptButton = save; CancelButton = cancel;
             root.Controls.Add(bottom, 0, 1);
             RefreshPreview();
         }

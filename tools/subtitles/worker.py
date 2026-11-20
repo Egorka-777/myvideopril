@@ -9,7 +9,8 @@ import sys
 import tempfile
 
 MODEL = "small"
-VERSION = "2026-11-04-imported-audio-v1"
+VERSION = "2026-11-20-complete-utterance-timing-v3"
+SAMPLING_RATE = 16000
 
 
 def emit(stage, message, percent=None):
@@ -63,7 +64,64 @@ def timing_from_segments(segments, duration, report=lambda value: None):
         character_end_times_seconds=[w[2] for w in words]))
 
 
-def execute(job, model_factory=None):
+def speech_chunks(audio):
+    from faster_whisper.vad import get_speech_timestamps, VadOptions
+    # The default .5 threshold misses the child's second call in real source audio.
+    # Keep quiet speech; do not concatenate utterances separated by silence.
+    chunks = get_speech_timestamps(audio, VadOptions(threshold=.2, min_silence_duration_ms=500,
+                                                    max_speech_duration_s=30))
+    merged = []
+    for chunk in chunks:
+        if merged and chunk["start"] <= merged[-1]["end"]:
+            merged[-1]["end"] = chunk["end"]
+        else:
+            merged.append(dict(chunk))
+    # VAD is a boundary hint, not a speech whitelist: music-backed speech in
+    # real sources falls below .2. Decode the omitted original intervals too,
+    # without changing the already aligned utterance windows or removing time.
+    return complete_chunks(merged, len(audio))
+
+
+def complete_chunks(chunks, length):
+    result, position = [], 0
+    limit = 30 * SAMPLING_RATE
+    for chunk in chunks:
+        while position < chunk["start"]:
+            end = min(chunk["start"], position + limit)
+            result.append(dict(start=position, end=end))
+            position = end
+        result.append(dict(chunk))
+        position = chunk["end"]
+    while position < length:
+        end = min(length, position + limit)
+        result.append(dict(start=position, end=end))
+        position = end
+    return result
+
+
+def transcribe_utterances(model, audio, chunks, language):
+    result = []
+    for chunk in chunks:
+        offset = chunk["start"] / SAMPLING_RATE
+        segments, _ = model.transcribe(audio[chunk["start"]:chunk["end"]], language=language,
+                                       word_timestamps=True, vad_filter=False,
+                                       condition_on_previous_text=False, beam_size=5, task="transcribe")
+        for segment in segments:
+            # ASR clocks are relative to the decoded chunk, not to the VAD-compressed file.
+            for word in segment.words or []:
+                word.start += offset
+                word.end += offset
+            segment.start += offset
+            segment.end += offset
+            result.append(segment)
+    return result
+
+
+def execute(job, model_factory=None, audio_loader=None, chunk_detector=None):
+    if audio_loader is None:
+        from faster_whisper.audio import decode_audio
+        audio_loader = lambda path: decode_audio(path, sampling_rate=SAMPLING_RATE)
+    chunk_detector = chunk_detector or speech_chunks
     if model_factory is None:
         from faster_whisper import WhisperModel
         model_factory = WhisperModel
@@ -77,9 +135,10 @@ def execute(job, model_factory=None):
             raise ValueError("Аудиофайл изменился перед распознаванием: " + audio.name)
         # PyAV decodes MP3/WAV/M4A/FLAC/OGG directly. No external child process,
         # no audio upload and no language translation.
-        segments, info = model.transcribe(str(audio), word_timestamps=True, vad_filter=True,
-                                         condition_on_previous_text=False, beam_size=5, task="transcribe")
-        duration = float(info.duration)
+        samples = audio_loader(str(audio))
+        language = model.detect_language(samples, vad_filter=True)[0]
+        segments = transcribe_utterances(model, samples, chunk_detector(samples), language)
+        duration = len(samples) / SAMPLING_RATE
         if not math.isfinite(duration) or duration <= 0:
             raise ValueError("Не удалось прочитать длительность аудио: " + audio.name)
         result = timing_from_segments(segments, duration, lambda value: emit(
@@ -88,7 +147,7 @@ def execute(job, model_factory=None):
         if fingerprint(audio) != item["hash"]:
             raise ValueError("Аудиофайл изменился во время распознавания: " + audio.name)
         result.update(AudioHash=item["hash"], Source="faster-whisper/" + MODEL,
-                      Language=info.language, Version=VERSION)
+                      Language=language, Version=VERSION)
         atomic_json(item["output"], result)
         emit("cached", f"Субтитры сохранены: {audio.name}", int((index + 1) * 100 / len(job["items"])))
     emit("done", "Распознавание завершено", 100)

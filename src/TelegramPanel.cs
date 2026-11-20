@@ -38,22 +38,28 @@ namespace VideoBatch {
             getPreferences=preferences;
             store=storage??new TelegramStore();runner=new TelegramRunner(store);
             Dock=DockStyle.Fill;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
-            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty,Padding=new Padding(6,2,6,0)};
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=6,Margin=Padding.Empty,Padding=new Padding(6,2,6,0)};
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,54));Controls.Add(layout);
-            actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};layout.Controls.Add(actions,0,0);
+            var profileBar=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+            var fillProfile=Theme.MakeButton("Оформить профиль",accent:true,action:()=>OpenProfilePresets());
+            fillProfile.Name="FillTelegramProfile";profileBar.Controls.Add(fillProfile);workButtons.Add(fillProfile);layout.Controls.Add(profileBar,0,0);
+            actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};layout.Controls.Add(actions,0,1);
             WorkButton("＋ Добавить аккаунты",ChooseImport,true);
             WorkButton("Диагностика",async()=>await RunSelected("doctor"));
             WorkButton("Чекер аккаунтов",async()=>await RunSelected("spam_check"));
             WorkButton("Настройки",Settings);
             actions.Controls.Add(new Label{Text="Поиск",AutoSize=true,ForeColor=Theme.TextMuted,Margin=new Padding(6,9,4,0)});
             search=Theme.MakeSearchBox();search.Width=160;search.Margin=new Padding(4,7,0,0);search.TextChanged+=(s,e)=>RefreshData();actions.Controls.Add(search);
-            summary=new Label{Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary,TextAlign=ContentAlignment.MiddleLeft};layout.Controls.Add(summary,0,1);
-            tabStrip=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(tabStrip,0,2);
-            pageHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(pageHost,0,3);
+            summary=new Label{Dock=DockStyle.Fill,ForeColor=Theme.TextSecondary,TextAlign=ContentAlignment.MiddleLeft};layout.Controls.Add(summary,0,2);
+            tabStrip=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(tabStrip,0,3);
+            pageHost=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};layout.Controls.Add(pageHost,0,4);
             var accountsPage=Page("Аккаунты");var proxiesPage=Page("Прокси");var invitePage=Page("Добавить участников");var logsPage=Page("Журнал");
             BuildProxyPage(proxiesPage);
+            BuildDialoguePage(Page("Нейрочатинг"));
+            BuildDialogueHistoryPage(Page("История запусков"));
             grid=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,ReadOnly=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=true,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill};Theme.StyleGrid(grid);
             grid.ColumnHeadersBorderStyle=DataGridViewHeaderBorderStyle.None;grid.CellBorderStyle=DataGridViewCellBorderStyle.SingleHorizontal;
             grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="selected",HeaderText="✓",AutoSizeMode=DataGridViewAutoSizeColumnMode.None,Width=40,MinimumWidth=40,DefaultCellStyle=new DataGridViewCellStyle{Padding=Padding.Empty}});
@@ -68,6 +74,7 @@ namespace VideoBatch {
             grid.CurrentCellDirtyStateChanged+=(s,e)=>{if(grid.IsCurrentCellDirty)grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
             var context=Theme.MakeContextMenu();context.Items.Add("Карточка аккаунта",null,(s,e)=>EditAccount(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Открыть Telegram",null,(s,e)=>OpenWeb(grid.CurrentRow?.Tag as TelegramAccount));
+            context.Items.Add("Заполнить профиль · пресеты",null,(s,e)=>OpenProfilePresets(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Изменить данные · шаблон",null,async(s,e)=>await ApplyProfileTemplate(grid.CurrentRow?.Tag as TelegramAccount));
             context.Items.Add("Удалить из Telegram-раздела",null,(s,e)=>RemoveSelected());grid.ContextMenuStrip=context;
             grid.CellMouseDown+=(s,e)=>{if(e.Button==MouseButtons.Right&&e.RowIndex>=0){grid.ClearSelection();grid.Rows[e.RowIndex].Selected=true;grid.CurrentCell=grid.Rows[e.RowIndex].Cells[1];}};
@@ -118,8 +125,8 @@ namespace VideoBatch {
                 else status.Text="Выберите аккаунт → Диагностика. Отчёт появится после проверки.";
             });reportButton.Dock=DockStyle.Top;logsPage.Controls.Add(reportButton);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Padding=new Padding(0,6,0,0)};
-            stop=Theme.MakeButton("Остановить",ghost:true,action:async()=>await runner.Stop());stop.Enabled=false;bottom.Controls.Add(stop);
-            status=new Label{Text="Выберите аккаунт → проверьте соединение → откройте Telegram",Width=720,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,4);bottom.SizeChanged+=(s,e)=>status.Width=Math.Max(120,bottom.ClientSize.Width-stop.Width-22);
+            stop=Theme.MakeButton("Остановить",ghost:true,action:async()=>{if(dialogueCancelSource!=null)dialogueCancelSource.Cancel();else await runner.Stop();});stop.Enabled=false;bottom.Controls.Add(stop);
+            status=new Label{Text="Выберите аккаунт → проверьте соединение → откройте Telegram",Width=720,Height=32,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,ForeColor=Theme.TextSecondary};bottom.Controls.Add(status);layout.Controls.Add(bottom,0,5);bottom.SizeChanged+=(s,e)=>status.Width=Math.Max(120,bottom.ClientSize.Width-stop.Width-22);
             SelectTab(0);
             AllowDrop=true;DragEnter+=(s,e)=>e.Effect=!busy&&e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;
             DragDrop+=async(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))await Import((string[])e.Data.GetData(DataFormats.FileDrop));};
@@ -137,6 +144,8 @@ namespace VideoBatch {
             for(int i=0;i<pages.Count;i++){pages[i].Visible=i==index;pageButtons[i].BackColor=i==index?Theme.Selected:Theme.Background;pageButtons[i].ForeColor=i==index?Theme.TextPrimary:Theme.TextSecondary;}
             foreach(Control c in actions.Controls)c.Visible=index==0||(c is Button b&&(b.Text.Contains("Добавить аккаунты")||b.Text=="Настройки"));
             pages[index].BringToFront();if(index==2&&senderChoice!=null)RefreshSenders();
+            if(index==5){try{RefreshDialogueHistory();}catch(Exception e){Failure(e);}}
+            if(index==4&&dialogueBody!=null){dialogueBody.Enabled=!busy;UpdateDialogueActions();}
         }
         void WorkButton(string text,Action action,bool accent=false){var b=Theme.MakeButton(text,accent:accent,action:()=>{try{action();}catch(Exception e){Failure(e);}});actions.Controls.Add(b);workButtons.Add(b);}
         public void RefreshData() {
@@ -150,6 +159,8 @@ namespace VideoBatch {
                 if(a.id==current)grid.CurrentCell=grid.Rows[i].Cells[1];
             }
             RefreshSenders();
+            RefreshDialogueAccounts(all);
+            if(dialogueBody!=null)dialogueBody.Enabled=true;UpdateDialogueActions();
             int ready=all.Count(a=>TelegramHealth.AccountLabel(a).Contains("Работает")),uncheckedCount=all.Count(a=>TelegramHealth.AccountLabel(a).StartsWith("○"));
             if(!busy&&status.Text.StartsWith("Выберите аккаунт"))status.Text=all.Count==0?"Добавьте папку аккаунта или перетащите JSON / TData сюда":"Выберите аккаунт и откройте Telegram. Причина ошибки — в строке аккаунта и журнале.";
             summary.Text=$"Всего {all.Count}   ·   Доступны {ready}   ·   Требуют внимания {all.Count-ready-uncheckedCount}   ·   Проверить {uncheckedCount}";
@@ -200,6 +211,18 @@ namespace VideoBatch {
                 }
                 await Run(new Dictionary<string,object>{{"action",action},{"accounts",Selected()}});
             }catch(Exception e){Failure(e);}
+        }
+        void OpenProfilePresets(TelegramAccount current=null){
+            try{
+                if(busy)return;
+                var accounts=store.Load().accounts;
+                var account=ProfilePresetActions.ChooseAccount(this,"Telegram",accounts,
+                    a=>a.name+" · "+(string.IsNullOrWhiteSpace(a.username)?a.phone:"@"+a.username),
+                    current==null?null:accounts.FirstOrDefault(a=>a.id==current.id));
+                if(account==null)return;
+                ProfilePresetActions.OpenTelegram(this,store,account);
+                RefreshData();
+            }catch(Exception error){Failure(error);}
         }
         async Task ApplyProfileTemplate(TelegramAccount current=null){
             try{
@@ -279,7 +302,7 @@ namespace VideoBatch {
         }
         async Task<bool> Run(Dictionary<string,object> job,string importProxyId=null,List<string> importedIds=null,Func<string,CancellationToken,Task<string>> tokenProvider=null) {
             if(busy)return false;
-            if(!TelegramRunner.Prepared(store)){await Prepare();if(!TelegramRunner.Prepared(store))return false;}busy=true;foreach(var b in workButtons)b.Enabled=false;stop.Enabled=true;grid.Enabled=false;search.Enabled=false;proxyGrid.Enabled=false;pages[2].Enabled=false;
+            if(!TelegramRunner.Prepared(store)){await Prepare();if(!TelegramRunner.Prepared(store))return false;}busy=true;SetTelegramBusyUI(true);
             bool complete=false,failed=false;string finalSummary="";string task=Guid.NewGuid().ToString("N");status.Text="Выполняется…";
             TaskQueueStore.Upsert(task,t=>{t.Platform="Telegram";t.UploadMethod="MTProto";t.Account=job.ContainsKey("accounts")?string.Join(", ",((List<TelegramAccount>)job["accounts"]).Select(a=>a.name)):"Импорт аккаунтов";t.Stage=Convert.ToString(job["action"]);t.Status=TaskQueueStatus.Preparing;},true);
             Task tokenTask=null;Exception tokenFailure=null;string previousToken="";var tokenCancel=new CancellationTokenSource();
@@ -290,8 +313,14 @@ namespace VideoBatch {
                 catch(Exception e){tokenFailure=e;await runner.Stop();}
             }
             try {
+                BeginDialogueHistory(task,job);
                 int code=await runner.Run(job,ev=>{
+                    RecordDialogueHistory(ev);
                     string type=Get(ev,"event");
+                    if(type=="dialogue_joined"||type=="dialogue_sent") {
+                        string detail=type=="dialogue_joined" ? "Участие в чате подтверждено: "+Get(ev,"title") : "Отправлена ИИ-реплика №"+Get(ev,"step")+" · сообщение "+Get(ev,"message_id");
+                        status.Text=detail;Log(task,Get(ev,"account_id"),type,detail);TaskQueueStore.Upsert(task,t=>{t.Stage=type;t.Result=detail;});return;
+                    }
                     if(type=="web_token_request"){status.Text=Get(ev,"text");Log(task,Get(ev,"id"),type,status.Text);tokenTask=SendFreshToken();return;}
                     if(type=="invite_link"){
                         string link=Get(ev,"link");if(!Regex.IsMatch(link,@"^https://t\.me/\+[A-Za-z0-9_-]+$"))throw new IOException("Telegram не вернул корректную ссылку");
@@ -345,8 +374,9 @@ namespace VideoBatch {
                 if(code!=0&&code!=2)throw new IOException("Telegram: "+status.Text);
                 if(code==0&&!string.IsNullOrEmpty(finalSummary))status.Text=finalSummary;if(code==2)status.Text="Остановлено";
                 TaskQueueStore.Upsert(task,t=>{t.Status=code==2?TaskQueueStatus.Stopped:failed?TaskQueueStatus.Error:TaskQueueStatus.Done;t.Progress=code==0?100:0;t.Result=status.Text;},true);
+                FinishDialogueHistory(code==2?"Остановлен":failed?"Ошибка":"Завершён",status.Text);
                 return code==0&&!failed;
-            }catch{TaskQueueStore.Upsert(task,t=>{t.Status=TaskQueueStatus.Error;t.Result="Проверьте журнал Telegram";},true);throw;}finally{tokenCancel.Cancel();if(tokenTask!=null)await tokenTask;tokenCancel.Dispose();busy=false;foreach(var b in workButtons)b.Enabled=true;stop.Enabled=false;grid.Enabled=true;search.Enabled=true;proxyGrid.Enabled=true;pages[2].Enabled=true;RefreshData();RefreshProxies();}
+            }catch(Exception failure){FinishDialogueHistory("Ошибка",failure.Message);TaskQueueStore.Upsert(task,t=>{t.Status=TaskQueueStatus.Error;t.Result="Проверьте журнал Telegram";},true);throw;}finally{tokenCancel.Cancel();if(tokenTask!=null)await tokenTask;tokenCancel.Dispose();busy=false;SetTelegramBusyUI(false);RefreshData();RefreshProxies();}
         }
         static string Get(Dictionary<string,object> ev,string key)=>ev.TryGetValue(key,out var value)?Convert.ToString(value):"";
         void Log(string task,string account,string stage,string text){if(!string.IsNullOrEmpty(account)){var a=store.Load().accounts.FirstOrDefault(x=>x.id==account);if(a!=null)text=a.name+": "+text;}string line=DateTime.Now.ToString("HH:mm:ss")+" · "+text;log.AppendText(line+Environment.NewLine);log.ScrollToCaret();AppDiagnostics.Write("Telegram",account,task,stage,text,stage=="error"||stage=="import_error"?"error":"info");}
@@ -391,16 +421,16 @@ namespace VideoBatch {
         }
         async Task Prepare() {
             if(busy)return;
-            busy=true;try{store.Prepare();status.Text="Подготовка Telegram…";
+            busy=true;SetTelegramBusyUI(true);try{store.Prepare();status.Text="Подготовка Telegram…";
                 var script=Path.Combine(TelegramRunner.Scripts(),"setup.ps1");
                 var info=new ProcessStartInfo("powershell.exe","-NoProfile -ExecutionPolicy Bypass -File "+Core.Quote(script)+" -Root "+Core.Quote(store.Root)){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=System.Text.Encoding.UTF8,StandardErrorEncoding=System.Text.Encoding.UTF8};
                 using(var process=Process.Start(info)){preparation=process;var outputTask=process.StandardOutput.ReadToEndAsync();var errorTask=process.StandardError.ReadToEndAsync();
                     var exited=Task.Run(()=>process.WaitForExit(300000));if(!await exited){try{process.Kill();}catch{}throw new IOException("Подготовка заняла больше 5 минут. Проверьте соединение и повторите.");}
                     var output=await outputTask;var error=await errorTask;if(process.ExitCode!=0){string detail=(error+output).Trim();if(detail.Length>400)detail=detail.Substring(0,400)+"…";throw new IOException(string.IsNullOrWhiteSpace(detail)?"Подготовка не завершена. Установите Python 3.11 (64-bit) с python.org и нажмите «Подготовить Telegram» снова.":detail);}}
                 status.Text="Telegram подготовлен";
-            }catch(Exception e){Failure(e);}finally{preparation=null;busy=false;}
+            }catch(Exception e){Failure(e);}finally{preparation=null;busy=false;SetTelegramBusyUI(false);}
         }
-        public async Task StopBeforeClose(){foreach(var web in webWindows.Values.ToArray())await web.Shutdown();proxyCancel.Cancel();try{if(preparation!=null&&!preparation.HasExited){using(var kill=Process.Start(new ProcessStartInfo("taskkill.exe","/PID "+preparation.Id+" /T /F"){UseShellExecute=false,CreateNoWindow=true}))await Task.Run(()=>kill.WaitForExit());}}catch{}await runner.Stop();while(busy)await Task.Delay(50);}
+        public async Task StopBeforeClose(){dialogueCancelSource?.Cancel();foreach(var web in webWindows.Values.ToArray())await web.Shutdown();proxyCancel.Cancel();try{if(preparation!=null&&!preparation.HasExited){using(var kill=Process.Start(new ProcessStartInfo("taskkill.exe","/PID "+preparation.Id+" /T /F"){UseShellExecute=false,CreateNoWindow=true}))await Task.Run(()=>kill.WaitForExit());}}catch{}await runner.Stop();while(busy)await Task.Delay(50);}
     }
     internal class TelegramFields : Form {
         readonly FlowLayoutPanel body;

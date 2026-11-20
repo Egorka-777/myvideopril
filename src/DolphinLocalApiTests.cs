@@ -44,6 +44,23 @@ namespace VideoBatch {
             catch (Exception e) { rejected = e.Message.Contains("Не удалось подтвердить") && !e.Message.Contains(token); }
             Check(rejected && bad.Calls.Count == 2, "ambiguous 200 is not successful authentication");
 
+            var denied = new Stub();
+            denied.Reply = (r, ct) => Task.FromResult(Response(401, "{\"success\":false}"));
+            bool explicitDenial = false;
+            try { await DolphinLocalApi.ResolvePortsAsync(token, new[] { 3001, 3002 }, denied, CancellationToken.None, null, 3001).ConfigureAwait(false); }
+            catch (Exception e) { explicitDenial = e.Message.Contains("HTTP 401") && !e.Message.Contains("превысила"); }
+            Check(explicitDenial && denied.Calls.Count == 1, "configured API denial is not masked by a port scan timeout");
+
+            var slow = new Stub();
+            slow.Reply = async (r, ct) => {
+                await Task.Delay(3000, ct).ConfigureAwait(false);
+                return Response(200, "{\"success\":true}");
+            };
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30))) {
+                int slowPort = await DolphinLocalApi.ResolvePortsAsync(token, new[] { 3001, 3002 }, slow, cts.Token).ConfigureAwait(false);
+                Check(slowPort == 3001 && slow.Calls.Count == 1, "slow valid authorization stays on the API port");
+            }
+
             var cancelled = new Stub();
             cancelled.Reply = async (r, ct) => { await Task.Delay(10000, ct).ConfigureAwait(false); return Response(200, "{}"); };
             using (var cts = new CancellationTokenSource(50)) {

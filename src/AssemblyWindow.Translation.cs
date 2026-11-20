@@ -71,7 +71,7 @@ namespace VideoBatch {
             var load = Btn("Стандартные голоса", null); load.Click += async (s, e) => await Run(LoadVoices); voiceRow.Controls.Add(load); settings.Controls.Add(voiceRow);
             subtitles = new CheckBox { Name = "TranslationBurnSubtitles", AutoSize = true, Checked = options.BurnSubtitles, Text = "Наложить субтитры на видео", Margin = new Padding(8) };
             var tools = Row(); tools.Controls.Add(subtitles); tools.Controls.Add(Btn("Стиль субтитров…", () => { _ = Run(EditSubtitles); })); tools.Controls.Add(Btn("Обработка видео…", EditProcessing)); settings.Controls.Add(tools);
-            settings.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(940, 0), ForeColor = Theme.TextSecondary, Text = "Исходная звуковая дорожка заменяется речью на выбранном языке. Фоновая музыка оригинала не отделяется.\nSRT сохраняется отдельно. Gemini и ElevenLabs расходуют квоту API; бесплатность длинного видео не гарантируется." });
+            settings.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(940, 0), ForeColor = Theme.TextSecondary, Text = "Исходный звук сохраняется: во время перевода громкость оригинала 15%, в паузах — 100%. Перевод начинается по таймкодам исходных реплик.\nSRT сохраняется отдельно. Gemini и ElevenLabs расходуют квоту API; бесплатность длинного видео не гарантируется." });
             lines = new DataGridView { Name = "TranslationSegments", Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, BackgroundColor = Theme.Card, AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
                 DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.White, ForeColor = Color.Black, WrapMode = DataGridViewTriState.True } };
             lines.Columns.Add(new DataGridViewTextBoxColumn { Name = "Time", HeaderText = "Таймкод", Width = 145, ReadOnly = true });
@@ -79,6 +79,7 @@ namespace VideoBatch {
             lines.Columns.Add(new DataGridViewTextBoxColumn { Name = "Translation", HeaderText = "Перевод (можно редактировать)", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
             root.Controls.Add(lines, 0, 1);
             actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true };
+            var automatic = Btn("Автоперевод", null); automatic.Click += async (s, e) => await Run(AutoTranslate); actions.Controls.Add(automatic);
             var transcribe = Btn("1. Распознать оригинал", null); transcribe.Click += async (s, e) => await Run(Transcribe); actions.Controls.Add(transcribe);
             var translate = Btn("2. Перевести через Gemini", null); translate.Click += async (s, e) => await Run(Translate); actions.Controls.Add(translate);
             var render = Btn("3. Озвучить и создать видео", null); render.Click += async (s, e) => await Run(Render); actions.Controls.Add(render);
@@ -211,6 +212,11 @@ namespace VideoBatch {
             if (string.IsNullOrWhiteSpace(source.Text)) throw new Exception("Добавьте исходное видео.");
             project = await VideoTranslationEngine.TranscribeAsync(source.Text, folder.Text, ct, report); BindProject(); status.Text = "Оригинал распознан. Выберите стиль и запустите перевод.";
         }
+        async Task AutoTranslate(CancellationToken ct, Action<string> report) {
+            await Transcribe(ct, report);
+            await Translate(ct, report);
+            await Render(ct, report);
+        }
         async Task Translate(CancellationToken ct, Action<string> report) {
             if (project == null) throw new Exception("Сначала распознайте оригинал или откройте проект.");
             await VideoTranslationEngine.TranslateAsync(project, options, WindowsSupport.Unprotect(prefs.ProtectedOpenRouterKey), ct, report, WindowsSupport.Unprotect(prefs.ProtectedWarmupHttpProxy));
@@ -237,7 +243,7 @@ namespace VideoBatch {
                     if (item.Segments.Any(s => string.IsNullOrWhiteSpace(s.Text)))
                         await VideoTranslationEngine.TranslateAsync(item, options, WindowsSupport.Unprotect(prefs.ProtectedOpenRouterKey), ct, report, WindowsSupport.Unprotect(prefs.ProtectedWarmupHttpProxy));
                 }
-                await VideoTranslationEngine.RenderAsync(item, renderOptions, ElevenKey(), WindowsSupport.Unprotect(prefs.ProtectedWarmupHttpProxy), ffmpeg, probe, ct, report);
+                await VideoTranslationEngine.RenderAsync(item, renderOptions, ElevenKey(), WindowsSupport.Unprotect(prefs.ProtectedWarmupHttpProxy), ffmpeg, probe, ct, report, geminiKey: WindowsSupport.Unprotect(prefs.ProtectedOpenRouterKey));
                 item.Output = await AssemblyWindow.RenderTranslationStudioAsync(layout, item.Output, Path.Combine(item.Directory, "translated-studio.mp4"), Path.Combine(item.Directory, "montage-render"), ffmpeg, probe, ct, report);
                 item.Options = Store.Clone(options); VideoTranslationEngine.Save(item); completed++;
                 report("Готово " + completed + " из " + sources.Count + ": " + item.Output);

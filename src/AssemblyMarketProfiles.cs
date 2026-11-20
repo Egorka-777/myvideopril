@@ -161,6 +161,7 @@ namespace VideoBatch {
                 Opacity = l.Opacity,
                 Start = l.Start,
                 End = l.End,
+                IndividualAnimation = l.IndividualAnimation,
                 AppearanceTransition = l.AppearanceTransition,
                 AppearanceDuration = l.AppearanceDuration,
                 PlaybackMode = l.PlaybackMode,

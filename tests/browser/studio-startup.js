@@ -55,20 +55,35 @@ const S=require('../../tools/uploader/youtube-studio-upload');
   let lookupTimeout=0;
   const newPage=context.newPage.bind(context);
   context.newPage=async()=>{const lookup=await newPage(),goto=lookup.goto.bind(lookup);lookup.goto=(url,opts)=>{lookupTimeout=opts.timeout;return goto(url,opts);};return lookup;};
-  try{await B.openStudio(page,'https://www.youtube.com/@requested/videos',()=>{});}
+  try{await B.openStudio(page,'https://www.youtube.com/@requested/videos',()=>{},{verifyChannel:true});}
   finally{context.newPage=newPage;}
-  assert(lookupTimeout>0&&lookupTimeout<=60000,'Channel lookup navigation shares the 60-second deadline');
+  assert.equal(lookupTimeout,0,'Channel lookup navigation has no readiness deadline');
   assert.equal(page.url(),'https://studio.youtube.com/channel/UCabcdefghijklmnopqrstuv');
   assert.equal(context.pages().length,1,'Handle lookup tab must close');await context.unrouteAll();
-  // Access denied is a concrete account/channel error, not a missing Create button.
+  // Temporarily disabled checks use the current Studio channel, without a handle lookup.
+  await context.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html',body:'<h1>У вас нет доступа к этой странице.</h1><button>Create</button>'}));
+  const normalGoto=page.goto.bind(page);let startupTimeout;
+  page.goto=(_,options)=>{startupTimeout=options.timeout;return normalGoto('https://studio.youtube.com/channel/UCwrongchannel00000000000',options);};
+  try{await B.openStudio(page,'https://www.youtube.com/@not-looked-up',()=>{});}
+  finally{page.goto=normalGoto;}
+  assert.equal(startupTimeout,0);assert.equal(context.pages().length,1);
+  await context.unrouteAll();
+  // An unlimited readiness wait survives more than a minute of elapsed clock time.
+  const realNow=Date.now;let unlimitedReads=0;
+  try{
+   Date.now=()=>realNow()+unlimitedReads*61000;
+   assert.equal(await B.waitFor(()=>++unlimitedReads>=3,0,'must not expire'),true);
+  }finally{Date.now=realNow;}
+  await assert.rejects(B.waitFor(()=>{throw Error('Target page, context or browser has been closed');},0,'must not expire'),/has been closed/);
+  // Opt-in access checks still diagnose concrete account/channel errors.
   await context.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:'<h1>У вас нет доступа к этой странице.</h1>'}));
   const deniedStart=Date.now();
-  await assert.rejects(B.openStudio(page,'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv',()=>{}),/нет доступа к каналу UCabcdefghijklmnopqrstuv/);
+  await assert.rejects(B.openStudio(page,'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv',()=>{},{verifyChannel:true}),/нет доступа к каналу UCabcdefghijklmnopqrstuv/);
   assert(Date.now()-deniedStart<5000);await context.unrouteAll();
   await context.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html',body:'<button>Create</button>'}));
   const originalGoto=page.goto.bind(page);
   page.goto=(_,options)=>originalGoto('https://studio.youtube.com/channel/UCwrongchannel00000000000',options);
-  try{await assert.rejects(B.openStudio(page,'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv',()=>{}),/ожидался UCabcdefghijklmnopqrstuv, открыт UCwrongchannel00000000000/);}
+  try{await assert.rejects(B.openStudio(page,'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv',()=>{},{verifyChannel:true}),/ожидался UCabcdefghijklmnopqrstuv, открыт UCwrongchannel00000000000/);}
   finally{page.goto=originalGoto;}
   await context.unrouteAll();
   // A delayed file input in an already open picker must not click Create behind its backdrop.
@@ -118,6 +133,11 @@ const S=require('../../tools/uploader/youtube-studio-upload');
   assert.equal(fixture.saved.get('video000001').description,'Old default','Studio description must remain untouched');
   assert(!fixture.stages.some(s=>s.stage==='metadata_description'));
   await fixture.ctx.close();
+  // Already selected Public must not be clicked again, even under a blocking overlay.
+  await page.setContent('<ytcp-uploads-dialog><input type="radio" name="PUBLIC" checked><button id="done-button">Publish</button></ytcp-uploads-dialog><div style="position:fixed;inset:0;z-index:100"></div><script>window.radioClicks=0;document.querySelector("input").onclick=()=>radioClicks++;</script>');
+  const selectedAt=Date.now();
+  await S.selectPublicRadio(page.locator('ytcp-uploads-dialog'));
+  assert(Date.now()-selectedAt<2000);assert.equal(await page.evaluate(()=>radioClicks),0);
   // A normal modal backdrop must never trigger Escape (which closes Studio).
   await page.setContent(`<style>ytcp-uploads-dialog{display:block;position:fixed;inset:40px;background:white;z-index:2}tp-yt-iron-overlay-backdrop{display:block;position:fixed;inset:0;background:#0008;z-index:1}</style><tp-yt-iron-overlay-backdrop opened class="opened"></tp-yt-iron-overlay-backdrop><ytcp-uploads-dialog><label><input type="radio" name="PUBLIC">Public</label><button id="done-button">Publish</button></ytcp-uploads-dialog><script>window.escapes=0;window.clicks=0;document.addEventListener('keydown',e=>{if(e.key==='Escape'){escapes++;document.querySelector('ytcp-uploads-dialog')?.remove();}});document.querySelector('input').onclick=()=>clicks++;</script>`);
   await S.publishPublic(page,page.locator('ytcp-uploads-dialog'));

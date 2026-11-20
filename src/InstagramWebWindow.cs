@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -12,24 +13,56 @@ namespace VideoBatch {
         readonly string profileId,upstream;
         readonly WebView2 view;
         readonly Label hint;
+        readonly Button instagramTab,threadsTab,metaTab;
+        internal const string MetaUrl="https://accountscenter.instagram.com/";
+        internal const string MobileUserAgent="Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
+        void SelectSite(string url){view.CoreWebView2?.Navigate(url);}
+        void RefreshSiteTabs(string url){
+            if(!Uri.TryCreate(url,UriKind.Absolute,out var uri))return;
+            var selected=uri.Host=="accountscenter.instagram.com"?metaTab:uri.Host.EndsWith("threads.com",StringComparison.OrdinalIgnoreCase)||uri.Host.EndsWith("threads.net",StringComparison.OrdinalIgnoreCase)?threadsTab:instagramTab;
+            foreach(var button in new[]{instagramTab,threadsTab,metaTab}){button.BackColor=button==selected?Theme.Accent:Theme.TopBar;button.ForeColor=button==selected?Color.White:Theme.TextSecondary;}
+        }
         TelegramWebProxy proxy;
-        bool closing,closed;
+        bool closing,closed,mobileReady;
+        bool? sessionPresent;
         internal static bool TrustedOrigin(string source) => Uri.TryCreate(source,UriKind.Absolute,out var u)&&u.Scheme=="https"&&u.Port==443&&(u.Host=="instagram.com"||u.Host.EndsWith(".instagram.com",StringComparison.OrdinalIgnoreCase)||u.Host=="threads.com"||u.Host.EndsWith(".threads.com",StringComparison.OrdinalIgnoreCase)||u.Host=="threads.net"||u.Host.EndsWith(".threads.net",StringComparison.OrdinalIgnoreCase));
         public InstagramWebWindow(string profileId,string name,string upstream) {
             if(!Regex.IsMatch(profileId??"",@"^\d+$"))throw new ArgumentException("Некорректный Dolphin ID");
             if(string.IsNullOrWhiteSpace(upstream))throw new ArgumentException("Профилю нужен прокси");
             this.profileId=profileId;this.upstream=upstream;
-            Text="Instagram / Threads · "+name;ClientSize=new Size(430,850);MinimumSize=new Size(390,620);StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
-            var sites=new FlowLayoutPanel{Dock=DockStyle.Top,Height=42,Padding=new Padding(5),WrapContents=false};
-            sites.Controls.Add(Theme.MakeButton("Instagram",ghost:true,action:()=>view.CoreWebView2?.Navigate("https://www.instagram.com/")));
-            sites.Controls.Add(Theme.MakeButton("Threads",ghost:true,action:()=>view.CoreWebView2?.Navigate("https://www.threads.com/")));
-            var bar=new FlowLayoutPanel{Dock=DockStyle.Top,Height=42,Padding=new Padding(5),WrapContents=false};
-            bar.Controls.Add(Theme.MakeButton("Назад",ghost:true,action:()=>{if(view.CoreWebView2?.CanGoBack==true)view.CoreWebView2.GoBack();}));
-            bar.Controls.Add(Theme.MakeButton("Обновить",ghost:true,action:()=>view.CoreWebView2?.Reload()));
-            hint=new Label{Dock=DockStyle.Bottom,Height=56,Padding=new Padding(6),Text="Подключение через прокси профиля…",ForeColor=Theme.TextSecondary};
-            view=new WebView2{Dock=DockStyle.Fill,DefaultBackgroundColor=Theme.Background};Controls.Add(view);Controls.Add(bar);Controls.Add(sites);Controls.Add(hint);
+            Text="Instagram / Threads / Meta · "+name;ClientSize=new Size(391,Math.Min(849,Screen.FromPoint(Cursor.Position).WorkingArea.Height-80));MinimumSize=new Size(390,620);StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
+            var title=new Label{Dock=DockStyle.Top,Height=48,Padding=new Padding(12,8,12,0),Text=name+" · "+profileId,Font=Theme.FontCardTitle,AutoEllipsis=true};
+            var sites=new TableLayoutPanel{Name="MetaSiteTabs",Dock=DockStyle.Top,Height=52,Padding=new Padding(8,5,8,5),ColumnCount=3,RowCount=1,BackColor=Theme.TopBar};
+            for(int i=0;i<3;i++)sites.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));
+            sites.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            instagramTab=Theme.MakeButton("Instagram",accent:true,action:()=>SelectSite("https://www.instagram.com/"));
+            threadsTab=Theme.MakeButton("Threads",ghost:true,action:()=>SelectSite("https://www.threads.com/"));
+            metaTab=Theme.MakeButton("Meta",ghost:true,action:()=>SelectSite(MetaUrl));
+            var tabs=new[]{instagramTab,threadsTab,metaTab};
+            for(int i=0;i<tabs.Length;i++){tabs[i].Name=new[]{"InstagramTab","ThreadsTab","MetaTab"}[i];tabs[i].Dock=DockStyle.Fill;tabs[i].AutoSize=false;tabs[i].MinimumSize=Size.Empty;tabs[i].Margin=new Padding(i==0?0:4,0,i==2?0:4,0);sites.Controls.Add(tabs[i],i,0);}
+            hint=new Label{Dock=DockStyle.Bottom,Height=66,Padding=new Padding(10,6,10,6),Text="Подключение через прокси профиля…",ForeColor=Theme.TextSecondary};
+            var device=new Panel{Dock=DockStyle.Fill,Padding=new Padding(8),BackColor=Theme.Card};
+            view=new WebView2{Dock=DockStyle.Fill,DefaultBackgroundColor=Theme.Background};device.Controls.Add(view);
+            Controls.Add(device);Controls.Add(sites);Controls.Add(title);Controls.Add(hint);
+            view.SizeChanged+=async(s,e)=>{if(!mobileReady||closing)return;try{await ResizeMobileViewport();}catch(Exception error){if(!closing){hint.Text="Не удалось изменить размер мобильной страницы.";AppDiagnostics.Write("Instagram",profileId,"","viewport_error",error.GetType().Name,"error");}}};
             Shown+=async(s,e)=>await Initialize();
-            FormClosing+=async(s,e)=>{if(closed)return;e.Cancel=true;if(closing)return;closing=true;view.Dispose();if(proxy!=null)await proxy.Stop();closed=true;Close();};
+            FormClosing+=async(s,e)=>{
+                if(closed)return;e.Cancel=true;if(closing)return;closing=true;
+                try{if(!view.IsDisposed&&view.CoreWebView2!=null)await ReportSession(false);}
+                catch(Exception error){AppDiagnostics.Write("Instagram",profileId,"","session_check_error",error.GetType().Name,"error");}
+                finally{view.Dispose();if(proxy!=null)await proxy.Stop();closed=true;Close();}
+            };
+        }
+        Task ResizeMobileViewport() {
+            int width=view.ClientSize.Width,height=view.ClientSize.Height;
+            if(width<=0||height<=0)return Task.CompletedTask;
+            return view.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setDeviceMetricsOverride","{\"width\":"+width+",\"height\":"+height+",\"screenWidth\":375,\"screenHeight\":667,\"deviceScaleFactor\":2,\"mobile\":true}");
+        }
+        async Task ReportSession(bool updateHint) {
+            var cookies=await view.CoreWebView2.CookieManager.GetCookiesAsync("https://www.instagram.com/");
+            bool present=cookies.Any(c=>c.Name=="sessionid"&&!string.IsNullOrEmpty(c.Value));
+            if(sessionPresent!=present){sessionPresent=present;AppDiagnostics.Write("Instagram",profileId,"","session",present?"В профиле есть cookie сессии Instagram":"В профиле нет cookie сессии Instagram");}
+            if(updateHint&&!closing)hint.Text=present?"Сессия Instagram сохранена. Профиль: "+profileId+". Threads и Meta используют этот же профиль браузера.":"Войдите вручную. Данные сайтов сохраняются отдельно в профиле "+profileId+"; закрытие окна не выполняет выход.";
         }
         async Task Initialize() {
             try{
@@ -45,17 +78,24 @@ namespace VideoBatch {
                 await view.EnsureCoreWebView2Async(env);if(closing)return;
                 var core=view.CoreWebView2;TelegramWebProxy.BindAuthentication(core,proxy.Port,proxy.Secret);
                 core.Settings.IsPasswordAutosaveEnabled=false;core.Settings.IsGeneralAutofillEnabled=false;
-                string agent=new Regex(@"\([^)]*\)").Replace(core.Settings.UserAgent,"(Linux; Android 13)",1);
-                agent=Regex.Replace(agent,@"\s+Edg(?:e|A)?/[\d.]+","");
-                core.Settings.UserAgent=agent.Replace(" Safari/"," Mobile Safari/");
-                await core.CallDevToolsProtocolMethodAsync("Emulation.setDeviceMetricsOverride","{\"width\":390,\"height\":844,\"deviceScaleFactor\":1,\"mobile\":true}");
+                core.Settings.UserAgent=MobileUserAgent;
+                await core.CallDevToolsProtocolMethodAsync("Emulation.setUserAgentOverride",new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new{userAgent=MobileUserAgent,platform="iPhone"}));
+                await ResizeMobileViewport();
                 await core.CallDevToolsProtocolMethodAsync("Emulation.setTouchEmulationEnabled","{\"enabled\":true,\"maxTouchPoints\":5}");
-                core.NavigationStarting+=(s,e)=>{if(!TrustedOrigin(e.Uri)){e.Cancel=true;hint.Text="В этом окне открываются только Instagram и Threads.";}};
+                mobileReady=true;
+                core.NavigationStarting+=(s,e)=>{if(!TrustedOrigin(e.Uri)){e.Cancel=true;hint.Text="В этом окне открываются Instagram, Threads и Центр аккаунтов Meta.";}};
+                core.SourceChanged+=(s,e)=>RefreshSiteTabs(core.Source);
                 core.NewWindowRequested+=(s,e)=>{e.Handled=true;if(TrustedOrigin(e.Uri))core.Navigate(e.Uri);};
                 core.ServerCertificateErrorDetected+=(s,e)=>{e.Action=CoreWebView2ServerCertificateErrorAction.Cancel;hint.Text="Ошибка сертификата. Соединение отклонено.";};
-                core.NavigationCompleted+=(s,e)=>{hint.Text=e.IsSuccess?"Instagram / Threads. Войдите вручную; для Threads используйте вход через Instagram. Обе сессии сохраняются в этом профиле.":"Страница не загрузилась: "+e.WebErrorStatus;AppDiagnostics.Write("Instagram",profileId,"","navigation",e.IsSuccess?"Страница загружена":e.WebErrorStatus.ToString(),e.IsSuccess?"info":"error");};
+                core.NavigationCompleted+=async(s,e)=>{
+                    if(closing)return;
+                    hint.Text=e.IsSuccess?"Страница загружена. Проверяю сохранённую сессию…":"Страница не загрузилась: "+e.WebErrorStatus;
+                    AppDiagnostics.Write("Instagram",profileId,"","navigation",e.IsSuccess?"Страница загружена":e.WebErrorStatus.ToString(),e.IsSuccess?"info":"error");
+                    if(e.IsSuccess)try{await ReportSession(true);}catch(Exception error){if(!closing)hint.Text="Не удалось проверить сохранённую сессию.";AppDiagnostics.Write("Instagram",profileId,"","session_check_error",error.GetType().Name,"error");}
+                };
+                await ReportSession(true);
                 core.Navigate("https://www.instagram.com/");
-            }catch(Exception e){if(closing)return;hint.Text=e is InvalidOperationException||e is IOException?e.Message:"Не удалось открыть Instagram: "+e.GetType().Name;AppDiagnostics.Write("Instagram",profileId,"","web_error",e.GetType().Name,"error");view.Dispose();if(proxy!=null)await proxy.Stop();}
+            }catch(Exception e){if(closing)return;hint.Text=e is InvalidOperationException||e is IOException?e.Message:"Не удалось открыть Instagram: "+e.GetType().Name;AppDiagnostics.Write("Instagram",profileId,"","web_error",e.GetType().Name+" · HRESULT 0x"+e.HResult.ToString("X8"),"error");view.Dispose();if(proxy!=null)await proxy.Stop();}
         }
     }
 }

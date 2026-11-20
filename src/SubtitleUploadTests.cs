@@ -87,6 +87,7 @@ namespace VideoBatch {
             var random = new Random(42); var combinations = new HashSet<string>();
             for (int i = 0; i < 100; i++) {
                 var style = SubtitleRandomSettings.ForVideo(source, random); var o = source.RandomStyle;
+                Check(style.TextThickness >= o.ThicknessMin && style.TextThickness <= o.ThicknessMax && style.PlatePaddingX >= o.PaddingXMin && style.PlatePaddingX <= o.PaddingXMax && style.PlatePaddingY >= o.PaddingYMin && style.PlatePaddingY <= o.PaddingYMax, "random thickness and padding ranges");
                 Check(style.FontSize >= o.SizeMin && style.FontSize <= o.SizeMax && style.Position >= o.PositionMin && style.Position <= o.PositionMax, "random size and position ranges");
                 Check(style.WordsPerCaption >= o.WordsMin && style.WordsPerCaption <= o.WordsMax && style.OutlineWidth >= o.OutlineMin && style.OutlineWidth <= o.OutlineMax && style.Opacity >= o.OpacityMin && style.Opacity <= o.OpacityMax, "random caption ranges");
                 Check(o.Fonts.Contains(style.FontFamily) && o.Colors.Contains(style.TextColor) && o.Motions.Contains(style.Motion) && o.Plates.Contains(style.Plate) && o.Highlights.Contains(style.Highlight), "random allowed choices");
@@ -94,9 +95,25 @@ namespace VideoBatch {
                 combinations.Add(style.FontFamily + style.FontSize + style.Position + style.Motion);
             }
             Check(combinations.Count > 90, "per-video variation");
+            var geometry = new WarmupSubtitleStyle { Plate = "solid", PlatePaddingX = 0, PlatePaddingY = 0, OutlineWidth = 0, TextThickness = 0 };
+            var plain = WarmupSubtitles.PlateRect("Твой стиль", geometry, 1080, 1920);
+            geometry.PlatePaddingX = 40; geometry.PlatePaddingY = 25;
+            var padded = WarmupSubtitles.PlateRect("Твой стиль", geometry, 1080, 1920);
+            Check(Math.Abs(padded.Width - plain.Width - 80) < .1 && Math.Abs(padded.Height - plain.Height - 50) < .1 && Math.Abs(padded.X + padded.Width / 2 - plain.X - plain.Width / 2) < .1 && Math.Abs(padded.Y + padded.Height / 2 - plain.Y - plain.Height / 2) < .1, "plate padding expands symmetrically around centered text");
+            geometry.Plate = "none"; geometry.TextColor = "#FFFFFF";
+            using (var thin = WarmupSubtitles.Paint("Твой стиль", geometry, 1080, 1920)) {
+                geometry.TextThickness = 4;
+                using (var thick = WarmupSubtitles.Paint("Твой стиль", geometry, 1080, 1920)) {
+                    int a = 0, b = 0;
+                    for (int y = 1250; y < 1500; y++) for (int x = 100; x < 980; x++) { if (thin.GetPixel(x, y).R > 200) a++; if (thick.GetPixel(x, y).R > 200) b++; }
+                    Check(b > a, "thickness increases actual rasterized letter area");
+                }
+            }
+            source.TextThickness = 3; source.PlatePaddingX = 40; source.PlatePaddingY = 25;
             var serializer = new XmlSerializer(typeof(WarmupSubtitleStyle)); var xml = new StringWriter(); serializer.Serialize(xml, source);
             var restored = (WarmupSubtitleStyle)serializer.Deserialize(new StringReader(xml.ToString()));
             Check(restored.RandomStyle.Enabled && restored.RandomStyle.Fonts.SequenceEqual(source.RandomStyle.Fonts) && restored.RandomStyle.PositionMax == 80, "random XML roundtrip");
+            Check(restored.TextThickness == 3 && restored.PlatePaddingX == 40 && restored.PlatePaddingY == 25 && restored.RandomStyle.PaddingXMax == source.RandomStyle.PaddingXMax, "thickness and padding XML roundtrip");
             var copy = source.Copy(); copy.RandomStyle.Fonts[0] = "Impact"; Check(source.RandomStyle.Fonts[0] == "Segoe UI", "random settings deep copy");
             source.RandomStyle.SizeMin = source.RandomStyle.SizeMax = 61; source.RandomStyle.Fonts = new[] { "Impact" }; source.RandomStyle.Motions = new[] { "fade" };
             var t = new AssemblyTemplate { SubtitleStyle = source }; var item = t.WithVideoSubtitleStyle(random);
@@ -177,6 +194,17 @@ namespace VideoBatch {
                 using (var dialog = new SubtitleStyleDialog(new WarmupSubtitleStyle())) {
                     dialog.Show(); Application.DoEvents();
                     ((Button)All(dialog).First(c => c is Button && c.Text == "Настройки")).PerformClick();
+                    ((TrackBar)All(dialog).First(c => c.Name == "SubtitleTextThicknessSlider")).Value = 4;
+                    Check(dialog.Style.TextThickness == 4, "thickness slider updates style");
+                    ((NumericUpDown)All(dialog).First(c => c.Name == "SubtitleTextThickness")).Value = 2;
+                    Check(((TrackBar)All(dialog).First(c => c.Name == "SubtitleTextThicknessSlider")).Value == 2, "manual number updates slider");
+                    ((TrackBar)All(dialog).First(c => c.Name == "SubtitlePlatePaddingXSlider")).Value = 40;
+                    ((NumericUpDown)All(dialog).First(c => c.Name == "SubtitlePlatePaddingY")).Value = 25;
+                    Check(dialog.Style.PlatePaddingX == 40 && dialog.Style.PlatePaddingY == 25, "padding controls update style");
+                    Check(All(dialog).OfType<NumericUpDown>().All(n => n.Parent.Controls.OfType<TrackBar>().Any()), "all numeric subtitle controls have sliders");
+                    ((TrackBar)All(dialog).First(c => c.Name == "SubtitleRandomThicknessMinSlider")).Value = 2;
+                    ((NumericUpDown)All(dialog).First(c => c.Name == "SubtitleRandomPaddingXMax")).Value = 50;
+                    Check(dialog.Style.RandomStyle.ThicknessMin == 2 && dialog.Style.RandomStyle.PaddingXMax == 50, "random thickness and padding sliders");
                     ((CheckBox)All(dialog).First(c => c.Name == "SubtitleRandomEnabled")).Checked = true;
                     ((NumericUpDown)All(dialog).First(c => c.Name == "SubtitleRandomSizeMin")).Value = 58;
                     ((NumericUpDown)All(dialog).First(c => c.Name == "SubtitleRandomSizeMax")).Value = 66;

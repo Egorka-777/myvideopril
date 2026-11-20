@@ -8,13 +8,15 @@ using System.Threading.Tasks;
 namespace VideoBatch {
     public static class AssemblyEngine {
         // The inputs here are fully composited scene clips, so every image moves with its video.
-        public static string TransitionFilter(string key) {
+        public static string TransitionFilter(string key, bool transparentOutgoing = false) {
             if (key == "swipe") return "transition=smoothleft";
             if (key != "zoomsoft" && key != "zoomout" && key != "pull") return "transition=" + key;
             string progress="(1-P)", outgoing, incoming;
             if (key == "zoomout") { outgoing="(1-.22*"+progress+"*"+progress+")"; incoming="(1+.22*P*P)"; }
             else { string strength=key=="pull" ? "1.4" : ".28"; outgoing="(1+"+strength+"*"+progress+"*"+progress+")"; incoming="(1+"+strength+"*P*P)"; }
             string a=Sample("a",outgoing), b=Sample("b",incoming), weight="(P*P*(3-2*P))";
+            // Overlay entrances start from transparent black: sampling that input is always zero.
+            if (transparentOutgoing) return "transition=custom:expr='"+b+"*(1-"+weight+")'";
             return "transition=custom:expr='"+a+"*"+weight+"+"+b+"*(1-"+weight+")'";
         }
         static string Sample(string source,string scale) {
@@ -177,7 +179,7 @@ namespace VideoBatch {
                                 destination = VideoBatchOutputPaths.NamedOutput(t.Output,chosenTitle,"mp4");
                                 var metadata=await AssemblyOutputTags.Apply(ffmpeg,ffprobe,partial,chosenTitle,t.OutputMetadata,random,ct).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
-                                if (AssemblySpeechPlan.SubtitlesEnabled(t))
+                                if (t.ExportSubtitleText)
                                     await AssemblySpeechPlan.EnsureTranscript(t,plan,partial,ffmpeg,itemWork,ct,
                                         message => progress.Report(new Update("Ролик " + (global + 1) + " · " + message, 100.0 * global / targetCount))).ConfigureAwait(false);
                                 AssemblyHistoryRecord reservation=null; bool published=false;
@@ -188,7 +190,7 @@ namespace VideoBatch {
                                     File.WriteAllLines(AssemblyOutputFiles.Report(destination,".metadata.txt"),metadata,System.Text.Encoding.UTF8);
                                     reservation=AssemblyHistoryStore.Reserve(historyFolder,history,plan,destination,t.Id,partial,historyScope);
                                     ct.ThrowIfCancellationRequested();
-                                    if (AssemblySpeechPlan.SubtitlesEnabled(t))
+                                    if (t.ExportSubtitleText)
                                         AssemblySpeechPlan.SaveTranscript(destination,plan,AssemblyTimeline.MainStart(t,plan));
                                     File.Move(partial,destination); published=true; result.Outputs.Add(destination);
                                     AssemblyOutputFiles.DeleteLegacySidecars(destination);

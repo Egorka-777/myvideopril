@@ -79,9 +79,13 @@ class Login(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(TimeoutError):await w.web_login(dict(accounts=[dict(id='a')],refresh_token=True))
         self.assertEqual(len(client.calls),1);self.assertEqual(len(requests),1);self.assertFalse(client.connected)
 
-    async def test_wait_for_qr_is_cancellable_and_bounded(self):
+    async def test_wait_for_qr_has_no_deadline_and_is_cancellable(self):
         with patch.object(w,'emit'):
-            with self.assertRaisesRegex(ValueError,'QR'):await w.fresh_login_token(dict(id='a'),1,.01)
+            task=asyncio.create_task(w.fresh_login_token(dict(id='a'),1))
+            await asyncio.sleep(.02)
+            self.assertFalse(task.done())
+            w.LOGIN_TOKENS.put_nowait('a'*32)
+            self.assertEqual(await asyncio.wait_for(task,.5),'a'*32)
             task=asyncio.create_task(w.fresh_login_token(dict(id='a'),1))
             await asyncio.sleep(.01);w.CANCEL.set()
             with self.assertRaises(w.StopJob):await asyncio.wait_for(task,.5)

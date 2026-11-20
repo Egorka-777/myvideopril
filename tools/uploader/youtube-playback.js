@@ -143,20 +143,34 @@ async function likeCurrentVideo(page, report, opts) {
     page.locator("button[aria-label*='like this video' i]").first(),
     page.locator("button[aria-label^='Нравится' i]").first(),
     page.locator("button[aria-label*='Нравится' i]:not([aria-label*='Не нравится' i])").first(),
-    page.locator("ytd-toggle-button-renderer#like-button button, #like-button button").first()
+    page.locator("ytd-toggle-button-renderer#like-button button, #like-button button").first(),
+    page.locator("#actions button[aria-label*='Нравится' i]:not([aria-label*='Не нравится' i]), #actions-inner button[aria-label*='Нравится' i]:not([aria-label*='Не нравится' i]), #actions button[aria-label*='like this video' i]:not([aria-label*='dislike' i])")
   ];
 
   let clicked = false;
-  for (const btn of candidates) {
-    if (!(await visible(btn, 1200))) continue;
-    const label = ((await btn.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
-    if (/dislike|не нрав/.test(label) && !/^нрав|^like/.test(label)) continue;
-    await btn.scrollIntoViewIfNeeded().catch(() => {});
-    if (soft) await safety.skipAdDuringWarmup(page, report);
-    else await safety.assertNoAds(page);
-    await btn.click({ timeout: 5000 });
-    clicked = true;
-    break;
+  let disabled = false;
+  for (const candidate of candidates) {
+    for (let i = 0; i < await candidate.count(); i++) {
+      const btn = candidate.nth(i);
+      if (!(await visible(btn, 1200))) continue;
+      const label = ((await btn.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
+      if (/dislike|не нрав/.test(label) && !/^нрав|^like/.test(label)) continue;
+      if (!(await btn.isEnabled())) { disabled = true; continue; }
+      await btn.scrollIntoViewIfNeeded().catch(() => {});
+      if (soft) await safety.skipAdDuringWarmup(page, report);
+      else await safety.assertNoAds(page);
+      await btn.click({ timeout: 5000 });
+      clicked = true;
+      break;
+    }
+    if (clicked) break;
+  }
+
+  if (!clicked && disabled) {
+    const message = "YouTube отключил кнопку «Нравится» (disabled/aria-disabled). Проверьте аккаунт и ограничения в открытом профиле.";
+    if (!soft) throw new Error(message);
+    report("youtube", message);
+    return;
   }
 
   if (!clicked && soft) {
@@ -263,7 +277,7 @@ async function waitForVideoEnd(page, opts, report) {
       continue;
     }
     const curRaw = Number(state.current) || 0;
-    const dur = state.duration > 1 ? state.duration : duration;
+    const dur = Number.isFinite(state.duration) && state.duration > 1 ? state.duration : duration;
 
     if (!likePlaced && curRaw >= likeAtSec) {
       await assertStillOnVideo(page, expectedVideoId);

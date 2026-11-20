@@ -43,6 +43,17 @@ class WebRoutes(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConnectionError):await bridge.connect('web.telegram.org')
         self.assertEqual(len(calls),1)
 
+    def test_tiktok_allowlist_is_service_specific(self):
+        for host in ('www.tiktok.com','m.tiktok.com','sf16.tiktokcdn.com','lf16-tiktok-web.ttwstatic.com'):
+            self.assertTrue(allowed_host(host,'tiktok'))
+            self.assertFalse(allowed_host(host,'instagram'))
+            self.assertFalse(allowed_host(host,'telegram'))
+            self.assertEqual(route_hosts(host,'tiktok'),[host])
+            self.assertEqual(safe_host(host,'tiktok'),host)
+        for host in ('tiktok.com.evil.test','eviltiktok.com','127.0.0.1','instagram.com','web.telegram.org','user:secret@tiktok.com'):
+            self.assertFalse(allowed_host(host,'tiktok'))
+            self.assertEqual(safe_host(host,'tiktok'),'other.tiktok.com')
+
     def test_instagram_allowlist_is_service_specific(self):
         for domain in ('instagram.com','threads.com','threads.net','cdninstagram.com','fbcdn.net'):
             for host in (domain,'www.'+domain,'a.b.'+domain,('WWW.'+domain).upper()+'.'):

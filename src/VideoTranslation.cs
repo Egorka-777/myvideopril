@@ -21,6 +21,7 @@ namespace VideoBatch {
         public double Start, End;
         public string Original = "", Text = "", TargetLanguage = "ru";
         public string TranslationKey = "", AudioKey = "", AudioPath = "";
+        public string DurationShorteningKey = ""; // Completed bounded shortening attempt for this speech key, including resume.
     }
     public sealed class VideoTranslationProject {
         public int Version = 1;
@@ -94,10 +95,10 @@ namespace VideoBatch {
             return await Task.Run(async () => {
                 source = Path.GetFullPath(source); projectDirectory = Path.GetFullPath(projectDirectory);
                 string hash = FileHash(source), existing = Path.Combine(projectDirectory, ProjectFileName);
+                VideoTranslationProject saved = null;
                 if (File.Exists(existing)) {
-                    var saved = Load(existing);
+                    saved = Load(existing);
                     if (saved.SourceHash != hash) throw new Exception("Эта папка принадлежит другому исходнику. Выберите отдельную папку проекта.");
-                    saved.Source = source; Save(saved); progress?.Invoke("Использую сохранённый проект перевода."); return saved;
                 }
                 var media = Core.VideoInfo(await Core.Probe(probe, source, ct).ConfigureAwait(false));
                 if (!media.HasAudio) throw new Exception("В исходном видео нет звуковой дорожки для распознавания.");
@@ -114,8 +115,28 @@ namespace VideoBatch {
                         last.End = cue.End; last.Original += " " + cue.Text;
                     } else p.Segments.Add(new VideoTranslationSegment { Id = ++id, Start = cue.Start, End = cue.End, Original = cue.Text });
                 }
+                RestoreRecognizedTranslations(p, saved);
                 p.TimelineHash = Timeline(p); Save(p); return p;
             }, ct).ConfigureAwait(false);
+        }
+        internal static void RestoreRecognizedTranslations(VideoTranslationProject project, VideoTranslationProject saved) {
+            if (saved == null) return;
+            project.Options = Copy(saved.Options);
+            project.BatchSources = saved.BatchSources.ToList();
+            foreach (var segment in project.Segments) {
+                // Match unchanged utterances, not row numbers: recognition may recover missing speech.
+                var previous = saved.Segments.FirstOrDefault(s => s.Original == segment.Original && s.Start == segment.Start && s.End == segment.End);
+                if (previous == null) {
+                    var matches = saved.Segments.Where(s => s.Original == segment.Original).ToList();
+                    if (matches.Count != 1 || project.Segments.Count(s => s.Original == segment.Original) != 1) continue;
+                    previous = matches[0];
+                }
+                segment.Text = previous.Text; segment.TargetLanguage = previous.TargetLanguage;
+                segment.AudioKey = previous.AudioKey; segment.AudioPath = previous.AudioPath;
+                if (previous.Start == segment.Start && previous.End == segment.End) segment.DurationShorteningKey = previous.DurationShorteningKey;
+                if (previous.TranslationKey == TranslationKey(previous, project.Options))
+                    segment.TranslationKey = TranslationKey(segment, project.Options);
+            }
         }
         internal static string TranslationKey(VideoTranslationSegment s, VideoTranslationOptions o) => Digest(Json().Serialize(new { s.Original, s.Start, s.End, o.Style, o.Profanity, o.Instructions, o.GeminiModel, o.TargetLanguage }));
         public static async Task TranslateAsync(VideoTranslationProject p, VideoTranslationOptions options, string geminiKey, CancellationToken ct, Action<string> progress, string proxyUrl = "") {
@@ -148,12 +169,17 @@ namespace VideoBatch {
             string name = Path.GetFileNameWithoutExtension(source);
             return (name.Length > 48 ? name.Substring(0, 48) : name) + "-" + created.ToString("yyyyMMdd-HHmmss");
         }
-        public static async Task RenderAsync(VideoTranslationProject p, VideoTranslationOptions options, string elevenKey, string proxy, string ffmpeg, string ffprobe, CancellationToken ct, Action<string> progress) {
+        public static async Task RenderAsync(VideoTranslationProject p, VideoTranslationOptions options, string elevenKey, string proxy, string ffmpeg, string ffprobe, CancellationToken ct, Action<string> progress, string geminiKey = "") {
+            Func<VideoTranslationSegment, double, Task<string>> shorten = null;
+            if (!string.IsNullOrWhiteSpace(geminiKey)) shorten = async (segment, seconds) => {
+                using (var client = new GeminiTranslationClient(geminiKey, proxyUrl: proxy))
+                    return await client.ShortenAsync(segment, options, seconds, ct).ConfigureAwait(false);
+            };
             await RenderCore(p, options, ffmpeg, ffprobe, ct, progress, async text => {
                 using (var client = new ElevenLabsClient(elevenKey, proxy)) return await client.GenerateAsync(text, options.VoiceId, null, true, ct, SpeechModel(options.TargetLanguage), options.TargetLanguage == "bn" ? "bn" : null).ConfigureAwait(false);
-            }).ConfigureAwait(false);
+            }, shorten).ConfigureAwait(false);
         }
-        internal static async Task RenderCore(VideoTranslationProject p, VideoTranslationOptions options, string ffmpeg, string ffprobe, CancellationToken ct, Action<string> progress, Func<string, Task<ElevenLabsSpeech>> generate) {
+        internal static async Task RenderCore(VideoTranslationProject p, VideoTranslationOptions options, string ffmpeg, string ffprobe, CancellationToken ct, Action<string> progress, Func<string, Task<ElevenLabsSpeech>> generate, Func<VideoTranslationSegment, double, Task<string>> shorten = null) {
             Validate(p); ValidateOptions(options); ct.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(options.VoiceId)) throw new Exception("Выберите голос ElevenLabs.");
             if (p.Segments.Any(s => string.IsNullOrWhiteSpace(s.Text))) throw new Exception("Сначала переведите все реплики или заполните перевод вручную.");
@@ -164,17 +190,22 @@ namespace VideoBatch {
             p.Options = Copy(options); Save(p);
             string audioFolder = Path.Combine(p.Directory, "speech"), work = Path.Combine(p.Directory, "render");
             System.IO.Directory.CreateDirectory(audioFolder); System.IO.Directory.CreateDirectory(work);
-            progress?.Invoke("Исходный звук будет полностью удалён, включая музыку и эффекты. Разделение дорожек не выполняется.");
+            progress?.Invoke("Исходный звук сохраняется; во время переводных реплик его громкость снижается до 15%.");
             string timeline = Path.Combine(work, "timeline.wav");
             var captions = new List<WarmupCaption>();
+            var speechWindows = new List<Tuple<double,double>>();
             using (var wav = new FileStream(timeline, FileMode.Create, FileAccess.ReadWrite)) {
                 long total = Samples(p.Duration); WriteWavHeader(wav, total);
                 // Zero-filled fixed timeline; speech is written only inside its immutable window.
                 wav.SetLength(44 + total * 2);
                 foreach (var s in p.Segments) {
                     ct.ThrowIfCancellationRequested(); progress?.Invoke("Озвучка реплики " + s.Id + " / " + p.Segments.Count);
+                    string pcm = Path.Combine(work, "segment.pcm");
+                    ElevenLabsSpeech speech = null;
+                    long rawLength = 0, trimStart = 0, trimEnd = 0, length = 0, first = Samples(s.Start), window = Samples(s.End) - first;
+                    // At most the original synthesis and one replacement. Never shorten in a loop.
+                    for (int attempt = 0; attempt < 2; attempt++) {
                     string key = SpeechKey(s.Text, options.VoiceId, options.TargetLanguage), audio = SpeechAudioPath(audioFolder, key), receipt = audio + ".speech.json";
-                    ElevenLabsSpeech speech;
                     if (File.Exists(audio)) {
                         if (!File.Exists(receipt)) throw new Exception("Озвучка реплики " + s.Id + " сохранена, но нет метаданных: " + receipt + ". Автоматическая платная перегенерация запрещена.");
                         var saved = Json().Deserialize<SpeechReceipt>(File.ReadAllText(receipt));
@@ -188,25 +219,49 @@ namespace VideoBatch {
                     }
                     s.AudioKey = key; s.AudioPath = audio; Save(p);
                     AssemblySpeechPlan.SaveTiming(audio, s.Text, speech.SubtitleAlignment);
-                    string pcm = Path.Combine(work, "segment.pcm");
                     await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-i", audio, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", pcm }, ct, null, 300).ConfigureAwait(false);
-                    long length = new FileInfo(pcm).Length / 2, first = Samples(s.Start), window = Samples(s.End) - first;
+                    rawLength = new FileInfo(pcm).Length / 2;
+                    var bounds = SpeechBounds(pcm, speech.SubtitleAlignment);
+                    trimStart = bounds.Item1; trimEnd = bounds.Item2; length = trimEnd - trimStart;
+                    progress?.Invoke("Реплика " + s.Id + ": речь " + Core.N((double)length / Rate) + " с; убраны паузы " + Core.N((double)trimStart / Rate) + " / " + Core.N((double)(rawLength - trimEnd) / Rate) + " с.");
+                    if (length > window && attempt == 0 && shorten != null && s.DurationShorteningKey != key) {
+                        progress?.Invoke("Реплика " + s.Id + ": один запрос сокращения перевода под измеренную длительность речи.");
+                        string text = await shorten(s, (double)length / Rate).ConfigureAwait(false);
+                        ct.ThrowIfCancellationRequested();
+                        if (string.IsNullOrWhiteSpace(text)) throw new Exception("Gemini вернул пустое сокращение реплики " + s.Id + ".");
+                        text = text.Trim();
+                        bool validTranslation = s.TranslationKey == TranslationKey(s, options);
+                        bool changed = text != s.Text;
+                        s.Text = text;
+                        if (validTranslation) s.TranslationKey = TranslationKey(s, options);
+                        s.DurationShorteningKey = SpeechKey(s.Text, options.VoiceId, options.TargetLanguage);
+                        Save(p); // Persist the accepted text before another paid synthesis or render can fail.
+                        if (changed) continue;
+                        progress?.Invoke("Сокращение не изменило текст; сохранённая озвучка используется без повторного синтеза.");
+                    }
+                    break;
+                    }
                     double timingScale = 1;
                     if (length > window) {
                         double tempo = (double)length / window;
                         timingScale = 1 / tempo;
-                        progress?.Invoke("Подгоняю реплику " + s.Id + " в исходное окно: темп ×" + Core.N(tempo) + ". Следующие таймкоды не меняются.");
-                        string filter = string.Join(",", ProcessingEngine.TempoFilters(tempo)) + ",apad,atrim=end_sample=" + window;
-                        await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-i", audio, "-vn", "-ac", "1", "-ar", "48000", "-af", filter, "-f", "s16le", pcm }, ct, null, 300).ConfigureAwait(false);
+                        progress?.Invoke((shorten != null ? "Оставшееся превышение после единственной попытки сокращения. " : "") + "Подгоняю реплику " + s.Id + " в исходное окно: темп ×" + Core.N(tempo) + ". Следующие таймкоды не меняются; естественный темп не гарантируется.");
+                        string fitted = Path.Combine(work, "fitted.pcm");
+                        string filter = "atrim=start_sample=" + trimStart + ":end_sample=" + trimEnd + ",asetpts=PTS-STARTPTS," + string.Join(",", ProcessingEngine.TempoFilters(tempo)) + ",apad,atrim=end_sample=" + window;
+                        await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-f", "s16le", "-ac", "1", "-ar", "48000", "-i", pcm, "-af", filter, "-f", "s16le", fitted }, ct, null, 300).ConfigureAwait(false);
+                        File.Delete(pcm); File.Move(fitted, pcm);
                         length = new FileInfo(pcm).Length / 2;
+                    } else {
+                        TrimPcm(pcm, trimStart, length);
                     }
                     EnsureFits(s, length, window);
+                    speechWindows.Add(Tuple.Create(s.Start, s.Start + (double)length / Rate));
                     wav.Position = 44 + first * 2;
                     using (var input = File.OpenRead(pcm)) await input.CopyToAsync(wav, 81920, ct).ConfigureAwait(false);
                     File.Delete(pcm);
                     // Full editable speech text, no provider-normalized spelling substitution in SRT or burn-in.
                     captions.Add(new WarmupCaption { Start = s.Start, End = s.End, Text = s.Text,
-                        Words = SpeechWords(s, speech.SubtitleAlignment, (double)length / Rate, timingScale) });
+                        Words = SpeechWords(s, speech.SubtitleAlignment, (double)rawLength / Rate, timingScale, (double)trimStart / Rate, (double)length / Rate) });
                 }
             }
             string srt = Path.Combine(p.Directory, "translation.srt"); File.WriteAllText(srt, Srt(p.Segments), new UTF8Encoding(true));
@@ -214,10 +269,14 @@ namespace VideoBatch {
             media.Duration = p.Duration;
             string partial = Path.Combine(work, "translated.partial.mp4"), processed = Path.Combine(work, "processed.mp4");
             try {
-                // Reuse all existing processing filters with a replacement narration, never original audio.
+                // Mix on the immutable source timeline before applying shared output effects.
+                string mixed = Path.Combine(work, "mixed.wav");
+                string mixGraph = "[0:" + media.AudioIndex + "]asetpts=PTS-STARTPTS," + DuckFilter(speechWindows) + "[original];"
+                    + "[1:a:0]asetpts=PTS-STARTPTS[translation];[original][translation]amix=inputs=2:duration=longest:normalize=0,atrim=duration=" + Core.N(p.Duration) + "[mixed]";
+                await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-i", p.Source, "-i", timeline, "-filter_complex", mixGraph, "-map", "[mixed]", "-c:a", "pcm_s16le", mixed }, ct, null, 300).ConfigureAwait(false);
                 var profile = new Profile { Processing = new ProcessingSample() };
                 ProcessingEngine.Apply(profile, processing, media, new Random(17), DateTime.Now);
-                var args = ProcessingEngine.Arguments(p.Source, processed, profile, media, timeline);
+                var args = ProcessingEngine.Arguments(p.Source, processed, profile, media, mixed);
                 await ProcessingEngine.Accelerate(ffmpeg,args,media.Width,media.Height,ct,progress).ConfigureAwait(false);
                 if (File.Exists(processed)) File.Delete(processed);
                 progress?.Invoke("Собираю перевод на исходном таймлайне…");
@@ -241,16 +300,72 @@ namespace VideoBatch {
                 p.Output = output; Save(p); progress?.Invoke("Готово: " + output);
             } finally { if (File.Exists(partial)) File.Delete(partial); if (File.Exists(processed)) File.Delete(processed); }
         }
-        static List<SubtitleWord> SpeechWords(VideoTranslationSegment s, WarmupAlignment alignment, double duration, double timingScale) {
-            var cues = WarmupSubtitles.Cues(alignment, duration / timingScale, 6);
+        internal static List<SubtitleWord> SpeechWords(VideoTranslationSegment s, WarmupAlignment alignment, double rawDuration, double timingScale, double trimOffset, double renderedDuration) {
+            var cues = WarmupSubtitles.Cues(alignment, rawDuration, 6);
             var words = cues.SelectMany(c => c.Words).ToList();
-            foreach (var word in words) { word.Start = s.Start + word.Start * timingScale; word.End = Math.Min(s.End, s.Start + word.End * timingScale); }
+            double end = Math.Min(s.End, s.Start + renderedDuration);
+            foreach (var word in words) {
+                word.Start = Math.Min(end, s.Start + Math.Max(0, word.Start - trimOffset) * timingScale);
+                word.End = Math.Min(end, s.Start + Math.Max(0, word.End - trimOffset) * timingScale);
+            }
             // Providers normalize punctuation/spacing. Keep their word timings when
             // the word count matches, while displaying the user's exact words.
             var text = s.Text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
             if (words.Count != text.Length) return null;
             for (int i = 0; i < words.Count; i++) words[i].Text = text[i];
             return words;
+        }
+        internal static Tuple<long, long> SpeechBounds(string pcm, WarmupAlignment alignment) {
+            long length = new FileInfo(pcm).Length / 2;
+            // ElevenLabs /with-timestamps uses parallel character/start/end arrays in seconds
+            // relative to the ORIGINAL MP3. Real receipts include leading/trailing whitespace
+            // in normalized_alignment; whitespace is not spoken and must not define the cut.
+            WarmupSubtitles.Cues(alignment, (double)length / Rate, 6); // Validate the existing provider schema.
+            var spoken = Enumerable.Range(0, alignment.characters.Length).Where(i => !string.IsNullOrWhiteSpace(alignment.characters[i])).ToArray();
+            long start = Math.Min(length, Samples(alignment.character_start_times_seconds[spoken.First()]));
+            long end = Math.Min(length, Samples(spoken.Max(i => alignment.character_end_times_seconds[i])));
+            // Alignment is not a phoneme-accurate edit point. Keep any acoustic content
+            // outside it (including quiet consonants); only discard near-digital silence
+            // inside it. No fixed pre-roll that would delay every source onset.
+            long first = length, last = -1;
+            using (var reader = new BinaryReader(File.OpenRead(pcm))) {
+                for (long i = 0; i < length; i++) {
+                    int value = Math.Abs((int)reader.ReadInt16());
+                    if (value > 1) { if (first == length) first = i; last = i; }
+                }
+            }
+            if (last < first) throw new Exception("В озвучке нет слышимой речи.");
+            start = Math.Min(start, first); end = Math.Max(end, last + 1);
+            // Inside the aligned bounds preserve even one-LSB content: only digital zero
+            // is demonstrably silence. This also handles providers whose first letter starts at 0.
+            using (var reader = new BinaryReader(File.OpenRead(pcm))) {
+                while (start < end) { reader.BaseStream.Position = start * 2; if (reader.ReadInt16() != 0) break; start++; }
+                while (end > start) { reader.BaseStream.Position = (end - 1) * 2; if (reader.ReadInt16() != 0) break; end--; }
+            }
+            return Tuple.Create(start, end);
+        }
+        static void TrimPcm(string path, long start, long length) {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite)) {
+                var buffer = new byte[81920]; long copied = 0;
+                while (copied < length * 2) {
+                    stream.Position = start * 2 + copied;
+                    int count = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, length * 2 - copied));
+                    if (count == 0) throw new EndOfStreamException("Оборвана PCM-озвучка.");
+                    stream.Position = copied; stream.Write(buffer, 0, count); copied += count;
+                }
+                stream.SetLength(length * 2);
+            }
+        }
+        internal static string DuckFilter(IEnumerable<Tuple<double, double>> windows) {
+            // Sample-evaluated local 50 ms attack/release; overlapping ramps take the
+            // quieter gain, never multiply ducking or change another utterance's onset.
+            string gain = "1";
+            foreach (var w in windows) {
+                string start = Core.N(w.Item1), end = Core.N(w.Item2);
+                string local = "1-0.85*max(0,min(1,min((t-(" + start + "-0.05))/0.05,(" + end + "+0.05-t)/0.05)))";
+                gain = "min(" + gain + "," + local + ")";
+            }
+            return "aeval=exprs='val(ch)*(" + gain + ")':c=same";
         }
         internal static void EnsureFits(VideoTranslationSegment s, long samples, long window) {
             if (samples > window) throw new Exception("Реплика " + s.Id + ": озвучка " + Core.N((double)samples / Rate) + " с не помещается в исходное окно " + Core.N((double)window / Rate) + " с. Сократите перевод этой реплики. Озвучка сохранена; следующие реплики не сдвинуты.");

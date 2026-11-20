@@ -20,6 +20,7 @@ namespace VideoBatch {
         public int OutlineWidth;
         public int LineSpacing = 100; // Percentage of the font's natural line height.
         public bool Bold = true;
+        public int TextThickness = 0, PlatePaddingX = 22, PlatePaddingY = 12; // Pixels in the subtitle canvas.
         public SubtitleRandomSettings RandomStyle = new SubtitleRandomSettings();
         public WarmupSubtitleStyle Copy() {
             var copy = (WarmupSubtitleStyle)MemberwiseClone();
@@ -35,6 +36,9 @@ namespace VideoBatch {
             TextColor = Hex(TextColor, "#FFFFFF"); PlateColor = Hex(PlateColor, "#171717");
             AccentColor = Hex(AccentColor, "#32F56B"); OutlineColor = Hex(OutlineColor, "#000000");
             OutlineWidth = Math.Max(0, Math.Min(10, OutlineWidth));
+            TextThickness = Math.Max(0, Math.Min(10, TextThickness));
+            PlatePaddingX = Math.Max(0, Math.Min(100, PlatePaddingX));
+            PlatePaddingY = Math.Max(0, Math.Min(100, PlatePaddingY));
             if (!new[] { "none", "active", "progressive" }.Contains(Highlight)) Highlight = "none";
             if (!new[] { "none", "pop", "fade", "rise", "word-accent" }.Contains(Motion)) Motion = "none";
             if (string.IsNullOrWhiteSpace(PresetId)) PresetId = "classic";
@@ -75,7 +79,7 @@ namespace VideoBatch {
             var cues = new List<WarmupCaption>(); wordsPerCaption = Math.Max(1, Math.Min(6, wordsPerCaption));
             for (int i = 0; i < words.Count;) {
                 var part = new List<WarmupCaption>();
-                do { var next = words[i++]; part.Add(next); if (".!?…".Contains(next.Text.Last())) break; } while (i < words.Count && part.Count < wordsPerCaption);
+                do { var next = words[i++]; part.Add(next); if (".!?…".Contains(next.Text.Last())) break; } while (i < words.Count && part.Count < wordsPerCaption && words[i].Start - part.Last().End < .6);
                 double cueEnd = part.Last().End;
                 if (i < words.Count) cueEnd = Math.Min(words[i].Start, cueEnd + .12);
                 cueEnd = Math.Min(duration, cueEnd);

@@ -167,7 +167,10 @@ namespace VideoBatch {
             FontFamily family, FontStyle face, StringFormat format, out List<WordBox> result, out RectangleF plate) {
             result = new List<WordBox>(); plate = RectangleF.Empty;
             using (var font = new Font(family, size, face, GraphicsUnit.Pixel)) {
-                float maxWidth = width * .84f, space = g.MeasureString(" ", font, int.MaxValue, format).Width;
+                float edge = style.TextThickness + style.OutlineWidth;
+                float padX = style.Plate == "none" ? 0 : style.PlatePaddingX;
+                float padY = style.Plate == "none" ? 0 : style.PlatePaddingY;
+                float maxWidth = Math.Min(width * .84f, width - 2 * (padX + edge + Math.Min(24, width * .1f))), space = g.MeasureString(" ", font, int.MaxValue, format).Width;
                 float pitch = font.GetHeight(g) * style.LineSpacing / 100f, x = 0;
                 float inkTop = float.MaxValue, inkBottom = float.MinValue;
                 var lines = new List<List<WordBox>> { new List<WordBox>() };
@@ -190,8 +193,8 @@ namespace VideoBatch {
                 float totalHeight = inkHeight + (lines.Count - 1) * pitch;
                 float motionRoom = (style.Motion == "rise" ? size * .24f : 0) + (style.Motion == "word-accent" ? inkHeight * .03f : 0);
                 float margin = Math.Min(24, height * .1f);
-                if (totalHeight + motionRoom > height - margin * 2) return false;
-                float top = Math.Max(margin, Math.Min(height - margin - totalHeight - motionRoom,
+                if (totalHeight + motionRoom + 2 * (padY + edge) > height - margin * 2) return false;
+                float top = Math.Max(margin + padY + edge, Math.Min(height - margin - padY - edge - totalHeight - motionRoom,
                     height * style.Position / 100f - totalHeight / 2));
                 foreach (var line in lines) {
                     float span = line.Count == 0 ? 0 : line.Last().Box.Right;
@@ -202,7 +205,7 @@ namespace VideoBatch {
                 }
                 float left = result.Count == 0 ? width / 2 : result.Min(w => w.Box.Left);
                 float right = result.Count == 0 ? left : result.Max(w => w.Box.Right);
-                plate = new RectangleF(left - 22, top - 12, right - left + 44, totalHeight + 24);
+                plate = new RectangleF(left - padX - edge, top - padY - edge, right - left + 2 * (padX + edge), totalHeight + 2 * (padY + edge));
                 return true;
             }
         }
@@ -228,6 +231,10 @@ namespace VideoBatch {
                 foreach (var word in words) using (var path = new GraphicsPath()) {
                     var face = style.Bold && family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular;
                     path.AddString(word.Text, family, (int)face, fontSize, new PointF(word.Box.X - word.GlyphLeft, word.Box.Y - word.GlyphTop), format);
+                    if (style.TextThickness > 0) using (var original = (GraphicsPath)path.Clone())
+                    using (var pen = new Pen(Color.Black, style.TextThickness * 2) { LineJoin = LineJoin.Round }) {
+                        path.Widen(pen); path.AddPath(original, false); path.FillMode = FillMode.Winding;
+                    }
                     if (word.Index == cue.ActiveWord && cue.ActiveWordScale != 1) using (var transform = new Matrix()) {
                         float cx = word.Box.Left + word.Box.Width / 2, cy = word.Box.Top + word.Box.Height / 2;
                         transform.Translate(cx, cy); transform.Scale(cue.ActiveWordScale, cue.ActiveWordScale); transform.Translate(-cx, -cy); path.Transform(transform);

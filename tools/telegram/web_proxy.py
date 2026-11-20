@@ -15,7 +15,7 @@ from worker import proxy_connector
 
 def allowed_host(host,service='telegram'):
     value=host.lower().rstrip('.')
-    domains={'telegram':('telegram.org',),'instagram':('instagram.com','threads.com','threads.net','cdninstagram.com','fbcdn.net')}.get(service,())
+    domains={'telegram':('telegram.org',),'instagram':('instagram.com','threads.com','threads.net','cdninstagram.com','fbcdn.net'),'tiktok':('tiktok.com','tiktokcdn.com','tiktokcdn-us.com','tiktokcdn-eu.com','tiktokv.com','tiktokv.us','byteoversea.com','ibytedtos.com','ibyteimg.com','muscdn.com','musical.ly','byteimg.com','ttwstatic.com')}.get(service,())
     return bool(re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)*',value)) and any(value==domain or value.endswith('.'+domain) for domain in domains)
 
 
@@ -35,9 +35,9 @@ def route_hosts(host,service='telegram'):
 
 
 def safe_host(host,service='telegram'):
-    if service=='instagram':
+    if service in ('instagram','tiktok'):
         host=host.lower().rstrip('.')
-        return host if allowed_host(host,service) else 'other.instagram.com'
+        return host if allowed_host(host,service) else 'other.'+('tiktok.com' if service=='tiktok' else 'instagram.com')
     if re.fullmatch(r'(?:(?:[kz]ws[1-5]|pluto|venus|aurora|vesta|flora)(?:-1)?\.)?web\.telegram\.org',host):
         return host
     return 'other.telegram.org'
@@ -45,7 +45,7 @@ def safe_host(host,service='telegram'):
 
 class Bridge:
     def __init__(self, proxy, secret, allow_host=None, on_route=None, service='telegram'):
-        if service not in ('telegram','instagram'):raise ValueError('Unsupported bridge service')
+        if service not in ('telegram','instagram','tiktok'):raise ValueError('Unsupported bridge service')
         self.service=service
         self.connector=proxy_connector(proxy)
         if self.connector is None:
@@ -71,7 +71,7 @@ class Bridge:
             except (OSError,TimeoutError,ProxyError,ProxyConnectionError,ProxyTimeoutError) as exc:
                 failure=exc
                 self.on_route(host=safe_host(host,self.service),target=safe_host(target,self.service),status='failed',code='proxy_tunnel')
-        raise ConnectionError(('Instagram' if self.service=='instagram' else 'Telegram')+' Web proxy tunnel failed') from failure
+        raise ConnectionError(({'instagram':'Instagram','tiktok':'TikTok'}.get(self.service,'Telegram'))+' Web proxy tunnel failed') from failure
 
     async def handle(self, reader, writer):
         self.connections.add(writer)

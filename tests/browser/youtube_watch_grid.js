@@ -122,7 +122,44 @@ const channels = {
     );
     assert.deepEqual(opened, ["ru"], "Failure must not skip remaining channels");
     assert.equal(errors.length, 1);
-    console.log("OK: watch grid browser (full watch + like during playback, RU/EN, partial failure)");
+    // Current YouTube markup: enabled yt-button-shape after a disabled structural match.
+    await page.setContent(`<div id="actions"><div id="top-level-buttons-computed">
+      <like-button-view-model><button aria-disabled="true" aria-label='поставить отметку "Нравится"' aria-pressed="false">Disabled</button></like-button-view-model>
+      <yt-button-shape><button id="available-like" aria-label='поставить отметку "Нравится"' aria-pressed="false">Like</button></yt-button-shape>
+      <button aria-label='Поставить отметку "Не нравится"'>Dislike</button>
+    </div></div>`);
+    await page.locator("#available-like").evaluate(btn => {
+      btn.onclick = () => { btn.setAttribute("aria-pressed", "true"); };
+    });
+    await playback.likeCurrentVideo(page);
+    assert.equal(await page.locator("#available-like").getAttribute("aria-pressed"), "true");
+    assert.equal(await page.locator("[aria-disabled]").getAttribute("aria-pressed"), "false");
+
+    await page.setContent(`<div id="actions"><like-button-view-model>
+      <button aria-disabled="true" aria-label='поставить отметку "Нравится"' aria-pressed="false">Like</button>
+    </like-button-view-model></div>`);
+    await assert.rejects(playback.likeCurrentVideo(page), /YouTube отключил кнопку/);
+    const softMessages = [];
+    await playback.likeCurrentVideo(page, (_, text) => softMessages.push(text), { soft: true });
+    assert(softMessages.some(text => /YouTube отключил кнопку/.test(text)));
+
+    // A non-finite player duration must not replace the known finite duration.
+    await page.setContent(`<video></video><button aria-label="Unlike this video" aria-pressed="true">Liked</button>`);
+    await page.evaluate(() => {
+      const video = document.querySelector("video");
+      let reads = 0;
+      Object.defineProperties(video, {
+        duration: { get: () => ++reads <= 2 ? 2 : Infinity },
+        currentTime: { get: () => reads >= 2 ? 2 : 0.1 },
+        paused: { get: () => false },
+        readyState: { get: () => 4 },
+        ended: { get: () => false }
+      });
+    });
+    const playbackMessages = [];
+    await playback.waitForVideoEnd(page, {}, (_, text) => playbackMessages.push(text));
+    assert(playbackMessages.includes("Видео закончилось."));
+    console.log("OK: watch grid browser (full watch, current like markup, disabled likes, non-finite duration, RU/EN, partial failure)");
   } finally {
     await browser.close();
   }

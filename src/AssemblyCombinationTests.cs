@@ -42,25 +42,60 @@ namespace VideoBatch {
                 Directory.CreateDirectory(root); Store.Root=root;
                 var t=AssemblyTemplate.Defaults(); t.Materials=Path.Combine(root,"materials"); t.Output=Path.Combine(root,"output");
                 t.Scenes[0].IsPreview=true; AssemblyFiles.Save(Path.Combine(root,"assembly-template.xml"),t);
-                Exception failure=null; bool visited=false;
+                Exception failure=null; int visited=0;
                 using(var window=new AssemblyWindow(true)) using(var timer=new System.Windows.Forms.Timer {Interval=200}) {
                     window.Show(); System.Windows.Forms.Application.DoEvents();
+                    var current=(AssemblyTemplate)typeof(AssemblyWindow).GetField("template",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(window);
+                    var originalSettings=current.Combination;
+                    var originalValues=new[]{originalSettings.Video,originalSettings.SecondaryVideo,originalSettings.Background,originalSettings.Music,originalSettings.Voiceover};
+                    var originalVideos=current.Scenes.Select(s=>s.VideoInCombination).ToArray();
+                    var originalLayers=current.Scenes.SelectMany(s=>s.Layers).Concat(current.GlobalLayers).Select(l=>l.InCombination).ToArray();
                     timer.Tick+=(s,e)=>{
                         var dialog=System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().FirstOrDefault(f=>f.Name=="AssemblyCombinationDialog"); if(dialog==null)return;
                         timer.Stop(); try {
-                            ((System.Windows.Forms.Button)Controls(dialog).First(c=>c.Name=="CombinationMainVideos")).PerformClick();
-                            Check(!((System.Windows.Forms.CheckBox)Controls(dialog).First(c=>c.Name=="CombinationSceneVideo0")).Checked,"UI preset excludes preview");
-                            Check(((System.Windows.Forms.CheckBox)Controls(dialog).First(c=>c.Name=="CombinationSceneVideo1")).Checked,"UI preset includes main scene");
-                            Check(Controls(dialog).OfType<System.Windows.Forms.ListBox>().Any(),"UI file lists visible");
-                            visited=true; ((System.Windows.Forms.Button)Controls(dialog).First(c=>c.Name=="SaveCombinationSettings")).PerformClick();
+                            var controls=Controls(dialog).ToArray();
+                            var labelMethod=typeof(AssemblyWindow).GetMethod("SceneLabel",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
+                            for(int i=0;i<current.Scenes.Count;i++) {
+                                var group=controls.First(c=>c.Name=="CombinationScene"+i);
+                                Check(controls.First(c=>c.Name=="CombinationScene"+i+"Title").Text==(string)labelMethod.Invoke(window,new object[]{current.Scenes[i],i}),"scene heading matches editor");
+                                Check(Controls(group).OfType<System.Windows.Forms.CheckBox>().Count()==1+current.Scenes[i].Layers.Count,"scene voice count is read-only");
+                                Check(controls.First(c=>c.Name=="CombinationSceneVoice"+i).Text.StartsWith("Озвучка · "+AssemblySpeechPlan.SceneVoiceOptions(current,current.Scenes[i]).Count+" файлов"),"scene voice count matches speech options");
+                            }
+                            Check(controls.First(c=>c.Name=="CombinationScene0Title").Text=="Превью","preview editor label");
+                            Check(controls.First(c=>c.Name=="CombinationScene1Title").Text=="Сцена 1","scene numbering excludes preview");
+                            foreach(var size in new[]{dialog.MinimumSize,new System.Drawing.Size(1100,800)}) {
+                                dialog.Size=size; dialog.PerformLayout(); System.Windows.Forms.Application.DoEvents();
+                                Check(!((System.Windows.Forms.Panel)controls.First(c=>c.Name=="CombinationScroll")).HorizontalScroll.Visible,"dialog has no horizontal overflow");
+                                foreach(var box in controls.OfType<System.Windows.Forms.CheckBox>())
+                                    Check(box.Left>=0 && box.Right<=box.Parent.ClientSize.Width && box.Width>=box.PreferredSize.Width,"rule toggle fits at dialog width");
+                            }
+                            Check(controls.OfType<System.Windows.Forms.ListBox>().Any(),"UI file lists visible");
+                            ((System.Windows.Forms.Button)controls.First(c=>c.Name=="CombinationMainVideos")).PerformClick();
+                            Check(!((System.Windows.Forms.CheckBox)controls.First(c=>c.Name=="CombinationSceneVideo0")).Checked,"UI preset excludes preview");
+                            Check(((System.Windows.Forms.CheckBox)controls.First(c=>c.Name=="CombinationSceneVideo1")).Checked,"UI preset includes main scene");
+                            Check(!((System.Windows.Forms.CheckBox)controls.First(c=>c.Name=="CombinationMusic")).Checked && !((System.Windows.Forms.CheckBox)controls.First(c=>c.Name=="CombinationVoiceover")).Checked,"preset clears shared audio rules");
+                            if(visited==0) {
+                                foreach(var box in controls.OfType<System.Windows.Forms.CheckBox>())box.Checked=!box.Checked;
+                                ((System.Windows.Forms.Button)controls.First(c=>c.Name=="CancelCombinationSettings")).PerformClick();
+                            } else {
+                                ((System.Windows.Forms.CheckBox)controls.First(c=>c.Name=="CombinationMusic")).Checked=true;
+                                ((System.Windows.Forms.CheckBox)controls.First(c=>c.Name=="CombinationVoiceover")).Checked=true;
+                                ((System.Windows.Forms.Button)controls.First(c=>c.Name=="SaveCombinationSettings")).PerformClick();
+                            }
+                            visited++;
                         } catch(Exception ex) {failure=ex; dialog.Close();}
-                    }; timer.Start();
-                    typeof(AssemblyWindow).GetMethod("OpenCombinationSettings",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).Invoke(window,null);
-                    if(failure!=null)throw failure; Check(visited,"rules dialog opened");
-                    var current=(AssemblyTemplate)typeof(AssemblyWindow).GetField("template",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(window);
-                    Check(!current.Scenes[0].VideoInCombination && current.Scenes[1].VideoInCombination && !current.Combination.Background,"preset saved"); window.Close();
+                    };
+                    var open=typeof(AssemblyWindow).GetMethod("OpenCombinationSettings",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
+                    timer.Start(); open.Invoke(window,null);
+                    if(failure!=null)throw failure; Check(visited==1,"cancel dialog opened");
+                    Check(object.ReferenceEquals(current.Combination,originalSettings) && originalValues.SequenceEqual(new[]{current.Combination.Video,current.Combination.SecondaryVideo,current.Combination.Background,current.Combination.Music,current.Combination.Voiceover}),"cancel preserves shared settings");
+                    Check(originalVideos.SequenceEqual(current.Scenes.Select(s=>s.VideoInCombination)) && originalLayers.SequenceEqual(current.Scenes.SelectMany(s=>s.Layers).Concat(current.GlobalLayers).Select(l=>l.InCombination)),"cancel preserves scene and layer flags");
+                    timer.Start(); open.Invoke(window,null);
+                    if(failure!=null)throw failure; Check(visited==2,"save dialog opened");
+                    Check(!current.Scenes[0].VideoInCombination && current.Scenes[1].VideoInCombination && !current.Combination.Background,"preset saved");
+                    Check(current.Combination.Music && current.Combination.Voiceover,"shared audio rules saved"); window.Close();
                 }
-                Console.WriteLine("Combination UI PASS: cards, file lists, main-video preset and save."); return true;
+                Console.WriteLine("Combination UI PASS: scene labels, responsive rows, read-only scene voices, shared audio, preset, cancel and save."); return true;
             } finally {Store.Root=previous; if(Directory.Exists(root))Directory.Delete(root,true);}
         }
         public static bool RunSelfTests() {

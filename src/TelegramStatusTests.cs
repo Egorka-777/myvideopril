@@ -116,7 +116,7 @@ namespace VideoBatch {
                             var account=new TelegramAccount{id=Guid.NewGuid().ToString("N"),name="Web fixture",proxy="socks5://fixture:local-test-password@127.0.0.1:"+port};
                             window=new TelegramWebWindow(store,account,async()=>{
                                 approvals++;
-                                string token=await window.CurrentLoginToken("");Check(token==new string('b',32),"Fresh rendered login QR only");
+                                string token=await window.CurrentLoginToken(new string('a',32));Check(token==new string('b',32),"Fresh rendered login QR only");
                                 if(failFirst&&approvals==1)throw new IOException("Synthetic approval failure");
                                 var field=typeof(TelegramWebWindow).GetField("view",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
                                 var native=(WebView2)field.GetValue(window);await native.CoreWebView2.ExecuteScriptAsync("document.body.innerHTML='<div id=Main>Signed-in fixture</div>'");shownMain=true;

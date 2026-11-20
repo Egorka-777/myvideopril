@@ -9,7 +9,38 @@ using System.Web.Script.Serialization;
 
 namespace VideoBatch {
     public static class DolphinLocalApi {
-        public const string Build = "2026-10-29-dolphin-auth-v2";
+        public const string Build = "2026-11-18-dolphin-session-v4";
+        static readonly SemaphoreSlim sessionGate = new SemaphoreSlim(1, 1);
+        static string confirmedToken, confirmedProcess;
+        static int confirmedPort;
+
+        static string DolphinProcessIdentity() {
+            var instances = new List<string>();
+            foreach (var process in Process.GetProcessesByName("Dolphin Anty")) {
+                using (process) {
+                    try { instances.Add(process.Id + ":" + process.StartTime.ToUniversalTime().Ticks); }
+                    catch (InvalidOperationException) { }
+                    catch (System.ComponentModel.Win32Exception) { return null; }
+                }
+            }
+            instances.Sort(StringComparer.Ordinal);
+            return instances.Count == 0 ? null : string.Join(";", instances);
+        }
+
+        static async Task<bool> SessionAliveAsync(int port, CancellationToken cancel) {
+            using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(2.5) }) {
+                try {
+                    using (var response = await client.GetAsync("http://127.0.0.1:" + port + "/v1.0/browser_profiles/running", cancel).ConfigureAwait(false)) {
+                        if (!response.IsSuccessStatusCode) return false;
+                        var data = new JavaScriptSerializer().DeserializeObject(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                        return data is Dictionary<string, object>;
+                    }
+                } catch (HttpRequestException) { return false; }
+                catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { return false; }
+                catch (ArgumentException) { return false; }
+                catch (InvalidOperationException) { return false; }
+            }
+        }
 
         public static async Task<int> ResolvePortAsync(string token, int preferredPort, CancellationToken cancel = default(CancellationToken), Action<string> report = null) {
             if (string.IsNullOrWhiteSpace(token)) throw new Exception("Укажите API-токен Dolphin в настройках.");
@@ -17,24 +48,41 @@ namespace VideoBatch {
                 string id = Guid.NewGuid().ToString("N").Substring(0, 8);
                 report = line => AppDiagnostics.Write("Dolphin", "", id, "connection_probe", line);
             }
-            report("Проверка API Dolphin · " + Build);
+            token = token.Trim();
+            await sessionGate.WaitAsync(cancel).ConfigureAwait(false);
+            try {
+                string process = DolphinProcessIdentity();
+                if (process != null && process == confirmedProcess && token == confirmedToken &&
+                    await SessionAliveAsync(confirmedPort, cancel).ConfigureAwait(false)) {
+                    report("Используется ранее подтверждённая сессия Dolphin · порт " + confirmedPort);
+                    return confirmedPort;
+                }
+                confirmedToken = confirmedProcess = null;
+                report("Проверка API Dolphin · " + Build);
             using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel)) {
-                deadline.CancelAfter(TimeSpan.FromSeconds(20));
+                deadline.CancelAfter(TimeSpan.FromSeconds(30));
                 try {
                     // Process/port enumeration must never run on the WinForms UI thread.
-                    return await Task.Run(() => ResolvePortsAsync(token.Trim(), CandidatePorts(preferredPort),
-                        new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }, deadline.Token, report), deadline.Token).ConfigureAwait(false);
+                    int port = await Task.Run(() => ResolvePortsAsync(token, CandidatePorts(preferredPort),
+                        new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }, deadline.Token, report, preferredPort), deadline.Token).ConfigureAwait(false);
+                    confirmedToken = token;
+                    confirmedProcess = process;
+                    confirmedPort = port;
+                    return port;
                 } catch (OperationCanceledException) when (!cancel.IsCancellationRequested) {
-                    throw new TimeoutException("Проверка API Dolphin превысила 20 секунд. Укажите API-порт из окна Health в Dolphin; подробности — в журнале приложения.");
+                    throw new TimeoutException("Проверка API Dolphin превысила 30 секунд. Укажите API-порт из окна Health в Dolphin; подробности — в журнале приложения.");
                 }
             }
+            } finally { sessionGate.Release(); }
         }
 
         // Tests exercise the real HTTP handling without Windows process discovery.
-        internal static async Task<int> ResolvePortsAsync(string token, IEnumerable<int> ports, HttpMessageHandler handler, CancellationToken cancel, Action<string> report = null) {
+        internal static async Task<int> ResolvePortsAsync(string token, IEnumerable<int> ports, HttpMessageHandler handler, CancellationToken cancel, Action<string> report = null, int configuredPort = 0) {
             var replies = new List<string>();
             var json = new JavaScriptSerializer();
-            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2.5) }) {
+            // Token authorization can take most of the probe budget; the caller's
+            // cancellation token still enforces the overall 30-second deadline.
+            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) }) {
                 foreach (int port in ports) {
                     cancel.ThrowIfCancellationRequested();
                     string result;
@@ -51,6 +99,8 @@ namespace VideoBatch {
                             result = "HTTP " + (int)response.StatusCode + (confirmed ? "; success=true" : "; вход не подтверждён");
                             report?.Invoke("POST 127.0.0.1:" + port + "/v1.0/auth/login-with-token → " + result);
                             if (response.IsSuccessStatusCode && confirmed) return port;
+                            if (port == configuredPort && (int)response.StatusCode == 401 && (text ?? "").Replace(" ", "").Trim() == "{\"success\":false}")
+                                throw new Exception("Dolphin отклонил авторизацию на порту " + port + " (HTTP 401, success=false). Это также бывает при сбое связи Dolphin с его сервером; ответ сам по себе не доказывает, что токен истёк. Проверьте токен в настройках и журнал Dolphin. Перебор портов остановлен.");
                         }
                     } catch (OperationCanceledException) when (!cancel.IsCancellationRequested) {
                         result = "таймаут";

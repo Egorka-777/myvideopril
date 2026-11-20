@@ -46,7 +46,7 @@ async function connect(chromium, endpoint, report, { timeout = 20000 } = {}) {
   }
 }
 async function waitFor(fn, timeout, message) {
-  const end = Date.now() + timeout;
+  const end = timeout === 0 ? Infinity : Date.now() + timeout;
   const probeTimeout='STUDIO_READ_PROBE_TIMEOUT';
   do {
     try {
@@ -229,19 +229,20 @@ async function resolveStudioChannel(page,channelUrl,report){
   if(direct)return direct;
   const handle=String(channelUrl||'').match(/youtube\.com\/(\@[^/?#]+)/i)?.[1];
   if(!handle)return '';
-  report('studio_channel','Определяю ID канала по ссылке '+handle+' в отдельной вкладке YouTube · ожидаю до 60 секунд. Файл пока не передаётся.');
+  report('studio_channel','Определяю ID канала по ссылке '+handle+' в отдельной вкладке YouTube · ожидаю готовности без лимита времени. Файл пока не передаётся.');
   const lookup=await page.context().newPage();
-  const deadline=Date.now()+60000;
   try{
-    await lookup.goto('https://www.youtube.com/'+handle,{waitUntil:'commit',timeout:Math.max(1,deadline-Date.now())});
+    await lookup.goto('https://www.youtube.com/'+handle,{waitUntil:'commit',timeout:0});
     return await waitFor(()=>lookup.evaluate(()=>{
       const id=window.ytInitialData?.metadata?.channelMetadataRenderer?.externalId||document.querySelector('meta[itemprop="channelId"]')?.content||document.querySelector('link[rel="canonical"]')?.href?.match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1]||'';
       return /^UC[A-Za-z0-9_-]{22}$/.test(id)?id:null;
-    }),Math.max(1,deadline-Date.now()),'Не удалось определить ID канала '+handle+' за 60 секунд. Файл не передавался; текущий канал Studio не использован вместо указанного.');
+    }),0,'Не удалось определить ID канала '+handle+'. Файл не передавался; текущий канал Studio не использован вместо указанного.');
   }finally{await lookup.close();}
 }
-async function openStudio(page, channelUrl, report, {preserveCompleted=false}={}) {
-  const expected = await resolveStudioChannel(page,channelUrl,report);
+async function openStudio(page, channelUrl, report, {preserveCompleted=false,verifyChannel=false}={}) {
+  // Temporarily disabled at the user's request; duplicate-video recovery stays enabled.
+  const expected = verifyChannel ? await resolveStudioChannel(page,channelUrl,report) : '';
+  if(!verifyChannel)report('studio_channel','Проверки входа Google и соответствия канала временно отключены. Используется текущий канал Studio.');
   const url = 'https://studio.youtube.com' + (expected ? '/channel/' + expected : '');
   const onStudio = /^https:\/\/studio\.youtube\.com(?:\/|$)/i.test(page.url() || '');
   const completed=onStudio&&await isPostPublishScreen(page);
@@ -251,22 +252,22 @@ async function openStudio(page, channelUrl, report, {preserveCompleted=false}={}
     report('studio_ready', 'YouTube Studio: продолжаю открытый мастер загрузки (без перезагрузки страницы).');
     return;
   }
-  report('studio_open', 'Открываю YouTube Studio · без проверки сторонних IP-сервисов.');
-  if(!completed)await page.goto(url, { waitUntil: 'commit', timeout: 60000 });
+  report('studio_open', 'Открываю YouTube Studio · ожидаю готовности без лимита времени.');
+  if(!completed)await page.goto(url, { waitUntil: 'commit', timeout: 0 });
   // Detection polls are read-only and bounded to five seconds. A legitimate
   // disabled Close can take much longer, so dismiss runs outside that poll.
   for(let attempt=0;attempt<2;attempt++){
     const ready=await waitFor(async()=>{
       const current=page.url();
-      if(/accounts\.google\.com/.test(current))throw new Error('Требуется вход в Google в выбранном Dolphin-профиле.');
-      if(await anyVisible(page.getByText(/^\s*(У вас нет доступа к этой странице[.!]?|You (?:do not|don.t) have access to this page[.!]?)\s*$/i)))
+      if(verifyChannel&&/accounts\.google\.com/.test(current))throw new Error('Требуется вход в Google в выбранном Dolphin-профиле.');
+      if(verifyChannel&&await anyVisible(page.getByText(/^\s*(У вас нет доступа к этой странице[.!]?|You (?:do not|don.t) have access to this page[.!]?)\s*$/i)))
         throw new Error('YouTube Studio: у выбранного Google-аккаунта нет доступа к каналу '+(expected||current)+'. Проверьте аккаунт в Dolphin и ссылку канала в приложении. Файл не передавался.');
       if(expected&&/studio\.youtube\.com\/channel\/UC/.test(current)&&!current.includes('/channel/'+expected))
         throw new Error('Studio открыл другой канал: ожидался '+expected+', открыт '+current.match(/\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1]+'. Проверьте выбранный Google-аккаунт и ссылку канала. Файл не передавался.');
       if(await isPostPublishScreen(page))return {completed:true};
       const button=await createButton(page);
       return button?{button}:null;
-    },60000,'Studio не показал доступную кнопку «Создать» за 60 секунд. Файл не передавался; проверьте вход и доступ к Studio.');
+    },0,'Studio не показал доступную кнопку «Создать». Файл не передавался.');
     if(!ready.completed)break;
     await dismissPublishDialog(page,report);
     if(attempt===1)throw new Error('Studio повторно открыл завершённый мастер вместо главной страницы. Файл не передавался.');

@@ -411,6 +411,9 @@ async function clickPublicRadioTarget(scope,{actionDelayMs=0}={}){
   if(!await scopeAlive(scope))throw new Error('Studio закрыл окно доступа до выбора Public. Публикация не нажималась.');
   const radio=await publicRadio(scope);
   if(!radio){await pause(150);continue;}
+  // Studio may already have Public selected; a redundant click can be blocked
+  // by the transitioning visibility panel even though the required state is set.
+  if(await publicRadioSelected(radio))return;
   const circle=radio.locator('#radioContainer');
   const target=await circle.count()?circle:radio;
   try{await target.click({trial:true,timeout:Math.min(1000,end-Date.now())});}
