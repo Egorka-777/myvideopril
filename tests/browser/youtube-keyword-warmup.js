@@ -81,7 +81,7 @@ const safety = require("../../tools/uploader/youtube-interaction-safety");
       assert.deepEqual(modern.map(x => x.id), ["abcdefghijk"]);
       assert.equal(await raw.evaluate(() => window.nativeSearchClicks), 1);
       assert.equal(await raw.evaluate(() => window.swallowedEnter), undefined);
-      for (const name of ["search_input", "search_fill", "search_submit", "search_results_url", "search_results_ready", "search_harvest"])
+      for (const name of ["search_home", "search_fill", "search_submit", "search_results_url", "search_results_ready", "search_harvest"])
         assert(searchEvents.some(e => e.waitStage === name), name + " completion logged");
       assert(searchEvents.find(e => e.waitStage === "search_results_ready").waitMs >= 200, "URL readiness does not imply populated results");
       const submitted = JSON.parse(searchEvents.find(e => e.waitStage === "search_submit_snapshot").reason);
@@ -98,6 +98,38 @@ const safety = require("../../tools/uploader/youtube-interaction-safety");
       assert.equal(resultsTransition.navigationType, "historyApi");
       assert(homeRequest.initiator.type);
       assertDiagnosticCleanup();
+      // Some YouTube experiments render the visible search field as an
+      // editable combobox instead of an input.
+      const editableRoute = route => route.fulfill({ contentType: "text/html", body: `
+        <div contenteditable="true" role="combobox" aria-label="Search or ask a question"></div>
+        <button aria-label="Search" onclick="history.pushState({},'', '/results?search_query='+encodeURIComponent(document.querySelector('[role=combobox]').textContent));setTimeout(()=>{document.querySelector('ytd-search').innerHTML='<ytd-video-renderer><a href=/watch?v=abcdefghijk>Result</a></ytd-video-renderer>';},100)">Search</button>
+        <ytd-search></ytd-search>` });
+      await raw.route("**/*", editableRoute);
+      const editable = await searchKeyword(page, "editable search", false);
+      assert.deepEqual(editable.map(x => x.id), ["abcdefghijk"]);
+      assert.equal(await raw.locator("[role=combobox]").textContent(), "editable search");
+      assertDiagnosticCleanup();
+      await raw.unroute("**/*", editableRoute);
+      // Startup can restore the home route at load, overwriting a search
+      // submitted while the document is still interactive.
+      const startupRoute = async route => {
+        if (route.request().url().endsWith('/startup.js')) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          return route.fulfill({ contentType: 'application/javascript', body: '' });
+        }
+        return route.fulfill({ contentType: 'text/html', body: `
+          <input name="search_query">
+          <button id="search-icon-legacy" onclick="window.searchReadyState=document.readyState;history.pushState({},'', '/results?search_query='+encodeURIComponent(document.querySelector('input').value));document.querySelector('ytd-search').innerHTML='<ytd-video-renderer><a href=/watch?v=abcdefghijk>Result</a></ytd-video-renderer>'">Search</button>
+          <ytd-search></ytd-search>
+          <script>addEventListener('load', () => { history.replaceState({}, '', '/'); document.querySelector('ytd-search').innerHTML=''; });</script>
+          <script async src="/startup.js"></script>` });
+      };
+      await raw.route('**/*', startupRoute);
+      const startupPage = deadlinePage(raw, Date.now() + 5000);
+      assert.deepEqual((await searchKeyword(startupPage, 'binodex', false)).map(x => x.id), ['abcdefghijk']);
+      assert.equal(await raw.evaluate(() => window.searchReadyState), 'complete', 'search waits for home startup load before clicking');
+      assertDiagnosticCleanup();
+      await raw.unroute('**/*', startupRoute);
       // Failed URL and DOM waits must be distinguished without replacing the
       // original error, navigating directly or clicking a second time.
       const originalWait = raw.waitForFunction;

@@ -8,11 +8,22 @@ function youtubeUrl(value) {
 }
 async function isAdVisible(page) {
   if (!youtubeUrl(page.url())) return false;
+  // Only in-player ads. Sidebar/search slots (ytd-ad-slot-renderer) stay visible
+  // on ordinary watch pages and must not block readiness or playback.
   return page.evaluate(() => {
-    const active = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]');
-    const scope = active || document;
     const visible = el => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
-    return [...scope.querySelectorAll('.ad-showing, .ad-interrupting, .ytp-ad-player-overlay, .ytp-ad-text, .ytp-ad-skip-button-container, .ytp-skip-ad-button, ytd-ad-slot-renderer, ytd-action-companion-ad-renderer, ad-button-view-model')].some(visible);
+    const activeShort = document.querySelector("ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]");
+    const players = activeShort
+      ? [activeShort]
+      : [...document.querySelectorAll("#movie_player, ytd-player .html5-video-player, .html5-video-player")];
+    for (const player of players) {
+      if (player.classList?.contains("ad-showing") || player.classList?.contains("ad-interrupting")) return true;
+      if (player.querySelector?.(".ad-showing, .ad-interrupting")) return true;
+      if ([...player.querySelectorAll(
+        ".ytp-ad-player-overlay, .ytp-ad-text, .ytp-ad-skip-button-container, .ytp-skip-ad-button, button.ytp-ad-skip-button-modern"
+      )].some(visible)) return true;
+    }
+    return false;
   }).catch(() => false);
 }
 
@@ -28,7 +39,11 @@ async function skipAdDuringWarmup(page, report = () => {}) {
     const visible = el => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
     const skip = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, button.ytp-ad-skip-button-modern');
     if (visible(skip)) { skip.click(); return "skip"; }
-    const ad = [...document.querySelectorAll('.ad-showing, .ad-interrupting, .ytp-ad-player-overlay, ytd-ad-slot-renderer')].some(visible);
+    const player = document.querySelector("#movie_player, ytd-player .html5-video-player, .html5-video-player, ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]");
+    const ad = !!(player && (
+      player.classList?.contains("ad-showing") || player.classList?.contains("ad-interrupting") ||
+      player.querySelector?.(".ad-showing, .ad-interrupting, .ytp-ad-player-overlay")
+    ));
     return ad ? "ad" : "";
   }).catch(() => "");
   if (action === "skip") {

@@ -207,7 +207,7 @@ async function runSequential(page,items,host){
   await publish(page,item,{...host,progress});
   progress('owner_video_public','Этап установки открытого доступа завершён; повторная страница проверки не открывалась.',{visibility:'public'});
   await comment(page,item,{...host,progress});
-  progress('owner_item_confirmed','Готово: видео опубликовано, комментарий обработан без проверки после отправки.');
+  progress('owner_item_confirmed',!S.norm(item.commentText)?'Видео опубликовано. Комментарий не отправлен: подпись не задана.':item.commentState==='sent'?'Видео опубликовано, комментарий отправлен без проверки появления.':'Видео опубликовано; повтор комментария пропущен: он уже подтверждён.');
  }
 }
 module.exports={BUILD,visibilityDialog,parseVisibility,canonicalAuthor,visibilitySummary,readVisibility,ownVideo,commentMatches,publish,comment,readComment,runSequential};

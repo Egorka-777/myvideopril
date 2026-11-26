@@ -270,7 +270,8 @@ namespace VideoBatch {
                 Console.WriteLine("LIVE TEST: multi-channel launch and duplicate prevention passed");
                 await manager.Stop("a").ConfigureAwait(false);
                 Check(manager.View("a").Phase == LivePhase.Finished && manager.View("b").Phase == LivePhase.Live, "point stop affected another channel");
-                await manager.StopAll().ConfigureAwait(false); Check(!manager.HasBusy && store.PendingSnapshot().Length == 0, "stop all / journal");
+                Check(manager.HasRunning,"active stream must be stopped on close");
+                await manager.StopRunning().ConfigureAwait(false); Check(!manager.HasRunning && !manager.HasBusy && store.PendingSnapshot().Length == 0, "close stops active encoders and completes their journals");
                 var views = (System.Collections.Generic.Dictionary<string, LiveView>)typeof(YouTubeLiveManager).GetField("views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(manager);
                 views["orphan"] = new LiveView { LocalId = "orphan", Name = "Orphan", Phase = LivePhase.Live };
                 Check(!manager.HasBusy && !manager.CanStop("orphan"), "stale live view must not block UI");
@@ -296,6 +297,10 @@ namespace VideoBatch {
                 await Until(() => apis["a"].Completes >= 2).ConfigureAwait(false);
                 var recovered = new YouTubeLiveManager(new LiveStore(root), account => apis[account.LocalId]);
                 Check(recovered.HasBusy && recovered.View("a").Phase == LivePhase.NeedsCleanup, "crash recovery missing");
+                Check(!recovered.HasRunning,"old cleanup journal is not an active broadcast");
+                int oldCleanupCalls=apis["a"].Completes;
+                await recovered.StopRunning().ConfigureAwait(false);
+                Check(apis["a"].Completes==oldCleanupCalls&&recovered.HasBusy&&store.PendingSnapshot().Length==1,"closing idle app must not reconnect old broadcasts or remove their journals");
                 apis["a"].FailComplete = false;
                 await recovered.StopAll().ConfigureAwait(false); Check(!recovered.HasBusy, "recovery cleanup failed");
                 await manager.StopAll().ConfigureAwait(false);

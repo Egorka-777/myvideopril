@@ -17,7 +17,7 @@ namespace VideoBatch {
         readonly TextBox accountSearch;
         readonly Label marketHint;
         readonly Panel scheduleHint, channelBadge, timezoneChip;
-        readonly Button marketRu, marketEn, kindShorts, kindLong, crossWatchBtn;
+        readonly Button marketRu, marketEn, kindShorts, kindLong, kindWarmup, warmupRewriteBtn, crossWatchBtn;
         ToolStripMenuItem crossWatchMenuItem;
         ToolStripMenuItem statusMenuRoot;
         readonly Font accountNameFont = new Font(Theme.FontBody.FontFamily, 10.5f, FontStyle.Bold);
@@ -51,6 +51,8 @@ namespace VideoBatch {
             marketEn = Theme.MakeHeroToggle("EN", marketView == "EN", () => SwitchMarket("EN"));
             kindShorts = Theme.MakeHeroToggle("Shorts", kindView == "shorts", () => SwitchKindFilter("shorts"));
             kindLong = Theme.MakeHeroToggle("Long", kindView == "long", () => SwitchKindFilter("long"));
+            kindWarmup = Theme.MakeHeroToggle("Прогрев", kindView == "warmup", () => SwitchKindFilter("warmup"));
+            warmupRewriteBtn = Theme.MakeHeroToggle("Переписать заголовки", settings.YouTubeWarmupRewriteTitles, ToggleWarmupRewrite);
 
             accountSearch = Theme.MakeSearchBox();
             statusFilter = Theme.MakeCombo(new[] { "Все статусы", "Готов", "Ошибка", "Отложено", "Загрузка" });
@@ -84,7 +86,9 @@ namespace VideoBatch {
 
             var switches = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Theme.Card, Margin = new Padding(0, 2, 0, 0) };
             switches.Controls.Add(Theme.MakeHeroSegmentGroup("Рынок", marketRu, marketEn));
-            switches.Controls.Add(Theme.MakeHeroSegmentGroup("Формат", kindShorts, kindLong));
+            switches.Controls.Add(Theme.MakeHeroSegmentGroup("Формат", kindShorts, kindLong, kindWarmup));
+            switches.Controls.Add(Theme.MakeHeroSegmentGroup("Прогрев", warmupRewriteBtn));
+            UpdateWarmupRewriteVisibility();
 
             var meta = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = true, BackColor = Theme.Card, Margin = new Padding(0, 2, 0, 0) };
             scheduleHint = Theme.MakeChip(ScheduleSummary());
@@ -115,7 +119,7 @@ namespace VideoBatch {
             };
             Theme.StyleGrid(grid);
             grid.RowTemplate.Height = 54;
-            grid.DefaultCellStyle.SelectionBackColor = Theme.ColorFromHex("#106B54");
+            grid.DefaultCellStyle.SelectionBackColor = Theme.Selected;
             grid.DefaultCellStyle.SelectionForeColor = Color.White;
             grid.AlternatingRowsDefaultCellStyle.BackColor = Theme.ColorFromHex("#282828");
             var onCol = new DataGridViewCheckBoxColumn {
@@ -180,6 +184,14 @@ namespace VideoBatch {
                 (stopBtn, false));
             root.Controls.Add(bottom, 0, 3);
 
+            DashboardSessionState.Bind(this, () => {
+                foreach (DataGridViewRow row in grid.Rows)
+                    if (row.Tag is YouTubeChannel ch) {
+                        Theme.MarkConnected(row.DefaultCellStyle, DashboardSessionState.IsConnected(ch.ProfileId, "YouTube"));
+                        row.Cells["account"].ToolTipText = DashboardSessionState.Summary(ch.ProfileId, "YouTube");
+                    }
+                grid.Invalidate();
+            });
             backend.LogLine += AppendLog;
             backend.SetMarketView(marketView);
             backend.SetKindView(kindView);
@@ -313,29 +325,40 @@ namespace VideoBatch {
         }
 
         static string NormMarket(string m) { return (m ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU"; }
-        static string NormKindView(string k) { return (k ?? "").Trim().ToLowerInvariant() == "long" ? "long" : "shorts"; }
-        static bool IsShorts(string k) { return (k ?? "").Trim().ToLowerInvariant() != "long"; }
-        static bool IsLongKind(string k) {
+        static string NormKindView(string k) {
             k = (k ?? "").Trim().ToLowerInvariant();
-            return k != "shorts" && k != "short";
+            if (k == "long") return "long";
+            if (k == "warmup" || k == "прогрев") return "warmup";
+            return "shorts";
         }
+        static bool IsWarmupKind(string k) { return (k ?? "").Trim().ToLowerInvariant() == "warmup"; }
+        static bool IsLongKind(string k) { return (k ?? "").Trim().ToLowerInvariant() == "long"; }
         static bool IsShortsKind(string k) {
             k = (k ?? "").Trim().ToLowerInvariant();
             return k == "shorts" || k == "short";
         }
         static bool ChannelMatchesKindView(YouTubeChannel ch, string view) {
             if (ch == null) return false;
-            return view == "long" ? IsLongKind(ch.Kind) : IsShortsKind(ch.Kind);
+            view = NormKindView(view);
+            string k = (ch.Kind ?? "").Trim().ToLowerInvariant();
+            if (view == "warmup") return k == "warmup";
+            if (view == "long") return k == "long";
+            return k == "shorts" || k == "short";
         }
 
         string GuessDefaultKind() {
-            int shorts = (settings.YouTubeChannels ?? new List<YouTubeChannel>()).Count(c => c != null && NormMarket(c.Market) == marketView && IsShorts(c.Kind));
-            int lng = (settings.YouTubeChannels ?? new List<YouTubeChannel>()).Count(c => c != null && NormMarket(c.Market) == marketView && !IsShorts(c.Kind));
+            var list = (settings.YouTubeChannels ?? new List<YouTubeChannel>()).Where(c => c != null && NormMarket(c.Market) == marketView).ToList();
+            int shorts = list.Count(c => IsShortsKind(c.Kind));
+            int lng = list.Count(c => IsLongKind(c.Kind));
+            int warmup = list.Count(c => IsWarmupKind(c.Kind));
+            if (warmup >= shorts && warmup >= lng && warmup > 0) return "warmup";
             return lng > shorts ? "long" : "shorts";
         }
 
         public void OnNavigated() {
             ApplyNavigationContext();
+            UpdateWarmupRewriteVisibility();
+            if (kindView == "warmup") SyncWarmupChannelsFromYouTube();
             RefreshGrid();
         }
         public void ShowAccount(YouTubeChannel channel) {
@@ -345,7 +368,7 @@ namespace VideoBatch {
             settings.YouTubeMarketView = marketView; settings.YouTubeKindView = kindView;
             accountSearch.Text = ""; statusFilterValue = "Все статусы";
             StyleHeroToggle(marketRu, marketView == "RU"); StyleHeroToggle(marketEn, marketView == "EN");
-            StyleHeroToggle(kindShorts, kindView == "shorts"); StyleHeroToggle(kindLong, kindView == "long");
+            StyleHeroToggle(kindShorts, kindView == "shorts"); StyleHeroToggle(kindLong, kindView == "long"); StyleHeroToggle(kindWarmup, kindView == "warmup");
             backend.SetMarketView(marketView); backend.SetKindView(kindView); RefreshGrid();
             foreach (DataGridViewRow row in grid.Rows) if (ReferenceEquals(row.Tag, channel)) {
                 grid.ClearSelection(); row.Selected = true; grid.CurrentCell = row.Cells["account"]; break;
@@ -382,6 +405,7 @@ namespace VideoBatch {
             if (string.IsNullOrWhiteSpace(settings.YouTubeKindView)) kindView = GuessDefaultKind();
             StyleHeroToggle(kindShorts, kindView == "shorts");
             StyleHeroToggle(kindLong, kindView == "long");
+            StyleHeroToggle(kindWarmup, kindView == "warmup");
             try { Store.Save(settings); } catch { }
             StyleHeroToggle(marketRu, marketView == "RU");
             StyleHeroToggle(marketEn, marketView == "EN");
@@ -407,11 +431,53 @@ namespace VideoBatch {
             if (crossWatchMenuItem != null) crossWatchMenuItem.Text = label + " (отмеченные ✓)";
         }
 
+        void ToggleWarmupRewrite() {
+            settings.YouTubeWarmupRewriteTitles = !settings.YouTubeWarmupRewriteTitles;
+            StyleHeroToggle(warmupRewriteBtn, settings.YouTubeWarmupRewriteTitles);
+            try { Store.Save(settings); } catch { }
+        }
+
+        void UpdateWarmupRewriteVisibility() {
+            if (warmupRewriteBtn?.Parent != null) warmupRewriteBtn.Parent.Visible = kindView == "warmup";
+            StyleHeroToggle(warmupRewriteBtn, settings.YouTubeWarmupRewriteTitles);
+        }
+
+        void SyncWarmupChannelsFromYouTube() {
+            if (settings.YouTubeChannels == null) settings.YouTubeChannels = new List<YouTubeChannel>();
+            int added = 0;
+            foreach (var src in settings.YouTubeChannels.Where(c => c != null && NormMarket(c.Market) == marketView && (IsShortsKind(c.Kind) || IsLongKind(c.Kind))).ToList()) {
+                string pid = (src.ProfileId ?? "").Trim();
+                if (pid == "") continue;
+                bool exists = settings.YouTubeChannels.Any(c => c != null && NormMarket(c.Market) == marketView && IsWarmupKind(c.Kind)
+                    && string.Equals((c.ProfileId ?? "").Trim(), pid, StringComparison.OrdinalIgnoreCase));
+                if (exists) continue;
+                settings.YouTubeChannels.Add(new YouTubeChannel {
+                    ChannelId = Guid.NewGuid().ToString("N"),
+                    Enabled = false,
+                    Name = src.Name,
+                    ProfileId = pid,
+                    Market = src.Market,
+                    Kind = "warmup",
+                    ChannelUrl = src.ChannelUrl,
+                    ExpectedIp = src.ExpectedIp,
+                    Status = "Готов"
+                });
+                added++;
+            }
+            if (added > 0) {
+                try { Store.Save(settings); backend.Reload(); } catch { }
+                AppendLog("Прогрев: добавлено каналов с YouTube (" + marketView + "): " + added);
+            }
+        }
+
         void SwitchKindFilter(string kind) {
             kindView = NormKindView(kind);
             settings.YouTubeKindView = kindView;
             StyleHeroToggle(kindShorts, kindView == "shorts");
             StyleHeroToggle(kindLong, kindView == "long");
+            StyleHeroToggle(kindWarmup, kindView == "warmup");
+            UpdateWarmupRewriteVisibility();
+            if (kindView == "warmup") SyncWarmupChannelsFromYouTube();
             try { Store.Save(settings); } catch { }
             backend.SetKindView(kindView);
             RefreshGrid();
@@ -428,11 +494,12 @@ namespace VideoBatch {
                     .Sum(c => c.Items?.Count(i => !string.IsNullOrWhiteSpace(i?.Video)) ?? (string.IsNullOrWhiteSpace(c.Video) ? 0 : 1));
                 if (videos < 1) videos = Math.Max(1, n * 10);
                 var bounds = ScheduleGenerator.ResolveNetworkGapBounds(Math.Max(1, Math.Min(10, n)), videos, settings);
-                string fmt = kindView == "long" ? "Long" : "Shorts";
+                string fmt = kindView == "long" ? "Long" : kindView == "warmup" ? "Прогрев" : "Shorts";
                 return "Сеть · " + fmt + " · " + settings.YouTubeScheduleNetworkPeriodMinutes + " мин · ~" + bounds.minMinutes + "–" + bounds.maxMinutes + " мин · "
                     + (publish == "scheduled" ? "отложено" : publish == "immediate" ? "сразу" : publish) + " · ПК";
             }
-            return "HTTP · " + (kindView == "long" ? "Long" : "Shorts") + ": "
+            string kindLabel = kindView == "long" ? "Long" : kindView == "warmup" ? "Прогрев" : "Shorts";
+            return "HTTP · " + kindLabel + ": "
                 + (publish == "scheduled" ? (kindView == "long" ? settings.YouTubeScheduleLongMinMinutes + "–" + settings.YouTubeScheduleLongMaxMinutes : settings.YouTubeScheduleMinMinutes + "–" + settings.YouTubeScheduleMaxMinutes) + " мин" : publish)
                 + " · ПК";
         }
@@ -442,7 +509,7 @@ namespace VideoBatch {
                 && string.Equals((ch.Name ?? "").Trim(), name, StringComparison.OrdinalIgnoreCase)
                 && string.Equals((ch.ProfileId ?? "").Trim(), profileId, StringComparison.OrdinalIgnoreCase)
                 && NormMarket(ch.Market) == NormMarket(market)
-                && (kind == "long" ? !IsShorts(ch.Kind) : IsShorts(ch.Kind));
+                && string.Equals(NormKindView(ch.Kind), NormKindView(kind), StringComparison.OrdinalIgnoreCase);
         }
 
         void EnsureChannelIds() {
@@ -451,8 +518,10 @@ namespace VideoBatch {
                     ch.ChannelId = Guid.NewGuid().ToString("N");
         }
 
-        void AddChannel() {
-            if (!NewAccountDialog.TryShow(FindForm(), "YouTube · " + marketView + " · " + kindView, out var name, out var profileId)) return;
+        internal void AddDashboardAccount(string profileId,string name) { AddChannel(profileId,name); }
+        void AddChannel() { AddChannel("",""); }
+        void AddChannel(string initialProfileId,string initialName) {
+            if (!NewAccountDialog.TryShow(FindForm(), "YouTube · " + marketView + " · " + kindView, out var name, out var profileId,initialName,initialProfileId)) return;
             if (settings.YouTubeChannels == null) settings.YouTubeChannels = new List<YouTubeChannel>();
             if (settings.YouTubeChannels.Any(ch => ChannelRowEquals(ch, name, profileId, marketView, kindView))) {
                 MessageBox.Show(this, "Такой канал уже есть в списке (имя + Profile ID + формат).", "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -476,6 +545,7 @@ namespace VideoBatch {
             int n = 0;
             foreach (var ch in settings.YouTubeChannels ?? new List<YouTubeChannel>()) {
                 if (ch == null || NormMarket(ch.Market) != marketView) continue;
+                if (!ChannelMatchesKindView(ch, kindView)) continue;
                 if (!string.IsNullOrEmpty(q) && (ch.Name ?? "").ToLowerInvariant().IndexOf(q) < 0 && (ch.ProfileId ?? "").ToLowerInvariant().IndexOf(q) < 0) continue;
                 if (!st.StartsWith("Все") && (ch.Status ?? "").IndexOf(st, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 SyncPrimary(ch);
@@ -487,6 +557,7 @@ namespace VideoBatch {
                 int ri = grid.Rows.Add(ch.Enabled, LoadThumbImage(thumb, ch.Name), ch.Name, "—",
                     filesLabel, title, ch.Status ?? "Готов", url);
                 grid.Rows[ri].Tag = ch;
+                Theme.MarkConnected(grid.Rows[ri].DefaultCellStyle,DashboardSessionState.IsConnected(ch.ProfileId,"YouTube"));
                 grid.Rows[ri].Height = 54;
                 grid.Rows[ri].Cells["account"].ToolTipText = (ch.Name ?? "") + "\nProfile " + (ch.ProfileId ?? "");
                 grid.Rows[ri].Cells["thumb"].ToolTipText = string.IsNullOrWhiteSpace(thumb) ? "Нажмите — выбрать превью" : thumb;
@@ -589,7 +660,7 @@ namespace VideoBatch {
             if (!ChannelRenameDialog.TryShow(FindForm(), current, out string next)) return;
             next = (next ?? "").Trim();
             if (string.IsNullOrWhiteSpace(next) || string.Equals(next, current, StringComparison.OrdinalIgnoreCase)) return;
-            string kindKey = IsShorts(ch.Kind) ? "shorts" : "long";
+            string kindKey = NormKindView(ch.Kind);
             bool duplicate = (settings.YouTubeChannels ?? new List<YouTubeChannel>()).Any(c =>
                 c != null && !ReferenceEquals(c, ch) &&
                 ChannelRowEquals(c, next, ch.ProfileId ?? "", ch.Market ?? marketView, kindKey));
@@ -690,7 +761,6 @@ namespace VideoBatch {
             SyncEnabledFromGrid();
             backend.SetMarketView(marketView);
             backend.SetKindView(kindView);
-            backend.Reload();
         }
 
         static void SyncPrimary(YouTubeChannel ch) {
@@ -718,6 +788,22 @@ namespace VideoBatch {
             using (var d = new OpenFileDialog { Multiselect = true, Filter = "Видео|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|Все|*.*" }) {
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
                 if (ch.Items?.Any(i => i != null && !string.IsNullOrWhiteSpace(i.Video)) == true && MessageBox.Show(FindForm(), "Заменить видео у «" + ch.Name + "» после подготовки новой пачки?", "YouTube", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                List<string> manualTitles = null;
+                if (kindView == "warmup" || IsWarmupKind(ch.Kind)) {
+                    manualTitles = YouTubeWarmupTitles.TitlesFromFiles(d.FileNames);
+                    if (manualTitles.Count < d.FileNames.Length) {
+                        MessageBox.Show(this, "Не удалось взять заголовки из имён файлов.", "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    if (settings.YouTubeWarmupRewriteTitles) {
+                        try {
+                            AppendLog(ch.Name + ": переписываю заголовки (OpenRouter)…");
+                            manualTitles = (await YouTubeWarmupTitles.RewriteAsync(manualTitles, settings, default).ConfigureAwait(true)).ToList();
+                        } catch (Exception ex) {
+                            MessageBox.Show(this, ex.Message + "\n\nЗагрузка продолжится с заголовками из файлов.", "YouTube", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+                    }
+                }
                 string taskId = "prepare-" + Guid.NewGuid().ToString("N"); int logged = -1;
                 try {
                     SyncWorkspaceToBackend(); preparationKeys.Add(preparationKey);
@@ -730,7 +816,7 @@ namespace VideoBatch {
                         AppendLog(ch.Name + ": " + state.Caption);
                         AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare", state.Caption + " · " + state.File);
                     });
-                    await backend.AssignPreparedVideosToChannelAsync(ch, d.FileNames, progress);
+                    await backend.AssignPreparedVideosToChannelAsync(ch, d.FileNames, progress, manualTitles);
                     if (!IsDisposed) { RefreshGrid(); AppendLog(ch.Name + ": подготовлено 100% · " + d.FileNames.Length + " видео."); }
                     AppDiagnostics.Write("YouTube", ch.ProfileId, taskId, "video_prepare_done", "Готово · 100%");
                 } catch (OperationCanceledException) { if (!IsDisposed) { MarkPreparationStopped(ch, "Подготовка отменена"); AppendLog(ch.Name + ": подготовка отменена. Исходники возвращены в общую папку."); } }
@@ -1088,16 +1174,16 @@ namespace VideoBatch {
     }
 
     internal static class NewAccountDialog {
-        public static bool TryShow(IWin32Window owner, string platform, out string name, out string profileId) {
+        public static bool TryShow(IWin32Window owner, string platform, out string name, out string profileId,string initialName="",string initialProfileId="") {
             name = "";
             profileId = "";
             using (var dialog = new Form { Text = "Добавить · " + platform, Width = 440, Height = 230,
                 StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false, MinimizeBox = false, BackColor = Theme.Background, ForeColor = Theme.TextPrimary }) {
                 var title = new Label { Text = "Имя аккаунта", Left = 20, Top = 18, Width = 380 };
-                var nameBox = new TextBox { Left = 20, Top = 42, Width = 380 };
+                var nameBox = new TextBox { Left = 20, Top = 42, Width = 380,Text=initialName };
                 var idLabel = new Label { Text = "Profile ID в Dolphin", Left = 20, Top = 78, Width = 380 };
-                var idBox = new TextBox { Left = 20, Top = 102, Width = 380 };
+                var idBox = new TextBox { Left = 20, Top = 102, Width = 380,Text=initialProfileId };
                 var ok = new Button { Text = "Добавить", Left = 228, Top = 143, Width = 82, DialogResult = DialogResult.OK };
                 var cancel = new Button { Text = "Отмена", Left = 318, Top = 143, Width = 82, DialogResult = DialogResult.Cancel };
                 dialog.Controls.AddRange(new Control[] { title, nameBox, idLabel, idBox, ok, cancel });

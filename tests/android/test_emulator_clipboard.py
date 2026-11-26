@@ -119,7 +119,9 @@ class ClipboardTests(unittest.TestCase):
             self.assertEqual(m.discover(directory)[0], 8554)
             self.discovery_file(directory, "pid_2.ini")
             self.error("discovery_ambiguous", lambda: m.discover(directory))
-        self.error("invalid_serial", lambda: m.discover(serial="emulator-5556"))
+            self.discovery_file(directory, "pid_5556.ini", **{"port.serial": "5556", "port.adb": "5557"})
+            self.assertEqual(m.discover(directory, serial="emulator-5556"), (8554, "private-token"))
+        self.error("invalid_serial", lambda: m.discover(serial="bad-serial"))
 
     def test_discovery_rejects_invalid_endpoint_and_credentials(self):
         for field, value in (("grpc.port", "0"), ("grpc.port", "65536"), ("grpc.port", "remote:8554"),

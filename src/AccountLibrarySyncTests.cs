@@ -21,7 +21,109 @@ namespace VideoBatch {
                 }
             };
         }
+        public static bool RunTikTokNameSyncTests() {
+            var prefs = new Preferences {
+                YouTubeChannels = new List<YouTubeChannel> {
+                    new YouTubeChannel { ChannelId = "yt-5", Name = "Lucky Tom | Smart Trading @filmrezzzka", ProfileId = "852114839", Market = "RU", Kind = "shorts" }
+                },
+                TikTokAccounts = new List<TikTokAccount> {
+                    new TikTokAccount { AccountId = "tk-5", Name = "Канал 5", ProfileId = "852114839", Market = "RU" }
+                }
+            };
+            TikTokProfileSync.SyncFromYouTube(prefs, "RU");
+            Check(prefs.TikTokAccounts.Single(a => a.ProfileId == "852114839").Name == "Lucky Tom | Smart Trading @filmrezzzka",
+                "linked TikTok name follows YouTube on regular sync");
+
+            prefs = new Preferences {
+                YouTubeChannels = new List<YouTubeChannel> {
+                    new YouTubeChannel { ChannelId = "yt-en", Name = "Samuel Trader @fact_boom_24", ProfileId = "852114839", Market = "EN", Kind = "shorts" }
+                },
+                TikTokAccounts = new List<TikTokAccount> {
+                    new TikTokAccount { AccountId = "tk-ru", YouTubeSourceId = "yt-en", Name = "Канал 5", ProfileId = "852114839", Market = "RU" }
+                }
+            };
+            TikTokProfileSync.SyncFromYouTube(prefs, "RU");
+            TikTokProfileSync.SyncFromYouTube(prefs, "EN");
+            Check(prefs.TikTokAccounts.Single().Market == "EN" && prefs.TikTokAccounts.Single().Name == "Samuel Trader @fact_boom_24",
+                "linked TikTok follows exact YouTube source market before import without creating an EN copy");
+            Console.WriteLine("TikTok name sync from YouTube PASS");
+            return true;
+        }
+
+        public static bool RunTikTokNormalizationTests() {
+            var prefs = new Preferences();
+            for (int n = 0; n < 5; n++) {
+                string source = "en-source-" + n, profile = "en-profile-" + n;
+                prefs.YouTubeChannels.Add(new YouTubeChannel { ChannelId = source, ProfileId = profile, Market = "EN", Name = "English " + n });
+                prefs.TikTokAccounts.Add(new TikTokAccount { AccountId = "original-" + n, YouTubeSourceId = source, ProfileId = profile,
+                    Market = "RU", Video = "legacy-" + n, Title = "legacy title", Description = "legacy description", Caption = "legacy caption",
+                    Items = new List<TikTokItem> { new TikTokItem { Video = "queue-" + n, Caption = "saved caption", Title = "saved title", Description = "saved description" } } });
+                prefs.TikTokAccounts.Add(new TikTokAccount { AccountId = "copy-" + n, YouTubeSourceId = source, ProfileId = profile, Market = "EN",
+                    Video = "copy-legacy-" + n, Caption = "copy caption", Items = new List<TikTokItem> {
+                        new TikTokItem { Video = "queue-" + n, Caption = "saved caption", Published = true, Scheduled = true, HttpSubmitted = true,
+                            HttpNeedsReview = true, ContentReview = true, ScheduledUnixSeconds = 1800000000 + n,
+                            HttpVideoId = "post-" + n, LocalJobId = "job-" + n, SharedShortsSourceId = "shared-" + n },
+                        new TikTokItem { Video = "other-" + n, Caption = "other caption" }
+                    } });
+            }
+            var first = prefs.TikTokAccounts[0];
+            first.Items.Add(new TikTokItem { Video = "queue-0", Caption = "different caption", HttpVideoId = "different-post", LocalJobId = "different-job", Published = true });
+            first.Items.Add(new TikTokItem { Video = "queue-0", Caption = "saved caption", HttpVideoId = "post-0", LocalJobId = "another-job", HttpSubmitted = true });
+            first.Items.Add(new TikTokItem { Video = "queue-0", Caption = "saved caption", ScheduledUnixSeconds = 1900000000, Scheduled = true });
+            prefs = Store.Clone(prefs);
+            TikTokProfileSync.SyncFromYouTube(prefs, "RU");
+            Check(prefs.TikTokAccounts.Count == 5 && prefs.TikTokAccounts.All(a => a.Market == "EN"), "five wrong-market EN copies merge before RU import");
+            for (int n = 0; n < 5; n++) {
+                var account = prefs.TikTokAccounts.Single(a => a.YouTubeSourceId == "en-source-" + n);
+                var delivered = account.Items.Single(i => i.HttpVideoId == "post-" + n && i.LocalJobId == "job-" + n);
+                Check(delivered.Published && delivered.Scheduled && delivered.HttpSubmitted && delivered.HttpNeedsReview && delivered.ContentReview
+                    && delivered.ScheduledUnixSeconds == 1800000000 + n && delivered.SharedShortsSourceId == "shared-" + n,
+                    "all delivery fields and timestamp retained " + n);
+                Check(delivered.Title == "saved title" && delivered.Description == "saved description" && delivered.Caption == "saved caption", "video metadata retained " + n);
+                Check(account.Items.Any(i => i.Video == "other-" + n) && account.Items.Any(i => i.Video == "legacy-" + n && i.Title == "legacy title"
+                    && i.Description == "legacy description" && i.Caption == "legacy caption") && account.Items.Any(i => i.Video == "copy-legacy-" + n && i.Caption == "copy caption"),
+                    "both queues and legacy fields retained " + n);
+            }
+            Check(prefs.TikTokAccounts[0].Items.Any(i => i.HttpVideoId == "different-post" && i.LocalJobId == "different-job")
+                && prefs.TikTokAccounts[0].Items.Any(i => i.LocalJobId == "another-job")
+                && prefs.TikTokAccounts[0].Items.Any(i => i.ScheduledUnixSeconds == 1900000000), "conflicting publications, jobs and schedules remain separate");
+            var snapshot = Store.Clone(prefs);
+            prefs = Store.Clone(prefs);
+            var result = TikTokProfileSync.ImportAllFromYouTube(prefs);
+            prefs = Store.Clone(prefs);
+            TikTokProfileSync.ImportAllFromYouTube(prefs);
+            Check(result.Imported == 0 && prefs.TikTokAccounts.Count == 5
+                && prefs.TikTokAccounts.Select(a => a.Items.Count).SequenceEqual(snapshot.TikTokAccounts.Select(a => a.Items.Count)), "clone and repeated RU/EN imports keep queues and row counts stable");
+
+            prefs = new Preferences {
+                YouTubeChannels = new List<YouTubeChannel> {
+                    new YouTubeChannel { ChannelId = "samuel", ProfileId = "shared-dolphin", Market = "EN", Name = "Samuel" },
+                    new YouTubeChannel { ChannelId = "jake", ProfileId = "shared-dolphin", Market = "EN", Name = "Jake" },
+                    new YouTubeChannel { ChannelId = "ambiguous", ProfileId = "shared-dolphin", Market = "EN" },
+                    new YouTubeChannel { ChannelId = "ambiguous", ProfileId = "shared-dolphin", Market = "RU" }
+                },
+                TikTokAccounts = new List<TikTokAccount> {
+                    new TikTokAccount { AccountId = "samuel-row", YouTubeSourceId = "samuel", ProfileId = "shared-dolphin", Market = "RU" },
+                    new TikTokAccount { AccountId = "jake-row", YouTubeSourceId = "jake", ProfileId = "shared-dolphin", Market = "RU" },
+                    new TikTokAccount { AccountId = "manual", Name = "Manual empty", Market = "RU" },
+                    new TikTokAccount { AccountId = "missing", YouTubeSourceId = "missing", ProfileId = "shared-dolphin", Market = "RU", Name = "Missing source" },
+                    new TikTokAccount { AccountId = "wrong-profile", YouTubeSourceId = "samuel", ProfileId = "other-dolphin", Market = "RU", Name = "Different profile" },
+                    new TikTokAccount { AccountId = "ambiguous", YouTubeSourceId = "ambiguous", ProfileId = "shared-dolphin", Market = "RU", Name = "Ambiguous source" }
+                }
+            };
+            TikTokProfileSync.SyncFromYouTube(prefs, "EN");
+            Check(prefs.TikTokAccounts.Single(a => a.AccountId == "samuel-row").Name == "Samuel"
+                && prefs.TikTokAccounts.Single(a => a.AccountId == "jake-row").Name == "Jake", "same Dolphin ID does not merge or rename distinct YouTube channels");
+            Check(prefs.TikTokAccounts.Any(a => a.AccountId == "manual" && a.YouTubeSourceId == ""), "manual without source is not deleted");
+            Check(prefs.TikTokAccounts.Any(a => a.AccountId == "missing" && a.Market == "RU" && a.Name == "Missing source")
+                && prefs.TikTokAccounts.Any(a => a.AccountId == "wrong-profile" && a.Market == "RU" && a.Name == "Different profile")
+                && prefs.TikTokAccounts.Any(a => a.AccountId == "ambiguous" && a.Market == "RU" && a.Name == "Ambiguous source"), "missing, mismatched and ambiguous source links are not guessed");
+            Console.WriteLine("TikTok normalization: five EN copies, metadata, delivery states, conflicts, clone idempotence and exact source isolation PASS");
+            return true;
+        }
+
         public static bool RunTikTokImportTests() {
+            if (!RunTikTokNameSyncTests() || !RunTikTokNormalizationTests()) return false;
             var prefs = LinkedFixture();
             prefs.YouTubeChannels[0].Enabled = false;
             prefs.TikTokAccounts[0].Caption = "Сохранить подпись";

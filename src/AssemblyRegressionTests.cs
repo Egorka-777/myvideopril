@@ -494,7 +494,15 @@ namespace VideoBatch {
                 if(p.Captions.Count!=1 || Math.Abs(p.Captions[0].Start-1.4)>.01)throw new Exception("Main subtitles were not shifted after intro");
                 AssemblySpeechPlan.Prepare(t,p,ffmpeg,probe,Path.Combine(root,"work"),ct).GetAwaiter().GetResult();
                 if(Math.Abs(p.Captions[0].Start-1.4)>.01)throw new Exception("Subtitle shift accumulated on repeat");
-                Console.WriteLine("Preview real FFmpeg: intro only; main audio and music after 1.3s; captions after intro; repeat stable");return true;
+                string fusedWork=Path.Combine(root,"fused");Directory.CreateDirectory(fusedWork);
+                WarmupSubtitles.Rasterize(p.Captions,t.SubtitleStyle,fusedWork,t.Width,t.Height);
+                var fusedProcessing=AssemblyProcessing.Prepare(t,new Media {Width=t.Width,Height=t.Height,Fps=t.Fps+"/1",Duration=p.RollDuration(t)},new Random(4),AssemblyTimeline.MainStart(t,p));
+                Core.Tool(ffmpeg,AssemblyRender.Arguments(t,p,"libx264",Path.Combine(fusedWork,"render.ffgraph"),output,new AssemblyRenderContext(),fusedProcessing),ct).GetAwaiter().GetResult();
+                cleanIntro=Amplitude(.3,440); changedMain=Amplitude(1.7,(int)Math.Round(880*Math.Pow(2,1.8/12)*1.2));
+                if(cleanIntro<.07||changedMain<.01||Math.Abs(Core.VideoInfo(Core.Probe(probe,output,ct).GetAwaiter().GetResult()).VideoDuration-3.3)>.06)throw new Exception("Fused intro protection or main audio timing");
+                string fusedGraph=File.ReadAllText(Path.Combine(root,"fused","render.ffgraph"));
+                if(fusedGraph.IndexOf("[captioned]format=yuv420p[vout]",StringComparison.Ordinal)<0||!fusedGraph.Contains("[vout]setpts="))throw new Exception("Fused effects moved before captions");
+                Console.WriteLine("Preview real FFmpeg: raw and fused intro protection, main effects, captions before processing, repeat stable");return true;
             } finally {Directory.Delete(root,true);}
         }
         public static bool RunPreviewSceneTests() {
@@ -750,6 +758,19 @@ namespace VideoBatch {
                 File.WriteAllText(t.Resolve("Музыка/a.wav"),"music-a"); File.WriteAllText(t.Resolve("Музыка/b.wav"),"music-b"); File.Copy(t.Resolve("Музыка/a.wav"),t.Resolve("Музыка/copy.wav"));
                 var h=new AssemblyHistory(); var capacity=new AssemblyInventory(t,v,h).Calculate();
                 if (!capacity.Exact || capacity.Variants!=12 || capacity.BatchLimit!=12) throw new Exception("Capacity should deduplicate content and count 3*2*2=12 (music excluded)");
+                t.SplitLayout="vertical"; t.SplitSharedPool=false; t.SecondaryVideos="";
+                AssemblyWorkspace.EnsureSplitSharedPool(t);
+                if (!t.SplitSharedPool) throw new Exception("Split with videos in one pack must auto-enable shared pool");
+                var splitCapacity=new AssemblyInventory(t,v,h).Calculate();
+                if (splitCapacity.Variants<1) throw new Exception("Shared split pool should produce linkages");
+                t.SplitSharedPool=false; t.SplitLayout="vertical"; t.Scenes[0].Duration=21; t.Scenes[0].DurationByVideo=true; t.SecondaryVideos="Видео-низ";
+                Directory.CreateDirectory(t.Resolve(t.SecondaryVideos));
+                string bottom=t.Resolve(t.SecondaryVideos+"/short.mp4"); File.WriteAllText(bottom,"bottom");
+                var vb=Directory.GetFiles(t.Resolve("Видео")).Select(p => new AssemblyVideo {Path=p,Hash=AssemblyFiles.Hash(p),Duration=25}).ToList();
+                vb.Add(new AssemblyVideo {Path=bottom,Hash=AssemblyFiles.Hash(bottom),Duration=8});
+                var splitBottom=new AssemblyInventory(t,vb,h).Calculate();
+                if (splitBottom.Variants<1) throw new Exception("Split secondary should count when scene length follows source video");
+                t.SplitLayout="none"; t.SplitSharedPool=false;
                 var batch=AssemblyPlanner.Create(t,v,h,new Random(5),12); if (batch.Plans.Count!=12 || batch.Plans.Select(p => p.Signature).Distinct().Count()!=12) throw new Exception("Exhaustive small-space allocation lost combinations");
                 h.Combinations.AddRange(batch.Plans.Take(11).Select(p => p.Signature));
                 if (new AssemblyInventory(t,v,h).Calculate().Variants!=1 || AssemblyPlanner.Create(t,v,h,new Random(8),10).Plans.Count!=1) throw new Exception("Last remaining combination was lost");

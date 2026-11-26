@@ -34,12 +34,25 @@ namespace VideoBatch {
                         throw new InvalidOperationException("Имя TikTok — не более 30 символов. Сократите название пресета; текст не обрезан.");
                     string username=AskUsername(owner,network,accountName);
                     if(username==null)throw new OperationCanceledException("Применение отменено. Пресет не использован.");
-                    await ApplyAndroid(network,profileId,username,preset,log);
+                    await ApplyPreset(network,profileId,accountName,username,preset,log);
                 });
             }catch(Exception error){MessageBox.Show(owner,error.Message,"Пресеты профиля",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
         }
-        static Task ApplyAndroid(string network,string profileId,string username,ProfilePreset preset,Action<string> log){
-            return AndroidProfileEditor.ApplyAsync(network,profileId,username,preset.Name,preset.Bio,preset.AvatarPath,log);
+        static async Task ApplyPreset(string network,string profileId,string accountName,string username,ProfilePreset preset,Action<string> log){
+            if(network=="Instagram"){
+                var settings=Store.Load();
+                string token=WindowsSupport.Unprotect(settings.ProtectedDolphinToken);
+                var route=await TelegramProxyCatalog.FetchDolphin(token,new[]{new System.Collections.Generic.KeyValuePair<string,string>(profileId,accountName)},includeCatalog:false);
+                string key="dolphin:profile:"+profileId;
+                var proxy=route.Proxies.SingleOrDefault(p=>p.source_id==key);
+                if(proxy==null||string.IsNullOrWhiteSpace(proxy.url))throw new InvalidOperationException("Не получен прокси профиля Instagram.");
+                await InstagramWebProfileEditor.ApplyAsync(profileId,accountName,proxy.url,username,preset.Name,preset.Bio,preset.AvatarPath,log);
+                return;
+            }
+            string avatar="";
+            if(!string.IsNullOrWhiteSpace(preset.AvatarPath)&&log!=null)
+                log("Аватар на TikTok Android пока не меняется автоматически; применяются имя и описание.");
+            await AndroidProfileEditor.ApplyAsync(network,profileId,username,preset.Name,preset.Bio,avatar,log);
         }
         public static void OpenTelegram(Control owner,TelegramStore store,TelegramAccount account){
             ProfilePresetDialog.ShowDialog(owner,"Telegram",account.id,preset=>TelegramProfilePresetApply.Apply(store,account,preset.Name,preset.Bio,preset.AvatarPath,null));
@@ -47,7 +60,10 @@ namespace VideoBatch {
         static string AskUsername(IWin32Window owner,string network,string accountName){
             using(var dialog=new Form{Text="Аккаунт "+network,ClientSize=new Size(510,220),StartPosition=FormStartPosition.CenterParent,MinimizeBox=false,MaximizeBox=false}){
                 Theme.StyleModal(dialog);
-                var text=new Label{Text="Выбран: "+accountName+"\nОткройте нужный профиль в Android. Укажите его @username для сверки перед изменениями:",Location=new Point(18,18),Size=new Size(470,80),ForeColor=Theme.TextSecondary};
+                string hint=network=="Instagram"
+                    ?"Выбран: "+accountName+"\nСессия Instagram WebView2 изменится автоматически. Укажите @username для сверки:"
+                    :"Выбран: "+accountName+"\nОткройте нужный профиль в Android. Укажите его @username для сверки перед изменениями:";
+                var text=new Label{Text=hint,Location=new Point(18,18),Size=new Size(470,80),ForeColor=Theme.TextSecondary};
                 var field=Theme.MakeSearchBox();field.Name="ExpectedProfileUsername";field.Location=new Point(18,102);field.Width=470;
                 var ok=Theme.MakeButton("Применить",accent:true);ok.Location=new Point(220,160);ok.DialogResult=DialogResult.OK;
                 var cancel=Theme.MakeButton("Отмена",ghost:true);cancel.Location=new Point(355,160);cancel.DialogResult=DialogResult.Cancel;

@@ -107,7 +107,7 @@ class SubtitlesTests(unittest.TestCase):
             w.execute(job, Model, loader, utterance)
             self.assertEqual(len(calls), 1)
             self.assertTrue(calls[0][1]["local_files_only"])
-            self.assertEqual(calls[0][1]["cpu_threads"], 2)
+            self.assertEqual(calls[0][1]["cpu_threads"], max(2, (w.os.cpu_count() or 4) // 2))
             data = json.loads((root / "0.json").read_text(encoding="utf-8"))
             self.assertEqual(data["AudioHash"], digest)
             self.assertEqual(data["Source"], "faster-whisper/small")

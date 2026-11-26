@@ -83,6 +83,9 @@ namespace VideoBatch {
         public string UploadStagingFolder=@"C:\VideoBatch\Upload";
         public bool UploadPreparationSubtleEffects = true;
         public List<YouTubeChannel> YouTubeChannels=new List<YouTubeChannel>();
+        public List<SharedShortsEntry> SharedShorts=new List<SharedShortsEntry>();
+        public List<InstagramQueueItem> InstagramQueue=new List<InstagramQueueItem>();
+        public List<string> InstagramSelectedProfiles=new List<string>();
         public string YouTubeSearchTitle="", YouTubeSearchUrl="", YouTubeSearchFilter="today";
         public string YouTubeMarketView="RU";
         /// <summary>Активная вкладка RU/EN в «Моя студия».</summary>
@@ -94,6 +97,8 @@ namespace VideoBatch {
         public VideoTranslationOptions TranslationOptions = new VideoTranslationOptions();
         /// <summary>Активная вкладка Shorts/Long в workspace (не скрывает каналы).</summary>
         public string YouTubeKindView="shorts";
+        /// <summary>Прогрев YouTube: перефраз заголовков через OpenRouter (хэштеги сохраняются).</summary>
+        public bool YouTubeWarmupRewriteTitles;
         public bool YouTubeLongScheduled20260923Migrated;
         public bool YouTubeNetworkSchedule20260923Migrated;
         /// <summary>Один раз отметить миграцию банка описаний YouTube (поле «Описание»).</summary>
@@ -112,7 +117,9 @@ namespace VideoBatch {
         public List<string> ProcessingTitles=new List<string>();
         public List<string> TitleBankLongRu=new List<string>(), TitleBankLongEn=new List<string>();
         public List<string> TitleBankShortsRu=new List<string>(), TitleBankShortsEn=new List<string>();
+        public List<string> TitleBankWarmupRu=new List<string>(), TitleBankWarmupEn=new List<string>();
         public int TitleCursorLongRu, TitleCursorLongEn, TitleCursorShortsRu, TitleCursorShortsEn;
+        public int TitleCursorWarmupRu, TitleCursorWarmupEn;
         public bool TitleBanksSeeded;
         /// <summary>Последняя применённая ревизия youtube-title-banks.json из комплекта.</summary>
         public int TitleBanksBundleRevision;
@@ -158,6 +165,7 @@ namespace VideoBatch {
         public string YouTubeSchedulePeriodStart="", YouTubeSchedulePeriodEnd="";
         /// <summary>YouTube | TikTok | Telegram | Studio — стартовый раздел интерфейса.</summary>
         public string AppPlatformView="";
+        public int TikTokAndroidWarmupMinutes=5, TikTokAndroidWarmupLikePercent=30;
         public int YouTubeWarmupMinMinutes=10, YouTubeWarmupMaxMinutes=10;
         /// <summary>Legacy single list; migrated into RU/EN on load.</summary>
         public string YouTubeWarmupKeywords="бинарные опционы стратегия\nтрейдинг\nbinodex\nбинодекс\nбинарные опционы binodex\nбинарные опционы покет опшн\nбинарные опционы сигналы\nторговый бот\nтрейдинг бот binodex";
@@ -339,7 +347,7 @@ namespace VideoBatch {
                 p.YouTubeDescriptionBankEn=YouTubeDescriptionTemplates.DefaultsEn();
             if(p.YouTubeDescriptionBankEn.Count>0)
                 p.YouTubeDescriptionCursorEn=((p.YouTubeDescriptionCursorEn%p.YouTubeDescriptionBankEn.Count)+p.YouTubeDescriptionBankEn.Count)%p.YouTubeDescriptionBankEn.Count;
-            if(string.IsNullOrWhiteSpace(p.YouTubeKindView)||(p.YouTubeKindView!="shorts"&&p.YouTubeKindView!="long"))p.YouTubeKindView="shorts";
+            if(string.IsNullOrWhiteSpace(p.YouTubeKindView)||(p.YouTubeKindView!="shorts"&&p.YouTubeKindView!="long"&&p.YouTubeKindView!="warmup"))p.YouTubeKindView="shorts";
             if(!p.YouTubeLongScheduled20260923Migrated){
                 if(string.Equals((p.YouTubeHttpLongPublishMode??"").Trim(),"immediate",StringComparison.OrdinalIgnoreCase))
                     p.YouTubeHttpLongPublishMode="scheduled";
@@ -387,6 +395,7 @@ namespace VideoBatch {
             if(p.TikTokUploadStaggerMaxMinutes>120)p.TikTokUploadStaggerMaxMinutes=120;
             TikTokProfileSync.SyncFromYouTube(p, p.TikTokMarketView ?? "RU");
             TikTokProfileSync.SyncFromYouTube(p, p.TikTokMarketView == "EN" ? "RU" : "EN");
+            AndroidTikTokSessionStore.RestoreSavedSessions();
             if(!p.MeshParallelProfilesMigrated20260929){
                 if(p.WatchMaxParallelProfiles<=1)p.WatchMaxParallelProfiles=4;
                 p.MeshParallelProfilesMigrated20260929=true;
@@ -458,14 +467,20 @@ namespace VideoBatch {
             if(p.TitleBankLongEn==null)p.TitleBankLongEn=new List<string>();
             if(p.TitleBankShortsRu==null)p.TitleBankShortsRu=new List<string>();
             if(p.TitleBankShortsEn==null)p.TitleBankShortsEn=new List<string>();
+            if(p.TitleBankWarmupRu==null)p.TitleBankWarmupRu=new List<string>();
+            if(p.TitleBankWarmupEn==null)p.TitleBankWarmupEn=new List<string>();
             p.TitleBankLongRu=p.TitleBankLongRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.TitleBankLongEn=p.TitleBankLongEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.TitleBankShortsRu=p.TitleBankShortsRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.TitleBankShortsEn=p.TitleBankShortsEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            p.TitleBankWarmupRu=p.TitleBankWarmupRu.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
+            p.TitleBankWarmupEn=p.TitleBankWarmupEn.Select(x=>(x??"").Trim()).Where(x=>x.Length>0).ToList();
             p.TitleCursorLongRu=ClampTitleCursor(p.TitleCursorLongRu,p.TitleBankLongRu.Count);
             p.TitleCursorLongEn=ClampTitleCursor(p.TitleCursorLongEn,p.TitleBankLongEn.Count);
             p.TitleCursorShortsRu=ClampTitleCursor(p.TitleCursorShortsRu,p.TitleBankShortsRu.Count);
             p.TitleCursorShortsEn=ClampTitleCursor(p.TitleCursorShortsEn,p.TitleBankShortsEn.Count);
+            p.TitleCursorWarmupRu=ClampTitleCursor(p.TitleCursorWarmupRu,p.TitleBankWarmupRu.Count);
+            p.TitleCursorWarmupEn=ClampTitleCursor(p.TitleCursorWarmupEn,p.TitleBankWarmupEn.Count);
             // Пустые банки — один раз подтянуть готовые заголовки из комплекта рядом с exe.
             if(!p.TitleBanksSeeded||(p.TitleBankLongRu.Count==0&&p.TitleBankLongEn.Count==0&&p.TitleBankShortsRu.Count==0&&p.TitleBankShortsEn.Count==0)){
                 if(TryLoadBundledYouTubeTitleBanks(p))p.TitleBanksSeeded=true;
@@ -544,7 +559,7 @@ namespace VideoBatch {
                 if(c==null)continue;
                 if(string.IsNullOrWhiteSpace(c.ChannelId))c.ChannelId=Guid.NewGuid().ToString("N");
                 if(string.IsNullOrWhiteSpace(c.Market)||(c.Market!="RU"&&c.Market!="EN"))c.Market="RU";
-                if(string.IsNullOrWhiteSpace(c.Kind)||(c.Kind!="long"&&c.Kind!="shorts"))c.Kind="long";
+                if(string.IsNullOrWhiteSpace(c.Kind)||(c.Kind!="long"&&c.Kind!="shorts"&&c.Kind!="warmup"))c.Kind="long";
                 if(c.Items==null)c.Items=new List<YouTubeItem>();
                 // Старые одиночные Video/Title поднимаем в Items, если очередь пуста.
                 if(c.Items.Count==0&&(!string.IsNullOrWhiteSpace(c.Video)||!string.IsNullOrWhiteSpace(c.Title)))
@@ -571,6 +586,7 @@ namespace VideoBatch {
             }
             // Схлопываем дубликаты одного канала (раньше пачка создавала клоны строк).
             p.YouTubeChannels=MergeYouTubeChannels(p.YouTubeChannels);
+            SharedShortsQueue.Capture(p);
             if(p.Music==null)p.Music=new List<string>();
             if(p.MusicRu==null)p.MusicRu=new List<string>();
             if(p.MusicEn==null)p.MusicEn=new List<string>();
@@ -693,6 +709,12 @@ namespace VideoBatch {
                 return true;
             }catch{return false;}
         }
+        static string NormYouTubeKind(string k){
+            k=(k??"").Trim().ToLowerInvariant();
+            if(k=="shorts"||k=="short")return "shorts";
+            if(k=="warmup"||k=="прогрев")return "warmup";
+            return "long";
+        }
         static List<YouTubeChannel> MergeYouTubeChannels(List<YouTubeChannel> list){
             if(list==null)return new List<YouTubeChannel>();
             var result=new List<YouTubeChannel>();
@@ -706,7 +728,8 @@ namespace VideoBatch {
                     if(string.IsNullOrWhiteSpace(c.ProfileId))return false;
                     return string.Equals((x.Market??"RU"),(c.Market??"RU"),StringComparison.OrdinalIgnoreCase)
                         && string.Equals((x.ProfileId??"").Trim(),(c.ProfileId??"").Trim(),StringComparison.OrdinalIgnoreCase)
-                        && string.Equals((x.Name??"").Trim(),(c.Name??"").Trim(),StringComparison.OrdinalIgnoreCase);
+                        && string.Equals((x.Name??"").Trim(),(c.Name??"").Trim(),StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(NormYouTubeKind(x.Kind),NormYouTubeKind(c.Kind),StringComparison.OrdinalIgnoreCase);
                 });
                 if(existing==null){result.Add(c);continue;}
                 if(existing.Items==null)existing.Items=new List<YouTubeItem>();
@@ -727,6 +750,9 @@ namespace VideoBatch {
         static readonly object SaveLock=new object();
         public static void Save(Preferences p){
             lock(SaveLock){
+                TikTokProfileSync.SyncFromYouTube(p, "RU");
+                TikTokProfileSync.SyncFromYouTube(p, "EN");
+                SharedShortsQueue.Capture(p);
                 Directory.CreateDirectory(Root);
                 string temp=Config+"."+Guid.NewGuid().ToString("N")+".tmp";
                 try{
@@ -838,7 +864,7 @@ namespace VideoBatch {
             w=(int)Math.Max(2,Math.Floor(w*p.ScalePercent/100/2)*2);h=(int)Math.Max(2,Math.Floor(h*p.ScalePercent/100/2)*2);
             var filters=new List<string>{p.Short?"setpts=PTS-STARTPTS":"setpts=PTS/"+N(p.Speed)};
             if(p.Crop>0){string rem=N(1-2*p.Crop/100);filters.Add("crop=trunc(iw*"+rem+"/2)*2:trunc(ih*"+rem+"/2)*2");}
-            filters.Add("scale="+w+":"+h+":flags=lanczos");filters.Add("setsar=1");if(p.Gray>0)filters.Add("hue=s="+N(1-p.Gray/100));filters.Add("fps=("+(p.Fps=="source"?m.Fps:p.Fps)+")*"+N(p.FpsPercent/100));
+            filters.Add("scale="+w+":"+h+":flags=bicubic");filters.Add("setsar=1");if(p.Gray>0)filters.Add("hue=s="+N(1-p.Gray/100));filters.Add("fps=("+(p.Fps=="source"?m.Fps:p.Fps)+")*"+N(p.FpsPercent/100));
             if(p.Short)filters.Add("eq=brightness="+N(p.Brightness)+":contrast="+N(p.Contrast));
             bool voice=!string.IsNullOrWhiteSpace(narration),background=!p.Short&&!string.IsNullOrWhiteSpace(p.MusicPath),hasAudio=p.Short||voice||m.HasAudio||background;
             double outputDuration=m.Duration/p.Speed;
@@ -875,7 +901,7 @@ namespace VideoBatch {
             var result=new BatchResult();int done=0,total=job.Inputs.Count*job.Count;var random=new Random();
             try {
                 if(job.Inputs.Count==0)throw new Exception("Добавьте видео.");if(job.Count<1||job.Count>10)throw new Exception("Неверное количество вариантов.");
-                Directory.CreateDirectory(job.Output);var tracks=new List<Track>();
+                job.Output=VideoBatchOutputPaths.DailySessionFolder(job.Output);var tracks=new List<Track>();
                 if(job.Processing!=null)job.Processing.Validate();
                 if(job.Shorts)job.Ranges.Validate();else{if(job.Profiles==null||job.Profiles.Length<job.Count)throw new Exception("Недостаточно настроек вариантов.");Profile.Check(job.BackgroundDb,-60,-.1,"Громкость фона, дБ");}
                 foreach(string path in job.Music.Distinct(StringComparer.OrdinalIgnoreCase)){string musicPath=Store.TryRepairStoredPath(path);if(!File.Exists(musicPath))throw new Exception("Не найден файл музыки: "+Path.GetFileName(musicPath));progress.Report(new Update("Читаю музыку…",0));tracks.Add(new Track{Path=musicPath,Duration=AudioDuration(await Probe(job.FFprobe,musicPath,ct).ConfigureAwait(false))});}

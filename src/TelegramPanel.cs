@@ -166,6 +166,7 @@ namespace VideoBatch {
             summary.Text=$"Всего {all.Count}   ·   Доступны {ready}   ·   Требуют внимания {all.Count-ready-uncheckedCount}   ·   Проверить {uncheckedCount}";
         }
         void PaintHealth(DataGridViewRow row,TelegramAccount a){
+            Theme.MarkConnected(row.DefaultCellStyle,a.status=="ready");
             string spam=a.spam_status=="clean"?"Без спам-ограничений":a.spam_status=="restricted"?"Спам-блок":a.spam_status=="unknown"?"Не удалось определить":a.spam_status=="error"?"Ошибка проверки":"Не проверен";
             row.Cells["spam"].Value=spam;
             row.Cells["spam"].Style.ForeColor=a.spam_status=="clean"?Theme.Success:a.spam_status=="restricted"?Theme.Error:Theme.TextSecondary;
@@ -188,6 +189,7 @@ namespace VideoBatch {
             if(list.Count==0)list=grid.SelectedRows.Cast<DataGridViewRow>().Select(r=>(TelegramAccount)r.Tag).ToList();
             if(list.Count==0)throw new InvalidOperationException("Выберите аккаунт в списке");return list;
         }
+        internal void AddDashboardAccount(){ChooseImport();}
         async void ChooseImport(){await Import(null);}
         async Task Import(string[] paths) {
             try {

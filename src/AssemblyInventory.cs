@@ -11,7 +11,8 @@ namespace VideoBatch {
         public int Usage(string axis,string hash) { int n; return usage.TryGetValue(axis+"|"+hash,out n) ? n : 0; }
         void Add(string axis,string hash) { string key=axis+"|"+hash; usage[key]=Usage(axis,hash)+1; }
         public long Score(AssemblyPlan p) {
-            long score=Usage("music",p.MusicHash ?? "");
+            long score=Usage("music",p.MusicHash ?? "") + Usage("voice",p.VoiceoverHash ?? "");
+            for (int i=0; i<p.Scenes.Count; i++) score+=Usage("sceneVoice:"+i,p.Scenes[i].VoiceoverHash ?? "");
             if (p.Background != null) score += 64L * Usage("background", p.Background.Hash);
             for (int i=0; i<p.Scenes.Count; i++) {score+=Usage("video:"+i,p.Scenes[i].Video.Hash); foreach (var layer in p.Scenes[i].Layers.Where(l => !l.Layer.Fixed)) score+=64L*Usage("image:"+layer.Layer.ObjectId,layer.Asset.Hash);}
             foreach(var layer in p.GlobalLayers.Where(l => !l.Layer.Fixed)) score+=64L*Usage("image:"+layer.Layer.ObjectId,layer.Asset.Hash);
@@ -80,6 +81,21 @@ namespace VideoBatch {
         readonly List<AssemblyPlan> savedPlans = new List<AssemblyPlan>();
         Dictionary<string,List<AssemblyPlan>> alternatives;
         const int EnumerationLimit = 50000;
+        static bool CatalogMatches(HashSet<string> allowed, AssemblyVideo v) {
+            return allowed.Contains(v.Path) || !string.IsNullOrEmpty(v.SourcePath) && allowed.Contains(v.SourcePath);
+        }
+        bool SecondaryEligible(AssemblyVideo v) {
+            if (v.Duration <= 0) return false;
+            if (template.LoopShortVideos) return true;
+            if (template.Scenes.Any(s => template.UsesVideoDuration(s))) return true;
+            for (int i = 0; i < template.Scenes.Count; i++) {
+                var scene = template.Scenes[i];
+                if (scene.IsPreview) continue;
+                double need = template.ContinuousVideo ? template.Duration : RenderDuration(i);
+                if (v.Duration + .001 >= need) return true;
+            }
+            return v.Duration + .001 >= template.Duration;
+        }
         public AssemblyInventory(AssemblyTemplate t, IList<AssemblyVideo> source, AssemblyHistory h) {
             template = t; history = h; previous = new HashSet<string>(h.Combinations);
             speechHashes = AssemblySpeechPlan.SpeechHashes(t);
@@ -91,7 +107,7 @@ namespace VideoBatch {
                 AssemblySceneVideoBuilder.Migrate(scene);
                 bool flexibleSceneVideo = !t.ContinuousVideo && t.SceneTimingVersion > 0 && scene.VideoMode == "own"
                     && (t.HasSceneVoiceovers && scene.VoiceMode != "none" || scene.VideoPacks.Count > 0);
-                videos.Add(source.Where(v => allowed.Contains(v.Path) && (t.UsesVideoDuration(scene) && v.Duration > 0 || v.Duration + .001 >= required || flexibleSceneVideo && v.Duration > 0 || (t.LoopShortVideos || !t.ContinuousVideo && t.SceneTimingVersion>0 && scene.VideoMode=="own") && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
+                videos.Add(source.Where(v => CatalogMatches(allowed, v) && (t.UsesVideoDuration(scene) && v.Duration > 0 || v.Duration + .001 >= required || flexibleSceneVideo && v.Duration > 0 || (t.LoopShortVideos || !t.ContinuousVideo && t.SceneTimingVersion>0 && scene.VideoMode=="own") && v.Duration > 0)).GroupBy(v => v.Hash).Select(g => g.First()).ToList());
                 sceneMusic[scene] = Assets(t.Resolve(scene.Music),AssemblyFiles.MusicExtensions).Where(a => !speechHashes.Contains(a.Hash)).ToList();
                 foreach (var l in scene.Layers.Where(l => l.Enabled)) {
                     if (l.IsText) { pictures.Add(l, TextAssets(l)); continue; }
@@ -115,10 +131,10 @@ namespace VideoBatch {
             }
             if (Split && t.SplitSharedPool) {
                 var sharedPaths = new HashSet<string>(t.SplitVideoPaths(), StringComparer.OrdinalIgnoreCase);
-                secondary = source.Where(v => sharedPaths.Contains(v.Path) && v.Duration > 0 && (t.LoopShortVideos || v.Duration + .001 >= t.Duration)).GroupBy(v => v.Hash).Select(g => g.First()).ToList();
+                secondary = source.Where(v => CatalogMatches(sharedPaths, v) && SecondaryEligible(v)).GroupBy(v => v.Hash).Select(g => g.First()).ToList();
             } else {
                 var secondaryPaths = new HashSet<string>(AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos),AssemblyFiles.VideoExtensions),StringComparer.OrdinalIgnoreCase);
-                secondary = Split ? source.Where(v => secondaryPaths.Contains(v.Path) && v.Duration > 0 && (t.LoopShortVideos || v.Duration + .001 >= t.Duration)).GroupBy(v => v.Hash).Select(g => g.First()).ToList() : new List<AssemblyVideo>();
+                secondary = Split ? source.Where(v => CatalogMatches(secondaryPaths, v) && SecondaryEligible(v)).GroupBy(v => v.Hash).Select(g => g.First()).ToList() : new List<AssemblyVideo>();
             }
             backgrounds = Assets(t.Resolve(t.Backgrounds), AssemblyFiles.BackgroundExtensions);
             music = Assets(t.Resolve(t.Music),AssemblyFiles.MusicExtensions).Where(a => !string.IsNullOrWhiteSpace(a.Path) && !speechHashes.Contains(a.Hash)).ToList();
@@ -223,16 +239,19 @@ namespace VideoBatch {
             return paths.Select(p=>new AssemblyAsset {Path=p,Hash=AssemblyFiles.Hash(p)}).GroupBy(a=>a.Hash).Select(g=>g.First()).ToList();
         }
         // Selected audio dimensions are concrete alternatives before signing, never random afterwards.
-        IEnumerable<AssemblyPlan> AudioVariants(AssemblyPlan p) {
+        IEnumerable<AssemblyPlan> AudioVariants(AssemblyPlan p, AssemblyMixTracker mix = null, Random random = null) {
             var setters=new List<Action<AssemblyAsset>>(); var pools=new List<List<AssemblyAsset>>();
-            Action<List<AssemblyAsset>,Action<AssemblyAsset>> add=(pool,set)=>{pools.Add(pool.Count==0?new List<AssemblyAsset>{null}:pool);setters.Add(set);};
+            Action<List<AssemblyAsset>,Action<AssemblyAsset>,string> add=(pool,set,axis)=>{
+                if (mix != null && (axis == "voice" || axis.StartsWith("sceneVoice:"))) pool=pool.OrderBy(a=>mix.Usage(axis,a.Hash)).ThenBy(a=>random.Next()).ToList();
+                pools.Add(pool.Count==0?new List<AssemblyAsset>{null}:pool);setters.Add(set);
+            };
             if(Identity.Music) {
-                add(music,a=>{p.Music=a?.Path??"";p.MusicHash=a?.Hash??"";});
-                foreach(var s in p.Scenes) {var scene=s;add(sceneMusic[s.Scene],a=>{scene.Music=a?.Path??"";scene.MusicHash=a?.Hash??"";});}
+                add(music,a=>{p.Music=a?.Path??"";p.MusicHash=a?.Hash??"";},"music");
+                foreach(var s in p.Scenes) {var scene=s;add(sceneMusic[s.Scene],a=>{scene.Music=a?.Path??"";scene.MusicHash=a?.Hash??"";},"sceneMusic");}
             }
             if(Identity.Voiceover) {
-                if(template.HasSceneVoiceovers) foreach(var s in p.Scenes) {var scene=s;add(VoiceOptions(s.Scene),a=>{scene.Voiceover=a?.Path??"";scene.VoiceoverHash=a?.Hash??"";});}
-                else add(VoiceOptions(null),a=>{p.Voiceover=a?.Path??"";p.VoiceoverHash=a?.Hash??"";});
+                if(template.HasSceneVoiceovers) for(int i=0;i<p.Scenes.Count;i++) {var scene=p.Scenes[i];add(VoiceOptions(scene.Scene),a=>{scene.Voiceover=a?.Path??"";scene.VoiceoverHash=a?.Hash??"";},"sceneVoice:"+i);}
+                else add(VoiceOptions(null),a=>{p.Voiceover=a?.Path??"";p.VoiceoverHash=a?.Hash??"";},"voice");
             }
             return WalkAudio(0,p,pools,setters);
         }
@@ -409,7 +428,7 @@ namespace VideoBatch {
                             int swaps = Split && !template.SplitFixHalves ? 2 : 1;
                             for (int swap = 0; swap < swaps; swap++) {
                                 plan.SplitSwapped = swap == 1;
-                                foreach(var candidate in AudioVariants(plan)) {
+                                foreach(var candidate in AudioVariants(plan,mix,random)) {
                                     string raw=SignatureText(candidate); Sign(candidate);
                                     if(combinations.Contains(candidate.Signature) || CombinationBlocked(raw)) continue;
                                     if (reserve > 0) { var after = new HashSet<string>(used); after.UnionWith(candidate.UniqueImages); if (UniqueLimit(after) < reserve) continue; }

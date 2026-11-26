@@ -68,12 +68,15 @@ namespace VideoBatch {
         public static DialogResult ShowDialog(IWin32Window owner, string network, string accountId, Func<ProfilePreset, Task> apply) {
             using (var dialog = new ProfilePresetDialog(network, accountId, apply)) return dialog.ShowDialog(owner);
         }
+        public static DialogResult ShowLibrary(IWin32Window owner) {
+            using (var dialog = new ProfilePresetDialog(null, null, null)) return dialog.ShowDialog(owner);
+        }
         // Storage injection also allows isolated tests and alternate portable storage roots.
         public ProfilePresetDialog(string network, string accountId, Func<ProfilePreset, Task> apply, ProfilePresetStore store = null) {
             this.store = store ?? new ProfilePresetStore();
-            this.network = ProfilePresetStore.NormalizeNetwork(network);
-            session = new ProfilePresetApplySession(this.store, this.network, accountId, apply);
-            Text = "Заполнить профиль — " + network + " — " + accountId;
+            this.network = network == null ? null : ProfilePresetStore.NormalizeNetwork(network);
+            if (this.network != null) session = new ProfilePresetApplySession(this.store, this.network, accountId, apply);
+            Text = session == null ? "Пресеты профилей — библиотека" : "Заполнить профиль — " + network + " — " + accountId;
             ClientSize = new Size(920, 670); MinimumSize = new Size(820, 600);
             StartPosition = FormStartPosition.CenterParent; MaximizeBox = false;
             Theme.StyleModal(this);
@@ -83,7 +86,7 @@ namespace VideoBatch {
             Controls.Add(root);
             var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(0, 0, 14, 0) };
             left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); left.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
-            left.Controls.Add(new Label { Text = "Пресеты (серые — использованы)", Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            left.Controls.Add(new Label { Text = session == null ? "Пресеты · имя, описание, аватар" : "Пресеты (серые — использованы)", Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
             list.Dock = DockStyle.Fill; list.BorderStyle = BorderStyle.None; list.BackColor = Theme.Card; list.ForeColor = Theme.TextPrimary;
             list.DrawMode = DrawMode.OwnerDrawFixed; list.ItemHeight = 38; list.IntegralHeight = false;
             list.DrawItem += DrawPreset;
@@ -114,10 +117,10 @@ namespace VideoBatch {
             status.Dock = DockStyle.Fill; status.ForeColor = Theme.TextSecondary; status.Padding = new Padding(0, 8, 0, 0); root.Controls.Add(status, 0, 1); root.SetColumnSpan(status, 2);
             var bottom = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
             var close = Theme.MakeButton("Закрыть"); close.Click += (s, e) => Close(); bottom.Controls.Add(close);
-            applyButton = Theme.MakeButton("Применить", accent: true); applyButton.Click += async (s, e) => await ApplySelectedAsync(); bottom.Controls.Add(applyButton);
+            applyButton = Theme.MakeButton("Применить", accent: true); applyButton.Click += async (s, e) => await ApplySelectedAsync(); applyButton.Visible = session != null; bottom.Controls.Add(applyButton);
             root.Controls.Add(bottom, 0, 2); root.SetColumnSpan(bottom, 2);
             FormClosing += (s, e) => {
-                if (applying || session.PendingReceipt != null) {
+                if (applying || session?.PendingReceipt != null) {
                     e.Cancel = true;
                     if (!applying) ShowError("Профиль изменён, но отметка использования не сохранена. Нажми «Сохранить отметку» перед закрытием.");
                 }
@@ -144,7 +147,7 @@ namespace VideoBatch {
         }
         void Reload(string selectId) {
             var presets = store.Load();
-            var items = presets.Select(p => new PresetItem { Preset = p, Used = store.GetUsed(network, p.Id) }).ToArray();
+            var items = presets.Select(p => new PresetItem { Preset = p, Used = network != null && store.GetUsed(network, p.Id) }).ToArray();
             refreshing = true;
             try {
                 list.Items.Clear(); list.Items.AddRange(items);
@@ -161,7 +164,7 @@ namespace VideoBatch {
                     selectedId = item.Preset.Id; name.Text = item.Preset.Name; bio.Text = item.Preset.Bio;
                     SetAvatar(item.Preset.AvatarPath);
                     status.ForeColor = Theme.TextSecondary;
-                    status.Text = item.Used ? "Этот пресет уже использован в " + network + ". Можно редактировать или удалить; повторное применение недоступно."
+                    status.Text = session == null ? list.Items.Count + " пресетов · Редактируй имя, описание и аватар, затем нажми «Сохранить пресет». Аккаунты в соцсетях не изменяются." : item.Used ? "Этот пресет уже использован в " + network + ". Можно редактировать или удалить; повторное применение недоступно."
                         : "Проверь имя, описание и аватар. «Применить» также сохранит изменения в библиотеке.";
                 } else { selectedId = null; name.Clear(); bio.Clear(); SetAvatar(""); }
                 UpdateEnabled();
@@ -170,7 +173,7 @@ namespace VideoBatch {
         void NewPreset() {
             refreshing = true; list.ClearSelected(); refreshing = false;
             selectedId = Guid.NewGuid().ToString("N"); name.Clear(); bio.Clear(); SetAvatar("");
-            status.Text = "Заполни имя, описание и выбери аватар, затем сохрани или примени."; status.ForeColor = Theme.TextSecondary;
+            status.Text = session == null ? "Заполни имя, описание и выбери аватар, затем сохрани пресет." : "Заполни имя, описание и выбери аватар, затем сохрани или примени."; status.ForeColor = Theme.TextSecondary;
             UpdateEnabled(); name.Focus();
         }
         void SetAvatar(string path) {
@@ -215,11 +218,11 @@ namespace VideoBatch {
             } finally { applying = false; UpdateEnabled(); }
         }
         void UpdateEnabled() {
-            bool editable = !applying && session.PendingReceipt == null;
+            bool editable = !applying && session?.PendingReceipt == null;
             list.Enabled = editable; editor.Enabled = editable; libraryActions.Enabled = editable;
             saveButton.Enabled = selectedId != null; deleteButton.Enabled = list.SelectedItem != null;
-            applyButton.Text = session.PendingReceipt != null ? "Сохранить отметку" : "Применить";
-            applyButton.Enabled = !applying && (session.PendingReceipt != null || (selectedId != null && (!(list.SelectedItem is PresetItem item) || !item.Used)));
+            applyButton.Text = session?.PendingReceipt != null ? "Сохранить отметку" : "Применить";
+            applyButton.Enabled = session != null && !applying && (session.PendingReceipt != null || (selectedId != null && (!(list.SelectedItem is PresetItem item) || !item.Used)));
         }
         void Guard(Action action) { try { action(); } catch (Exception ex) { ShowError(ex.Message); } }
         void ShowError(string message) { status.Text = message; status.ForeColor = Theme.Error; }

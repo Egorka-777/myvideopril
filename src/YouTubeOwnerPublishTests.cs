@@ -50,7 +50,51 @@ namespace VideoBatch {
             var sentChoice=new OwnerPublishSelection{Channel=channel,Item=sentItem,CommentText="Sent text"};
             YouTubeOwnerPublish.Apply(sentChoice,new UploadMessage{stage="owner_comment_sent",videoId=sentItem.PublishedVideoId,localJobId=sentItem.StudioUploadId,commentText="Sent text"});
             Check(sentItem.OwnerCommentState=="sent"&&YouTubeOwnerPublish.CommentComplete(sentItem)&&YouTubeOwnerPublish.ToJob(sentChoice).commentState=="confirmed","sent without readback skips duplicate");
+            TestTemplateAccounts();
             Console.WriteLine("Owner publish: per-account templates, PC date, saved IDs, durable uncertain state and exact response routing PASS");return true;
+        }
+        static void TestTemplateAccounts(){
+            string old=Store.Root,temp=Path.Combine(Path.GetTempPath(),"vb-templates-"+Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(temp);
+            try{
+                Store.Root=temp;
+                var shorts=new YouTubeChannel{Name="Account",ProfileId="42",Kind="shorts",OwnerCommentTemplate="Saved\n{ddMM}"};
+                var longs=new YouTubeChannel{Name="Account",ProfileId="42",Kind="long"};
+                var warmup=new YouTubeChannel{Name="Account",ProfileId=" 42 ",Kind="warmup"};
+                var other=new YouTubeChannel{Name="Account",ProfileId="43",OwnerCommentTemplate="Other"};
+                var prefs=new Preferences{YouTubeChannels=new List<YouTubeChannel>{longs,shorts,warmup,other}};
+                Check(YouTubeOwnerPublish.CommentTemplate(longs,prefs.YouTubeChannels)==shorts.OwnerCommentTemplate,"long video reads existing profile signature from shorts before editor Save");
+                var candidateItem=new YouTubeItem{PublishedVideoId="video000007",ScheduleDate="2026-11-25",ScheduleTime="21:26"};
+                longs.Items.Add(candidateItem);
+                Check(YouTubeOwnerPublish.Candidates(new[]{longs},new DateTime(2026,11,26),prefs.YouTubeChannels).Single().CommentText=="Saved\n2511","selected long video uses profile signature and video slot date");
+                candidateItem.OwnerCommentState="sent";candidateItem.OwnerCommentText="Already sent";
+                Check(YouTubeOwnerPublish.Candidates(new[]{longs},DateTime.Now,prefs.YouTubeChannels).Single().CommentText=="Already sent","profile template lookup cannot reset sent comment");
+                candidateItem.OwnerCommentState="";
+                var accounts=OwnerCommentTemplateAccount.Create(prefs.YouTubeChannels);
+                Check(accounts.Count==2,"shorts, long and warmup produce one entry per profile, not per name");
+                var account=accounts.Single(a=>a.Channels.Contains(shorts));
+                Check(account.Template==shorts.OwnerCommentTemplate,"empty first variant cannot hide existing signature");
+                account.Template="Draft";
+                Check(shorts.OwnerCommentTemplate=="Saved\n{ddMM}"&&longs.OwnerCommentTemplate=="","editing draft does not change settings before Save");
+                account.Template="Saved\n{ddMM}";
+                OwnerCommentTemplateAccount.Save(prefs,accounts);
+                Check(prefs.YouTubeChannels.Count==4&&shorts.OwnerCommentTemplate=="Saved\n{ddMM}"&&longs.OwnerCommentTemplate==shorts.OwnerCommentTemplate&&warmup.OwnerCommentTemplate==shorts.OwnerCommentTemplate,"save keeps records and shares existing signature with empty variants");
+                Check(Store.Load().YouTubeChannels.Count(c=>c.OwnerCommentTemplate=="Saved\n{ddMM}")==3,"all profile signatures survive reload");
+                longs.OwnerCommentTemplate="Different saved signature";
+                warmup.OwnerCommentTemplate="";
+                Reject(()=>YouTubeOwnerPublish.CommentTemplate(warmup,prefs.YouTubeChannels));
+                Check(YouTubeOwnerPublish.CommentTemplate(longs,prefs.YouTubeChannels)=="Different saved signature","explicit variant signature remains authoritative");
+                accounts=OwnerCommentTemplateAccount.Create(prefs.YouTubeChannels);account=accounts.Single(a=>a.Channels.Contains(shorts));
+                OwnerCommentTemplateAccount.Save(prefs,accounts);
+                Check(longs.OwnerCommentTemplate=="Different saved signature"&&shorts.OwnerCommentTemplate=="Saved\n{ddMM}","conflicting existing signatures are not overwritten");
+                account.Template="Replacement";Reject(()=>OwnerCommentTemplateAccount.Save(prefs,accounts));
+                Check(longs.OwnerCommentTemplate=="Different saved signature","conflicting edit rejected before changes");
+                longs.OwnerCommentTemplate=shorts.OwnerCommentTemplate;
+                accounts=OwnerCommentTemplateAccount.Create(prefs.YouTubeChannels);accounts.Single(a=>a.Channels.Contains(shorts)).Template="New";
+                Store.Root=Path.Combine(temp,"not-a-directory");File.WriteAllText(Store.Root,"blocked");
+                Reject(()=>OwnerCommentTemplateAccount.Save(prefs,accounts));
+                Check(shorts.OwnerCommentTemplate=="Saved\n{ddMM}"&&longs.OwnerCommentTemplate==shorts.OwnerCommentTemplate,"failed save restores every signature");
+            }finally{Store.Root=old;Directory.Delete(temp,true);}
         }
         public static bool RunUiTests(string folder){
             Directory.CreateDirectory(folder);

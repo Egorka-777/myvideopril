@@ -143,6 +143,14 @@ const channels = {
     await playback.likeCurrentVideo(page, (_, text) => softMessages.push(text), { soft: true });
     assert(softMessages.some(text => /YouTube отключил кнопку/.test(text)));
 
+    // Signed-out profiles must fail before playback/like, not after watching 80%.
+    await page.setContent(`<script>window.ytcfg={get:key=>key==='LOGGED_IN'?false:undefined};</script><video></video><button aria-label="Like this video">Like</button>`);
+    await assert.rejects(playback.waitForVideoEnd(page, {}), /нет активного входа в YouTube/);
+    await assert.rejects(playback.likeCurrentVideo(page), /нет активного входа в YouTube/);
+    await page.evaluate(()=>{ delete window.ytcfg; });
+    await page.setContent(`<div>Войдите в аккаунт, чтобы поставить отметку.</div><button aria-label="Like this video">Like</button>`);
+    await assert.rejects(playback.likeCurrentVideo(page), /нет активного входа в YouTube/);
+
     // A non-finite player duration must not replace the known finite duration.
     await page.setContent(`<video></video><button aria-label="Unlike this video" aria-pressed="true">Liked</button>`);
     await page.evaluate(() => {

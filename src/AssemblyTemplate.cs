@@ -148,6 +148,8 @@ namespace VideoBatch {
         /// <summary>Доля первой половины (верх/слева), 0.25–0.75.</summary>
         public double SplitRatio = .5;
         public double SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
+        /// <summary>Сдвиг кадрирования половины −1…1 (по горизонтали/вертикали).</summary>
+        public double SplitPrimaryPanX, SplitPrimaryPanY, SplitSecondaryPanX, SplitSecondaryPanY;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public bool ExportSubtitleText = true;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
@@ -242,7 +244,9 @@ namespace VideoBatch {
             Check(SplitAudioVolume, 0, 2, "Громкость звука двух экранов");
             if (SplitAudioMode != "" && SplitAudioMode != "top" && SplitAudioMode != "bottom" && SplitAudioMode != "alternate") throw new Exception("Неизвестный режим звука двух экранов.");
             Check(SplitSoftness, 0, .5, "Мягкость границы"); Check(SplitRatio, .25, .75, "Доля первой половины");
-            Check(SplitPrimaryZoom, .85, 1.15, "Масштаб первой половины"); Check(SplitSecondaryZoom, .85, 1.15, "Масштаб второй половины");
+            Check(SplitPrimaryZoom, .6, 2, "Масштаб первой половины"); Check(SplitSecondaryZoom, .6, 2, "Масштаб второй половины");
+            Check(SplitPrimaryPanX, -1, 1, "Сдвиг первой половины по X"); Check(SplitPrimaryPanY, -1, 1, "Сдвиг первой половины по Y");
+            Check(SplitSecondaryPanX, -1, 1, "Сдвиг второй половины по X"); Check(SplitSecondaryPanY, -1, 1, "Сдвиг второй половины по Y");
             Check(VoiceoverVolume, 0, 2, "Громкость озвучки");
             Check(VoicePitchSemitones, -12, 12, "Тон голоса");
             Check(PrimaryNativeVolume, 0, 2, "Родной звук первой пачки");
@@ -370,14 +374,23 @@ namespace VideoBatch {
                 return (T)new XmlSerializer(typeof(T)).Deserialize(reader);
         }
         public static void Save<T>(string path, T value) {
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
-            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            path = PathUtil.Normalize(path);
+            string dir = Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(dir)) throw new ArgumentException("Invalid path.", nameof(path));
+            Directory.CreateDirectory(dir);
+            string temp = Path.Combine(dir, Guid.NewGuid().ToString("N") + ".tmp");
+            string pathEx = PathUtil.Extended(path);
+            string tempEx = PathUtil.Extended(temp);
             try {
-                using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                using (var stream = new FileStream(tempEx, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                     new XmlSerializer(typeof(T)).Serialize(stream, value); stream.Flush(true);
                 }
-                if (File.Exists(path)) File.Replace(temp, path, path + ".bak"); else File.Move(temp, path);
-            } finally { if (File.Exists(temp)) File.Delete(temp); }
+                if (File.Exists(pathEx)) File.Replace(tempEx, pathEx, pathEx + ".bak");
+                else File.Move(tempEx, pathEx);
+            } finally {
+                try { if (File.Exists(tempEx)) File.Delete(tempEx); } catch { }
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
         }
     }
     public static class AssemblyWorkspace {
@@ -438,6 +451,13 @@ namespace VideoBatch {
             }
             if (!string.IsNullOrWhiteSpace(t.Videos)) MakeFolder(t.Resolve(t.Videos));
             if (!string.IsNullOrWhiteSpace(t.Music)) MakeFolder(t.Resolve(t.Music));
+            EnsureSplitSharedPool(t);
+        }
+        /// <summary>При делении экрана без второй пачки используем общий набор из 2+ файлов — иначе связок 0.</summary>
+        public static void EnsureSplitSharedPool(AssemblyTemplate t) {
+            if (t.SplitLayout == "none" || t.SplitSharedPool) return;
+            if (AssemblyFiles.Pool(t.Resolve(t.SecondaryVideos), AssemblyFiles.VideoExtensions).Count > 0) return;
+            if (t.SplitVideoPaths().Count >= 2) t.SplitSharedPool = true;
         }
         static void MakeFolder(string path) { if (!File.Exists(path)) Directory.CreateDirectory(path); }
         public static string NewFolder(AssemblyTemplate t, int index) {

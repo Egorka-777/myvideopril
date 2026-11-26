@@ -12,9 +12,24 @@ namespace VideoBatch {
     public sealed class VideoTranslationOptions {
         public string TargetLanguage = "ru";
         public string Style = "Гоблинский", Profanity = "Без мата", Instructions = "", GeminiModel = "gemini-2.5-flash", VoiceId = "";
-        public bool BurnSubtitles;
+        public bool BurnSubtitles, MaskVideoText;
+        public List<string> TextMaskImages = new List<string>();
         public ProcessingSettings Processing = new ProcessingSettings();
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle();
+        /// <summary>Громкость оригинала под озвучкой, % (0 = выкл., 100 = без приглушения).</summary>
+        public double OriginalDuckLevelPercent = 10;
+        /// <summary>Плавный спад до заданного уровня за столько секунд до речи.</summary>
+        public double OriginalDuckAttackSeconds = 0.5;
+        /// <summary>Плавное восстановление до 100% после речи.</summary>
+        public double OriginalDuckReleaseSeconds = 0.5;
+        internal void NormalizeDuck() {
+            if (double.IsNaN(OriginalDuckLevelPercent) || double.IsInfinity(OriginalDuckLevelPercent)) OriginalDuckLevelPercent = 10;
+            OriginalDuckLevelPercent = Math.Max(0, Math.Min(100, OriginalDuckLevelPercent));
+            if (double.IsNaN(OriginalDuckAttackSeconds) || double.IsInfinity(OriginalDuckAttackSeconds)) OriginalDuckAttackSeconds = 0.5;
+            if (double.IsNaN(OriginalDuckReleaseSeconds) || double.IsInfinity(OriginalDuckReleaseSeconds)) OriginalDuckReleaseSeconds = 0.5;
+            OriginalDuckAttackSeconds = Math.Max(0.05, Math.Min(5, OriginalDuckAttackSeconds));
+            OriginalDuckReleaseSeconds = Math.Max(0.05, Math.Min(5, OriginalDuckReleaseSeconds));
+        }
     }
     public sealed class VideoTranslationSegment {
         public int Id;
@@ -138,7 +153,7 @@ namespace VideoBatch {
                     segment.TranslationKey = TranslationKey(segment, project.Options);
             }
         }
-        internal static string TranslationKey(VideoTranslationSegment s, VideoTranslationOptions o) => Digest(Json().Serialize(new { s.Original, s.Start, s.End, o.Style, o.Profanity, o.Instructions, o.GeminiModel, o.TargetLanguage }));
+        internal static string TranslationKey(VideoTranslationSegment s, VideoTranslationOptions o) => Digest(Json().Serialize(new { translationRevision = 2, s.Original, s.Start, s.End, o.Style, o.Profanity, o.Instructions, o.GeminiModel, o.TargetLanguage }));
         public static async Task TranslateAsync(VideoTranslationProject p, VideoTranslationOptions options, string geminiKey, CancellationToken ct, Action<string> progress, string proxyUrl = "") {
             Validate(p); ValidateOptions(options); ct.ThrowIfCancellationRequested();
             await Task.Run(() => VerifySource(p), ct).ConfigureAwait(false);
@@ -187,10 +202,14 @@ namespace VideoBatch {
             var processing = options.Processing ?? new ProcessingSettings(); processing.Validate();
             if (processing.Trim.Enabled || processing.Speed.Enabled || processing.Tempo.Enabled) throw new Exception("Для перевода отключите подрезку, скорость видео и темп аудио: исходный таймлайн должен оставаться неизменным.");
             await Task.Run(() => VerifySource(p), ct).ConfigureAwait(false);
+            VideoTextMask.ValidateImages(options);
+            var textRegions = options.MaskVideoText ? await VideoTextMask.ScanAsync(p, ffprobe, ct, progress).ConfigureAwait(false) : null;
             p.Options = Copy(options); Save(p);
             string audioFolder = Path.Combine(p.Directory, "speech"), work = Path.Combine(p.Directory, "render");
             System.IO.Directory.CreateDirectory(audioFolder); System.IO.Directory.CreateDirectory(work);
-            progress?.Invoke("Исходный звук сохраняется; во время переводных реплик его громкость снижается до 15%.");
+            options.NormalizeDuck();
+            progress?.Invoke("Исходный звук в паузах на 100%. Под озвучкой — " + Core.N(options.OriginalDuckLevelPercent) + "%, за "
+                + Core.N(options.OriginalDuckAttackSeconds) + " с до речи и " + Core.N(options.OriginalDuckReleaseSeconds) + " с после.");
             string timeline = Path.Combine(work, "timeline.wav");
             var captions = new List<WarmupCaption>();
             var speechWindows = new List<Tuple<double,double>>();
@@ -271,12 +290,18 @@ namespace VideoBatch {
             try {
                 // Mix on the immutable source timeline before applying shared output effects.
                 string mixed = Path.Combine(work, "mixed.wav");
-                string mixGraph = "[0:" + media.AudioIndex + "]asetpts=PTS-STARTPTS," + DuckFilter(speechWindows) + "[original];"
+                string mixGraph = "[0:" + media.AudioIndex + "]asetpts=PTS-STARTPTS," + DuckFilter(speechWindows, options) + "[original];"
                     + "[1:a:0]asetpts=PTS-STARTPTS[translation];[original][translation]amix=inputs=2:duration=longest:normalize=0,atrim=duration=" + Core.N(p.Duration) + "[mixed]";
                 await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-i", p.Source, "-i", timeline, "-filter_complex", mixGraph, "-map", "[mixed]", "-c:a", "pcm_s16le", mixed }, ct, null, 300).ConfigureAwait(false);
                 var profile = new Profile { Processing = new ProcessingSample() };
                 ProcessingEngine.Apply(profile, processing, media, new Random(17), DateTime.Now);
-                var args = ProcessingEngine.Arguments(p.Source, processed, profile, media, mixed);
+                string visualSource = p.Source;
+                if (textRegions != null && textRegions.Count > 0) {
+                    visualSource = Path.Combine(work, "masked.mp4");
+                    await VideoTextMask.ApplyAsync(p.Source, visualSource, ffmpeg, textRegions, options.TextMaskImages, Path.Combine(work, "text-masks"), media.Width, media.Height, p.Duration, ct, progress).ConfigureAwait(false);
+                }
+                var visualMedia = visualSource == p.Source ? media : Core.VideoInfo(await Core.Probe(ffprobe, visualSource, ct).ConfigureAwait(false));
+                var args = ProcessingEngine.Arguments(visualSource, processed, profile, visualMedia, mixed);
                 await ProcessingEngine.Accelerate(ffmpeg,args,media.Width,media.Height,ct,progress).ConfigureAwait(false);
                 if (File.Exists(processed)) File.Delete(processed);
                 progress?.Invoke("Собираю перевод на исходном таймлайне…");
@@ -298,7 +323,10 @@ namespace VideoBatch {
                 string output = Path.Combine(p.Directory, "translated.mp4");
                 if (File.Exists(output)) File.Replace(partial, output, null); else File.Move(partial, output);
                 p.Output = output; Save(p); progress?.Invoke("Готово: " + output);
-            } finally { if (File.Exists(partial)) File.Delete(partial); if (File.Exists(processed)) File.Delete(processed); }
+            } finally {
+                if (File.Exists(partial)) File.Delete(partial); if (File.Exists(processed)) File.Delete(processed);
+                string masked = Path.Combine(work, "masked.mp4"); if (File.Exists(masked)) File.Delete(masked);
+            }
         }
         internal static List<SubtitleWord> SpeechWords(VideoTranslationSegment s, WarmupAlignment alignment, double rawDuration, double timingScale, double trimOffset, double renderedDuration) {
             var cues = WarmupSubtitles.Cues(alignment, rawDuration, 6);
@@ -356,13 +384,16 @@ namespace VideoBatch {
                 stream.SetLength(length * 2);
             }
         }
-        internal static string DuckFilter(IEnumerable<Tuple<double, double>> windows) {
-            // Sample-evaluated local 50 ms attack/release; overlapping ramps take the
-            // quieter gain, never multiply ducking or change another utterance's onset.
+        internal static string DuckFilter(IEnumerable<Tuple<double, double>> windows, VideoTranslationOptions options = null) {
+            options = options ?? new VideoTranslationOptions();
+            options.NormalizeDuck();
+            if (options.OriginalDuckLevelPercent >= 100) return "anull";
+            string attack = Core.N(options.OriginalDuckAttackSeconds), release = Core.N(options.OriginalDuckReleaseSeconds);
+            string duck = Core.N((100 - options.OriginalDuckLevelPercent) / 100);
             string gain = "1";
             foreach (var w in windows) {
                 string start = Core.N(w.Item1), end = Core.N(w.Item2);
-                string local = "1-0.85*max(0,min(1,min((t-(" + start + "-0.05))/0.05,(" + end + "+0.05-t)/0.05)))";
+                string local = "1-" + duck + "*max(0,min(1,min((t-(" + start + "-" + attack + "))/" + attack + ",(" + end + "+" + release + "-t)/" + release + ")))";
                 gain = "min(" + gain + "," + local + ")";
             }
             return "aeval=exprs='val(ch)*(" + gain + ")':c=same";

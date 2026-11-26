@@ -66,6 +66,14 @@ class WebRoutes(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(allowed_host(host,'instagram'))
         self.assertFalse(allowed_host('instagram.com','unknown'))
 
+    def test_instagram_checkpoint_can_load_facebook_frame_through_same_proxy(self):
+        self.assertTrue(allowed_host('www.facebook.com','instagram'))
+        self.assertEqual(route_hosts('www.facebook.com','instagram'),['www.facebook.com'])
+        self.assertFalse(allowed_host('www.facebook.com','telegram'))
+        self.assertFalse(allowed_host('www.facebook.com','tiktok'))
+        for host in ('www.facebook.com.evil.test','evilwww.facebook.com','other.facebook.com'):
+            self.assertFalse(allowed_host(host,'instagram'))
+
     def test_instagram_routes_and_diagnostics_do_not_use_telegram_aliases(self):
         for host in ('www.instagram.com','www.threads.com','www.threads.net','scontent.cdninstagram.com','video.fbcdn.net'):
             self.assertEqual(route_hosts(host,'instagram'),[host])

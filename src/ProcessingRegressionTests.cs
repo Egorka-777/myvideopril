@@ -13,6 +13,20 @@ namespace VideoBatch {
                 string input=Path.Combine(root,"input.mp4");
                 Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","testsrc2=s=320x180:r=30:d=2","-f","lavfi","-i","sine=frequency=440:sample_rate=48000:duration=2","-c:v","libx264","-c:a","aac","-metadata","comment=fixture-original",input},ct,null,60).GetAwaiter().GetResult();
                 var media=Core.VideoInfo(Core.Probe(ffprobe,input,ct).GetAwaiter().GetResult());
+                // Compare the shared composed RGB table against the original two filters
+                // over every 8-bit input, including nearest-even rounding ties.
+                foreach (double shift in new[] { -.09, -.000126, .000126, .09 }) {
+                    var colorProfile = new Profile { Short=false, Resolution="source", Fps="source", Speed=1,
+                        Processing=new ProcessingSample { RedShift=shift, GreenShift=shift, BlueShift=shift, ColorLut=.3, ColorPreset="vintage" } };
+                    var colorArgs = ProcessingEngine.Arguments(input, "unused.mp4", colorProfile, media, null);
+                    string filters = colorArgs[colorArgs.IndexOf("-vf")+1];
+                    int begin = filters.IndexOf("lutrgb=", StringComparison.Ordinal), finish = filters.IndexOf("',", begin, StringComparison.Ordinal);
+                    string composed = filters.Substring(begin, finish+1-begin);
+                    string gain=Core.N(1+shift);
+                    string original="colorchannelmixer=rr="+gain+":gg="+gain+":bb="+gain+",lutrgb=r='val*1.012+0.9':g='val+0.6':b='val*0.976+1.2'";
+                    Func<string,string> digest = filter => Core.Tool(ffmpeg,new[] {"-v","error","-f","lavfi","-i","nullsrc=s=256x16,format=gbrp,geq=r=X:g=X:b=X","-vf","format=rgb24,"+filter,"-frames:v","1","-f","md5","-"},ct,null,30).GetAwaiter().GetResult().Trim();
+                    if(digest(original)!=digest(composed))throw new Exception("Composed RGB table changed pixels: "+shift);
+                }
                 foreach(string preset in new[]{"warm","cool","film","vintage"}) {
                     var settings=new ProcessingSettings {ColorPreset=preset};
                     foreach(var item in settings.Parameters().SkipWhile(p=>!ReferenceEquals(p,settings.Gamma)))item.Enabled=true;
@@ -38,6 +52,44 @@ namespace VideoBatch {
                 }
                 if(ProcessingSettings.MildDefaults().Geq.Enabled||AssemblyProcessing.Defaults().ColorLut.Enabled)throw new Exception("New effects enabled implicitly");
                 return true;
+            } finally {Directory.Delete(root,true);}
+        }
+        public static bool RunFusedAssembly(string ffmpeg, string ffprobe) {
+            string root=Path.Combine(Path.GetTempPath(),"vb-fused-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var ct=System.Threading.CancellationToken.None;
+            try {
+                string source=Path.Combine(root,"fixture.mp4");
+                Core.Tool(ffmpeg,new[]{"-v","error","-y","-f","lavfi","-i","testsrc2=s=160x96:r=25:d=2","-f","lavfi","-i","sine=frequency=440:sample_rate=48000:duration=2","-c:v","libx264","-c:a","aac",source},ct,null,30).GetAwaiter().GetResult();
+                foreach(bool sound in new[]{true,false}) {
+                    var settings=new ProcessingSettings();
+                    foreach(var parameter in settings.Parameters().SkipWhile(x=>!ReferenceEquals(x,settings.Gamma))) parameter.Enabled=true;
+                    settings.Speed.Enabled=true;settings.Speed.Values=new Range(125,125);
+                    var t=new AssemblyTemplate {Materials=root,Width=160,Height=96,Fps=25,Transition="cut",SceneTimingVersion=1,RenderMode="cpu",PrimaryNativeAudio=sound,PrimaryNativeVolume=1,OutputProcessing=settings};
+                    var scene=new AssemblyScene {Duration=2};t.Scenes.Add(scene);
+                    var p=new AssemblyPlan {RenderDuration=2};p.Scenes.Add(new AssemblyScenePlan {Scene=scene,Video=new AssemblyVideo {Path=source,Duration=2,HasAudio=true},ContentSeconds=2,RenderDuration=2});
+                    string work=Path.Combine(root,"work"+sound),output=Path.Combine(root,"fused"+sound+".mp4");
+                    AssemblyEngine.Render(t,p,ffmpeg,ffprobe,output,work,AssemblyRaster.Save,ct,null,segmentRandom:new Random(7),processOutput:true).GetAwaiter().GetResult();
+                    var media=Core.VideoInfo(Core.Probe(ffprobe,output,ct).GetAwaiter().GetResult());
+                    if(Math.Abs(media.VideoDuration-1.6)>.06 || media.HasAudio!=sound || media.Width!=160 || media.Height!=96)throw new Exception("Fused duration/audio/canvas");
+                    string graph=File.ReadAllText(Path.Combine(work,"render.ffgraph"));
+                    if(!graph.Contains("[vout]setpts=")||!graph.Contains("geq=")||!graph.Contains("gblur=")||!graph.Contains("[processed_video]"))throw new Exception("Fused shared effects graph missing");
+                    Core.Tool(ffmpeg,new[]{"-v","error","-i",output,"-f","null","-"},ct,null,30).GetAwaiter().GetResult();
+                    if(sound) {
+                        t.Insertions.Add(new AssemblyInsertion {Source=source,Start=1});
+                        string inserted=Path.Combine(root,"inserted.mp4");
+                        AssemblyEngine.Render(t,p,ffmpeg,ffprobe,inserted,Path.Combine(root,"insert-work"),AssemblyRaster.Save,ct,null,segmentRandom:new Random(7),processOutput:true).GetAwaiter().GetResult();
+                        var ad=Core.VideoInfo(Core.Probe(ffprobe,inserted,ct).GetAwaiter().GetResult());
+                        if(Math.Abs(ad.VideoDuration-3.2)>.06||!ad.HasAudio)throw new Exception("Insertion final processing boundary/speed");
+                        var leveled=Store.Clone(t);leveled.NativeAudioLeveled=true;leveled.OutputProcessing.Volume.Enabled=leveled.OutputProcessing.AudioModulation.Enabled=true;
+                        var sampled=AssemblyProcessing.Prepare(leveled,media,new Random(7),.5);
+                        if(sampled.Profile.Speed!=1||sampled.Profile.Processing.Volume!=1||sampled.Profile.Processing.ModulationDepth!=0)throw new Exception("Prefix/leveling policy");
+                    }
+                    string raw=Path.Combine(root,"raw"+sound+".mp4");
+                    t.Insertions.Clear();
+                    AssemblyEngine.Render(t,p,ffmpeg,ffprobe,raw,Path.Combine(root,"raw-work"+sound),AssemblyRaster.Save,ct,null).GetAwaiter().GetResult();
+                    if(Math.Abs(Core.VideoInfo(Core.Probe(ffprobe,raw,ct).GetAwaiter().GetResult()).VideoDuration-2)>.06)throw new Exception("Raw Render changed semantics");
+                }
+                Console.WriteLine("Fused assembly PASS: shared extended graph, speed, audio/no-audio, insertion final boundary, raw render, leveling/prefix policy");return true;
             } finally {Directory.Delete(root,true);}
         }
         public static bool RunAssemblySync(string ffmpeg, string ffprobe) {

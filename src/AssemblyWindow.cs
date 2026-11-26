@@ -20,6 +20,7 @@ namespace VideoBatch {
         string capacityKey; int capacityVersion;
         ContextMenuStrip activeSceneMenu;
         readonly System.Windows.Forms.Timer saveTimer = new System.Windows.Forms.Timer { Interval = 400 };
+        readonly System.Windows.Forms.Timer splitMaskPreviewTimer = new System.Windows.Forms.Timer { Interval = 350 };
         NumericUpDown duration, width, count, volume, voiceoverVolume, subtitlePosition;
         bool subtitleEditing;
         int videoPackIndex;
@@ -39,7 +40,6 @@ namespace VideoBatch {
         FlowLayoutPanel packChips;
         Label status, selectedCaption, capacityLabel;
         Button videoButton, musicButton, backgroundButton, globalImagesButton, voiceToolbarButton, subsToolbarButton, formatButton, titlesButton, profileRuBtn, profileEnBtn, profileRuInstBtn, profileEnInstBtn, profileTestBtn, profileRuTikTokBtn, profileEnTikTokBtn, stop, transitionButton, countButton, lessButton, moreButton, assembleButton;
-        NumericUpDown splitPrimaryZoom, splitSecondaryZoom;
         readonly Dictionary<string, double> voiceDurations = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         string VoiceRange(IEnumerable<string> paths) {
             var files = paths.ToList();
@@ -124,6 +124,7 @@ namespace VideoBatch {
             BuildStudio(); InitializeVisualEstimate(); SelectScene(0); Save();
             if (note != null) status.Text = note;
             saveTimer.Tick += (s,e) => { saveTimer.Stop(); Safe(Save); };
+            splitMaskPreviewTimer.Tick += (s,e) => { splitMaskPreviewTimer.Stop(); Safe(() => { Changed(true); Save(); RequestBackground(); }); };
             Shown += (s,e) => { RequestBackground(); RequestCapacity(); RequestTimingHints(); WarmMaterialsSilent(); };
             Activated += (s,e) => { AssemblyWorkspace.Prepare(template); RefreshInfo(); RefreshCanvas(); RequestCapacity(); RequestTimingHints(); };
             VisibleChanged += (s,e) => { if (Visible && !IsDisposed) RequestBackground(); if (!Visible && !IsDisposed && !loading) Safe(() => { saveTimer.Stop(); Save(); }); };
@@ -223,9 +224,8 @@ namespace VideoBatch {
             settingsColumn.Controls.Add(contentHost, 0, 2);
             globalImagesButton = HeaderAsset("GlobalImages", () => { globalEditing = true; layerIndex = 0; RefreshChips(); LoadLayer(); RefreshCanvas(); if (SelectedLayer == null) AddObject(); OpenPool(2); });
             globalImagesButton.Visible = false;
-            previewColumn = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = Theme.Card, Margin = Padding.Empty };
+            previewColumn = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Theme.Card, Margin = Padding.Empty };
             previewColumn.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-            previewColumn.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             previewColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             previewColumn.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             heroPreviewHost.Controls.Add(previewColumn);
@@ -248,7 +248,8 @@ namespace VideoBatch {
             canvas.BaseVideoSelected += () => { layerIndex = -1; LoadLayer(); RefreshChips(); };
             canvas.BaseVideoPlacementChanged += () => { saveTimer.Stop(); saveTimer.Start(); RequestVisualEstimate(); };
             canvas.SplitRatioChanged += () => Safe(() => { Changed(true); Save(); RequestBackground(); });
-            canvas.SplitZoomChanged += () => Safe(() => { if (splitPrimaryZoom != null && !loading) { splitPrimaryZoom.Value = (decimal)(template.SplitPrimaryZoom * 100); splitSecondaryZoom.Value = (decimal)(template.SplitSecondaryZoom * 100); } Changed(true); Save(); RequestBackground(); });
+            canvas.SplitPanCommitted += () => Safe(() => { Changed(true); Save(); RequestBackground(); });
+            canvas.SplitMaskAdjusted += () => Safe(() => { splitMaskPreviewTimer.Stop(); splitMaskPreviewTimer.Start(); saveTimer.Stop(); saveTimer.Start(); });
             canvas.SubtitlePositionChanged += pos => Safe(() => {
                 if (template.SubtitleStyle == null) template.SubtitleStyle = new WarmupSubtitleStyle { Enabled = true };
                 template.SubtitleStyle.Enabled = true;
@@ -278,21 +279,13 @@ namespace VideoBatch {
             var objectStyle = Button("Оформление…", () => Safe(() => { if (SelectedLayer == null) { status.Text="Сначала выберите объект или добавьте текст."; return; } if (SelectedLayer.Kind == "text") EditTextObject(); else EditCornerRadius(); })); objectStyle.Name = "ObjectStyle"; positions.Controls.Add(objectStyle);
             controls.Controls.Add(positions,0,2); controls.SetColumnSpan(positions,2);
             sceneEditor.Controls.Add(controls, 0, 2);
-            var splitZoomRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, Visible = false, Name = "SplitZoomRow", Padding = new Padding(0, 2, 0, 0) };
-            splitPrimaryZoom = Value(85, 115, 0); splitSecondaryZoom = Value(85, 115, 0);
-            splitPrimaryZoom.Visible = splitSecondaryZoom.Visible = false;
-            splitZoomRow.Controls.Add(new AssemblySlider("Верх/лево · масштаб", splitPrimaryZoom, "%") { Width = 220, Margin = new Padding(0, 0, 8, 0) });
-            splitZoomRow.Controls.Add(new AssemblySlider("Низ/право · масштаб", splitSecondaryZoom, "%") { Width = 220 });
-            splitPrimaryZoom.ValueChanged += (s, e) => { if (loading) return; template.SplitPrimaryZoom = (double)splitPrimaryZoom.Value / 100; Changed(true); Save(); RequestBackground(); };
-            splitSecondaryZoom.ValueChanged += (s, e) => { if (loading) return; template.SplitSecondaryZoom = (double)splitSecondaryZoom.Value / 100; Changed(true); Save(); RequestBackground(); };
             var guideBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
             foreach (string guide in new[] { "Без разметки", "TikTok", "Instagram" }) {
                 string selectedGuide = guide;
                 var button = Button(guide, () => canvas.SetPlatformGuide(selectedGuide)); button.Name = "PlatformGuide-" + guide; button.Height = 28; guideBar.Controls.Add(button);
             }
             previewColumn.Controls.Add(guideBar, 0, 0);
-            previewColumn.Controls.Add(splitZoomRow, 0, 1);
-            previewColumn.Controls.Add(canvas, 0, 2);
+            previewColumn.Controls.Add(canvas, 0, 1);
             var bottom=new TableLayoutPanel {Dock=DockStyle.Fill,RowCount=3,ColumnCount=1,Padding=new Padding(0,12,0,0),Margin=Padding.Empty};
             bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,28)); bottom.RowStyles.Add(new RowStyle(SizeType.Absolute,4)); bottom.RowStyles.Add(new RowStyle(SizeType.Percent,100)); root.Controls.Add(bottom,0,2);
             status=Label(""); status.Name="AssemblyStatus"; var notices=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty}; notices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,40)); notices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,60)); notices.Controls.Add(status,0,0); capacityLabel=Label("Добавь видео для расчёта связок"); capacityLabel.Name="AssemblyCapacity"; capacityLabel.TextAlign=ContentAlignment.MiddleRight; notices.Controls.Add(capacityLabel,1,0); bottom.Controls.Add(notices,0,0);
@@ -309,7 +302,7 @@ namespace VideoBatch {
             countButton=Button("",CountMenu); countButton.Name="AssemblyCount"; FooterSize(countButton,112);
             moreButton=Button("+",() => ChangeCount(1)); moreButton.Name="CountMore"; FooterSize(moreButton,34);
             assembleButton=Button("Собрать ролики",async () => await Run(false),true); assembleButton.Name="Assemble"; FooterSize(assembleButton,140);
-            var results=Button("Результаты ↗",() => Safe(() => {Directory.CreateDirectory(template.Output); Ui.Open(template.Output);})); results.Name="Results"; FooterSize(results,132);
+            var results=Button("Результаты ↗",() => Safe(() => Ui.Open(VideoBatchOutputPaths.DailySessionFolder(template.Output)))); results.Name="Results"; FooterSize(results,132);
             stop=Button("■ Стоп",() => cancellation?.Cancel()); stop.Visible=false; FooterSize(stop,82);
             outputOptions.Controls.AddRange(new Control[] {formatButton,transitionButton,titlesButton});
             outputActions.Controls.AddRange(new Control[] {lessButton,countButton,moreButton,results,assembleButton,stop});
@@ -589,6 +582,11 @@ namespace VideoBatch {
                 double pads=template.Transition=="cut"?0:Math.Max(0,template.Scenes.Count-1)*template.TransitionSeconds;
                 totalRange=ready?(min+pads).ToString("0.#")+"–"+(max+pads).ToString("0.#")+" с":"расчёт…";
             } else if(speechFiles>0) totalRange=VoiceRange(AssemblySpeechPlan.SharedVoiceOptions(template));
+            if (sceneEditor != null) {
+                bool showSceneTools = template.Scenes.Count > 0;
+                for (int i = 1; i < sceneEditor.Controls.Count; i++) sceneEditor.Controls[i].Visible = showSceneTools;
+            }
+            if (width != null) width.Enabled = SelectedLayer != null;
             selectedCaption.Text = SelectedScene == null ? "Нет сцен · нажми + в ленте сцен" :
                 SelectedScene.IsPreview ? "Превью · " + SelectedScene.Duration.ToString("0.#") + " с · затем переход" :
                 template.UsesVideoDuration(SelectedScene) ? SceneLabel(SelectedScene,sceneIndex) + " · длина по видео" :
@@ -606,15 +604,6 @@ namespace VideoBatch {
                 videoButton.ForeColor = splitBad ? Theme.Error : Theme.TextPrimary;
             }
             else if (videoButton != null) videoButton.ForeColor = Theme.TextPrimary;
-            var splitZoomRow = previewColumn?.Controls.Find("SplitZoomRow", true).FirstOrDefault() as Control;
-            bool splitOn = template.SplitLayout != "none";
-            if (splitZoomRow != null) splitZoomRow.Visible = splitOn;
-            if (splitOn && splitPrimaryZoom != null && splitSecondaryZoom != null) {
-                loading = true;
-                splitPrimaryZoom.Value = (decimal)(template.SplitPrimaryZoom * 100);
-                splitSecondaryZoom.Value = (decimal)(template.SplitSecondaryZoom * 100);
-                loading = false;
-            }
             int gcd=Gcd(template.Width,template.Height); formatButton.Text="Формат\n"+template.Width/gcd+":"+template.Height/gcd+" ▾";
             countButton.Text="Роликов\n"+template.Count.ToString("N0"); transitionButton.Text="Переход\n"+TransitionLabel(template.Transition)+" ▾";
             if (titlesButton != null) titlesButton.Text = template.TitleBank.Count == 0 ? "Заголовки\n+ Загрузить ключи" : ("Заголовки\n" + template.TitleBank.Count + " фраз");
@@ -911,13 +900,33 @@ namespace VideoBatch {
             assembleButton.Enabled=ready;
         }
         void ApplyCapacity(AssemblyCapacity capacity) {
-            if (template.Scenes.Count==0) capacityLabel.Text="Добавь сцену для сборки";
+            if (template.Scenes.Count==0) capacityLabel.Text="Добавь сцену: кнопка + в ленте сцен слева";
             else {
                 string journal="Журнал "+AssemblyHistoryScope.ShortLabel(AssemblyHistoryScope.Normalize(template.HistoryScope));
                 capacityLabel.Text=journal+" · "+capacity.Caption;
+                if (capacity.Variants == 0) {
+                    string hint = ZeroLinkageHint();
+                    if (!string.IsNullOrEmpty(hint)) capacityLabel.Text += " · " + hint;
+                }
             }
             batchMaximum=capacity.BatchLimit;
             count.Maximum=Math.Max(1,batchMaximum); UpdateCountControls();
+        }
+        string ZeroLinkageHint() {
+            if (template.Scenes.Count == 0) return "";
+            if (template.SplitLayout != "none") {
+                if (template.SplitSharedPool) {
+                    if (template.SplitVideoPaths().Count < 2) return "Для двух экранов нужно минимум 2 разных видео";
+                } else if (Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Count == 0)
+                    return "Добавьте вторую пачку или включите общую пачку";
+            }
+            int videos = template.ContinuousVideo ? Pool(template.Videos, AssemblyFiles.VideoExtensions).Count
+                : template.Scenes.Max(s => Pool(template.VideoSource(s), AssemblyFiles.VideoExtensions).Count);
+            if (videos == 0) return "Нет подходящего фонового видео";
+            if (template.Combination != null && !template.Combination.Video && template.Scenes.All(s => !s.VideoInCombination)
+                && (template.SplitLayout == "none" || template.Combination.SecondaryVideo == false))
+                return "В правилах роликов отключены видео — включите «Новый ролик»";
+            return "";
         }
         void CountMenu() {
             if (batchMaximum<1) return; var popup=ChoiceFrame("Сколько роликов?",countButton,260,160);
@@ -943,20 +952,24 @@ namespace VideoBatch {
             var popup=new Form {Name="StudioChoice",FormBorderStyle=FormBorderStyle.None,ShowInTaskbar=false,StartPosition=FormStartPosition.Manual,ClientSize=new Size(w,h),BackColor=Theme.Card,ForeColor=Theme.TextPrimary,Font=Theme.FontBody,KeyPreview=true};
             var area=Screen.FromControl(this).WorkingArea; var point=anchor.PointToScreen(new Point(0,anchor.Height+6)); popup.Location=new Point(Math.Max(area.Left,Math.Min(point.X,area.Right-w)),Math.Max(area.Top,Math.Min(point.Y,area.Bottom-h)));
             popup.Controls.Add(new Label {Text=title,Font=Theme.FontCardTitle,ForeColor=Theme.TextPrimary,Location=new Point(14,10),Size=new Size(w-28,28)});
-            popup.Paint+=(sender,args) => {using (var pen=new Pen(Theme.Border)) args.Graphics.DrawRectangle(pen,0,0,w-1,h-1);}; popup.Deactivate+=(sender,args) => popup.Close(); popup.KeyDown+=(sender,args) => {if (args.KeyCode==Keys.Escape) popup.Close();}; popup.FormClosed+=(sender,args) => popup.Dispose(); return popup;
+            popup.Paint+=(sender,args) => {using (var pen=new Pen(Theme.Border)) args.Graphics.DrawRectangle(pen,0,0,w-1,h-1);}; popup.Deactivate+=(sender,args) => popup.Close(); popup.KeyDown+=(sender,args) => {if (args.KeyCode==Keys.Escape) popup.Close();}; popup.FormClosed+=(sender,args) => popup.Dispose();
+            var owner = anchor?.FindForm(); if (owner != null) popup.Owner = owner;
+            return popup;
         }
         void ShowChoices(string title,Control anchor,IEnumerable<Tuple<string,Action,bool>> choices) {
             var list=choices.ToList(); var popup=ChoiceFrame(title,anchor,300,44+list.Count*42+8); int top=44;
             foreach (var choice in list) {var selected=choice; var b=Button((choice.Item3 ? "✓  " : "")+choice.Item1,() => {popup.Close();Later(selected.Item2);},choice.Item3); b.AutoSize=false; b.TextAlign=ContentAlignment.MiddleLeft; b.SetBounds(10,top,280,36); popup.Controls.Add(b); top+=42;}
-            popup.Show(this);
+            var owner = anchor?.FindForm() ?? this;
+            popup.Owner = owner;
+            popup.Show(owner);
         }
         void SetFormat(int w,int h) { template.Width = w; template.Height = h; Changed(true); Save(); status.Text = "Формат " + w + "×" + h + " сохранён для " + AssemblyProfile.ShortLabel(studioProfile, template) + "."; }
         string Source(int kind) { return kind == 0 ? template.Videos : kind == 1 ? template.Music : kind == 5 ? template.Backgrounds : kind == 3 ? SelectedScene.Videos : kind == 4 ? SelectedScene.VideoPacks[videoPackIndex].Source : SelectedLayer.Source; }
         string[] Extensions(int kind) { return kind == 0 || kind == 3 || kind == 4 ? AssemblyFiles.VideoExtensions : kind == 1 ? AssemblyFiles.MusicExtensions : kind == 5 ? AssemblyFiles.BackgroundExtensions : AssemblyFiles.PictureExtensions; }
         void SetSource(int kind,string source) { if (kind == 0) template.Videos = source; else if (kind == 1) template.Music = source; else if (kind == 5) template.Backgrounds = source; else if (kind == 3) { SelectedScene.Videos = source; SelectedScene.VideoMode="own"; } else if (kind == 4) { SelectedScene.VideoPacks[videoPackIndex].Source = source; SelectedScene.VideoMode="own"; } else SelectedLayer.Source = source; }
-        string[] PickFiles(int kind) {
+        string[] PickFiles(int kind, IWin32Window owner = null) {
             using (var dialog = new OpenFileDialog { Multiselect = true, AutoUpgradeEnabled = true, Filter = "Файлы|" + string.Join(";",Extensions(kind).Select(e => "*" + e)) }) {
-                if (dialog.ShowDialog(this) != DialogResult.OK) return null;
+                if (dialog.ShowDialog(owner ?? this) != DialogResult.OK) return null;
                 var paths = PathUtil.NormalizeAll(dialog.FileNames);
                 foreach (string p in paths) if (!PathUtil.Exists(p)) throw new Exception("Не удалось прочитать «" + Path.GetFileName(p) + "». Перетащите файлы в окно «Общие видео» или выберите их ещё раз.");
                 return paths;
@@ -1200,6 +1213,7 @@ namespace VideoBatch {
         async void RequestCapacity() {
             if (capacityLabel==null || !IsHandleCreated || IsDisposed || cancellation!=null) return;
             try {
+                AssemblyWorkspace.Prepare(template);
                 var t=Store.Clone(template); string scope=AssemblyHistoryScope.Normalize(t.HistoryScope);
                 var files=t.Scenes.SelectMany(scene => Pool(t.VideoSource(scene),AssemblyFiles.VideoExtensions).Concat(Pool(scene.Music,AssemblyFiles.MusicExtensions)).Concat(scene.Layers.Where(l => l.Enabled).SelectMany(l => Pool(l.Source,t.PictureExtensions)))).Concat(Pool(t.Music,AssemblyFiles.MusicExtensions)).Concat(Pool(t.Backgrounds,AssemblyFiles.BackgroundExtensions)).Concat(AssemblySpeechPlan.SharedVoiceOptions(t)).Concat(t.Scenes.SelectMany(scene=>AssemblySpeechPlan.SceneVoiceOptions(t,scene))).Concat(Pool(t.SecondaryVideos,AssemblyFiles.VideoExtensions)).Concat(t.GlobalLayers.Where(l => l.Enabled).SelectMany(l => Pool(l.Source,t.PictureExtensions))).Distinct().ToList();
                 string identityKey=t.Combination.Video+":"+t.Combination.SecondaryVideo+":"+string.Join(",",t.Scenes.Select(s=>s.VideoInCombination))+":"+t.Combination.Background+":"+t.Combination.Music+":"+t.Combination.Voiceover+":"+string.Join(",",t.Scenes.SelectMany(s=>s.Layers).Concat(t.GlobalLayers).Select(l=>l.InCombination));
@@ -1255,7 +1269,7 @@ namespace VideoBatch {
             MessageBox.Show(this, details, title, MessageBoxButtons.OK, result.Outputs.Count == 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
         }
         void Safe(Action action) { try { action(); } catch (Exception e) { AppDiagnostics.Write("Сборка",studioProfile,"","error",e.ToString(),"error"); if (throwErrors) throw; if (status != null) status.Text = e.Message; Ui.Error(this,e); } }
-        protected override void Dispose(bool disposing) { if (disposing) { DisposeVisualEstimate(); saveTimer.Dispose(); previewCancellation?.Cancel(); capacityCancellation?.Cancel(); cancellation?.Cancel(); } base.Dispose(disposing); }
+        protected override void Dispose(bool disposing) { if (disposing) { DisposeVisualEstimate(); saveTimer.Dispose(); splitMaskPreviewTimer.Dispose(); previewCancellation?.Cancel(); capacityCancellation?.Cancel(); cancellation?.Cancel(); } base.Dispose(disposing); }
     }
     public sealed class AssemblySceneRow : Panel {
         protected override void OnSizeChanged(EventArgs e) {
@@ -1315,7 +1329,10 @@ namespace VideoBatch {
         Point origin;
         double oldX, oldY, oldWidth, oldHeight;
         RectangleF resizeVisibleBounds;
-        bool dragging, resizing, draggingSplit, draggingSubtitle, subtitleDragEnabled, subtitleEditing, subtitleSelected;
+        bool dragging, resizing, draggingSplit, draggingSplitPan, splitPanMoved, draggingSubtitle, subtitleDragEnabled, subtitleEditing, subtitleSelected;
+        int splitPanPane = -1;
+        Point splitPanOrigin;
+        double splitPanStartX, splitPanStartY;
         WarmupSubtitleStyle subtitleStyle;
         string subtitlePreviewText = "";
         WarmupCaption subtitlePreviewCue;
@@ -1326,7 +1343,7 @@ namespace VideoBatch {
         public event Action PlacementChanged;
         public event Action<int> SubtitlePositionChanged;
         public event Action SplitRatioChanged;
-        public event Action SplitZoomChanged;
+        public event Action SplitPanCommitted;
         public AssemblyCanvas() { DoubleBuffered = true; BackColor = Theme.Background; animationTimer.Tick += (sender, args) => UpdateAnimatedFrames(); }
         sealed class AnimatedPreview : IDisposable {
             readonly object gate = new object();
@@ -1510,7 +1527,18 @@ namespace VideoBatch {
             }
             return result;
         }
-        public void SetBackground(Image value) { background?.Dispose(); background = value; Invalidate(); }
+        public void SetBackground(Image value) {
+            background?.Dispose(); background = value;
+            if (template != null) {
+                previewBakePrimaryPanX = template.SplitPrimaryPanX;
+                previewBakePrimaryPanY = template.SplitPrimaryPanY;
+                previewBakeSecondaryPanX = template.SplitSecondaryPanX;
+                previewBakeSecondaryPanY = template.SplitSecondaryPanY;
+                previewBakePrimaryZoom = template.SplitPrimaryZoom > 0 ? template.SplitPrimaryZoom : 1;
+                previewBakeSecondaryZoom = template.SplitSecondaryZoom > 0 ? template.SplitSecondaryZoom : 1;
+            }
+            Invalidate();
+        }
         public void SetBackdrop(Image value) { backdrop?.Dispose(); backdrop = value; Invalidate(); }
         public void SetSubtitleEditing(bool value) { subtitleEditing = value; subtitleSelected = value; Invalidate(); }
         public void ClearSubtitles() { subtitleOverlay?.Dispose(); subtitleOverlay = null; subtitleDragEnabled = false; subtitleStyle = null; subtitlePlateScreen = RectangleF.Empty; subtitleSelected = false; Cursor = Cursors.Default; Invalidate(); }
@@ -1622,7 +1650,7 @@ namespace VideoBatch {
             if (template != null && template.SplitLayout != "none")
                 using (var hint = new Font("Segoe UI", Math.Max(7f, f.Width * .022f)))
                 using (var brush = new SolidBrush(Color.FromArgb(190, 255, 255, 255)))
-                    e.Graphics.DrawString("Границу тяните · колёсико над половиной — масштаб", hint, brush, f.X + 6, f.Bottom - 22);
+                    e.Graphics.DrawString("Маска: тяните половину — положение · колёсико — крупнее/мельче · линия — деление", hint, brush, f.X + 6, f.Bottom - 22);
             else if (subtitleDragEnabled && subtitleOverlay != null)
                 using (var hint = new Font("Segoe UI", Math.Max(7f, f.Width * .022f)))
                 using (var brush = new SolidBrush(Color.FromArgb(200, 255, 255, 255)))
@@ -1655,6 +1683,42 @@ namespace VideoBatch {
             float line = vertical ? f.Top + f.Height * ratio : f.Left + f.Width * ratio;
             return vertical ? (p.Y < line ? 0 : 1) : (p.X < line ? 0 : 1);
         }
+        RectangleF SplitPaneBounds(int pane) {
+            var f = Frame;
+            bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+            AssemblySplit.PaneSizes(template, out int primarySpan, out _, out _, out _);
+            float ratio = primarySpan / (float)(vertical ? template.Height : template.Width);
+            float line = vertical ? f.Top + f.Height * ratio : f.Left + f.Width * ratio;
+            if (vertical) return pane == 0 ? new RectangleF(f.Left, f.Top, f.Width, line - f.Top) : new RectangleF(f.Left, line, f.Width, f.Bottom - line);
+            return pane == 0 ? new RectangleF(f.Left, f.Top, line - f.Left, f.Height) : new RectangleF(line, f.Top, f.Right - line, f.Height);
+        }
+        void ApplySplitPan(Point screen, int pane) {
+            if (template == null || pane < 0) return;
+            var paneRect = SplitPaneBounds(pane);
+            if (paneRect.Width < 4 || paneRect.Height < 4) return;
+            double dx = (screen.X - splitPanOrigin.X) / paneRect.Width;
+            double dy = (screen.Y - splitPanOrigin.Y) / paneRect.Height;
+            if (pane == 0) {
+                template.SplitPrimaryPanX = Math.Max(-1, Math.Min(1, splitPanStartX + dx));
+                template.SplitPrimaryPanY = Math.Max(-1, Math.Min(1, splitPanStartY + dy));
+            } else {
+                template.SplitSecondaryPanX = Math.Max(-1, Math.Min(1, splitPanStartX + dx));
+                template.SplitSecondaryPanY = Math.Max(-1, Math.Min(1, splitPanStartY + dy));
+            }
+            splitPanMoved = true;
+            Invalidate();
+        }
+        protected override void OnMouseWheel(MouseEventArgs e) {
+            base.OnMouseWheel(e);
+            if (template == null || template.SplitLayout == "none") return;
+            int pane = SplitPaneAt(e.Location);
+            if (pane < 0) return;
+            double step = e.Delta > 0 ? .05 : -.05;
+            if (pane == 0) template.SplitPrimaryZoom = Math.Max(.6, Math.Min(2, template.SplitPrimaryZoom + step));
+            else template.SplitSecondaryZoom = Math.Max(.6, Math.Min(2, template.SplitSecondaryZoom + step));
+            SplitMaskAdjusted?.Invoke();
+            Invalidate();
+        }
         void ApplySubtitleDrag(Point screen) {
             var f = Frame;
             float localY = (screen.Y - f.Y) / Math.Max(1f, f.Height);
@@ -1668,17 +1732,6 @@ namespace VideoBatch {
             }
             Invalidate();
         }
-        protected override void OnMouseWheel(MouseEventArgs e) {
-            base.OnMouseWheel(e);
-            if (template == null || template.SplitLayout == "none") return;
-            int pane = SplitPaneAt(e.Location);
-            if (pane < 0) return;
-            double step = e.Delta > 0 ? .01 : -.01;
-            if (pane == 0) template.SplitPrimaryZoom = Math.Max(.85, Math.Min(1.15, template.SplitPrimaryZoom + step));
-            else template.SplitSecondaryZoom = Math.Max(.85, Math.Min(1.15, template.SplitSecondaryZoom + step));
-            SplitZoomChanged?.Invoke();
-            Invalidate();
-        }
         protected override void OnMouseDown(MouseEventArgs e) {
             base.OnMouseDown(e); if (scene == null || e.Button != MouseButtons.Left) return;
             if (SplitLineHit(e.Location, out _)) { draggingSplit = true; Capture = true; ApplySplitDrag(e.Location); return; }
@@ -1686,6 +1739,15 @@ namespace VideoBatch {
                 draggingSubtitle = true; subtitleSelected = true; Capture = true; ApplySubtitleDrag(e.Location); return;
             }
             if (BeginBaseVideoDrag(e, true)) return;
+            if (template != null && template.SplitLayout != "none") {
+                int pane = SplitPaneAt(e.Location);
+                if (pane >= 0) {
+                    draggingSplitPan = true; splitPanPane = pane; splitPanMoved = false; Capture = true; splitPanOrigin = e.Location;
+                    splitPanStartX = pane == 0 ? template.SplitPrimaryPanX : template.SplitSecondaryPanX;
+                    splitPanStartY = pane == 0 ? template.SplitPrimaryPanY : template.SplitSecondaryPanY;
+                    return;
+                }
+            }
             var hit = scene.Layers.Select(p => p.Layer).LastOrDefault(l => Box(l).Contains(e.Location));
             if (hit == null) {
                 if (BeginBaseVideoDrag(e, false)) return;
@@ -1705,6 +1767,7 @@ namespace VideoBatch {
         protected override void OnMouseMove(MouseEventArgs e) {
             base.OnMouseMove(e);
             if (MoveBaseVideo(e)) return;
+            if (draggingSplitPan) { ApplySplitPan(e.Location, splitPanPane); return; }
             if (draggingSplit) { ApplySplitDrag(e.Location); return; }
             if (template != null && template.SplitLayout != "none") {
                 if (SplitLineHit(e.Location, out _)) Cursor = AssemblySplit.IsVertical(template.SplitLayout) ? Cursors.SizeNS : Cursors.SizeWE;
@@ -1727,7 +1790,11 @@ namespace VideoBatch {
             else { selected.X = oldX + dx; selected.Y = oldY + dy; }
             PlacementChanged?.Invoke(); Invalidate();
         }
-        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); draggingBaseVideo = false; dragging = false; draggingSplit = false; draggingSubtitle = false; Capture = false; }
+        protected override void OnMouseUp(MouseEventArgs e) {
+            base.OnMouseUp(e);
+            if (draggingSplitPan && splitPanMoved) SplitPanCommitted?.Invoke();
+            draggingBaseVideo = false; dragging = false; draggingSplit = false; draggingSplitPan = false; splitPanPane = -1; splitPanMoved = false; draggingSubtitle = false; Capture = false;
+        }
         protected override void Dispose(bool disposing) { if (disposing) { StopAnimatedPreviews(); animatedPaths.Clear(); animationTimer.Dispose(); background?.Dispose(); backdrop?.Dispose(); subtitleOverlay?.Dispose(); foreach (var image in images) image?.Dispose(); images.Clear(); } base.Dispose(disposing); }
     }
     public sealed class AssemblyHorizontalStrip : FlowLayoutPanel {

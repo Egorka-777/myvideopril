@@ -340,7 +340,7 @@ namespace VideoBatch {
             finally { run.Dispose(); run = null; if (!IsDisposed) { SetBusy(false); UpdateBundleSummary(); } }
         }
         void OpenResults() {
-            try { SaveFields(); Directory.CreateDirectory(output.Text); Process.Start(new ProcessStartInfo(output.Text) { UseShellExecute = true }); }
+            try { SaveFields(); Ui.Open(VideoBatchOutputPaths.DailySessionFolder(output.Text)); }
             catch (Exception ex) { Append("Не удалось открыть папку: " + ex.Message); }
         }
         void Append(string text) {

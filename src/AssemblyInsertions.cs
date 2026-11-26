@@ -43,7 +43,7 @@ namespace VideoBatch {
         }
 
         public static async Task Apply(AssemblyTemplate t, string ffmpeg, string probe, string main, string output,
-            CancellationToken ct, Random random, Action<string> progress = null) {
+            CancellationToken ct, Random random, Action<string> progress = null, bool processOutput = false, double untouchedPrefix = 0, AssemblyRenderContext context = null) {
             var media = Core.VideoInfo(await Core.Probe(probe, main, ct).ConfigureAwait(false));
             int totalFrames = (int)Math.Round(media.VideoDuration * t.Fps);
             var selected = new List<Selected>();
@@ -131,14 +131,21 @@ namespace VideoBatch {
             graph.Add(string.Join("", pieces) + "concat=n=" + pieces.Count + ":v=1:a=1[rawVideo][a]");
             graph.Add("[rawVideo]fps=" + t.Fps + ":eof_action=pass[v]");
             double expected = (double)(totalFrames + selected.Sum(i => i.Frames)) / t.Fps;
-            var context = new AssemblyRenderContext();
+            var processing = processOutput ? AssemblyProcessing.Prepare(t,new Media { Width=media.Width, Height=media.Height, Fps=t.Fps+"/1", Duration=expected, VideoDuration=expected, HasAudio=true },random,untouchedPrefix) : null;
+            if (processing != null) {
+                graph.Add("[v]format=yuv420p[insertionOutput]");
+                processing.Append(graph,"insertionOutput","a");
+            }
+            double outputDuration = processing == null ? expected : processing.Duration;
+            context = context ?? new AssemblyRenderContext();
             await AssemblyRender.SelectEncoder(t, ffmpeg, Path.GetDirectoryName(output), context, ct).ConfigureAwait(false);
-            args.AddRange(new[] { "-filter_complex", string.Join(";", graph), "-map", "[v]", "-map", "[a]", "-t", Core.N(expected) });
-            args.AddRange(AssemblyRender.EncoderArguments(context.Encoder, context.EncoderThreads));
-            args.AddRange(new[] { "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output });
+            args.AddRange(new[] { "-filter_complex", string.Join(";", graph), "-map", processing == null ? "[v]" : "[processed_video]", "-map", processing == null ? "[a]" : "[processed_audio]", "-t", Core.N(outputDuration) });
+            args.AddRange(processing == null ? AssemblyRender.EncoderArguments(context.Encoder, context.EncoderThreads) : ProcessingEngine.FinalEncoderArguments(context.Encoder,processing.Profile,context.EncoderThreads));
+            if (processing != null) args.AddRange(new[] { "-map_metadata", "-1", "-map_metadata:s:v", "-1", "-map_metadata:s:a", "-1", "-map_chapters", "-1", "-metadata:s:v:0", "rotate=0" });
+            args.AddRange(new[] { "-c:a", "aac", "-b:a", processing == null ? "192k" : "160k", "-movflags", "+faststart", output });
             await Core.Tool(ffmpeg, args, ct, null, 1800).ConfigureAwait(false);
             var result = Core.VideoInfo(await Core.Probe(probe, output, ct).ConfigureAwait(false));
-            if (Math.Abs(result.VideoDuration - expected) > .15 || result.Width != media.Width || result.Height != media.Height || !result.HasAudio)
+            if (Math.Abs(result.VideoDuration - outputDuration) > .15 || result.Width != media.Width || result.Height != media.Height || !result.HasAudio)
                 throw new Exception("Рекламная пауза: результат не прошёл проверку длительности, размера или звука.");
         }
 

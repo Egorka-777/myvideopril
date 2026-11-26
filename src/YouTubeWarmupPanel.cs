@@ -22,6 +22,14 @@ namespace VideoBatch {
         public YouTubeWarmupPanel(Preferences prefs, YouTubeBackend be) {
             settings = prefs;
             backend = be;
+            DashboardSessionState.Bind(this, () => {
+                foreach (DataGridViewRow row in grid.Rows)
+                    if (row.Tag is YouTubeChannel channel) {
+                        Theme.MarkConnected(row.DefaultCellStyle, DashboardSessionState.IsConnected(channel.ProfileId, "YouTube"));
+                        row.Cells["channel"].ToolTipText = DashboardSessionState.Summary(channel.ProfileId, "YouTube");
+                    }
+                grid.Invalidate();
+            });
             marketView = NormMarket(settings.YouTubeMarketView);
             Dock = DockStyle.Fill;
             BackColor = Theme.Background;
@@ -214,8 +222,10 @@ namespace VideoBatch {
                 .OrderBy(c => c.Name)) {
                 int i = grid.Rows.Add(ch.Enabled, ch.Name ?? "Канал");
                 grid.Rows[i].Tag = ch;
+                Theme.MarkConnected(grid.Rows[i].DefaultCellStyle,DashboardSessionState.IsConnected(ch.ProfileId,"YouTube"));
                 grid.Rows[i].Cells["session"].Value = progressByProfile.TryGetValue(ch.ProfileId, out UploadMessage message) ? ProgressText(message) : "— · 0/30 · 0";
-                grid.Rows[i].Cells["channel"].ToolTipText = (ch.Name ?? "") + "\nProfile " + (ch.ProfileId ?? "");
+                grid.Rows[i].Cells["channel"].ToolTipText = (ch.Name ?? "") + "\nProfile " + (ch.ProfileId ?? "")
+                    + "\n" + DashboardSessionState.Summary(ch.ProfileId, "YouTube");
             }
         }
 

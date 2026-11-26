@@ -1,6 +1,7 @@
 "use strict";
 const assert = require("assert/strict");
-const { parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, TOTAL_MS, WAIT_MS, WarmupDeadline, runShortsWarmup, watchResult, buildResult } = require("../tools/uploader/youtube-shorts-warmup");
+const { parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, TOTAL_MS, WAIT_MS, WarmupDeadline, runShortsWarmup, watchResult, buildResult, pickVideo } = require("../tools/uploader/youtube-shorts-warmup");
+const { isAdVisible } = require("../tools/uploader/youtube-interaction-safety");
 
 (async () => {
   assert.equal(TOTAL_MS, 900000);
@@ -76,13 +77,17 @@ const { parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, TOTAL_MS, 
   const slowPage = {
     url: () => 'fixture:slow-video',
     waitForTimeout: async ms => { clock += ms; },
-    evaluate: async () => ({ url: 'fixture:slow-video', videos: [{ duration: '47', ready: 0 }] }),
+    evaluate: async fn => {
+      const src = String(fn);
+      if (src.includes("readyState >= 2") && src.includes("querySelectorAll")) return false;
+      return { url: "fixture:slow-video", videos: [{ duration: "47", ready: 0 }] };
+    },
     evaluateHandle: async () => ({
       evaluate: async (action, argument) => action({
         duration: 47, readyState: clock >= readyAfter ? 4 : 0,
         get currentTime() { if (clock >= readyAfter) current += 0.25; return current; },
         set currentTime(value) { current = value; },
-        paused: false, ended: false, pause() {}
+        paused: false, ended: false, pause() {}, play() { return Promise.resolve(); }
       }, argument),
       dispose: async () => {}
     })
@@ -101,5 +106,77 @@ const { parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, TOTAL_MS, 
     assert.equal(clock, 12000, 'session limit bounds loading wait');
     assert(messages.some(t => /пропуск без засчитанного просмотра/.test(t)));
   } finally { Date.now = realNow; }
-  console.log("OK: 30-video randomized budget, delayed playback readiness, 120s skip and session deadline tests");
+
+  // Sidebar/search ad slots must not look like an in-player ad.
+  global.document = {
+    querySelector: sel => sel.includes("movie_player")
+      ? { classList: { contains: () => false }, querySelector: () => null, querySelectorAll: () => [] }
+      : null,
+    querySelectorAll: () => []
+  };
+  global.getComputedStyle = () => ({ visibility: "visible" });
+  try {
+    assert.equal(await isAdVisible({
+      url: () => "https://www.youtube.com/watch?v=abcdefghijk",
+      evaluate: async fn => fn()
+    }), false);
+  } finally {
+    delete global.document;
+    delete global.getComputedStyle;
+  }
+  // pickVideo ignores empty visible shells when another node has metadata.
+  const shell = {
+    duration: NaN, readyState: 0, classList: { contains: () => false },
+    getBoundingClientRect: () => ({ width: 640, height: 360, top: 0, bottom: 360, left: 0, right: 640 })
+  };
+  const ready = {
+    duration: 270, readyState: 4, classList: { contains: () => false },
+    getBoundingClientRect: () => ({ width: 1, height: 1, top: -100, bottom: -99, left: 0, right: 1 })
+  };
+  const main = {
+    duration: 270, readyState: 4, classList: { contains: () => true },
+    getBoundingClientRect: () => ({ width: 800, height: 450, top: 0, bottom: 450, left: 0, right: 800 })
+  };
+  global.document = {
+    querySelector: sel => sel.includes("html5-main-video") ? main : sel.includes("movie_player") ? main : null,
+    querySelectorAll: () => [shell, ready, main]
+  };
+  global.getComputedStyle = () => ({ visibility: "visible" });
+  global.innerHeight = 900;
+  global.innerWidth = 1400;
+  assert.equal(pickVideo(), main);
+  global.document = {
+    querySelector: () => null,
+    querySelectorAll: () => [shell, ready]
+  };
+  assert.equal(pickVideo(), ready, "ready hidden video beats empty visible shell");
+  delete global.document;
+  delete global.getComputedStyle;
+  delete global.innerHeight;
+  delete global.innerWidth;
+
+  // Ready player must still be found when a sidebar ad slot would previously starve the wait.
+  clock = 0; readyAfter = 0; current = 0; messages.length = 0;
+  let adReads = 0;
+  const sidebarAdPage = {
+    url: () => "https://www.youtube.com/watch?v=abcdefghijk",
+    waitForTimeout: async ms => { clock += ms; },
+    evaluate: async fn => {
+      adReads++;
+      const src = String(fn);
+      if (src.includes("ad-showing") || src.includes("ytp-ad-player-overlay")) return false;
+      if (src.includes("readyState >= 2") && src.includes("querySelectorAll")) return false;
+      return { url: "https://www.youtube.com/watch?v=abcdefghijk", videos: [{ duration: "47", ready: 4 }] };
+    },
+    evaluateHandle: slowPage.evaluateHandle,
+    locator: () => ({ first: () => ({ isVisible: async () => false, click: async () => {} }) })
+  };
+  try {
+    Date.now = () => clock;
+    assert(await watchResult(sidebarAdPage, false, Date.now() + 8000, {}, (s, t) => messages.push(t), async () => {}, Date.now() + 60000));
+    assert(adReads > 0);
+    assert(messages.some(t => /фактически просмотрено/.test(t)));
+  } finally { Date.now = realNow; }
+
+  console.log("OK: 30-video randomized budget, delayed playback readiness, ad-slot false positive, pickVideo meta preference");
 })().catch(error => { console.error(error); process.exitCode = 1; });

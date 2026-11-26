@@ -50,7 +50,16 @@ namespace VideoBatch {
             if(result.Length>10000||result.Any(c=>char.IsControl(c)&&c!='\n'&&c!='\t'))throw new Exception("Комментарий: до 10 000 символов, без управляющих символов.");
             return result;
         }
-        public static List<OwnerPublishSelection> Candidates(IEnumerable<YouTubeChannel> channels,DateTime? asOf=null){
+        public static string CommentTemplate(YouTubeChannel channel,IEnumerable<YouTubeChannel> accounts){
+            if(!string.IsNullOrWhiteSpace(channel?.OwnerCommentTemplate))return channel.OwnerCommentTemplate;
+            string profile=(channel?.ProfileId??"").Trim();
+            if(profile.Length==0)return "";
+            var templates=(accounts??Enumerable.Empty<YouTubeChannel>()).Where(c=>c!=null&&string.Equals((c.ProfileId??"").Trim(),profile,StringComparison.OrdinalIgnoreCase))
+                .Select(c=>c.OwnerCommentTemplate??"").Where(t=>!string.IsNullOrWhiteSpace(t)).GroupBy(t=>t.Replace("\r\n","\n"),StringComparer.Ordinal).Select(g=>g.First()).ToList();
+            if(templates.Count>1)throw new Exception("Профиль «"+channel.Name+"»: найдены разные подписи. Укажите подпись для выбранного канала; существующие тексты не изменены.");
+            return templates.FirstOrDefault()??"";
+        }
+        public static List<OwnerPublishSelection> Candidates(IEnumerable<YouTubeChannel> channels,DateTime? asOf=null,IEnumerable<YouTubeChannel> templateAccounts=null){
             var fallback=asOf??DateTime.Now;
             var result=new List<OwnerPublishSelection>();
             foreach(var channel in channels??Enumerable.Empty<YouTubeChannel>()){
@@ -58,7 +67,7 @@ namespace VideoBatch {
                 foreach(var item in channel.Items??new List<YouTubeItem>()){
                     if(item==null||VideoId(item)=="")continue;
                     var commentDate=CommentDateForItem(item,fallback);
-                    result.Add(new OwnerPublishSelection{Channel=channel,Item=item,CommentText=(item.OwnerCommentState=="pending"||CommentComplete(item))?item.OwnerCommentText:RenderComment(channel.OwnerCommentTemplate,commentDate)});
+                    result.Add(new OwnerPublishSelection{Channel=channel,Item=item,CommentText=(item.OwnerCommentState=="pending"||CommentComplete(item))?item.OwnerCommentText:RenderComment(CommentTemplate(channel,templateAccounts??channels),commentDate)});
                 }
             }
             return result;
@@ -111,7 +120,7 @@ namespace VideoBatch {
                 foreach(var choice in list){
                     YouTubeOwnerPublish.EnsureAttached(settings,choice);
                     if(choice.Item.OwnerCommentState!="pending"&&!YouTubeOwnerPublish.CommentComplete(choice.Item))
-                        choice.CommentText=YouTubeOwnerPublish.RenderComment(choice.Channel.OwnerCommentTemplate,YouTubeOwnerPublish.CommentDateForItem(choice.Item));
+                        choice.CommentText=YouTubeOwnerPublish.RenderComment(YouTubeOwnerPublish.CommentTemplate(choice.Channel,settings.YouTubeChannels),YouTubeOwnerPublish.CommentDateForItem(choice.Item));
                 }
                 var items=list.Select(YouTubeOwnerPublish.ToJob).ToArray();
                 if(items.Select(i=>i.publishedVideoId).Distinct().Count()!=items.Length)throw new Exception("Одно видео выбрано дважды.");
@@ -142,17 +151,57 @@ namespace VideoBatch {
             }finally{lock(uploadLock)foreach(var b in batches)busyProfiles.Remove(b.ProfileId);OwnerPublishing=false;UploadBusyEnd();}
         }
     }
+    internal sealed class OwnerCommentTemplateAccount {
+        public readonly List<YouTubeChannel> Channels=new List<YouTubeChannel>();
+        public string Template;
+        string initialTemplate;
+        public string Name=>Channels[0].ToString();
+        static string TextKey(string text)=>(text??"").Replace("\r\n","\n");
+        public static List<OwnerCommentTemplateAccount> Create(IEnumerable<YouTubeChannel> channels){
+            var result=new List<OwnerCommentTemplateAccount>();
+            foreach(var channel in channels??Enumerable.Empty<YouTubeChannel>()){
+                if(channel==null)continue;
+                string id=(channel.ProfileId??"").Trim();
+                var account=id.Length==0?null:result.FirstOrDefault(a=>string.Equals((a.Channels[0].ProfileId??"").Trim(),id,StringComparison.OrdinalIgnoreCase));
+                if(account==null){account=new OwnerCommentTemplateAccount();result.Add(account);}
+                if(!account.Channels.Contains(channel))account.Channels.Add(channel);
+            }
+            foreach(var account in result)
+                account.Template=account.initialTemplate=account.Channels.Select(c=>c.OwnerCommentTemplate).FirstOrDefault(t=>!string.IsNullOrWhiteSpace(t))??"";
+            return result.OrderBy(a=>a.Name,StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        bool HasConflictingTemplates=>Channels.Select(c=>TextKey(c.OwnerCommentTemplate)).Where(t=>!string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.Ordinal).Skip(1).Any();
+        public bool HasConflict=>HasConflictingTemplates;
+        public void Validate(){
+            if(HasConflictingTemplates&&TextKey(Template)!=TextKey(initialTemplate))
+                throw new Exception("Профиль «"+Name+"»: сохранены разные подписи. Изменения не сохранены, чтобы не потерять существующие тексты.");
+            if(!string.IsNullOrWhiteSpace(Template))YouTubeOwnerPublish.RenderComment(Template,DateTime.Now);
+        }
+        public static void Save(Preferences settings,IEnumerable<OwnerCommentTemplateAccount> accounts){
+            var list=accounts.ToList();
+            foreach(var account in list)account.Validate();
+            var previous=list.SelectMany(a=>a.Channels).Distinct().ToDictionary(c=>c,c=>c.OwnerCommentTemplate);
+            try{
+                foreach(var account in list){
+                    if(account.HasConflictingTemplates)continue;
+                    foreach(var channel in account.Channels)
+                        if(TextKey(channel.OwnerCommentTemplate)!=TextKey(account.Template))channel.OwnerCommentTemplate=account.Template;
+                }
+                Store.Save(settings);
+            }catch{foreach(var entry in previous)entry.Key.OwnerCommentTemplate=entry.Value;throw;}
+        }
+    }
     internal sealed class OwnerCommentTemplatesDialog:Form {
         readonly ListBox accounts;
         readonly TextBox template;
         readonly TextBox preview;
         readonly Label hint;
         readonly Preferences settings;
-        readonly List<YouTubeChannel> channels;
+        readonly List<OwnerCommentTemplateAccount> channels;
         int selectedIndex=-1;
         public OwnerCommentTemplatesDialog(Preferences prefs,IEnumerable<YouTubeChannel> visible){
             settings=prefs??new Preferences();
-            channels=(visible??Enumerable.Empty<YouTubeChannel>()).Where(c=>c!=null).OrderBy(c=>(c.Name??"").Trim(),StringComparer.OrdinalIgnoreCase).ToList();
+            channels=OwnerCommentTemplateAccount.Create(visible);
             Text="Комментарии под видео · шаблоны";ClientSize=new Size(960,640);MinimumSize=new Size(760,520);StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
             var root=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),ColumnCount=2,RowCount=3};
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,280));root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
@@ -183,15 +232,15 @@ namespace VideoBatch {
         }
         void CommitSelection(){
             if(selectedIndex>=0&&selectedIndex<channels.Count&&template.Enabled)
-                channels[selectedIndex].OwnerCommentTemplate=template.Text;
+                channels[selectedIndex].Template=template.Text;
             LoadSelection(accounts.SelectedIndex);
         }
         void LoadSelection(int index){
             selectedIndex=index;
             if(index<0||index>=channels.Count){template.Enabled=false;template.Text="";hint.Text="";return;}
             var ch=channels[index];template.Enabled=true;
-            hint.Text=ch.Name+(string.IsNullOrWhiteSpace(ch.ProfileId)?"":" · "+ch.ProfileId.Trim());
-            template.Text=(ch.OwnerCommentTemplate??"").Replace("\r\n","\n").Replace("\n",Environment.NewLine);
+            hint.Text=ch.Name+(ch.HasConflict?" · Есть разные сохранённые подписи; все варианты сохранены, общая замена запрещена.":"");
+            template.Text=(ch.Template??"").Replace("\r\n","\n").Replace("\n",Environment.NewLine);
             RefreshPreview();
         }
         void RefreshPreview(){
@@ -204,11 +253,7 @@ namespace VideoBatch {
         void SaveAll(){
             try{
                 CommitSelection();
-                foreach(var ch in channels){
-                    string t=(ch.OwnerCommentTemplate??"").Trim();
-                    if(t.Length>0)YouTubeOwnerPublish.RenderComment(ch.OwnerCommentTemplate,DateTime.Now);
-                }
-                Store.Save(settings);DialogResult=DialogResult.OK;Close();
+                OwnerCommentTemplateAccount.Save(settings,channels);DialogResult=DialogResult.OK;Close();
             }catch(Exception e){MessageBox.Show(this,e.Message,"YouTube");}
         }
     }
@@ -246,7 +291,7 @@ namespace VideoBatch {
         readonly List<OwnerPublishSelection> candidates;
         public List<OwnerPublishSelection> Choices{get;private set;}
         public OwnerPublishDialog(Preferences prefs,IEnumerable<YouTubeChannel> channels){
-            settings=prefs;candidates=YouTubeOwnerPublish.Candidates(channels,DateTime.Now);
+            settings=prefs;candidates=YouTubeOwnerPublish.Candidates(channels,DateTime.Now,settings?.YouTubeChannels);
             Text="Опубликовать · YouTube";ClientSize=new Size(850,560);MinimumSize=new Size(650,480);StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Background;ForeColor=Theme.TextPrimary;Font=Theme.FontBody;
             var root=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),ColumnCount=1,RowCount=5};
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,58));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,42));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(root);
@@ -270,7 +315,7 @@ namespace VideoBatch {
             var c=(videos.CurrentRow?.Tag??(videos.Rows.Count>0?videos.Rows[0].Tag:null)) as OwnerPublishSelection;
             if(c==null){preview.Text="Нет сохранённых видео. Сначала загрузите ролик через Studio.";return;}
             if(c.Item.OwnerCommentState!="pending"&&!YouTubeOwnerPublish.CommentComplete(c.Item))
-                c.CommentText=YouTubeOwnerPublish.RenderComment(c.Channel.OwnerCommentTemplate,YouTubeOwnerPublish.CommentDateForItem(c.Item));
+                c.CommentText=YouTubeOwnerPublish.RenderComment(YouTubeOwnerPublish.CommentTemplate(c.Channel,settings?.YouTubeChannels),YouTubeOwnerPublish.CommentDateForItem(c.Item));
             string when=YouTubeOwnerPublish.CommentDateForItem(c.Item).ToString("dd.MM.yyyy");
             preview.Text="https://www.youtube.com/watch?v="+c.VideoId+" · дата подписи "+when+Environment.NewLine+Environment.NewLine+(string.IsNullOrWhiteSpace(c.CommentText)?"Без комментария. Задайте шаблон: кнопка «Комментарии» или ПКМ по аккаунту → Комментарий автора.":c.CommentText.Replace("\r\n","\n").Replace("\n",Environment.NewLine));
         }
@@ -279,7 +324,7 @@ namespace VideoBatch {
             string oldState=c.Item.OwnerCommentState,oldText=c.Item.OwnerCommentText,oldId=c.Item.OwnerCommentId,oldPreview=c.CommentText;
             try{
                 c.Item.OwnerCommentState=exists?"confirmed_manual":"";
-                if(!exists){c.Item.OwnerCommentText="";c.Item.OwnerCommentId="";c.CommentText=YouTubeOwnerPublish.RenderComment(c.Channel.OwnerCommentTemplate,YouTubeOwnerPublish.CommentDateForItem(c.Item));}
+                if(!exists){c.Item.OwnerCommentText="";c.Item.OwnerCommentId="";c.CommentText=YouTubeOwnerPublish.RenderComment(YouTubeOwnerPublish.CommentTemplate(c.Channel,settings?.YouTubeChannels),YouTubeOwnerPublish.CommentDateForItem(c.Item));}
                 Store.Save(settings);videos.Rows[index].Cells["state"].Value=State(c);ShowPreview();
             }catch(Exception e){c.Item.OwnerCommentState=oldState;c.Item.OwnerCommentText=oldText;c.Item.OwnerCommentId=oldId;c.CommentText=oldPreview;MessageBox.Show(this,"Не удалось сохранить проверку: "+e.Message,"YouTube");}
         }

@@ -5,6 +5,24 @@ const TOTAL_MS = 15 * 60 * 1000;
 const TARGET_VIDEOS = 30;
 const WAIT_MS = 120000;
 const deadlineTargets = new WeakMap();
+const SEARCH_INPUT_SELECTOR = [
+  "input[name='search_query']:visible",
+  "input#search:visible",
+  "input.ytSearchboxComponentInput:visible",
+  "input[placeholder*='Search' i]:visible",
+  "input[placeholder*='Поиск' i]:visible",
+  "textarea[placeholder*='Search' i]:visible",
+  "textarea[placeholder*='Поиск' i]:visible",
+  "[contenteditable='true'][role='combobox']:visible",
+  "[contenteditable='true'][aria-label*='Search' i]:visible",
+  "[contenteditable='true'][aria-label*='Поиск' i]:visible"
+].join(", ");
+const SEARCH_BUTTON_SELECTOR = [
+  "button#search-icon-legacy:visible",
+  "button.ytSearchboxComponentSearchButton:visible",
+  "button[aria-label='Search']:visible",
+  "button[aria-label='Поиск']:visible"
+].join(", ");
 
 class WarmupDeadline extends Error {
   constructor() { super("Время прогрева истекло."); }
@@ -43,18 +61,7 @@ function buildResult(keywords, covered, count, reason, opened = count) {
   };
 }
 
-function planWatch(duration, remainingSec, shorts, random = Math.random) {
-  if (!(duration > 0) || !(remainingSec > 0)) return null;
-  const initial = Math.min(5, duration);
-  // Do not start a clip if its mandatory initial segment cannot fit.
-  if (remainingSec < initial) return null;
-  const mode = ["short", "long", "full"][Math.floor(random() * 3)];
-  const fraction = mode === "full" ? 1 : mode === "long" ? 0.4 + random() * 0.4 : 0.05 + random() * 0.15;
-  const seconds = Math.min(remainingSec, duration, Math.max(initial, duration * fraction));
-  const seekTo = !shorts && mode !== "full" && duration > initial + seconds && random() < 0.5
-    ? initial + random() * (duration - seconds - initial) : null;
-  return { mode, initial, seconds, seekTo };
-}
+const { planWatch } = require("./warmup-watch-plan.js");
 
 function videoBudget(remainingSec, pendingVideos, overheadSec, random = Math.random) {
   if (pendingVideos <= 0 || remainingSec <= 0) return 0;
@@ -175,7 +182,7 @@ async function searchSnapshot(page) {
       const search = document.querySelector("ytd-search");
       return {
         url: location.href, ready: document.readyState, query: new URL(location.href).searchParams.get("search_query"),
-        inputs: [...document.querySelectorAll("input[name='search_query'], input#search, input.ytSearchboxComponentInput")].map(describe),
+        inputs: [...document.querySelectorAll("input, textarea, [contenteditable='true'], [role='searchbox'], [role='combobox']")].map(describe),
         buttons: [...document.querySelectorAll("button#search-icon-legacy, button.ytSearchboxComponentSearchButton")].map(el => {
           const r = el.getBoundingClientRect();
           const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
@@ -255,6 +262,24 @@ async function observeSearchNavigation(page, report, keyword) {
   }
 }
 
+async function openSearchHome(page, report) {
+  const input = page.locator(SEARCH_INPUT_SELECTOR).first();
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      // Home startup can still restore its SPA route after DOMContentLoaded.
+      // Let that initialization finish before submitting a native search.
+      await page.goto("https://www.youtube.com/", { waitUntil: "load", timeout: WAIT_MS });
+      await input.waitFor({ state: "visible", timeout: attempt === 1 ? 15000 : 30000 });
+      return input;
+    } catch (error) {
+      lastError = error;
+      journal(report, "search_home_retry", 0, JSON.stringify({ attempt, error: error.message }));
+    }
+  }
+  throw lastError;
+}
+
 async function searchKeyword(page, keyword, shorts, report = () => {}, globalSeen = new Set()) {
   const snapshot = async (stage, reason) => journal(report, stage + "_snapshot", 0,
     JSON.stringify({ reason, keyword, shorts, ...await searchSnapshot(page) }));
@@ -282,12 +307,10 @@ async function searchKeyword(page, keyword, shorts, report = () => {}, globalSee
   // Existing worker search helpers build URLs and dismiss generic overlays;
   // they are deliberately not used for this native-search-only workflow.
   // Reset the previous keyword's native filter, staying in this same tab.
-  await stage("search_home", () => page.goto("https://www.youtube.com/", { waitUntil: "domcontentloaded", timeout: WAIT_MS }));
-  const input = page.locator("input[name='search_query']:visible, input#search:visible, input.ytSearchboxComponentInput:visible").first();
-  await stage("search_input", () => input.waitFor({ state: "visible", timeout: WAIT_MS }));
+  const input = await stage("search_home", () => openSearchHome(page, report));
   await stage("search_fill", () => input.fill(keyword), true);
   // Submit through YouTube's native button; autocomplete can consume Enter.
-  await stage("search_submit", () => page.locator("button#search-icon-legacy:visible, button.ytSearchboxComponentSearchButton:visible").first().click({ timeout: WAIT_MS }), true);
+  await stage("search_submit", () => page.locator(SEARCH_BUTTON_SELECTOR).first().click({ timeout: WAIT_MS }), true);
   await stage("search_results_url", () => page.waitForFunction(query => {
     const u = new URL(location.href);
     return u.pathname === "/results" && u.searchParams.get("search_query") === query;
@@ -311,18 +334,60 @@ async function searchKeyword(page, keyword, shorts, report = () => {}, globalSee
   }
 }
 
-// Passed to evaluate so reads, seeks and pauses always target the same
-// visible player, not an unloaded prefetch video retained by YouTube.
-function currentVideo() {
-  return [...document.querySelectorAll("video")].find(video => {
+// Prefer the main ready player. Never return a visible empty <video> shell
+// (0:00 / readyState 0) when another element already has duration metadata.
+function pickVideo() {
+  const hasMeta = video => {
+    const duration = Number(video.duration);
+    return video.readyState >= 2 && duration > 0 && Number.isFinite(duration);
+  };
+  const main = document.querySelector("video.html5-main-video") ||
+    document.querySelector("#movie_player video") ||
+    document.querySelector("ytd-reel-video-renderer[is-active] video, ytd-reel-video-renderer[active] video");
+  if (main && hasMeta(main)) return main;
+  const visible = [...document.querySelectorAll("video")].find(video => {
     const rect = video.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
+    return hasMeta(video) &&
+      rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
       rect.right > 0 && rect.left < innerWidth && getComputedStyle(video).visibility !== "hidden";
   });
+  if (visible) return visible;
+  if (main) return main;
+  let best = null, bestArea = -1;
+  for (const video of document.querySelectorAll("video")) {
+    if (!hasMeta(video)) continue;
+    const rect = video.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (area > bestArea) { bestArea = area; best = video; }
+  }
+  return best;
+}
+
+async function nudgePlayback(page) {
+  await page.evaluate(pick => {
+    const anchor = document.querySelector("ytd-player, #movie_player, .html5-video-player");
+    if (anchor && anchor.scrollIntoView) anchor.scrollIntoView({ block: "center", inline: "nearest" });
+    const video = (typeof pick === "function" ? pick() : null) ||
+      document.querySelector("video.html5-main-video") ||
+      document.querySelector("#movie_player video") ||
+      document.querySelector("video");
+    if (video && video.paused && !video.ended) video.play().catch(() => {});
+  }, pickVideo).catch(() => {});
+  if (typeof page.locator !== "function") return;
+  const play = page.locator(
+    ".ytp-large-play-button:visible, button.ytp-play-button[aria-label*='Play' i]:visible, button.ytp-play-button[title*='Play' i]:visible, button.ytp-play-button[aria-label*='Смотреть' i]:visible, button.ytp-play-button[title*='Смотреть' i]:visible, .ytp-cued-thumbnail-overlay:visible"
+  ).first();
+  if (await play.isVisible({ timeout: 800 }).catch(() => false))
+    await play.click({ timeout: 2000 }).catch(() => {});
+  else {
+    const player = page.locator("#movie_player, ytd-player, .html5-video-player").first();
+    if (await player.isVisible({ timeout: 400 }).catch(() => false))
+      await player.click({ timeout: 2000, position: { x: 40, y: 40 } }).catch(() => {});
+  }
 }
 
 async function withVideo(page, action, argument) {
-  const handle = await page.evaluateHandle(currentVideo);
+  const handle = await page.evaluateHandle(pickVideo);
   try { return await handle.evaluate(action, argument); }
   finally { await handle.dispose(); }
 }
@@ -363,18 +428,41 @@ async function maybeLike(page, job, report, watched) {
   report("youtube", "Прогрев: лайк поставлен.");
 }
 
+function isReadyState(state) {
+  return !!(state && Number.isFinite(state.duration) && state.duration > 0 && state.ready >= 2);
+}
+
 async function watchResult(page, shorts, deadline, job, report, checkBoundary, sessionDeadline = deadline) {
   let state;
   const watchBudget = Math.max(0, deadline - Date.now());
   const metadataDeadline = Math.min(sessionDeadline, Date.now() + WAIT_MS);
   report("youtube", "Прогрев: ожидаю готовность видео, до 2 минут в пределах времени сессии.");
+  await nudgePlayback(page);
+  let lastNudge = Date.now();
   while (Date.now() < metadataDeadline) {
-    if (await handleAd(page, report)) continue;
+    // Always sample the player even when handleAd runs: sidebar slots used to
+    // make isAdVisible true forever and skip readState for the full 2 minutes.
+    await handleAd(page, report);
     state = await readState(page);
-    if (state && Number.isFinite(state.duration) && state.duration > 0 && state.ready >= 2) break;
+    if (isReadyState(state)) break;
+    if (Date.now() - lastNudge >= 4000) {
+      await nudgePlayback(page);
+      lastNudge = Date.now();
+    }
     await page.waitForTimeout(250);
   }
-  if (!state || !(state.duration > 0) || !Number.isFinite(state.duration) || state.ready < 2) {
+  if (!isReadyState(state)) {
+    const canRecover = await page.evaluate(() => [...document.querySelectorAll("video")].some(video => {
+      const duration = Number(video.duration);
+      return video.readyState >= 2 && duration > 0 && Number.isFinite(duration);
+    })).catch(() => false);
+    if (canRecover) {
+      await nudgePlayback(page);
+      await page.waitForTimeout(1200);
+      state = await readState(page);
+    }
+  }
+  if (!isReadyState(state)) {
     const diagnostic = await page.evaluate(() => ({ url: location.href, videos: [...document.querySelectorAll("video")].map(v => ({
       duration: String(v.duration), ready: v.readyState, paused: v.paused, error: v.error && v.error.code,
       width: v.getBoundingClientRect().width, height: v.getBoundingClientRect().height
@@ -392,23 +480,30 @@ async function watchResult(page, shorts, deadline, job, report, checkBoundary, s
     await withVideo(page, v => { if (v) v.currentTime = 0; });
     state = await readState(page);
   }
-  const plan = planWatch(state.duration, (deadline - Date.now()) / 1000, shorts);
+  if (state.paused && !state.ended) await nudgePlayback(page);
+  const plan = planWatch(state.duration, (deadline - Date.now()) / 1000, /\/shorts\//.test(page.url()) || shorts);
   if (plan && typeof job.watchBudget === "function") plan.seconds = Math.min(state.duration, (deadline - Date.now()) / 1000);
   if (!plan) return false;
-  report("youtube", "Прогрев: " + (shorts ? "Shorts" : "видео") + " · " + plan.mode + " · до " + Math.round(plan.seconds) + " сек.");
+  const isShorts = /\/shorts\//.test(page.url()) || shorts;
+  report("youtube", "Прогрев: " + (isShorts ? "Shorts" : "видео") + " · " + plan.mode + " · до " + Math.round(plan.seconds) + " сек.");
   let watched = 0, previous = 0, sought = false;
   let stalledAt = Date.now();
+  let lastResume = 0;
   while (watched < plan.seconds && Date.now() < deadline) {
     if (await handleAd(page, report)) { previous = null; stalledAt = Date.now(); continue; }
     await checkBoundary();
     state = await readState(page);
+    if (!state) {
+      await nudgePlayback(page);
+      state = await readState(page);
+    }
     if (!state) throw new Error("Прогрев: видеоплеер исчез.");
     // Count actual playback progress, never buffering, seek jumps or Shorts loops.
     const delta = previous == null ? 0 : state.current - previous;
     if (delta > 0 && delta < 2) { watched += delta; stalledAt = Date.now(); }
     previous = state.current;
     if (watched >= plan.seconds || state.ended && state.duration < 5) break;
-    if (state.ended && !shorts) break;
+    if (state.ended && !isShorts) break;
     if (!sought && watched >= plan.initial && plan.seekTo != null) {
       await withVideo(page, (v, position) => {
         if (v) v.currentTime = Math.min(position, v.duration - 0.1);
@@ -416,10 +511,9 @@ async function watchResult(page, shorts, deadline, job, report, checkBoundary, s
       previous = null;
       sought = true;
     }
-    if (state.paused && !state.ended) {
-      await withVideo(page, v => {
-        if (v && v.paused && !v.ended) return v.play();
-      });
+    if (state.paused && !state.ended && Date.now() - lastResume >= 1000) {
+      await nudgePlayback(page);
+      lastResume = Date.now();
     }
     if (Date.now() - stalledAt > 15000) throw new Error("Прогрев: воспроизведение не продвигается более 15 секунд.");
     await page.waitForTimeout(250);
@@ -527,4 +621,4 @@ async function runShortsWarmup(rawPage, job, report = () => {}) {
   return summary;
 }
 
-module.exports = { runShortsWarmup, parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, searchKeyword, watchResult, maybeLike, readState, buildResult, TOTAL_MS, TARGET_VIDEOS, WAIT_MS, WarmupDeadline };
+module.exports = { runShortsWarmup, parseKeywords, shuffle, planWatch, videoBudget, deadlinePage, searchKeyword, watchResult, maybeLike, readState, pickVideo, buildResult, TOTAL_MS, TARGET_VIDEOS, WAIT_MS, WarmupDeadline };

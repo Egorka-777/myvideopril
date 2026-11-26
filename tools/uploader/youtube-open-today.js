@@ -112,7 +112,18 @@ async function navigateTodayVideo(page, options, report = () => {}) {
   };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(options.todayDate || "")) throw new Error("Не задана календарная дата ПК.");
   report("open_channel", url);
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeout(60000) });
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeout(60000) });
+  } catch (e) {
+    // Retry only the observed failure: navigation timed out with an empty channel page.
+    const empty = e.name === "TimeoutError" && !page.isClosed() && await page.evaluate(() =>
+      !document.querySelector("ytd-browse, ytd-rich-grid-renderer") &&
+      !(document.body?.innerText || "").trim()
+    ).catch(() => false);
+    if (!empty) throw e;
+    report("channel_retry", "Канал не загрузился: пустая страница после тайм-аута. Повторяю открытие в пределах 90 секунд.");
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeout(30000) });
+  }
   const needsVerify = await page.evaluate(() =>
     /Подтвердите, что это вы|Confirm it's you|Verify it's you/i.test(document.body?.innerText || "")
   ).catch(() => false);

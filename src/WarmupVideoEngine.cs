@@ -125,6 +125,7 @@ namespace VideoBatch {
         // Injectable HTTP transport for offline integration tests; production always uses official endpoints.
         internal static async Task<IReadOnlyList<string>> GenerateAsync(WarmupVideoJob job, Action<string> log, CancellationToken ct, HttpClient routerClient, HttpClient elevenClient, string ffmpeg, string ffprobe) {
             Validate(job); ct.ThrowIfCancellationRequested(); log = log ?? (_ => { });
+            job.OutputFolder = VideoBatchOutputPaths.DailySessionFolder(job.OutputFolder);
             Directory.CreateDirectory(job.OutputFolder);
             var inventory = job.UsesManualBundles ? WarmupBundleHistory.Inventory(job.Market, job.Jokes, job.BackgroundFiles) : null;
             var plans = inventory?.Next;

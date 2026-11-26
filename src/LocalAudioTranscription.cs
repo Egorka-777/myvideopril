@@ -64,7 +64,7 @@ namespace VideoBatch {
                 } finally { try { File.Delete(job); } catch { } }
             } finally { gate.Release(); }
         }
-        static async Task RunProcess(string executable, IEnumerable<string> args, CancellationToken ct, Action<string> progress) {
+        internal static async Task RunProcess(string executable, IEnumerable<string> args, CancellationToken ct, Action<string> progress) {
             ct.ThrowIfCancellationRequested();
             var start = new ProcessStartInfo(executable, string.Join(" ", args.Select(Core.Quote))) {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,

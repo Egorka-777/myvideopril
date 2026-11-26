@@ -168,10 +168,12 @@ namespace VideoBatch {
         public static List<WarmupCaption> Rasterize(List<WarmupCaption> cues, WarmupSubtitleStyle style, string folder, int canvasWidth = 1080, int canvasHeight = 1920) {
             var frames = SubtitlePresets.Frames(cues, style);
             cues.Clear(); cues.AddRange(frames);
-            for (int i = 0; i < cues.Count; i++) {
-                cues[i].ImagePath = Path.Combine(folder, "caption-" + i + ".png");
-                using (var image = SubtitleTypography.UsesTypography(style) ? SubtitleTypography.Paint(cues[i], style, canvasWidth, canvasHeight) : Paint(cues[i].Text, style, canvasWidth, canvasHeight)) image.Save(cues[i].ImagePath, ImageFormat.Png);
-            }
+            try {
+                System.Threading.Tasks.Parallel.For(0, cues.Count, i => {
+                    cues[i].ImagePath = Path.Combine(folder, "caption-" + i + ".png");
+                    using (var image = SubtitleTypography.UsesTypography(style) ? SubtitleTypography.Paint(cues[i], style, canvasWidth, canvasHeight) : Paint(cues[i].Text, style, canvasWidth, canvasHeight)) image.Save(cues[i].ImagePath, ImageFormat.Png);
+                });
+            } catch (AggregateException e) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e.InnerExceptions[0]).Throw(); }
             WriteTrack(cues, folder, canvasWidth, canvasHeight);
             return cues;
         }

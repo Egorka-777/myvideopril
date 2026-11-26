@@ -99,7 +99,7 @@ def complete_chunks(chunks, length):
     return result
 
 
-def transcribe_utterances(model, audio, chunks, language):
+def transcribe_utterances(model, audio, chunks, language, report=None):
     result = []
     for chunk in chunks:
         offset = chunk["start"] / SAMPLING_RATE
@@ -114,6 +114,8 @@ def transcribe_utterances(model, audio, chunks, language):
             segment.start += offset
             segment.end += offset
             result.append(segment)
+            if report is not None:
+                report(segment.end)
     return result
 
 
@@ -126,7 +128,7 @@ def execute(job, model_factory=None, audio_loader=None, chunk_detector=None):
         from faster_whisper import WhisperModel
         model_factory = WhisperModel
     emit("loading", "Загружаю локальную модель речи…", 0)
-    model = model_factory(MODEL, device="cpu", compute_type="int8", cpu_threads=2,
+    model = model_factory(MODEL, device="cpu", compute_type="int8", cpu_threads=max(2, (os.cpu_count() or 4) // 2),
                           num_workers=1, download_root=job["models"], local_files_only=True)
     for index, item in enumerate(job["items"]):
         audio = Path(item["audio"])
@@ -137,13 +139,13 @@ def execute(job, model_factory=None, audio_loader=None, chunk_detector=None):
         # no audio upload and no language translation.
         samples = audio_loader(str(audio))
         language = model.detect_language(samples, vad_filter=True)[0]
-        segments = transcribe_utterances(model, samples, chunk_detector(samples), language)
         duration = len(samples) / SAMPLING_RATE
+        segments = transcribe_utterances(model, samples, chunk_detector(samples), language,
+            lambda end: emit("speech", f"Распознаю {index + 1}/{len(job['items'])}: {audio.name}",
+                int((index + min(0.99, end / duration)) * 100 / len(job["items"]))))
         if not math.isfinite(duration) or duration <= 0:
             raise ValueError("Не удалось прочитать длительность аудио: " + audio.name)
-        result = timing_from_segments(segments, duration, lambda value: emit(
-            "speech", f"Распознаю {index + 1}/{len(job['items'])}: {audio.name}",
-            int((index + value / 100) * 100 / len(job["items"]))))
+        result = timing_from_segments(segments, duration)
         if fingerprint(audio) != item["hash"]:
             raise ValueError("Аудиофайл изменился во время распознавания: " + audio.name)
         result.update(AudioHash=item["hash"], Source="faster-whisper/" + MODEL,

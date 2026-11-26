@@ -17,6 +17,9 @@ namespace VideoBatch {
             AssemblyMarketProfiles.SyncMissingLayersFromPrimary(t);
             Check(t.MarketRuInst.Scenes[0].Layers.Count==1,"Configured profiles do not inherit new primary objects");
             Check(t.MarketEn.Scenes[0].Layers.Count==1,"Migration seeds independent EN scene objects");
+            var custom = AssemblyMarketProfiles.AddEmpty(t, "EN прогрев тест");
+            AssemblyMarketProfiles.Apply(t, custom.Id);
+            Check(t.Scenes.Count == 1 && t.Scenes[0].Layers.Count == 1, "New custom studio must include one scene");
             return true;
         }
 
@@ -136,7 +139,7 @@ namespace VideoBatch {
                 Check(AssemblyProfile.ShortLabel(a.Id, t) == a.Name, "Custom display name resolved from template");
                 foreach (var custom in new[] { a, b }) {
                     AssemblyMarketProfiles.Apply(t, custom.Id); AssemblyWorkspace.Prepare(t); t.Validate();
-                    Check(t.Scenes.Count == 0 && t.Videos == "" && t.Music == "" && t.GlobalLayers.Count == 0, "Custom profile starts empty after workspace preparation");
+                    Check(t.Scenes.Count == 1 && t.Videos == "Видео" && t.Music == "Музыка" && t.GlobalLayers.Count == 0, "Custom profile starts with one scene and separate empty pools");
                     Check(t.Count == 1 && t.Width == 1080 && t.Height == 1920 && t.Fps == 30 && t.Transition == "fade", "Custom profile gets defaults, not active editor settings");
                     Check(t.SecondaryVideos == "" && t.Voiceover == "" && t.Speech.Text == "" && t.Captions.Count == 0 && t.TitleBank.Count == 0, "No secondary media, speech, captions or titles inherited");
                     Check(t.Materials == custom.Settings.Materials && t.Materials != t.MarketRu.Materials, "Custom materials have a separate filesystem root");
@@ -161,7 +164,7 @@ namespace VideoBatch {
                 AssemblyMarketProfiles.Apply(t, AssemblyProfile.En);
                 Check(t.Scenes.Count == 4 && t.GlobalLayers.Count == 0, "Existing sibling profile not contaminated");
                 AssemblyMarketProfiles.Apply(t, b.Id);
-                Check(t.Scenes.Count == 0 && t.Videos == "" && t.Count == 2, "Second custom remains empty and independently configured");
+                Check(t.Scenes.Count == 1 && t.Videos == "Видео" && t.Count == 2, "Second custom keeps its own scene shell and count");
                 string historyRoot = Path.Combine(root, "history");
                 var history = AssemblyHistoryStore.Load(historyRoot, a.Id); history.Combinations.Add("custom-only"); AssemblyHistoryStore.Save(historyRoot, history, a.Id);
                 Check(AssemblyHistoryStore.Load(historyRoot, a.Id).Combinations.Single() == "custom-only", "Custom history persisted");

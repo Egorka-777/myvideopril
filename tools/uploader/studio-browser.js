@@ -80,7 +80,7 @@ const UPLOADS='ytcp-uploads-dialog,ytcp-upload-dialog,ytcp-video-upload-dialog';
 const SUCCESS=/^(?:Video published|Video scheduled|Publish complete|Publication scheduled|Видео опубликовано|Видео запланировано|Публикация завершена|Публикация запланирована)[.!]?$/i;
 const SUCCESS_LOOSE=/(?:Video published|Video scheduled|Publish complete|Publication scheduled|Видео опубликовано|Видео запланировано|Публикация завершена|Публикация запланирована)/i;
 // This is Studio's saved publication receipt, not a bare processing indicator.
-const PROCESSING_RECEIPT=/(?:(?:видео|оно) будет опубликовано|(?:video|it) will be published)/i;
+const PROCESSING_RECEIPT=/(?:(?:видео|оно) будет опубликовано|(?:video|it) will be (?:published|set to public))/i;
 const VIDEO_ID_RE='(?:youtu\\.be\\/|[?&]v=|\\/shorts\\/|\\/video\\/)([A-Za-z0-9_-]{11})(?:\\b|\\/|$)';
 async function collectVideoIds(root){
   // Playwright's locator pierces shadow roots. The former manual walk skipped
@@ -107,7 +107,7 @@ async function findCompletionCopy(root){
   }catch{return '';}
 }
 function normCompletion(text){return String(text||'').replace(/\s+/g,' ').trim();}
-function completionState(copy){return /video scheduled|publication scheduled|видео запланировано|публикация запланирована/i.test(copy)?'scheduled':'published';}
+function completionState(copy){return /video scheduled|publication scheduled|видео запланировано|публикация запланирована|video will be set to public on\b/i.test(copy)?'scheduled':'published';}
 async function publishActionStillActive(root){
   // The footer is replaced by the completion card during this read. Query all
   // matches in one browser evaluation: a removed button is an empty snapshot,

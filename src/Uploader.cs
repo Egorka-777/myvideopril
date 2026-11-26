@@ -15,7 +15,7 @@ using System.Net.Http;
 
 namespace VideoBatch {
     public class YouTubeItem {
-        public string Video="",Title="",Thumbnail="",PublishedUrl="",PublishedVideoId="";
+        public string Video="",Title="",Thumbnail="",PublishedUrl="",PublishedVideoId="",ContentKind="";
         public string StudioUploadId=Guid.NewGuid().ToString("N"),StudioVideoId="",StudioPhase="";
         public bool StudioPending,StudioRetryImmediate;
         public string StudioVisibility="",OwnerCommentState="",OwnerCommentText="",OwnerCommentId="";
@@ -442,7 +442,7 @@ namespace VideoBatch {
 
     /// <summary>Одно окно: RU/EN × Long/Shorts. База постоянная.</summary>
     public class TitleBanksHubDialog:Dialog {
-        readonly Preferences settings;TextBox words;Label counter;Button langRu,langEn,kindLong,kindShorts;
+        readonly Preferences settings;TextBox words;Label counter;Button langRu,langEn,kindLong,kindShorts,kindWarmup;
         string lang="RU",kind="long";
         readonly Dictionary<string,string> drafts=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         public TitleBanksHubDialog(Preferences prefs):base("Заголовки YouTube",720){
@@ -452,9 +452,10 @@ namespace VideoBatch {
             var bar=Ui.Flow();bar.WrapContents=false;bar.Margin=new Padding(0,8,0,8);
             langRu=Ui.Button("RU",()=>Switch("RU",kind));langEn=Ui.Button("EN",()=>Switch("EN",kind));
             kindLong=Ui.Button("Long",()=>Switch(lang,"long"));kindShorts=Ui.Button("Shorts",()=>Switch(lang,"shorts"));
+            kindWarmup=Ui.Button("Прогрев",()=>Switch(lang,"warmup"));
             bar.Controls.Add(langRu);bar.Controls.Add(langEn);
             bar.Controls.Add(new Label{Text="  ",AutoSize=true});
-            bar.Controls.Add(kindLong);bar.Controls.Add(kindShorts);
+            bar.Controls.Add(kindLong);bar.Controls.Add(kindShorts);bar.Controls.Add(kindWarmup);
             all.Controls.Add(bar);
             words=new TextBox{Multiline=true,AcceptsReturn=true,AcceptsTab=true,WordWrap=false,ScrollBars=ScrollBars.Both,Width=660,Height=420,Font=new Font("Consolas",10)};
             words.TextChanged+=(s,e)=>RefreshCounter();
@@ -475,14 +476,25 @@ namespace VideoBatch {
         }
         static string KeyOf(string lang,string kind){return NormLang(lang)+"_"+NormKind(kind);}
         static string NormLang(string l){return string.Equals((l??"").Trim(),"EN",StringComparison.OrdinalIgnoreCase)?"EN":"RU";}
-        static string NormKind(string k){k=(k??"").Trim().ToLowerInvariant();return k=="shorts"||k=="short"?"shorts":"long";}
+        static string NormKind(string k){
+            k=(k??"").Trim().ToLowerInvariant();
+            if(k=="shorts"||k=="short")return "shorts";
+            if(k=="warmup"||k=="прогрев")return "warmup";
+            return "long";
+        }
         List<string> BankOf(string lang,string kind){
             lang=NormLang(lang);kind=NormKind(kind);
-            if(lang=="EN")return kind=="shorts"?settings.TitleBankShortsEn:settings.TitleBankLongEn;
-            return kind=="shorts"?settings.TitleBankShortsRu:settings.TitleBankLongRu;
+            if(lang=="EN"){
+                if(kind=="shorts")return settings.TitleBankShortsEn;
+                if(kind=="warmup")return settings.TitleBankWarmupEn;
+                return settings.TitleBankLongEn;
+            }
+            if(kind=="shorts")return settings.TitleBankShortsRu;
+            if(kind=="warmup")return settings.TitleBankWarmupRu;
+            return settings.TitleBankLongRu;
         }
         void SeedDraftsFromSettings(){
-            foreach(var L in new[]{"RU","EN"})foreach(var K in new[]{"long","shorts"})
+            foreach(var L in new[]{"RU","EN"})foreach(var K in new[]{"long","shorts","warmup"})
                 drafts[KeyOf(L,K)]=string.Join(Environment.NewLine,BankOf(L,K)??new List<string>());
         }
         void CommitCurrent(){drafts[KeyOf(lang,kind)]=words.Text??"";}
@@ -492,13 +504,14 @@ namespace VideoBatch {
             string key=KeyOf(lang,kind);
             if(!drafts.ContainsKey(key))drafts[key]=string.Join(Environment.NewLine,BankOf(lang,kind));
             words.Text=drafts[key];
-            PaintSeg(langRu,lang=="RU");PaintSeg(langEn,lang=="EN");PaintSeg(kindLong,kind=="long");PaintSeg(kindShorts,kind=="shorts");
+            PaintSeg(langRu,lang=="RU");PaintSeg(langEn,lang=="EN");PaintSeg(kindLong,kind=="long");PaintSeg(kindShorts,kind=="shorts");PaintSeg(kindWarmup,kind=="warmup");
             RefreshCounter();
         }
         static void PaintSeg(Button b,bool on){b.BackColor=on?Ui.Blue:Color.FromArgb(228,235,246);b.ForeColor=on?Color.White:Ui.Ink;}
         void RefreshCounter(){
             var lines=ParseLines(words.Text);
-            counter.Text=(lang=="EN"?"EN":"RU")+" · "+(kind=="shorts"?"Shorts":"Long")+" · "+(lines.Count==0?"пусто":(lines.Count+" шт."));
+            string kindLabel=kind=="shorts"?"Shorts":kind=="warmup"?"Прогрев":"Long";
+            counter.Text=(lang=="EN"?"EN":"RU")+" · "+kindLabel+" · "+(lines.Count==0?"пусто":(lines.Count+" шт."));
             counter.ForeColor=lines.Count==0?Color.FromArgb(180,60,40):Color.FromArgb(30,130,70);
         }
         static List<string> ParseLines(string text){
@@ -508,10 +521,11 @@ namespace VideoBatch {
         }
         void ApplyDraftsToSettings(){
             CommitCurrent();
-            foreach(var L in new[]{"RU","EN"})foreach(var K in new[]{"long","shorts"}){
+            foreach(var L in new[]{"RU","EN"})foreach(var K in new[]{"long","shorts","warmup"}){
                 var list=ParseLines(drafts.ContainsKey(KeyOf(L,K))?drafts[KeyOf(L,K)]:"");
                 var tooLong=list.Select((t,i)=>new{t,i}).Where(x=>x.t.Length>100).ToList();
-                if(tooLong.Count>0)throw new Exception((L=="EN"?"EN":"RU")+" · "+(K=="shorts"?"Shorts":"Long")+": заголовок №"+(tooLong[0].i+1)+" длиннее 100 символов.");
+                string kLab=K=="shorts"?"Shorts":K=="warmup"?"Прогрев":"Long";
+                if(tooLong.Count>0)throw new Exception((L=="EN"?"EN":"RU")+" · "+kLab+": заголовок №"+(tooLong[0].i+1)+" длиннее 100 символов.");
                 var bank=BankOf(L,K);bank.Clear();bank.AddRange(list);
             }
             settings.TitleBanksSeeded=true;
@@ -577,7 +591,7 @@ namespace VideoBatch {
         static readonly string[] FilterLabels=new[]{"Загруженные сегодня","За эту неделю","За этот месяц","За этот год","Без фильтра"};
         static readonly string[] FilterKeys=new[]{"today","week","month","year","none"};
         static readonly string[] LangLabels=new[]{"RU","EN"};
-        static readonly string[] KindLabels=new[]{"Длинное","Шортс"};
+        static readonly string[] KindLabels=new[]{"Длинное","Шортс","Прогрев"};
         static readonly string[] KindKeys=new[]{"long","shorts"};
         Preferences settings;DataGridView grid;RichTextBox log;TextBox searchKeys,searchFullTitle,searchUrl;ComboBox searchFilter;Button setup,add,files,titlesBtn,check,search,upload,uploadHttp,meshWatch,stop,marketRu,marketEn,kindShorts,kindLong,applyThumb,moreBtn,retrySafe,removeQueue;Label marketHint,runHint,channelsLabel;CancellationTokenSource cancellation;CancellationTokenSource uploadCts;HttpWorkerPool httpUploadPool;int uploadsInFlight;readonly HashSet<string> busyProfiles=new HashSet<string>(StringComparer.OrdinalIgnoreCase);string logFile;string marketView="RU";string workspaceKindView="shorts";readonly object saveLock=new object();readonly object uploadLock=new object();
         public UploadWindow(Preferences source){settings=source;marketView=NormMarket(settings.YouTubeMarketView);workspaceKindView=NormKind(settings.YouTubeKindView);Text="YouTube";ClientSize=new Size(1180,780);MinimumSize=new Size(960,640);StartPosition=FormStartPosition.CenterParent;Font=new Font("Segoe UI",9.5f);BackColor=Ui.Bg;ForeColor=Ui.Ink;AutoScaleMode=AutoScaleMode.Dpi;
@@ -706,9 +720,24 @@ namespace VideoBatch {
             if(grid.Rows.Count==0)AddGridRow(new YouTubeChannel{Name=marketView=="EN"?"Channel 1":"Канал 1",Market=marketView,Kind="long"});
             RefreshMarketUi();
         }
-        static string NormKind(string k){k=(k??"").Trim().ToLowerInvariant();return k=="shorts"?"shorts":"long";}
-        static string KindLabel(string k){return NormKind(k)=="shorts"?"Шортс":"Длинное";}
-        static string KindKeyFromLabel(string label){return string.Equals((label??"").Trim(),"Шортс",StringComparison.OrdinalIgnoreCase)?"shorts":"long";}
+        static string NormKind(string k){
+            k=(k??"").Trim().ToLowerInvariant();
+            if(k=="shorts"||k=="short")return "shorts";
+            if(k=="warmup"||k=="прогрев")return "warmup";
+            return "long";
+        }
+        static string KindLabel(string k){
+            k=NormKind(k);
+            if(k=="shorts")return "Шортс";
+            if(k=="warmup")return "Прогрев";
+            return "Длинное";
+        }
+        static string KindKeyFromLabel(string label){
+            string t=(label??"").Trim();
+            if(string.Equals(t,"Шортс",StringComparison.OrdinalIgnoreCase))return "shorts";
+            if(string.Equals(t,"Прогрев",StringComparison.OrdinalIgnoreCase))return "warmup";
+            return "long";
+        }
         void AddGridRow(YouTubeChannel c){
             c.Market=NormMarket(c.Market);c.Kind=NormKind(c.Kind);
             if(string.IsNullOrWhiteSpace(c.ChannelId))c.ChannelId=Guid.NewGuid().ToString("N");
@@ -1106,11 +1135,15 @@ namespace VideoBatch {
         List<string> TitleBankRef(string kind,string market=null){
             kind=NormKind(kind);bool en=NormMarket(market??marketView)=="EN";
             if(kind=="shorts")return en?settings.TitleBankShortsEn:settings.TitleBankShortsRu;
+            if(kind=="warmup")return en?settings.TitleBankWarmupEn:settings.TitleBankWarmupRu;
             return en?settings.TitleBankLongEn:settings.TitleBankLongRu;
         }
         int GetTitleCursor(string kind,string market=null){
             kind=NormKind(kind);bool en=NormMarket(market??marketView)=="EN";
-            int cursor=kind=="shorts"?(en?settings.TitleCursorShortsEn:settings.TitleCursorShortsRu):(en?settings.TitleCursorLongEn:settings.TitleCursorLongRu);
+            int cursor;
+            if(kind=="shorts")cursor=en?settings.TitleCursorShortsEn:settings.TitleCursorShortsRu;
+            else if(kind=="warmup")cursor=en?settings.TitleCursorWarmupEn:settings.TitleCursorWarmupRu;
+            else cursor=en?settings.TitleCursorLongEn:settings.TitleCursorLongRu;
             return Store.ClampTitleCursor(cursor,TitleBankRef(kind,market).Count);
         }
         void SetTitleCursor(string kind,int value,string market=null){
@@ -1118,6 +1151,7 @@ namespace VideoBatch {
             int bankCount=TitleBankRef(kind,market).Count;
             value=Store.ClampTitleCursor(value,bankCount);
             if(kind=="shorts"){if(en)settings.TitleCursorShortsEn=value;else settings.TitleCursorShortsRu=value;}
+            else if(kind=="warmup"){if(en)settings.TitleCursorWarmupEn=value;else settings.TitleCursorWarmupRu=value;}
             else{if(en)settings.TitleCursorLongEn=value;else settings.TitleCursorLongRu=value;}
         }
         string TitleCursorLabel(string kind,string market){
@@ -1245,13 +1279,13 @@ namespace VideoBatch {
             SaveGrid();LoadGrid();
             row.Cells[COn].Value=true;SaveGrid();
         }
-        public void AssignVideosToChannel(YouTubeChannel channel,string[] files,bool replaceConfirmed=false){
+        public void AssignVideosToChannel(YouTubeChannel channel,string[] files,bool replaceConfirmed=false,IList<string> manualTitles=null){
             if(channel==null||files==null||files.Length==0)return;
             SetMarketView(string.IsNullOrWhiteSpace(channel.Market)?marketView:channel.Market);
             LoadGrid();
             var row=FindChannelRow(channel);
             if(row==null)throw new Exception("Канал не найден: «"+(channel.Name??"")+"» (Profile "+(channel.ProfileId??"")+")");
-            AssignVideoPackToChannel((YouTubeChannel)row.Tag,row,files,replaceConfirmed);
+            AssignVideoPackToChannel((YouTubeChannel)row.Tag,row,files,replaceConfirmed,manualTitles);
             SaveGrid();LoadGrid();
             row=FindChannelRow(channel)??row;
             row.Cells[COn].Value=true;SaveGrid();
@@ -1373,16 +1407,28 @@ namespace VideoBatch {
             Write("  переименовано в исходной папке: "+renamed+".");
             return result;
         }
-        void AssignVideoPackToChannel(YouTubeChannel ch,DataGridViewRow row,string[] filePaths,bool replaceConfirmed=false){
+        void AssignVideoPackToChannel(YouTubeChannel ch,DataGridViewRow row,string[] filePaths,bool replaceConfirmed=false,IList<string> manualTitles=null){
             var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
             if(!replaceConfirmed&&ch.Items!=null&&ch.Items.Any(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Video))&&
                 MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+paths.Length+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
             string packKind=EffectiveKind(ch);
+            bool useSourceTitles=manualTitles!=null&&manualTitles.Count>0;
             List<string> titles;
-            try{titles=PeekTitlesFromBank(packKind,paths.Length,m);}catch(Exception ex){throw;}
+            if(useSourceTitles){
+                titles=manualTitles.Select(CleanTitle).Where(x=>x.Length>0).ToList();
+                if(titles.Count<paths.Length)throw new Exception("«"+ch.Name+"»: нужно "+paths.Length+" заголовков, указано "+titles.Count+".");
+                titles=titles.Take(paths.Length).ToList();
+                packKind="warmup";
+            } else if(packKind=="warmup"){
+                titles=paths.Select(VideoBatchOutputPaths.SourceTitle).Select(CleanTitle).Where(x=>x.Length>0).ToList();
+                if(titles.Count<paths.Length)throw new Exception("«"+ch.Name+"»: не удалось взять заголовок из имени файла.");
+            } else {
+                try{titles=PeekTitlesFromBank(packKind,paths.Length,m);}catch(Exception ex){throw;}
+            }
             titles=ResolveDuplicateTitlesInBatch(titles,"«"+ch.Name+"»");
-            Write("«"+ch.Name+"»: "+paths.Length+" видео — "+TitleCursorLabel(packKind,m)+":");
+            bool fromFile=packKind=="warmup";
+            Write("«"+ch.Name+"»: "+paths.Length+" видео — "+(fromFile?"заголовки из исходника (прогрев)":TitleCursorLabel(packKind,m))+":");
             var items=new List<YouTubeItem>();
             int renamed=0;
             for(int i=0;i<paths.Length;i++){
@@ -1395,13 +1441,13 @@ namespace VideoBatch {
                 path=AssignVideoFile(path,baseTitle,i+1,paths.Length);
                 if(!string.Equals(before,path,StringComparison.OrdinalIgnoreCase))renamed++;
                 else if(!string.Equals(Path.GetFileName(before),Path.GetFileName(path),StringComparison.OrdinalIgnoreCase))renamed++;
-                items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=""});
+                items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail="",ContentKind=packKind});
             }
             ch.Thumbnail="";ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;ch.Status=ChannelStatus.Ready;
             SyncChannelPrimary(ch);
-            AdvanceTitleCursor(packKind,paths.Length,m);
+            if(!fromFile)AdvanceTitleCursor(packKind,paths.Length,m);
             RefreshRowDisplay(row);
-            Write("  переименовано: "+renamed+". "+TitleCursorLabel(packKind,m));
+            Write("  переименовано: "+renamed+"."+(fromFile?"":" "+TitleCursorLabel(packKind,m)));
         }
         /// <summary>Читает N заголовков с текущей позиции курсора, не сдвигая его.</summary>
         List<string> PeekTitlesFromBank(string kind,int videoCount,string market=null){
@@ -1462,7 +1508,7 @@ namespace VideoBatch {
                             string path=paths[i];string before=path;
                             path=AssignVideoFile(path,baseTitle,i+1,paths.Count);
                             if(!string.Equals(before,path,StringComparison.OrdinalIgnoreCase))renamed++;
-                            items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=""});
+                            items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail="",ContentKind=packKind});
                         }
                         ch.Thumbnail="";ch.Items=items;ch.Enabled=true;ch.Market=m;ch.Kind=packKind;SyncChannelPrimary(ch);done+=items.Count;
                         AdvanceTitleCursor(packKind,paths.Count,m);
@@ -1516,7 +1562,7 @@ namespace VideoBatch {
                     ValidateTitleLength(finalTitle,"«"+baseCh.Name+"» шортс ["+(i+1)+"/"+videoFiles.Length+"]");
                     Write("  "+(i+1)+". «"+MakeWindowsSafeTitle(finalTitle)+"»");
                     string path=AssignVideoFile(videoFiles[i],baseTitle,i+1,videoFiles.Length);
-                    items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail=""});
+                    items.Add(new YouTubeItem{Video=path,Title=finalTitle,Thumbnail="",ContentKind="shorts"});
                 }
                 baseCh.Thumbnail="";baseCh.Enabled=true;baseCh.Market=m;baseCh.Kind="shorts";baseCh.Items=items;baseCh.Status="Готов (шортс "+items.Count+")";
                 AdvanceTitleCursor("shorts",videoFiles.Length,m);
@@ -1609,10 +1655,14 @@ namespace VideoBatch {
                 SyncChannelPrimary(c);
                 visible.Add(c);
             }
+            var visibleIds=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach(var c in visible)if(!string.IsNullOrWhiteSpace(c?.ChannelId))visibleIds.Add(c.ChannelId.Trim());
             var others=(settings.YouTubeChannels??new List<YouTubeChannel>()).Where(c=>NormMarket(c.Market)!=marketView).ToList();
+            var preserved=(settings.YouTubeChannels??new List<YouTubeChannel>()).Where(c=>c!=null&&NormMarket(c.Market)==marketView
+                &&!string.IsNullOrWhiteSpace(c.ChannelId)&&!visibleIds.Contains(c.ChannelId.Trim())).ToList();
             var moved=visible.Where(c=>NormMarket(c.Market)!=marketView).ToList();
             visible=visible.Where(c=>NormMarket(c.Market)==marketView).ToList();
-            settings.YouTubeChannels=Store.NormalizeChannels(others.Concat(moved).Concat(visible).ToList());
+            settings.YouTubeChannels=Store.NormalizeChannels(others.Concat(moved).Concat(visible).Concat(preserved).ToList());
             settings.YouTubeMarketView=marketView;Save();
             if(moved.Count>0){BeginInvoke(new Action(()=>{LoadGrid();Write("Каналы перенесены на другой рынок: "+moved.Count+".");}));}
         }
@@ -1660,6 +1710,9 @@ namespace VideoBatch {
             if(string.Equals(result.Outcome,"cancelled",StringComparison.OrdinalIgnoreCase)) return "Остановлено пользователем";
             if(result.Success||string.Equals(result.Outcome,"completed",StringComparison.OrdinalIgnoreCase)) return "Выполнено ✓";
             return "Ошибка · "+WarmupShortMessage(string.IsNullOrWhiteSpace(result.Reason)?result.Error:result.Reason);
+        }
+        sealed class WarmupWatchdogException:Exception {
+            public WarmupWatchdogException(string message):base(message){}
         }
         void DisposeUploadCancellationLocked(){
             if(uploadCts==null) return;
@@ -2003,23 +2056,60 @@ namespace VideoBatch {
             };
         }
         async Task<UploadRunResult> RunWarmupForChannel(string token,YouTubeChannel ch,DataGridViewRow row,CancellationToken ct){
-            var result=await DolphinRunner.Run(BuildWarmupJob(token,ch),m=>{
-                if(m.stage=="warmup_progress"||m.stage=="done"&&m.warmupTarget>0){
-                    WarmupProgress?.Invoke(ch.ProfileId,m);
-                    if(m.stage=="warmup_progress")return;
+            DateTime? progressStarted=null;
+            DateTime lastProgress=DateTime.MinValue;
+            string watchdogReason=null;
+            using(var runCancel=CancellationTokenSource.CreateLinkedTokenSource(ct)){
+                var run=DolphinRunner.Run(BuildWarmupJob(token,ch),m=>{
+                    if(m.stage=="warmup_progress"||m.stage=="done"&&m.warmupTarget>0){
+                        if(m.stage=="warmup_progress"){
+                            var now=DateTime.UtcNow;
+                            if(!progressStarted.HasValue)progressStarted=now;
+                            lastProgress=now;
+                        }
+                        WarmupProgress?.Invoke(ch.ProfileId,m);
+                        if(m.stage=="warmup_progress")return;
+                    }
+                    if(m.stage=="warmup_journal"){
+                        string journal=m.text??"";
+                        if(m.waitMs>0||!string.IsNullOrWhiteSpace(m.waitStage))
+                            journal=(m.waitStage??"ожидание")+": "+m.waitMs+" мс · "+(m.reason??"");
+                        Write((ch?.Name??"Канал")+": "+journal);
+                        return;
+                    }
+                    if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(ch,row,WarmupShortMessage(m.text));
+                },runCancel.Token);
+                var watchdog=Task.Run(async()=>{
+                    try{
+                        while(!run.IsCompleted){
+                            await Task.Delay(1000,runCancel.Token).ConfigureAwait(false);
+                            if(!progressStarted.HasValue)continue;
+                            var now=DateTime.UtcNow;
+                            if(now-lastProgress>TimeSpan.FromSeconds(60))
+                                watchdogReason="Прогрев не передавал прогресс 60 секунд.";
+                            else if(now-progressStarted.Value>TimeSpan.FromMinutes(17))
+                                watchdogReason="Прогрев не завершился за 17 минут.";
+                            if(watchdogReason!=null){runCancel.Cancel();return;}
+                        }
+                    }catch(OperationCanceledException){}
+                });
+                try{
+                    var result=await run.ConfigureAwait(false);
+                    MeshStatus(ch,row,WarmupRowStatus(result));
+                    SafeSave();
+                    return result;
+                }catch(Exception) when(watchdogReason!=null&&!ct.IsCancellationRequested){
+                    try{
+                        await DolphinRunner.StopProfileRequired(token,settings.DolphinPort,ch.ProfileId).ConfigureAwait(false);
+                    }catch(Exception stopError){
+                        throw new Exception(watchdogReason+" Dolphin не подтвердил закрытие профиля; повтор не запущен: "+stopError.Message,stopError);
+                    }
+                    throw new WarmupWatchdogException(watchdogReason);
+                }finally{
+                    if(!runCancel.IsCancellationRequested)runCancel.Cancel();
+                    try{await watchdog.ConfigureAwait(false);}catch(OperationCanceledException){}
                 }
-                if(m.stage=="warmup_journal"){
-                    string journal=m.text??"";
-                    if(m.waitMs>0||!string.IsNullOrWhiteSpace(m.waitStage))
-                        journal=(m.waitStage??"ожидание")+": "+m.waitMs+" мс · "+(m.reason??"");
-                    Write((ch?.Name??"Канал")+": "+journal);
-                    return;
-                }
-                if(!string.IsNullOrWhiteSpace(m.text))MeshStatus(ch,row,WarmupShortMessage(m.text));
-            },ct).ConfigureAwait(false);
-            MeshStatus(ch,row,WarmupRowStatus(result));
-            SafeSave();
-            return result;
+            }
         }
         async Task ShortsWarmup(IReadOnlyList<YouTubeChannel> channelsFilter){
             if(cancellation!=null)return;
@@ -2049,40 +2139,79 @@ namespace VideoBatch {
                 int batchTotal=(viewers.Count+batchSize-1)/batchSize;
                 Write("["+MarketLabel(marketView)+"] автопрогрев по ключам · "+viewers.Count+" акк. · 15 мин · цель 30 роликов · пачки по "+batchSize+".");
                 var errors=new ConcurrentBag<string>();
+                var retries=new ConcurrentQueue<(YouTubeChannel ch,DataGridViewRow row)>();
                 int ok=0,partial=0,interrupted=0,started=0;
                 bool cancelled=false;
+                Func<(YouTubeChannel ch,DataGridViewRow row),ProfileLaunchGate,bool,Task> runOne=async(pair,launchGate,isRetry)=>{
+                    var ch=pair.ch;var row=pair.row;
+                    bool launched=false;
+                    try{
+                        await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
+                        cancellation.Token.ThrowIfCancellationRequested();
+                        if(!isRetry)System.Threading.Interlocked.Increment(ref started);
+                        launched=true;
+                        MeshStatus(ch,row,isRetry?"Повторный прогрев Shorts…":"Прогрев Shorts…");
+                        var result=await RunWarmupForChannel(token,ch,row,cancellation.Token).ConfigureAwait(false);
+                        if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase))
+                            System.Threading.Interlocked.Increment(ref partial);
+                        else System.Threading.Interlocked.Increment(ref ok);
+                    }catch(WarmupWatchdogException e){
+                        if(isRetry){
+                            string shortMsg=WarmupShortMessage(e.Message);
+                            errors.Add(ch.Name+": повтор: "+shortMsg);
+                            MeshStatus(ch,row,"Ошибка повтора · "+shortMsg);
+                        }else{
+                            retries.Enqueue(pair);
+                            Write((ch.Name??"Канал")+": "+e.Message+" Профиль закрыт и поставлен в конец очереди.");
+                            MeshStatus(ch,row,"Повтор в конце очереди");
+                        }
+                    }catch(Exception) when(cancellation.IsCancellationRequested){if(launched)System.Threading.Interlocked.Increment(ref interrupted);MeshStatus(ch,row,"Остановлено пользователем");throw new OperationCanceledException(cancellation.Token);}
+                    catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);MeshStatus(ch,row,"Остановлено пользователем");throw;}
+                    catch(Exception e){
+                        if(cancellation.IsCancellationRequested){
+                            if(launched)System.Threading.Interlocked.Increment(ref interrupted);
+                            MeshStatus(ch,row,"Остановлено пользователем");
+                            return;
+                        }
+                        string shortMsg=WarmupShortMessage(e is UploadException ue?ue.Message:e.Message);
+                        if(!isRetry){
+                            try{
+                                if(e is UploadException uploadError&&uploadError.KeptOpen)
+                                    await DolphinRunner.StopProfileRequired(token,settings.DolphinPort,ch.ProfileId).ConfigureAwait(false);
+                                retries.Enqueue(pair);
+                                Write((ch.Name??"Канал")+": "+shortMsg+" Профиль закрыт и поставлен в конец очереди.");
+                                MeshStatus(ch,row,"Повтор в конце очереди");
+                                return;
+                            }catch(Exception stopError){
+                                shortMsg=WarmupShortMessage(shortMsg+" Dolphin не подтвердил закрытие профиля; повтор не запущен: "+stopError.Message);
+                            }
+                        }
+                        errors.Add(ch.Name+": "+shortMsg);
+                        MeshStatus(ch,row,(isRetry?"Ошибка повтора · ":"Ошибка · ")+shortMsg);
+                    }
+                };
                 for(int batchStart=0;batchStart<viewers.Count&&!cancelled;batchStart+=batchSize){
                     var batch=viewers.Skip(batchStart).Take(batchSize).ToList();
                     int batchNum=batchStart/batchSize+1;
                     Write("Прогрев: пачка "+batchNum+"/"+batchTotal+" — "+string.Join(", ",batch.Select(v=>v.ch.Name??"?"))+".");
                     var launchGate=ProfileLaunchGate.FromSettings(settings,batch.Count);
-                    var tasks=batch.Select(pair=>Task.Run(async()=>{
-                        var ch=pair.ch;var row=pair.row;
-                        bool launched=false;
-                        try{
-                            await launchGate.WaitStaggeredStartAsync(cancellation.Token).ConfigureAwait(false);
-                            cancellation.Token.ThrowIfCancellationRequested();
-                            System.Threading.Interlocked.Increment(ref started);launched=true;
-                            MeshStatus(ch,row,"Прогрев Shorts…");
-                            var result=await RunWarmupForChannel(token,ch,row,cancellation.Token).ConfigureAwait(false);
-                            if(string.Equals(result.Outcome,"partial",StringComparison.OrdinalIgnoreCase))
-                                System.Threading.Interlocked.Increment(ref partial);
-                            else System.Threading.Interlocked.Increment(ref ok);
-                        }catch(Exception) when(cancellation.IsCancellationRequested){if(launched)System.Threading.Interlocked.Increment(ref interrupted);MeshStatus(ch,row,"Остановлено пользователем");throw new OperationCanceledException(cancellation.Token);}
-                        catch(OperationCanceledException){if(launched)System.Threading.Interlocked.Increment(ref interrupted);MeshStatus(ch,row,"Остановлено пользователем");throw;}
-                        catch(Exception e){
-                            if(cancellation.IsCancellationRequested||IsWarmupStopNoise(e)){
-                                if(launched)System.Threading.Interlocked.Increment(ref interrupted);
-                                MeshStatus(ch,row,"Остановлено пользователем");
-                                return;
-                            }
-                            string shortMsg=WarmupShortMessage(e is UploadException ue?ue.Message:e.Message);
-                            errors.Add(ch.Name+": "+shortMsg);
-                            MeshStatus(ch,row,"Ошибка · "+shortMsg);
-                        }
-                    })).ToArray();
+                    var tasks=batch.Select(pair=>Task.Run(()=>runOne(pair,launchGate,false))).ToArray();
                     try{await Task.WhenAll(tasks).ConfigureAwait(true);}
                     catch(OperationCanceledException){Write("Прогрев остановлен.");cancelled=true;}
+                }
+                var retryList=retries.ToList();
+                if(!cancelled&&retryList.Count>0){
+                    int retryTotal=(retryList.Count+batchSize-1)/batchSize;
+                    Write("Прогрев: повтор проблемных профилей в конце очереди — "+retryList.Count+".");
+                    for(int batchStart=0;batchStart<retryList.Count&&!cancelled;batchStart+=batchSize){
+                        var batch=retryList.Skip(batchStart).Take(batchSize).ToList();
+                        int batchNum=batchStart/batchSize+1;
+                        Write("Повтор прогрева: пачка "+batchNum+"/"+retryTotal+" — "+string.Join(", ",batch.Select(v=>v.ch.Name??"?"))+".");
+                        var launchGate=ProfileLaunchGate.FromSettings(settings,batch.Count);
+                        var tasks=batch.Select(pair=>Task.Run(()=>runOne(pair,launchGate,true))).ToArray();
+                        try{await Task.WhenAll(tasks).ConfigureAwait(true);}
+                        catch(OperationCanceledException){Write("Прогрев остановлен.");cancelled=true;}
+                    }
                 }
                 if(cancelled||cancellation.IsCancellationRequested){
                     string result="Остановлено пользователем. Выполнено: "+ok+"; частично: "+partial+"; прервано: "+interrupted+"; не запущено: "+Math.Max(0,viewers.Count-started)+"; ошибок: "+errors.Count+".";
@@ -2257,61 +2386,79 @@ namespace VideoBatch {
                 var launchGate=ProfileLaunchGate.ForStudioUpload(settings);
                 Write("Пауза между стартами профилей: не менее 5000 мс. Описания записываются; фоновые проверки YouTube не ожидаются.");
                 var tasks=batches.GroupBy(b=>b.ProfileId,StringComparer.OrdinalIgnoreCase).Select(profileBatches=>Task.Run(async()=>{
-                    foreach(var batch in profileBatches){
-                    var row=batch.Row;var ch=batch.Channel;
                     try{
-                        await launchGate.EnterAsync(ct).ConfigureAwait(false);
-                        try{
-                        ct.ThrowIfCancellationRequested();
-                        Status(row,ChannelStatus.Uploading);
-                        var job=batch.ToUploadJob(token,dolphinPort,settings);
-                        lock(saveLock)Store.Save(settings);
-                        // Close only after every channel batch sharing this profile succeeded.
-                        job.keepProfileOpen=!ReferenceEquals(batch,profileBatches.Last());
-                        Write(ch.Name+": маршрут Studio · Profile ID "+job.profileId+" · "+(job.channelUrl??"(текущий канал)"));
-                        var result=await RunUploadOnce(job,ch,row,batch.Items,ct).ConfigureAwait(false);
-                        if(!string.IsNullOrWhiteSpace(result.Url)&&batch.Items.Count==1&&string.IsNullOrWhiteSpace(batch.Items[0].Source.PublishedUrl)){
-                            batch.Items[0].Source.PublishedUrl=result.Url.Trim();
-                            SyncPublishedMeta(batch.Items[0].Source);
+                        for(int attempt=1;attempt<=2;attempt++){
+                            bool entered=false;
+                            try{
+                                await launchGate.EnterAsync(ct).ConfigureAwait(false);entered=true;
+                                foreach(var original in profileBatches){
+                                    ct.ThrowIfCancellationRequested();
+                                    var remaining=original.Items.Where(it=>it.Source.StudioPhase!="confirmed").ToList();
+                                    if(remaining.Count==0)continue;
+                                    if(remaining.Any(it=>StudioUploadState.WasSubmitted(it.Source)))
+                                        throw new Exception("Передача без сохранённого ID: автоматическая повторная загрузка запрещена. Проверьте черновик в Studio.");
+                                    var batch=new PreparedProfileBatch{Row=original.Row,Channel=original.Channel,ProfileId=original.ProfileId,Items=remaining};
+                                    var row=batch.Row;var ch=batch.Channel;
+                                    Status(row,ChannelStatus.Uploading);
+                                    var job=batch.ToUploadJob(token,dolphinPort,settings);
+                                    lock(saveLock)Store.Save(settings);
+                                    // Keep one capacity slot for all channels sharing this profile.
+                                    job.keepProfileOpen=true;
+                                    Write(ch.Name+": попытка "+attempt+"/2 · маршрут Studio · Profile ID "+job.profileId);
+                                    var result=await RunUploadOnce(job,ch,row,batch.Items,ct).ConfigureAwait(false);
+                                    if(!string.IsNullOrWhiteSpace(result.Url)&&batch.Items.Count==1&&string.IsNullOrWhiteSpace(batch.Items[0].Source.PublishedUrl)){
+                                        batch.Items[0].Source.PublishedUrl=result.Url.Trim();
+                                        SyncPublishedMeta(batch.Items[0].Source);
+                                    }
+                                    Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
+                                    ch.Status=ChannelStatus.Scheduled;
+                                    bool immediateBatch=batch.Items.All(it=>it.Source.StudioVisibility=="public");
+                                    string doneStatus=result.ThumbnailWarning?"Видео загружено · превью не подтверждено, см. Логи"
+                                        :immediateBatch?"Публикация подтверждена ✓"
+                                        :(batch.Items.Count>1?("Отложено "+batch.Items.Count+" ✓"):("Отложено ✓ "+batch.Items[0].ScheduleDate+" "+batch.Items[0].ScheduleTime));
+                                    Status(row,doneStatus);
+                                    if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(ch.ProfileId,result.Ip);
+                                    SafeSave();
+                                }
+                                await DolphinRunner.StopProfileRequired(token,dolphinPort,profileBatches.Key).ConfigureAwait(false);
+                                break;
+                            }catch(OperationCanceledException){
+                                if(entered){
+                                    try{await DolphinRunner.StopProfileRequired(token,dolphinPort,profileBatches.Key).ConfigureAwait(false);}
+                                    catch(Exception closeError){launchGate.StopPendingStarts();errors.Add("Profile ID "+profileBatches.Key+": "+closeError.Message);Write(closeError.Message);}
+                                }
+                                foreach(var batch in profileBatches)Status(batch.Row,ct.IsCancellationRequested?"Остановлено":"Не запущено: закрытие ошибочного профиля не подтверждено");
+                                break;
+                            }catch(Exception e){
+                                SafeSave();
+                                Write("Profile ID "+profileBatches.Key+": ошибка попытки "+attempt+"/2 · "+e.Message);
+                                // Do not release capacity or retry until Dolphin confirms closure.
+                                try{await DolphinRunner.StopProfileRequired(token,dolphinPort,profileBatches.Key).ConfigureAwait(false);}
+                                catch(Exception closeError){
+                                    launchGate.StopPendingStarts();
+                                    errors.Add("Profile ID "+profileBatches.Key+": "+e.Message+" · "+closeError.Message);
+                                    foreach(var batch in profileBatches)Status(batch.Row,ChannelStatus.Error);
+                                    Write("Закрытие Profile ID "+profileBatches.Key+" не подтверждено: "+closeError.Message);
+                                    break;
+                                }
+                                Write("Profile ID "+profileBatches.Key+": закрытие после ошибки подтверждено.");
+                                if(attempt==2){
+                                    errors.Add("Profile ID "+profileBatches.Key+": после двух попыток · "+e.Message);
+                                    foreach(var batch in profileBatches.Where(b=>b.Items.Any(it=>it.Source.StudioPhase!="confirmed"))){batch.Channel.Status=ChannelStatus.Error;Status(batch.Row,ChannelStatus.Error);}
+                                    SafeSave();
+                                }else{
+                                    Write("Profile ID "+profileBatches.Key+": повторная попытка поставлена в очередь.");
+                                }
+                            }finally{if(entered)launchGate.Exit();}
                         }
-                        Store.SaveMeshCatalog(settings.YouTubeChannels??new List<YouTubeChannel>());
-                        ch.Status=ChannelStatus.Scheduled;
-                        bool immediateBatch=batch.Items.All(it=>it.Source.StudioVisibility=="public");
-                        string doneStatus=result.ThumbnailWarning?"Видео загружено · превью не подтверждено, см. Логи"
-                            :immediateBatch?"Публикация подтверждена ✓"
-                            :(batch.Items.Count>1?("Отложено "+batch.Items.Count+" ✓"):("Отложено ✓ "+batch.Items[0].ScheduleDate+" "+batch.Items[0].ScheduleTime));
-                        Status(row,doneStatus);
-                        if(!string.IsNullOrWhiteSpace(result.Ip))PropagateIp(ch.ProfileId,result.Ip);
-                        SafeSave();
-                        }catch(Exception e){
-                            // A closed profile has freed its browser slot. Its failure must
-                            // not pause unrelated queued profiles or cancel active uploads.
-                            // Retained error windows still count toward the three-window limit.
-                            if(ProfileLaunchGate.ShouldPauseAfterStudioFailure(e))
-                                launchGate.StopPendingStarts();
-                            throw;
-                        }finally{launchGate.Exit();}
-                    }catch(OperationCanceledException){
-                        Status(row,ct.IsCancellationRequested?"Остановлено":"Не запущено: очередь приостановлена после ошибки профиля");
-                        break;
-                    }
-                    catch(Exception e){
-                        SafeSave();
-                        ch.Status=ChannelStatus.Error;
-                        string msg=e.Message+(e is UploadException ue&&ue.KeptOpen?" (профиль оставлен)":"");
-                        errors.Add(ch.Name+": "+msg);
-                        Status(row,ChannelStatus.Error);
-                        Write(ch.Name+": профиль сохранён после ошибки; остальные каналы этого профиля не запускались.");
-                        break;
-                    }
-                    }
-                    lock(uploadLock)busyProfiles.Remove(profileBatches.Key);
+                    }finally{lock(uploadLock)busyProfiles.Remove(profileBatches.Key);}
                 })).ToArray();
                 await Task.WhenAll(tasks).ConfigureAwait(true);
                 if(errors.Count>0){
                     Write("Ошибки: "+errors.Count);
                     MessageBox.Show(this,string.Join(Environment.NewLine,errors),"Загрузка",MessageBoxButtons.OK,MessageBoxIcon.Warning);
-                }else Write("["+MarketLabel(marketView)+"] пакет завершён ("+batches.Count+" акк.).");
+                }else if(ct.IsCancellationRequested)Write("["+MarketLabel(marketView)+"] публикация остановлена пользователем.");
+                else Write("["+MarketLabel(marketView)+"] пакет завершён ("+batches.Count+" акк.).");
             }catch(Exception e){Write("ОШИБКА: "+e.Message);Ui.Error(this,e);}
             finally{
                 if(uiStarted)UploadBusyEnd();
@@ -2509,7 +2656,8 @@ namespace VideoBatch {
                 localPort=settings.DolphinPort,keepProfileOpen=settings.KeepDolphinProfileOpenAfterUpload,
                 runId=runId,publishMode=publishMode??"scheduled",
                 items=batch.Items.Select(it=>{
-                    string itemKind=string.Equals(it.Kind??kind,"shorts",StringComparison.OrdinalIgnoreCase)?"shorts":"long";
+                    string rawKind=NormKind(it.Kind??kind);
+                    string itemKind=rawKind=="warmup"?"shorts":(rawKind=="shorts"?"shorts":"long");
                     string itemMode=HttpWorkerSettings.ResolvePublishMode(settings,itemKind);
                     long unix=0;
                     if(itemMode=="scheduled"){

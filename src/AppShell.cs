@@ -23,6 +23,7 @@ namespace VideoBatch {
         Button settingsBtn;
         Button dolphinRefreshBtn;
         int dolphinCheckRunning;
+        DashboardSessionRefresh sessionRefresh;
         bool sidebarExpanded = true;
         string dolphinState = "unknown";
 
@@ -47,6 +48,7 @@ namespace VideoBatch {
         TelegramPanel telegramPanel;
         InstagramPanel instagramPanel;
         YouTubeWarmupPanel youtubeWarmupPanel;
+        SocialWarmupPanel socialWarmupPanel;
         WarmupVideoPanel warmupVideoPanel;
         MainWindow processingWindow;
         Control currentContent;
@@ -90,6 +92,9 @@ namespace VideoBatch {
 
             navigation.Navigated += ShowSection;
             BuildPanels();
+            sessionRefresh=new DashboardSessionRefresh(settings);
+            Disposed+=(s,e)=>sessionRefresh.Dispose();
+            Shown+=async(s,e)=>await sessionRefresh.RefreshAsync();
             appPlatform = AppPlatformNav.Parse(settings.AppPlatformView);
             if (appPlatform == AppPlatform.Unchosen) appPlatform = AppPlatform.YouTube;
             ApplyPlatform(appPlatform, navigate: false);
@@ -113,6 +118,10 @@ namespace VideoBatch {
                     try{await highlightsPanel.StopBeforeClose(); closingAfterHighlights=true; BeginInvoke(new Action(Close));}
                     finally{waitingForHighlights=false;} return;
                 }
+                if (socialWarmupPanel?.HasWork == true) {
+                    e.Cancel=true; if(waitingForHighlights)return; waitingForHighlights=true;
+                    try { await socialWarmupPanel.StopBeforeClose(); BeginInvoke(new Action(Close)); } finally { waitingForHighlights=false; } return;
+                }
                 if (telegramPanel?.HasWork == true) {
                     e.Cancel=true; if (waitingForHighlights) return; waitingForHighlights=true;
                     try { await telegramPanel.StopBeforeClose(); BeginInvoke(new Action(Close)); } finally { waitingForHighlights=false; } return;
@@ -134,7 +143,7 @@ namespace VideoBatch {
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
             y = AddNavGroup(panel, "Аккаунты", y, NavItem("Профили", NavSection.Profiles));
             y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("Автоперевод", NavSection.AutoTranslation), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram), NavItem("Instagram / Threads", NavSection.Instagram));
-            y = AddNavGroup(panel, "YouTube", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогрев роликами", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
+            y = AddNavGroup(panel, "Прогрев", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогрев роликами", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
             return panel;
         }
@@ -196,6 +205,7 @@ namespace VideoBatch {
             tiktokBackend = new TikTokBackend(settings);
             Console.WriteLine("UI startup: HomePanel");
             homePanel = new HomePanel(settings, navigation);
+            homePanel.ConnectRequested+=OpenDashboardAccount;
             Console.WriteLine("UI startup: ProfilesPanel");
             profilesPanel = new ProfilesPanel(settings, navigation, youtubeBackend, tiktokBackend,profile=>{navigation.Navigate(NavSection.AccountLibrary);accountLibraryPanel.SelectProfile(profile.ProfileId);});
             Console.WriteLine("UI startup: AccountLibraryPanel");
@@ -259,7 +269,7 @@ namespace VideoBatch {
             var tabs=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
             var host=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty};
             var views=new Control[]{profilesPanel,accountLibraryPanel,proxyPanel};var buttons=new System.Collections.Generic.List<Button>();
-            selectProfilesPage=index=>{for(int i=0;i<views.Length;i++){views[i].Visible=i==index;buttons[i].BackColor=i==index?Theme.Selected:Theme.Background;}views[index].BringToFront();};
+            selectProfilesPage=index=>{if(sessionRefresh!=null)_=sessionRefresh.RefreshAsync();for(int i=0;i<views.Length;i++){views[i].Visible=i==index;buttons[i].BackColor=i==index?Theme.Selected:Theme.Background;}views[index].BringToFront();};
             foreach(var view in views){view.Dock=DockStyle.Fill;view.Visible=false;host.Controls.Add(view);}
             string[] captions={"Профили","Карточки аккаунтов","Проверка сети"};
             for(int i=0;i<views.Length;i++){int page=i;var button=Theme.MakeButton(captions[i],action:()=>{accountLibraryPanel.RefreshData();profilesPanel.RefreshData();proxyPanel.RefreshData();selectProfilesPage(page);});buttons.Add(button);tabs.Controls.Add(button);}
@@ -270,6 +280,22 @@ namespace VideoBatch {
             panel.Dock = DockStyle.Fill;
             panel.Visible = false;
             contentHost.Controls.Add(panel);
+        }
+
+        async void OpenDashboardAccount(string id,string name,string network) {
+            NavigationContext.SelectedProfileId=id;NavigationContext.SelectedAccountName=name;
+            if(network=="Instagram"||network=="Threads") {
+                navigation.Navigate(NavSection.Instagram);
+                await instagramPanel.ConnectProfile(id,name,network);
+            } else if(network=="YouTube") {
+                navigation.Navigate(NavSection.YouTube);
+                var account=(settings.YouTubeChannels??new System.Collections.Generic.List<YouTubeChannel>()).FirstOrDefault(a=>a.ProfileId==id);
+                if(account!=null)youtubeWorkspace.ShowAccount(account);else youtubeWorkspace.AddDashboardAccount(id,name);
+            } else if(network=="TikTok") {
+                navigation.Navigate(NavSection.TikTok);
+                var account=(settings.TikTokAccounts??new System.Collections.Generic.List<TikTokAccount>()).FirstOrDefault(a=>a.ProfileId==id);
+                if(account!=null)tiktokWorkspace.ShowAccount(account);else tiktokWorkspace.AddDashboardAccount(id,name);
+            } else if(network=="Telegram") {navigation.Navigate(NavSection.Telegram);telegramPanel.AddDashboardAccount();}
         }
 
         void OpenLibrarySource(AccountSourceLink link) {
@@ -283,8 +309,9 @@ namespace VideoBatch {
         }
 
         void ShowSection(NavSection section) {
+            if(sessionRefresh!=null)_=sessionRefresh.RefreshAsync();
             dolphinLabel.Visible=dolphinDot.Visible=dolphinRefreshBtn.Visible=section!=NavSection.Telegram;
-            pageTitleLabel.Text = section==NavSection.AccountLibrary||section==NavSection.Proxy?"Профили":NavigationService.Title(section);
+            pageTitleLabel.Text = section==NavSection.Home?"Дашборд / Статистика":section==NavSection.AccountLibrary||section==NavSection.Proxy?"Профили":NavigationService.Title(section);
             platformBadge.Visible=platformBadge.Text!=pageTitleLabel.Text;
             globalSearch.Visible=false; // Each workspace already has its own search; do not duplicate it in the shell.
             HighlightNav(section==NavSection.AccountLibrary||section==NavSection.Proxy?NavSection.Profiles:section);
@@ -317,7 +344,12 @@ namespace VideoBatch {
                 case NavSection.Telegram: next = telegramPanel; telegramPanel.RefreshData(); break;
                 case NavSection.YouTube: next = youtubeWorkspace; youtubeWorkspace.OnNavigated(); break;
                 case NavSection.TikTok: next = tiktokWorkspace; tiktokWorkspace.OnNavigated(); break;
-                case NavSection.Warmup: next = youtubeWarmupPanel; youtubeWarmupPanel.ReloadAccounts(); break;
+                case NavSection.Warmup:
+                    if (appPlatform == AppPlatform.TikTok || appPlatform == AppPlatform.Instagram) {
+                        if (socialWarmupPanel == null) { socialWarmupPanel = new SocialWarmupPanel(settings); AddPanel(socialWarmupPanel); }
+                        socialWarmupPanel.SelectNetwork(appPlatform == AppPlatform.TikTok ? "TikTok" : "Instagram"); next = socialWarmupPanel;
+                    } else { next = youtubeWarmupPanel; youtubeWarmupPanel.ReloadAccounts(); }
+                    break;
                 case NavSection.WarmupClips: next = warmupVideoPanel; break;
                 case NavSection.ViewsSearch: next = viewsSearchPanel; viewsSearchPanel.RefreshData(); break;
                 case NavSection.Logs: next = logsPanel; logsPanel.RefreshData(); break;
@@ -408,7 +440,7 @@ namespace VideoBatch {
         }
 
         bool IsGroupVisibleForPlatform(string caption) {
-            if (caption == "YouTube") return appPlatform == AppPlatform.YouTube;
+            if (caption == "Прогрев") return appPlatform == AppPlatform.YouTube || appPlatform == AppPlatform.TikTok || appPlatform == AppPlatform.Instagram;
             if (caption == "Аккаунты") return appPlatform == AppPlatform.YouTube || appPlatform == AppPlatform.TikTok;
             if (caption == "Контент") return appPlatform != AppPlatform.Unchosen;
             return true;

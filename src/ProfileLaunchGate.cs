@@ -26,8 +26,8 @@ namespace VideoBatch {
         }
 
         public static int ResolveStudioMaxConcurrent(Preferences prefs) {
-            int configured = prefs?.MaxParallelUploads ?? 3;
-            return configured <= 0 ? 3 : Math.Max(1, Math.Min(3, configured));
+            int configured = prefs?.MaxParallelUploads ?? 2;
+            return configured <= 0 ? 2 : Math.Max(1, Math.Min(2, configured));
         }
 
         public static ProfileLaunchGate ForStudioUpload(Preferences prefs) {

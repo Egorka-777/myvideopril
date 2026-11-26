@@ -105,11 +105,11 @@ namespace VideoBatch {
             args.AddRange(new[] { "-t", Core.N(t.Duration), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output });
             return args;
         }
-        public static async Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress, AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null) {
+        public static async Task Render(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress, AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null, bool processOutput = false) {
             bool insertions = t.Insertions != null && t.Insertions.Count > 0;
             string main = insertions ? Path.Combine(work, "main-before-insertions.mp4") : output;
-            await AssemblyRender.Run(t, p, ffmpeg, ffprobe, main, work, rasterize, ct, progress, context, fraction, catalog, segmentRandom, segmentMix).ConfigureAwait(false);
-            if (insertions) await AssemblyInsertions.Apply(t, ffmpeg, ffprobe, main, output, ct, segmentRandom ?? new Random(), progress).ConfigureAwait(false);
+            await AssemblyRender.Run(t, p, ffmpeg, ffprobe, main, work, rasterize, ct, progress, context, fraction, catalog, segmentRandom, segmentMix, processOutput && !insertions).ConfigureAwait(false);
+            if (insertions) await AssemblyInsertions.Apply(t, ffmpeg, ffprobe, main, output, ct, segmentRandom ?? new Random(), progress, processOutput, AssemblyTimeline.MainStart(t,p), context).ConfigureAwait(false);
         }
         // Retained only as a reference for controlled before/after benchmarks.
         public static async Task RenderLegacy(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string ffprobe, string output, string work, Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress) {
@@ -138,6 +138,7 @@ namespace VideoBatch {
             t.Validate();
             if (t.Scenes.Count==0) throw new Exception("Добавь хотя бы одну сцену перед сборкой.");
             if (string.IsNullOrWhiteSpace(t.Output)) throw new Exception("Выберите папку готовых роликов.");
+            t.Output = VideoBatchOutputPaths.DailySessionFolder(t.Output);
             Directory.CreateDirectory(t.Output);
             string historyScope = t.HistoryScope;
             AssemblyHistoryStore.EnsureFolder(historyFolder, historyScope);
@@ -168,11 +169,8 @@ namespace VideoBatch {
                                 double renderFraction = 0;
                                 await Render(t, plan, ffmpeg, ffprobe, partial, itemWork, rasterize, ct,
                                     s => progress.Report(new Update("Ролик " + (global + 1) + " из " + targetCount + " · " + s, 100.0 * (global + renderFraction) / targetCount)), renderContext,
-                                    f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + targetCount + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / targetCount)); }, videos, random, mix).ConfigureAwait(false);
+                                    f => { renderFraction = f; progress.Report(new Update("Ролик " + (global + 1) + " из " + targetCount + " · " + (f * 100).ToString("0", Core.Inv) + "%", 100.0 * (global + f) / targetCount)); }, videos, random, mix, processOutput: true).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
-                                progress.Report(new Update("Ролик " + (global + 1) + " · обработка изображения и звука…", 100.0 * global / targetCount));
-                                await AssemblyProcessing.Apply(t, ffmpeg, ffprobe, partial, random, ct, AssemblyTimeline.MainStart(t, plan), renderContext,
-                                    f=>progress.Report(new Update("Ролик "+(global+1)+" · обработка изображения и звука · "+(f*100).ToString("0",Core.Inv)+"%",100.0*global/targetCount))).ConfigureAwait(false);
                                 // Tag and validate the private file before making it visible as a result.
                                 string chosenTitle=AssemblyOutputTags.PickTitle(t.TitleBank,random,usedTitles);
                                 if(string.IsNullOrWhiteSpace(chosenTitle))chosenTitle=VideoBatchOutputPaths.SourceTitle(plan.Scenes[0].Video.SourcePath??plan.Scenes[0].Video.Path);

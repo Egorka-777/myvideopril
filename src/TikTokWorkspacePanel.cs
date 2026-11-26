@@ -81,6 +81,14 @@ namespace VideoBatch {
         public TikTokWorkspacePanel(Preferences prefs, TikTokBackend be) {
 
             settings = prefs;
+            DashboardSessionState.Bind(this,()=>{
+                foreach(DataGridViewRow row in grid.Rows)
+                    if(row.Tag is TikTokAccount account) {
+                        Theme.MarkConnected(row.DefaultCellStyle,DashboardSessionState.IsConnected(account.ProfileId,"TikTok"));
+                        row.Cells["account"].ToolTipText=DashboardSessionState.Summary(account.ProfileId,"TikTok");
+                    }
+                grid.Invalidate();
+            });
 
             backend = be;
 
@@ -145,7 +153,6 @@ namespace VideoBatch {
             var headerActions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Theme.Background };
 
             headerActions.Controls.Add(Theme.MakeButton("Добавить видео", accent: true, action: AddVideos));
-            var openWeb=Theme.MakeButton("Открыть TikTok",ghost:true,action:async()=>await OpenTikTokWeb());openWeb.Name="OpenTikTokWeb";headerActions.Controls.Add(openWeb);
             openAndroid=Theme.MakeButton("Открыть Android",ghost:true,action:async()=>await OpenTikTokAndroid());openAndroid.Name="OpenTikTokAndroid";headerActions.Controls.Add(openAndroid);
 
             var fillProfile=Theme.MakeButton("Оформить профиль",accent:true,action:()=>{
@@ -260,7 +267,7 @@ namespace VideoBatch {
 
             grid.RowTemplate.Height = 54;
             grid.Margin = new Padding(0, 8, 0, 0);
-            grid.DefaultCellStyle.SelectionBackColor = Theme.ColorFromHex("#106B54");
+            grid.DefaultCellStyle.SelectionBackColor = Theme.Selected;
             grid.DefaultCellStyle.SelectionForeColor = Color.White;
             grid.AlternatingRowsDefaultCellStyle.BackColor = Theme.ColorFromHex("#282828");
 
@@ -447,9 +454,11 @@ namespace VideoBatch {
 
 
 
-        void AddAccount() {
+        internal void AddDashboardAccount(string profileId,string name) { AddAccount(profileId,name); }
+        void AddAccount() { AddAccount("",""); }
+        void AddAccount(string initialProfileId,string initialName) {
 
-            if (!NewAccountDialog.TryShow(FindForm(), "TikTok · " + marketView, out var name, out var profileId)) return;
+            if (!NewAccountDialog.TryShow(FindForm(), "TikTok · " + marketView, out var name, out var profileId,initialName,initialProfileId)) return;
 
             if (settings.TikTokAccounts == null) settings.TikTokAccounts = new List<TikTokAccount>();
 
@@ -614,7 +623,7 @@ namespace VideoBatch {
 
 
         public void RefreshGrid(bool skipSync = false) {
-
+            AndroidTikTokSessionStore.RestoreSavedSessions();
             if (!skipSync) SyncProfilesFromYouTube(silent: true);
 
             grid.Rows.Clear();
@@ -646,6 +655,8 @@ namespace VideoBatch {
                     files > 0 ? files + " файлов" : "—", caption, status);
 
                 grid.Rows[ri].Tag = acc;
+                Theme.MarkConnected(grid.Rows[ri].DefaultCellStyle,DashboardSessionState.IsConnected(acc.ProfileId,"TikTok"));
+                grid.Rows[ri].Cells["account"].ToolTipText=DashboardSessionState.Summary(acc.ProfileId,"TikTok");
 
                 grid.Rows[ri].Cells["caption"].ToolTipText = string.Join(Environment.NewLine + Environment.NewLine,
 

@@ -84,110 +84,90 @@ namespace VideoBatch {
         }
         void OpenVideoEditor() {
             LeaveSubtitleWorkspaceIfOpen();
-            using (var form = MediaDialog("Фоновое видео · источник и два экрана", 640)) {
+            AssemblyWorkspace.EnsureSplitSharedPool(template);
+            using (var form = MediaDialog("Фоновое видео", 620)) {
                 var page = MediaBody(form);
-                var body = MediaSection(page, "Фоновое видео", "Основа ролика под объектами сцен. Выберите источник и настройте размещение.");
-                var scope = new ComboBox { Name = "VideoScope", DropDownStyle = ComboBoxStyle.DropDownList, Width = 560 };
-                scope.Items.AddRange(new object[] { "Отрывок для каждой сцены", "Одно непрерывное видео на весь ролик", "Отдельная папка у выбранной сцены" });
-                scope.SelectedIndex = template.ContinuousVideo ? 1 : SelectedScene?.VideoMode == "own" ? 2 : 0;
-                body.Controls.Add(scope);
-                var primaryCount = new Label { AutoSize = false, Width = 560, Height = 22, ForeColor = Theme.TextSecondary };
-                var secondaryCount = new Label { AutoSize = false, Width = 560, Height = 22, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 0, 0, 8) };
-                var firstList = new ListBox { Width = 560, Height = 65, BackColor = Theme.Background, ForeColor = Theme.TextPrimary, HorizontalScrollbar = true };
-                var secondList = new ListBox { Width = 560, Height = 65, BackColor = Theme.Background, ForeColor = Theme.TextPrimary, HorizontalScrollbar = true };
-                var sharedPool = new CheckBox { Text = "Общая пачка: верх и низ выбираются из одного набора", AutoSize = true, ForeColor = Theme.TextPrimary, Checked = template.SplitSharedPool, Margin = new Padding(0, 8, 0, 4) };
-                var fixHalves = new CheckBox { Text = "Менять половины местами между роликами", AutoSize = true, ForeColor = Theme.TextPrimary, Checked = !template.SplitFixHalves, Margin = new Padding(0, 0, 0, 8) };
-                void RefreshCounts() {
-                    int primary = Pool(template.Videos, AssemblyFiles.VideoExtensions).Count;
-                    if (scope.SelectedIndex == 2 && SelectedScene != null) primary = Pool(SelectedScene.Videos, AssemblyFiles.VideoExtensions).Count;
-                    int secondary = Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Count;
-                    firstList.Items.Clear(); secondList.Items.Clear();
-                    firstList.Items.AddRange(Pool(scope.SelectedIndex == 2 && SelectedScene != null ? SelectedScene.Videos : template.Videos, AssemblyFiles.VideoExtensions).Select(Path.GetFileName).Cast<object>().ToArray());
-                    secondList.Items.AddRange(Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Select(Path.GetFileName).Cast<object>().ToArray());
-                    int shared = template.SplitVideoPaths().Count;
-                    bool splitOn = template.SplitLayout != "none";
-                    if (template.SplitSharedPool && splitOn) {
-                        primaryCount.Text = "Общая пачка · " + shared + " файлов";
-                        secondaryCount.Text = shared < 2 ? "Нужно минимум 2 видео для смены половин в связках" : "В связках видео могут оказаться сверху или снизу";
-                    } else {
-                        primaryCount.Text = "Пачка 1 · верх / слева · " + primary + " файлов";
-                        secondaryCount.Text = !splitOn ? "Пачка 2 · выберите деление ниже" : "Пачка 2 · низ / справа · " + secondary + " файлов";
-                    }
-                    secondaryCount.ForeColor = splitOn && (template.SplitSharedPool ? shared < 2 : secondary == 0) ? Theme.Error : Theme.TextSecondary;
-                }
-                RefreshCounts();
-                body.Controls.Add(primaryCount);
-                var files = Button("📁  Фоновое видео · открыть папку", () => {
-                    if (scope.SelectedIndex == 2 && SelectedScene != null) OpenPool(3); else OpenPool(0);
-                    RefreshCounts();
-                }); files.Width = 560; body.Controls.Add(files);
-                AddVoicePitchControls(body);
-                AddNativeAudioControls(body, true);
-                body.Controls.Add(firstList);
-                AddVideoPlacementControls(body);
-                body = MediaSection(page, "Два экрана", "Расположение, источники и звук каждой половины.");
-                var picker = new AssemblySplitLayoutPicker { Width = 560, SplitLayout = template.SplitLayout };
+                var body = MediaSection(page, "Раскладка", null);
+                var picker = new AssemblySplitLayoutPicker { Width = 560, Height = 168, SplitLayout = template.SplitLayout, Margin = new Padding(0, 4, 0, 0) };
                 body.Controls.Add(picker);
-                body.Controls.Add(sharedPool);
-                body.Controls.Add(fixHalves);
-                body.Controls.Add(secondaryCount);
-                var secondary = Button("📁  Второе видео · добавить файлы", () => {
-                    var paths = PickFiles(0); if (paths == null) return;
-                    string source = template.SecondaryVideos;
-                    AssemblyWorkspace.Import(template, ref source, "Второе-видео-" + Guid.NewGuid().ToString("N").Substring(0, 6), paths, AssemblyFiles.VideoExtensions, false);
-                    template.SecondaryVideos = source; Changed(true); Save(); RefreshCounts();
-                }); secondary.Width = 560; body.Controls.Add(secondary);
-                body.Controls.Add(secondList);
-                body.Controls.Add(new Label { Text = "Звук двух экранов · только одно видео", Width = 560, Height = 24, Font = Theme.FontCardTitle });
-                var splitAudio = new ComboBox { Name = "SplitAudioMode", DropDownStyle = ComboBoxStyle.DropDownList, Width = 560 };
-                splitAudio.Items.AddRange(new object[] { "Только верх / лево", "Только низ / право", "По очереди: верх, низ — для новых связок" });
-                splitAudio.SelectedIndex = template.EffectiveSplitAudioMode == "bottom" ? 1 : template.EffectiveSplitAudioMode == "alternate" ? 2 : 0;
-                body.Controls.Add(splitAudio);
-                var splitVolume = Value(0, 200, 0); splitVolume.Value = (decimal)(template.SplitAudioVolume * 100); splitVolume.Visible = false;
-                body.Controls.Add(new AssemblySlider("Громкость выбранного видео", splitVolume, "%") { Width = 560 });
-                splitAudio.SelectedIndexChanged += (s, e) => { template.SplitAudioMode = new[] { "top", "bottom", "alternate" }[splitAudio.SelectedIndex]; Changed(false); Save(); };
-                splitVolume.ValueChanged += (s, e) => { template.SplitAudioVolume = (double)splitVolume.Value / 100; Changed(false); Save(); };
-                body.Controls.Add(new Label { Text = "Звук зависит от положения видео, а не номера пачки. Смена звука не создаёт новую связку и не разрешает повтор пары.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
-                body.Controls.Add(Button("Пачка 2 · заменить файлы", () => {
-                    var paths = PickFiles(0); if (paths == null) return;
-                    string source = template.SecondaryVideos;
-                    AssemblyWorkspace.Import(template, ref source, "Второе-видео-" + Guid.NewGuid().ToString("N").Substring(0, 6), paths, AssemblyFiles.VideoExtensions, true);
-                    template.SecondaryVideos = source; Changed(true); Save(); RefreshCounts();
-                }));
-                body.Controls.Add(Button("Пачка 2 · очистить", () => { template.SecondaryVideos = ""; Changed(true); Save(); RefreshCounts(); }));
-                body.Controls.Add(new Label { Text = "Одинаковый файл не попадёт в обе половины. Использованные связки не повторяются. Источник звука выбирается отдельно: верх, низ или по очереди.", Width = 560, Height = 42, ForeColor = Theme.TextSecondary });
-                files.Text = "Фоновое видео · добавить / заменить файлы";
-                body.Controls.Add(Button("Очистить всё фоновое видео",()=>{
+                body.Controls.Add(new Label {
+                    Text = "Нажмите половинку: добавить или заменить. В превью — тянуть и колёсико.",
+                    Width = 560, Height = 28, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 6, 0, 8)
+                });
+                var poolSummary = new Label { AutoSize = false, Width = 560, Height = 22, ForeColor = Theme.TextSecondary };
+                var fileList = new ListBox { Width = 560, Height = 72, BackColor = Theme.Background, ForeColor = Theme.TextPrimary, HorizontalScrollbar = true };
+                string HalfTitle(int half) {
+                    if (template.SplitLayout == "none") return "Основное видео";
+                    if (template.SplitLayout == "vertical") return half == 0 ? "Верх" : "Низ";
+                    return half == 0 ? "Левая половина" : "Правая половина";
+                }
+                void ImportHalf(int half, bool replace) {
+                    var paths = PickFiles(0, form);
+                    if (paths == null) return;
+                    template.SplitSharedPool = false;
+                    if (half == 0) ImportPool(0, paths, replace);
+                    else {
+                        string source = template.SecondaryVideos;
+                        AssemblyWorkspace.Import(template, ref source, "Второе-видео-" + Guid.NewGuid().ToString("N").Substring(0, 6), paths, AssemblyFiles.VideoExtensions, replace || Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Count == 0);
+                        template.SecondaryVideos = source;
+                        Changed(true); Save();
+                    }
+                    RefreshCounts(); RequestCapacity(); RequestBackground();
+                }
+                void RefreshCounts() {
+                    bool splitOn = template.SplitLayout != "none";
+                    int primary = Pool(template.Videos, AssemblyFiles.VideoExtensions).Count;
+                    int secondary = Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Count;
+                    fileList.Items.Clear();
+                    if (!splitOn) {
+                        poolSummary.Text = "Файлов: " + primary;
+                        fileList.Items.AddRange(Pool(template.Videos, AssemblyFiles.VideoExtensions).Select(Path.GetFileName).Cast<object>().ToArray());
+                    } else {
+                        poolSummary.Text = "Верх: " + primary + " · низ: " + secondary + (secondary == 0 ? " · нажмите нижнюю половинку" : "");
+                        fileList.Items.AddRange(Pool(template.Videos, AssemblyFiles.VideoExtensions).Select(f => "▲ " + Path.GetFileName(f)).Cast<object>().ToArray());
+                        fileList.Items.AddRange(Pool(template.SecondaryVideos, AssemblyFiles.VideoExtensions).Select(f => "▼ " + Path.GetFileName(f)).Cast<object>().ToArray());
+                    }
+                    poolSummary.ForeColor = splitOn && secondary == 0 ? Theme.Error : Theme.TextSecondary;
+                }
+                body.Controls.Add(poolSummary);
+                body.Controls.Add(fileList);
+                var fileActions = new FlowLayoutPanel { Width = 560, AutoSize = true, WrapContents = false };
+                fileActions.Controls.Add(Button("Очистить все видео", () => {
                     AssemblyWorkspace.ClearBackgroundVideos(template);
-                    picker.SplitLayout="none";Changed(true);Save();RefreshCounts();
-                    status.Text="Все источники фонового видео отключены. Объекты сцен не изменены.";
+                    picker.SplitLayout = "none";
+                    Changed(true); Save(); RefreshCounts(); RequestCapacity();
+                    status.Text = "Фоновое видео отключено.";
                 }));
-                secondary.Text = "Пачка 2 · добавить файлы";
-                sharedPool.Text = "Дополнительно: объединить обе пачки в общий набор";
-                sharedPool.CheckedChanged += (s, e) => { template.SplitSharedPool = sharedPool.Checked; Changed(true); Save(); RefreshCounts(); };
-                fixHalves.CheckedChanged += (s, e) => { template.SplitFixHalves = !fixHalves.Checked; Changed(true); Save(); RefreshCounts(); };
+                body.Controls.Add(fileActions);
                 var softness = Value(0, 50, 0); softness.Value = (decimal)(template.SplitSoftness * 100); softness.Visible = false;
                 body.Controls.Add(new AssemblySlider("Смягчение стыка", softness, "%") { Width = 560, Margin = new Padding(0, 8, 0, 0) });
-                body.Controls.Add(new Label {
-                    Text = "Долю 70/30 и масштаб каждой половины настраивайте в превью: тяните линию и крутите колёсико над нужной частью.",
-                    Width = 560, Height = 40, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 4, 0, 0)
-                });
-                var removeSecond = Button("Убрать деление", () => { template.SecondaryVideos = ""; template.SplitLayout = "none"; picker.SplitLayout = "none"; Changed(true); Save(); RefreshCounts(); });
-                removeSecond.Width = 560; body.Controls.Add(removeSecond);
-                scope.SelectedIndexChanged += (s, e) => {
-                    template.ContinuousVideo = scope.SelectedIndex == 1;
-                    if (scope.SelectedIndex == 2) { if (SelectedScene != null && Pool(SelectedScene.Videos, AssemblyFiles.VideoExtensions).Count > 0) SelectedScene.VideoMode = "own"; }
-                    else if (SelectedScene != null) SelectedScene.VideoMode = "shared";
-                    Changed(true); Save(); RefreshCounts();
-                };
+                RefreshCounts();
                 picker.LayoutSelected += layout => {
                     template.SplitLayout = layout;
-                    Changed(true); Save(); RefreshCounts();
+                    if (layout != "none") template.SplitSharedPool = false;
+                    Changed(true); Save(); RefreshCounts(); RequestCapacity(); RequestBackground();
                 };
+                picker.HalfClicked += half => ShowChoices(HalfTitle(half), picker, new[] {
+                    Tuple.Create("+ Добавить файлы", (Action)(() => ImportHalf(half, false)), false),
+                    Tuple.Create("Заменить пачку", (Action)(() => ImportHalf(half, true)), false),
+                });
                 softness.ValueChanged += (s, e) => { template.SplitSoftness = (double)softness.Value / 100; Changed(true); };
-                MediaFooter(form, Button("Готово", () => { Save(); form.Close(); RefreshInfo(); RequestBackground(); }, true));
+                MediaFooter(form, Button("Готово", () => { Save(); form.Close(); RefreshInfo(); RequestBackground(); RequestCapacity(); }, true));
                 form.ShowDialog(this);
             }
+        }
+        void AddSplitScreenAudioControls(FlowLayoutPanel body) {
+            if (template.SplitLayout == "none") return;
+            body.Controls.Add(new Label { Text = "Звук двух экранов", Width = 560, Height = 24, Font = Theme.FontCardTitle, Margin = new Padding(0, 0, 0, 4) });
+            var splitAudio = new ComboBox { Name = "SplitAudioMode", DropDownStyle = ComboBoxStyle.DropDownList, Width = 560 };
+            splitAudio.Items.AddRange(new object[] { "Только верх", "Только низ", "По очереди (верх и низ в разных роликах)" });
+            splitAudio.SelectedIndex = template.EffectiveSplitAudioMode == "bottom" ? 1 : template.EffectiveSplitAudioMode == "alternate" ? 2 : 0;
+            body.Controls.Add(splitAudio);
+            var splitVolume = Value(0, 200, 0); splitVolume.Value = (decimal)(template.SplitAudioVolume * 100); splitVolume.Visible = false;
+            body.Controls.Add(new AssemblySlider("Громкость звука видео", splitVolume, "%") { Width = 560 });
+            splitAudio.SelectedIndexChanged += (s, e) => { template.SplitAudioMode = new[] { "top", "bottom", "alternate" }[splitAudio.SelectedIndex]; Changed(false); Save(); };
+            splitVolume.ValueChanged += (s, e) => { template.SplitAudioVolume = (double)splitVolume.Value / 100; Changed(false); Save(); };
+            body.Controls.Add(new Label { Text = "Источник звука не влияет на число связок.", Width = 560, Height = 28, ForeColor = Theme.TextSecondary });
         }
         void ImportSpeechToSceneAudio(string[] paths) {
             if (SelectedScene == null) throw new Exception("Выберите сцену слева.");
@@ -343,6 +323,10 @@ namespace VideoBatch {
             LeaveSubtitleWorkspaceIfOpen();
             using (var form = MediaDialog("Настройки звука · " + AssemblyProfile.ShortLabel(studioProfile, template), 740)) {
                 var page = MediaBody(form);
+                if (template.SplitLayout != "none") {
+                    var splitBody = MediaSection(page, "Два экрана", "Какой половине слышен родной звук видео.");
+                    AddSplitScreenAudioControls(splitBody);
+                }
                 var body = MediaSection(page, "Фоновая музыка", "Непрерывная музыкальная дорожка на весь ролик.");
                 var rollMusic = Button("Пачка фоновой музыки · " + Pool(template.Music, AssemblyFiles.MusicExtensions).Count + " файлов", () => OpenPool(1)); rollMusic.Width = 560; body.Controls.Add(rollMusic);
                 var mainScene = template.Scenes.FirstOrDefault(s => !s.IsPreview);

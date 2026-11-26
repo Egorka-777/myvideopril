@@ -7,11 +7,25 @@ using System.Text;
 namespace VideoBatch {
     public static class StudioUploadTests {
         static void Check(bool ok,string message){if(!ok)throw new Exception("Studio contract: "+message);}
+        static void CheckWarmupChannelPersistence(){
+            string previous=Store.Root, root=Path.Combine(Path.GetTempPath(),"vb-youtube-warmup-"+Guid.NewGuid().ToString("N"));
+            try{
+                Store.Root=root;
+                var prefs=new Preferences{YouTubeChannels=new List<YouTubeChannel>{
+                    new YouTubeChannel{ChannelId="shorts-row",Name="Канал",ProfileId="same-profile",Market="RU",Kind="shorts"},
+                    new YouTubeChannel{ChannelId="warmup-row",Name="Канал",ProfileId="same-profile",Market="RU",Kind="warmup"}
+                }};
+                Store.Save(prefs);
+                var loaded=Store.Load();
+                Check(loaded.YouTubeChannels.Count==2,"warmup and Shorts rows with the same profile remain separate after save/load");
+                Check(loaded.YouTubeChannels.Any(c=>c.ChannelId=="warmup-row"&&c.Kind=="warmup"),"warmup row keeps its kind and channel ID");
+            }finally{Store.Root=previous;if(Directory.Exists(root))Directory.Delete(root,true);}
+        }
         static void CheckStudioLaunchPolicy(){
-            Check(ProfileLaunchGate.ResolveStudioMaxConcurrent(null)==3,"Studio default concurrency is three");
+            Check(ProfileLaunchGate.ResolveStudioMaxConcurrent(null)==2,"Studio default concurrency is two");
             foreach(int configured in new[]{-1,0,1,2,3,4,16}){
                 var prefs=new Preferences{MaxParallelUploads=configured,ProfileLaunchStaggerMinMs=500,ProfileLaunchStaggerMaxMs=12000};
-                int expected=configured<=0?3:Math.Min(3,configured);
+                int expected=configured<=0?2:Math.Min(2,configured);
                 Check(ProfileLaunchGate.ResolveStudioMaxConcurrent(prefs)==expected,"Studio concurrency clamp: "+configured);
                 var gate=ProfileLaunchGate.ForStudioUpload(prefs);
                 const System.Reflection.BindingFlags fields=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
@@ -153,6 +167,7 @@ namespace VideoBatch {
                 Store.Save(tikTokPrefs);
                 var savedTikTok=Store.Load().TikTokAccounts.Single().Items;
                 Check(savedTikTok.Count==4&&savedTikTok[0].Published&&savedTikTok[0].HttpVideoId=="111"&&savedTikTok[1].ContentReview&&savedTikTok[1].HttpVideoId=="222"&&savedTikTok[2].HttpNeedsReview&&!savedTikTok[3].Published,"TikTok resume states survive settings reload without replaying public posts");
+                CheckWarmupChannelPersistence();
                 CheckStudioLaunchPolicy();
                 CheckQueueRoutingAndRetry(root);
                 var prefs=new Preferences{YouTubeDescriptionBankRu=new List<string>{"Описание первого варианта","Описание второго варианта"},YouTubeDescriptionBankEn=new List<string>{"First English description","Second English description"},YouTubeStudioPaidPromotion=false,YouTubeStudioAlteredContent=false};

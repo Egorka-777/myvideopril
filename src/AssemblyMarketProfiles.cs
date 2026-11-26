@@ -38,6 +38,7 @@ namespace VideoBatch {
         public ProcessingParameter BackgroundAudioPitch = new ProcessingParameter(-2,2);
         public string AudioProcessingSourceId = "";
         public double SplitRatio = .5, SplitPrimaryZoom = 1, SplitSecondaryZoom = 1;
+        public double SplitPrimaryPanX, SplitPrimaryPanY, SplitSecondaryPanX, SplitSecondaryPanY;
         public double SplitSoftness = .08, VoiceoverVolume = 1;
         public WarmupSubtitleStyle SubtitleStyle = new WarmupSubtitleStyle { Enabled = false };
         public List<AssemblyCaption> Captions = new List<AssemblyCaption>();
@@ -74,7 +75,28 @@ namespace VideoBatch {
                 }
             };
             t.CustomProfiles.Add(custom);
+            var seed = new AssemblyTemplate {
+                Materials = custom.Settings.Materials, Videos = "Видео", Music = "Музыка",
+                PackStudioVersion = 1, ObjectStudioVersion = 1, SceneTimingVersion = 1, Transition = "random",
+                LoopShortVideos = true, AllowVideoReuse = true
+            };
+            AssemblyWorkspace.Prepare(seed);
+            AssemblyWorkspace.Insert(seed, 0);
+            custom.Settings.Videos = seed.Videos;
+            custom.Settings.Music = seed.Music;
+            custom.Settings.Scenes = CloneScenes(seed.Scenes);
             return custom;
+        }
+
+        static void EnsureStudioScenes(AssemblyTemplate t, AssemblyMarketSettings slice) {
+            if (t.Scenes != null && t.Scenes.Count > 0) return;
+            if (string.IsNullOrWhiteSpace(t.Materials)) return;
+            AssemblyWorkspace.Prepare(t);
+            AssemblyWorkspace.Insert(t, 0);
+            if (slice != null) {
+                slice.Scenes = CloneScenes(t.Scenes);
+                slice.WorkspaceConfigured = true;
+            }
         }
 
         public static bool Contains(AssemblyTemplate t, string profile) {
@@ -270,6 +292,8 @@ namespace VideoBatch {
             slice.SplitRatio = t.SplitRatio;
             slice.SplitPrimaryZoom = t.SplitPrimaryZoom;
             slice.SplitSecondaryZoom = t.SplitSecondaryZoom;
+            slice.SplitPrimaryPanX = t.SplitPrimaryPanX; slice.SplitPrimaryPanY = t.SplitPrimaryPanY;
+            slice.SplitSecondaryPanX = t.SplitSecondaryPanX; slice.SplitSecondaryPanY = t.SplitSecondaryPanY;
             slice.SplitSoftness = t.SplitSoftness;
             slice.Voiceover = t.Voiceover;
             slice.VoiceoverVolume = t.VoiceoverVolume;
@@ -314,6 +338,8 @@ namespace VideoBatch {
             t.SplitRatio = slice.SplitRatio <= 0 ? .5 : slice.SplitRatio;
             t.SplitPrimaryZoom = slice.SplitPrimaryZoom <= 0 ? 1 : slice.SplitPrimaryZoom;
             t.SplitSecondaryZoom = slice.SplitSecondaryZoom <= 0 ? 1 : slice.SplitSecondaryZoom;
+            t.SplitPrimaryPanX = slice.SplitPrimaryPanX; t.SplitPrimaryPanY = slice.SplitPrimaryPanY;
+            t.SplitSecondaryPanX = slice.SplitSecondaryPanX; t.SplitSecondaryPanY = slice.SplitSecondaryPanY;
             t.SplitSoftness = slice.SplitSoftness;
             t.Voiceover = slice.Voiceover;
             t.VoiceoverVolume = slice.VoiceoverVolume;
@@ -519,6 +545,7 @@ namespace VideoBatch {
             t.OutputProcessing = Store.Clone(slice.OutputProcessing ?? AssemblyProcessing.Defaults());
             ApplyWorkspace(t, slice);
             ApplyEditorSettings(t, slice);
+            EnsureStudioScenes(t, slice);
         }
     }
 }

@@ -30,6 +30,7 @@ namespace VideoBatch {
         static bool ActionablePending(LiveJournalEntry entry) {
             return entry != null && entry.RequiresConfirmedCleanup();
         }
+        public bool HasRunning { get { lock (gate) return sessions.Count > 0; } }
         public bool HasBusy {
             get { lock (gate) return sessions.Count > 0 || Store.PendingSnapshot().Any(ActionablePending); }
         }
@@ -263,6 +264,15 @@ namespace VideoBatch {
                 lock (gate) if (views.ContainsKey(localId)) { var old = views[localId]; views[localId] = new LiveView { LocalId = old.LocalId, Name = old.Name, Phase = LivePhase.Finished, Url = old.Url }; }
                 Changed?.Invoke();
             } finally { recoveryGate.Release(); }
+        }
+        public async Task StopRunning() {
+            Session[] running;
+            Task[] cleanupTasks;
+            lock (gate) { running = sessions.Values.ToArray(); cleanupTasks = batches.ToArray(); }
+            foreach (var session in running) try { session.Cancel.Cancel(); } catch (ObjectDisposedException) { /* Already completed. */ }
+            await Task.WhenAll(running.Select(s => s.Work).Concat(cleanupTasks)).ConfigureAwait(false);
+            if (running.Any(s => Store.PendingSnapshot().Any(e => e.OperationId == s.Journal.OperationId && ActionablePending(e))))
+                throw new InvalidOperationException("YouTube не подтвердил завершение эфира. Данные для ручного завершения сохранены.");
         }
         public async Task StopAll() {
             string[] ids;

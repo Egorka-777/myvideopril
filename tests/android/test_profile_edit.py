@@ -149,7 +149,10 @@ class ProfileEditTests(unittest.TestCase):
 
     def test_deduplicated_accessibility_parent_and_child(self):
         self.assertEqual(profile().one_label("Edit profile").get("content-desc"), "Edit profile")
-        self.code("unsupported_screen", lambda: screen(node("Save", click=True), node("Save", click=True)).one_label("Save"))
+        self.code("unsupported_screen", lambda: screen(
+            node("Save", click=True, bounds="[0,0][100,50]"),
+            node("Save", click=True, bounds="[200,0][300,50]")
+        ).one_label("Save"))
 
     def test_ambiguous_rows_and_fields_are_unsupported(self):
         s = screen(node(click=True, children=[node("Name"), node("A"), node("B")]))
@@ -254,6 +257,7 @@ class ProfileEditTests(unittest.TestCase):
 
     def test_clipboard_bridge_uses_python312_private_stdin_and_strict_reply(self):
         adb = object.__new__(m.Adb)
+        adb.serial = "emulator-5554"
         for action in ("get", "set"):
             good = dict(ok=True, verified=True, action=action)
             with patch.object(m.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(good))) as run:

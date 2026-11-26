@@ -175,7 +175,38 @@ namespace VideoBatch {
 
         public static Panel MakeCard() => new ThemeCardPanel();
 
+        // Green: сохранённая сессия (cookie) или подтверждённый вход на сайте.
+        public static void MarkConnected(DataGridViewCellStyle style, bool connected) {
+            style.BackColor = connected ? ColorFromHex("#163B2B") : Color.Empty;
+            style.SelectionBackColor = connected ? ColorFromHex("#246044") : Color.Empty;
+        }
+
+        internal static void ToggleVisibleChecks(DataGridView grid,int column) {
+            grid.EndEdit();
+            bool all=true,any=false;
+            foreach(DataGridViewRow row in grid.Rows)if(row.Visible&&!row.IsNewRow&&!row.Cells[column].ReadOnly){any=true;if(!Convert.ToBoolean(row.Cells[column].Value??false))all=false;}
+            if(!any)return;
+            foreach(DataGridViewRow row in grid.Rows)if(row.Visible&&!row.IsNewRow&&!row.Cells[column].ReadOnly)row.Cells[column].Value=!all;
+            grid.InvalidateColumn(column);
+        }
+        static void PaintLargeCheck(DataGridView grid,DataGridViewCellPaintingEventArgs e) {
+            if(e.ColumnIndex<0||!(grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn))return;
+            bool value=false,mixed=false;
+            if(e.RowIndex<0){int total=0,on=0;foreach(DataGridViewRow row in grid.Rows)if(row.Visible&&!row.IsNewRow&&!row.Cells[e.ColumnIndex].ReadOnly){total++;if(Convert.ToBoolean(row.Cells[e.ColumnIndex].Value??false))on++;}value=total>0&&on==total;mixed=on>0&&on<total;}
+            else value=Convert.ToBoolean(e.Value??false);
+            e.Paint(e.ClipBounds,DataGridViewPaintParts.All&~DataGridViewPaintParts.ContentForeground);
+            int size=Math.Min(24,Math.Min(e.CellBounds.Width-8,e.CellBounds.Height-8));
+            var box=new Rectangle(e.CellBounds.X+(e.CellBounds.Width-size)/2,e.CellBounds.Y+(e.CellBounds.Height-size)/2,size,size);
+            using(var brush=new SolidBrush(value||mixed?Accent:Elevated))e.Graphics.FillRectangle(brush,box);
+            using(var pen=new Pen(value||mixed?Accent:TextSecondary,2))e.Graphics.DrawRectangle(pen,box);
+            using(var pen=new Pen(TextPrimary,3)){if(mixed)e.Graphics.DrawLine(pen,box.Left+5,box.Top+size/2,box.Right-5,box.Top+size/2);else if(value)e.Graphics.DrawLines(pen,new[]{new Point(box.Left+5,box.Top+size/2),new Point(box.Left+size/2-1,box.Bottom-6),new Point(box.Right-4,box.Top+5)});}
+            e.Handled=true;
+        }
+
         public static void StyleGrid(DataGridView grid) {
+            grid.CellPainting+=(s,e)=>PaintLargeCheck(grid,e);
+            grid.ColumnHeaderMouseClick+=(s,e)=>{if(e.Button==MouseButtons.Left&&e.ColumnIndex>=0&&grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)ToggleVisibleChecks(grid,e.ColumnIndex);};
+            grid.CellValueChanged+=(s,e)=>{if(e.ColumnIndex>=0&&grid.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)grid.InvalidateCell(e.ColumnIndex,-1);};
             grid.BackgroundColor = Card;
             grid.GridColor = Border;
             grid.BorderStyle = BorderStyle.None;

@@ -6,14 +6,16 @@ Set succeeds only after an exact getClipboard readback. No input is pasted.
 """
 import configparser
 import json
+import os
 from pathlib import Path
+import re
 import socket
 import struct
 import sys
 import tempfile
 import time
 
-SERIAL = "emulator-5554"
+SERIAL = os.environ.get("VB_ANDROID_SERIAL", "emulator-5554")
 SERVICE = "/android.emulation.control.EmulatorController/"
 TIMEOUT = 8
 
@@ -25,10 +27,17 @@ class ClipboardError(Exception):
         self.may_have_changes = False
 
 
-def discover(directory=None, serial=SERIAL):
-    """Use the emulator's per-user discovery file, never a remote endpoint."""
-    if serial != SERIAL:
+def serial_port(serial):
+    match = re.fullmatch(r"emulator-(\d+)", serial.strip())
+    if not match:
         raise ClipboardError("invalid_serial")
+    return match.group(1)
+
+
+def discover(directory=None, serial=None):
+    """Use the emulator's per-user discovery file, never a remote endpoint."""
+    serial = (serial or SERIAL).strip()
+    port_serial = serial_port(serial)
     directory = Path(directory) if directory is not None else Path(tempfile.gettempdir()) / "avd" / "running"
     matches = []
     for path in directory.glob("pid_*.ini"):
@@ -36,11 +45,12 @@ def discover(directory=None, serial=SERIAL):
             cfg = configparser.ConfigParser(interpolation=None)
             cfg.read_string("[emulator]\n" + path.read_text(encoding="utf-8-sig"))
             item = cfg["emulator"]
-            if item.get("port.serial") != "5554":
+            if item.get("port.serial") != port_serial:
                 continue
             port = int(item["grpc.port"])
             token = item["grpc.token"]
-            if (not 1 <= port <= 65535 or item.get("port.adb") != "5555"
+            adb_port = str(int(port_serial) + 1)
+            if (not 1 <= port <= 65535 or item.get("port.adb") != adb_port
                     or not token or any(ord(c) < 33 or ord(c) > 126 for c in token)):
                 raise ValueError()
             matches.append((port, token))

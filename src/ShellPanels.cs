@@ -9,32 +9,16 @@ namespace VideoBatch {
     public sealed class HomePanel : UserControl {
         readonly Preferences settings;
         readonly NavigationService navigation;
-        readonly Label profilesCount, youtubeCount, tiktokCount, queueCount, scheduledCount, errorsCount;
         readonly ListView eventsList;
+        readonly SocialDashboard dashboard;
+        internal event Action<string,string,string> ConnectRequested {add{dashboard.ConnectRequested+=value;}remove{dashboard.ConnectRequested-=value;}}
 
         public HomePanel(Preferences prefs, NavigationService nav) {
             settings = prefs;
             navigation = nav;
             Dock = DockStyle.Fill;
             BackColor = Theme.Background;
-            AutoScroll = true;
-
-            var cards = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(0, 0, 0, 12) };
-            profilesCount = StatCard(cards, "Профилей (уник.)");
-            youtubeCount = StatCard(cards, "YouTube");
-            tiktokCount = StatCard(cards, "TikTok");
-            queueCount = StatCard(cards, "В очереди");
-            scheduledCount = StatCard(cards, "Запланировано");
-            errorsCount = StatCard(cards, "Ошибок");
-            Controls.Add(cards);
-
-            var actions = Theme.MakeToolbar();
-            actions.Controls.Add(Theme.MakeButton("Профили", accent: true, action: () => navigation.Navigate(NavSection.Profiles)));
-            actions.Controls.Add(Theme.MakeButton("YouTube", action: () => navigation.Navigate(NavSection.YouTube)));
-            actions.Controls.Add(Theme.MakeButton("TikTok", action: () => navigation.Navigate(NavSection.TikTok)));
-            actions.Controls.Add(Theme.MakeButton("Задачи", action: () => navigation.Navigate(NavSection.Tasks)));
-            actions.Controls.Add(Theme.MakeButton("Логи", action: () => navigation.Navigate(NavSection.Logs)));
-            Controls.Add(actions);
+            AutoScroll = false;
 
             eventsList = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, BackColor = Theme.Card, ForeColor = Theme.TextPrimary, BorderStyle = BorderStyle.None };
             eventsList.Columns.Add("Аккаунт", 140);
@@ -45,31 +29,20 @@ namespace VideoBatch {
             var host = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
             host.Controls.Add(new Label { Text = "Последние операции", Dock = DockStyle.Top, Height = 28, Font = Theme.FontCardTitle, ForeColor = Theme.TextPrimary });
             host.Controls.Add(eventsList);
-            Controls.Add(host);
+            var tabs=new TabControl{Dock=DockStyle.Fill,Name="HomeDashboardTabs"};
+            var overview=new TabPage("Дашборд / Статистика"){BackColor=Theme.Background};
+            var operations=new TabPage("Последние операции"){BackColor=Theme.Background};
+            dashboard=new SocialDashboard(settings);
+            var sessionChecker=new SocialAccountChecker(settings);
+            dashboard.CheckSession=(profile,service,cancel)=>sessionChecker.CheckAsync(service,profile,cancel);
+            overview.Controls.Add(dashboard);operations.Controls.Add(host);
+            tabs.TabPages.Add(overview);tabs.TabPages.Add(operations);Controls.Add(tabs);tabs.BringToFront();
             TaskQueueStore.Changed += () => { if (!IsDisposed) BeginInvoke(new Action(RefreshStats)); };
             RefreshStats();
         }
 
-        static Label StatCard(FlowLayoutPanel parent, string caption) {
-            var card = Theme.MakeCard();
-            card.Width = 170;
-            card.Height = 84;
-            card.Controls.Add(new Label { Text = caption, ForeColor = Theme.TextSecondary, AutoSize = true, Location = new Point(12, 10) });
-            var value = new Label { Text = "0", Font = new Font("Segoe UI", 20f), ForeColor = Theme.TextPrimary, AutoSize = true, Location = new Point(12, 32) };
-            card.Controls.Add(value);
-            parent.Controls.Add(card);
-            return value;
-        }
-
         public void RefreshStats() {
-            var counts = ProfileCatalog.Counts(settings);
-            profilesCount.Text = counts.uniqueProfileIds.ToString();
-            youtubeCount.Text = counts.youtube.ToString();
-            tiktokCount.Text = counts.tiktok.ToString();
-            var tasks = TaskQueueStore.Load();
-            queueCount.Text = tasks.Count(t => t.Status == TaskQueueStatus.Waiting || t.Status == TaskQueueStatus.Preparing).ToString();
-            scheduledCount.Text = (settings.YouTubeChannels ?? new List<YouTubeChannel>()).SelectMany(c => c.Items ?? new List<YouTubeItem>()).Count(i => !string.IsNullOrWhiteSpace(i.PublishedUrl)).ToString();
-            errorsCount.Text = tasks.Count(t => t.Status == TaskQueueStatus.Error || t.Status == TaskQueueStatus.ManualCheck).ToString();
+            dashboard.RefreshLocal();
             eventsList.Items.Clear();
             foreach (var ev in TaskQueueStore.RecentEvents(40)) {
                 var item = new ListViewItem(ev.Account ?? "");
@@ -165,6 +138,15 @@ namespace VideoBatch {
             bottom.Controls.Add(Theme.MakeButton("TikTok", action: () => OpenPlatform(NavSection.TikTok)));
             bottom.Controls.Add(Theme.MakeButton("Проверить IP", ghost: true, action: async () => await CheckSelectedIp()));
             layout.Controls.Add(bottom,0,2);
+            DashboardSessionState.Bind(this, () => {
+                foreach (DataGridViewRow row in grid.Rows)
+                    if (row.Tag is UnifiedProfile profile) {
+                        Theme.MarkConnected(row.DefaultCellStyle, DashboardSessionState.IsConnected(profile.ProfileId));
+                        row.Cells[1].ToolTipText = string.Join("\n\n", new[]{"YouTube","TikTok","Instagram","Threads","Telegram"}
+                            .Select(service => service + ": " + DashboardSessionState.Summary(profile.ProfileId, service)));
+                    }
+                grid.Invalidate();
+            });
             RefreshData();
         }
         protected override async void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);if(Visible&&grid!=null&&!loadedProxies)await PullProxies();}
@@ -201,6 +183,9 @@ namespace VideoBatch {
                 int ri = grid.Rows.Add(false, p.DisplayName, p.PlatformsLabel, p.ChannelNames, p.Market, p.ContentKind,
                     p.CountryCode, p.ProfileId, ProxyFor(p.ProfileId)!=""?TelegramStore.ProxyLabel(ProxyFor(p.ProfileId)):"Не получен", loadLabel, p.VideoCount, p.Status, p.LastOperation, "⋯");
                 grid.Rows[ri].Tag = p;
+                Theme.MarkConnected(grid.Rows[ri].DefaultCellStyle,DashboardSessionState.IsConnected(p.ProfileId));
+                grid.Rows[ri].Cells[1].ToolTipText=string.Join("\n\n",new[]{"YouTube","TikTok","Instagram","Threads","Telegram"}
+                    .Select(service=>service+": "+DashboardSessionState.Summary(p.ProfileId,service)));
                 if(!string.IsNullOrEmpty(current)&&p.ProfileId==current)grid.CurrentCell=grid.Rows[ri].Cells["name"];
                 grid.Rows[ri].Cells["ip"].ToolTipText="Настроенный прокси Dolphin. Ожидаемый IP: "+p.ExpectedIp;
                 grid.Rows[ri].Cells["proxyload"].ToolTipText="Сколько YouTube и TikTok аккаунтов на одном прокси (лимит "+ProfileProxyLoad.MaxYouTubePerRoute+" YT и "+ProfileProxyLoad.MaxTikTokPerRoute+" TT).";
@@ -450,6 +435,15 @@ namespace VideoBatch {
             grid.Columns.Add("result", "Результат");
             grid.Columns.Add("checked", "Проверка");
             layout.Controls.Add(grid,0,1);
+            DashboardSessionState.Bind(this, () => {
+                foreach (DataGridViewRow row in grid.Rows)
+                    if (row.Tag is UnifiedProfile profile) {
+                        Theme.MarkConnected(row.DefaultCellStyle, DashboardSessionState.IsConnected(profile.ProfileId));
+                        row.Cells[1].ToolTipText = string.Join("\n\n", new[]{"YouTube","TikTok","Instagram","Threads","Telegram"}
+                            .Select(service => service + ": " + DashboardSessionState.Summary(profile.ProfileId, service)));
+                    }
+                grid.Invalidate();
+            });
             RefreshData();
         }
 
@@ -461,6 +455,9 @@ namespace VideoBatch {
                 int ri = grid.Rows.Add(false, p.DisplayName, p.ChannelNames, p.ProfileId, p.CountryCode,
                     p.ExpectedIp, p.VerifiedIp, p.ProxyCheckResult, p.LastProxyCheck.HasValue ? p.LastProxyCheck.Value.ToString("dd.MM HH:mm") : "—");
                 grid.Rows[ri].Tag = p;
+                Theme.MarkConnected(grid.Rows[ri].DefaultCellStyle,DashboardSessionState.IsConnected(p.ProfileId));
+                grid.Rows[ri].Cells[1].ToolTipText=string.Join("\n\n",new[]{"YouTube","TikTok","Instagram","Threads","Telegram"}
+                    .Select(service=>service+": "+DashboardSessionState.Summary(p.ProfileId,service)));
                 if (p.ExpectedIp != "—" && p.CountryCode == "—") _ = GeoCountry(p, ri);
             }
         }

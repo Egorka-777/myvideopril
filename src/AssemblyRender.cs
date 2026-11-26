@@ -23,7 +23,7 @@ namespace VideoBatch {
         internal readonly Dictionary<string, string> Rasters = new Dictionary<string, string>();
         public AssemblyRenderReport LastReport;
         public int EncoderThreads => Math.Min(8, Math.Max(1, Environment.ProcessorCount - 1));
-        public int FilterThreads => Math.Min(4, Math.Max(1, Environment.ProcessorCount / 2));
+        public int FilterThreads => Math.Min(8, Math.Max(1, Environment.ProcessorCount - 1));
         internal static string RasterKey(AssemblyTemplate t, AssemblyLayerPlan p) {
             var l = p.Layer;
             return AssemblyFiles.HashText(string.Join("|", t.Width, t.Height, l.ObjectId, l.IsText ? "" : p.Asset.Hash, l.IsText ? "" : Path.GetFullPath(p.Asset.Path),
@@ -78,7 +78,7 @@ namespace VideoBatch {
             if (segments.Count == 1) {
                 int video = input++;
                 if (AssemblyTimeline.LoopInput(t, s)) args.AddRange(new[] { "-stream_loop", "-1" });
-                args.AddRange(new[] { "-threads", "1", "-ss", Core.N(AssemblyTimeline.SourceStart(t, s)), "-t", Core.N(content), "-i", segments[0].Video.Path });
+                args.AddRange(new[] { "-ss", Core.N(AssemblyTimeline.SourceStart(t, s)), "-t", Core.N(content), "-i", segments[0].Video.Path });
                 graph.Add("[" + video + ":v:0]setpts=PTS-STARTPTS," + Fill(t.Width, t.Height, t.Fps) + ","
                     + (t.SceneTimingVersion > 0 || s.ContentSeconds > 0 ? "tpad=stop_mode=clone:stop_duration=" + Core.N(content) + "," : "")
                     + "trim=duration=" + Core.N(content) + AssemblyVideoPlacement.Filter(t, transparentPlacement) + "[" + outputLabel + "]");
@@ -89,7 +89,7 @@ namespace VideoBatch {
             var labels = new List<string>();
             for (int si = 0; si < segments.Count; si++) {
                 int video = input++;
-                args.AddRange(new[] { "-threads", "1", "-t", Core.N(segments[si].Duration), "-i", segments[si].Video.Path });
+                args.AddRange(new[] { "-t", Core.N(segments[si].Duration), "-i", segments[si].Video.Path });
                 string label = outputLabel + "Part" + si;
                 graph.Add("[" + video + ":v:0]setpts=PTS-STARTPTS," + Fill(t.Width, t.Height, t.Fps) + ",trim=duration=" + Core.N(segments[si].Duration)
                     + (si > 0 && transition > 0 ? ",tpad=start_mode=clone:start_duration=" + Core.N(transition) : "") + ",settb=1/" + t.Fps + ",format=yuv444p[" + label + "]");
@@ -234,7 +234,7 @@ namespace VideoBatch {
         }
         // Cut layers retain the single-frame optimized overlay path. Scene layers
         // are still composited before the separate scene-to-scene transition.
-        public static List<string> Arguments(AssemblyTemplate t, AssemblyPlan p, string encoder, string script, string output, AssemblyRenderContext context) {
+        public static List<string> Arguments(AssemblyTemplate t, AssemblyPlan p, string encoder, string script, string output, AssemblyRenderContext context, AssemblyProcessingPlan processing = null) {
             if (p.Scenes.Count == 0) throw new Exception("Добавь хотя бы одну сцену перед сборкой.");
             double dur = p.RollDuration(t);
             var args = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-filter_complex_threads", context.FilterThreads.ToString() };
@@ -247,7 +247,7 @@ namespace VideoBatch {
             if(t.ContinuousVideo) {
                 continuous=input++; var video=p.Scenes[0].Video;
                 if(t.LoopShortVideos && video.Duration+.001<dur)args.AddRange(new[]{"-stream_loop","-1"});
-                args.AddRange(new[]{"-threads","1","-t",Core.N(dur),"-i",video.Path});
+                args.AddRange(new[]{"-t",Core.N(dur),"-i",video.Path});
                 graph.Add("["+continuous+":v:0]setpts=PTS-STARTPTS,"+Fill(t.Width,t.Height,t.Fps)+",tpad=stop_mode=clone:stop_duration="+Core.N(dur)+",trim=duration="+Core.N(dur)+AssemblyVideoPlacement.Filter(t, transparentPlacement)+"[continuous]");
             }
             for (int i = 0; i < p.Scenes.Count; i++) {
@@ -290,7 +290,7 @@ namespace VideoBatch {
                 if(p.SecondaryVideo==null)throw new Exception("Не выбрано второе видео для разделённого экрана.");
                 int second=input++;
                 if(t.LoopShortVideos && p.SecondaryVideo.Duration+.001<dur)args.AddRange(new[]{"-stream_loop","-1"});
-                args.AddRange(new[]{"-threads","1","-t",Core.N(dur),"-i",p.SecondaryVideo.Path});
+                args.AddRange(new[]{"-t",Core.N(dur),"-i",p.SecondaryVideo.Path});
                 bool vertical = AssemblySplit.IsVertical(t.SplitLayout);
                 AssemblySplit.PaneSizes(t, out int primarySpan, out int secondarySpan, out int splitLine, out int feather);
                 double topZoom = p.SplitSwapped ? t.SplitSecondaryZoom : t.SplitPrimaryZoom;
@@ -317,7 +317,7 @@ namespace VideoBatch {
                     args.AddRange(new[] { "-stream_loop", "-1" });
                     if (extension == ".gif") args.AddRange(new[] { "-ignore_loop", "1" });
                 } else args.AddRange(new[] { "-loop", "1", "-framerate", t.Fps.ToString() });
-                args.AddRange(new[] { "-threads", "1", "-t", Core.N(dur), "-i", p.Background.Path });
+                args.AddRange(new[] { "-t", Core.N(dur), "-i", p.Background.Path });
                 graph.Add("[" + media + ":v:0]setpts=PTS-STARTPTS," + (t.BackgroundForeground ? Fill(t.Width, t.Height, t.Fps).Replace("format=yuv420p", "format=yuva444p") : Fill(t.Width, t.Height, t.Fps))
                     + ",trim=duration=" + Core.N(dur) + "[background]");
                 // Preserve media alpha for a foreground PNG frame; never key video colours.
@@ -358,7 +358,9 @@ namespace VideoBatch {
                 foreach (var scene in p.Scenes) {
                     double content = AssemblyTimeline.ContentDuration(t, scene);
                     bool preview = scene.Scene.IsPreview;
-                    bool objectOnly=!t.HasBackgroundVideo(scene.Scene) && scene.Layers.Any(l=>l.Layer.Enabled && !l.Layer.IsText && l.Asset!=null && string.Equals(l.Asset.Path,scene.Video.Path,StringComparison.OrdinalIgnoreCase));
+                    // With no background, animated layers supply the picture and their own audio.
+                    // The independently selected scene.Video is only a timing candidate, not a second sound source.
+                    bool objectOnly=!split && !t.HasBackgroundVideo(scene.Scene) && scene.Layers.Any(l=>l.Layer.Enabled && !l.Layer.IsText && l.Asset!=null && AssemblyOverlayMedia.IsAnimated(l.Asset.Path));
                     double level = objectOnly ? 0 : NativeLevel(scene.Scene);
                     double pitch = t.BackgroundAudioPitch.Enabled ? backgroundPitch : preview ? 0 : nativePitch;
                     double Gain(AssemblyVideo video) => preview ? 0 : AssemblyAudioLeveling.GainFor(t, video.Path);
@@ -431,11 +433,13 @@ namespace VideoBatch {
             bool music=audio.Count>0;
             string mixDuration = "longest"; // Keep the one-second tail after speech.
             if(music)graph.Add(string.Join("",audio.Select(a=>"["+a+"]"))+"amix=inputs="+audio.Count+":duration="+mixDuration+":normalize=0,atrim=duration="+Core.N(dur)+"[audio]");
+            if (processing != null) processing.Append(graph,"vout",music ? "audio" : null);
             File.WriteAllText(script, string.Join(";\n", graph), new UTF8Encoding(false));
-            args.AddRange(new[] { context.GraphFileOption, script, "-map", "[vout]" });
-            if (music) args.AddRange(new[] { "-map", "[audio]", "-c:a", "aac", "-b:a", "192k" }); else args.Add("-an");
-            args.AddRange(EncoderArguments(encoder, context.EncoderThreads));
-            args.AddRange(new[] { "-t", Core.N(dur), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output });
+            args.AddRange(new[] { context.GraphFileOption, script, "-map", processing == null ? "[vout]" : "[processed_video]" });
+            if (music) args.AddRange(new[] { "-map", processing == null ? "[audio]" : "[processed_audio]", "-c:a", "aac", "-b:a", processing == null ? "192k" : "160k" }); else args.Add("-an");
+            args.AddRange(processing == null ? EncoderArguments(encoder, context.EncoderThreads) : ProcessingEngine.FinalEncoderArguments(encoder,processing.Profile,context.EncoderThreads));
+            if (processing != null) args.AddRange(new[] { "-map_metadata", "-1", "-map_metadata:s:v", "-1", "-map_metadata:s:a", "-1", "-map_chapters", "-1", "-metadata:s:v:0", "rotate=0" });
+            args.AddRange(new[] { "-t", Core.N(processing == null ? dur : processing.Duration), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output });
             return args;
         }
         internal static async Task SelectEncoder(AssemblyTemplate t, string ffmpeg, string work, AssemblyRenderContext context, CancellationToken ct) {
@@ -456,7 +460,7 @@ namespace VideoBatch {
         }
         public static async Task Run(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string output, string work,
             Action<AssemblyTemplate, AssemblyLayerPlan, string> rasterize, CancellationToken ct, Action<string> progress,
-            AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null) {
+            AssemblyRenderContext context = null, Action<double> fraction = null, IList<AssemblyVideo> catalog = null, Random segmentRandom = null, AssemblyMixTracker segmentMix = null, bool processOutput = false) {
             t = t.WithVideoSubtitleStyle(segmentRandom ?? new Random());
             context = context ?? new AssemblyRenderContext(); var total = Stopwatch.StartNew(); var stage = Stopwatch.StartNew();
             var report = new AssemblyRenderReport { Width = t.Width, Height = t.Height, Fps = t.Fps, Duration = t.Duration,
@@ -494,6 +498,9 @@ namespace VideoBatch {
                 if (p.Captions.Count > 0)
                     WarmupSubtitles.Rasterize(p.Captions, t.SubtitleStyle, work, t.Width, t.Height);
             }
+            var processing = processOutput ? AssemblyProcessing.Prepare(t,new Media { Width=t.Width, Height=t.Height, Fps=t.Fps+"/1", Duration=roll, VideoDuration=roll },segmentRandom ?? new Random(),AssemblyTimeline.MainStart(t,p)) : null;
+            double outputDuration = processing == null ? roll : processing.Duration;
+            report.Duration = outputDuration;
             report.RasterSeconds = stage.Elapsed.TotalSeconds; stage.Restart();
             progress?.Invoke("Проверяю ускорение…");
             if (!context.GraphSupportChecked) {
@@ -508,9 +515,9 @@ namespace VideoBatch {
             async Task Encode() {
                 report.Encoder = context.Encoder; report.EncodeAttempts++;
                 progress?.Invoke("Собираю · " + (context.Encoder == "libx264" ? "процессор" : "видеокарта"));
-                var args = Arguments(t, p, context.Encoder, Path.Combine(work, "render.ffgraph"), output, context);
+                var args = Arguments(t, p, context.Encoder, Path.Combine(work, "render.ffgraph"), output, context, processing);
                 await Core.Tool(ffmpeg, args, ct, line => {
-                    if (line.StartsWith("out_time_us=", StringComparison.Ordinal)) fraction?.Invoke(Math.Min(.99, Math.Max(0, Core.Parse(line.Substring(12)) / 1000000 / roll)));
+                    if (line.StartsWith("out_time_us=", StringComparison.Ordinal)) fraction?.Invoke(Math.Min(.99, Math.Max(0, Core.Parse(line.Substring(12)) / 1000000 / outputDuration)));
                 }, 3600).ConfigureAwait(false);
             }
             try { await Encode().ConfigureAwait(false); }
@@ -522,7 +529,7 @@ namespace VideoBatch {
             }
             report.EncodeSeconds = stage.Elapsed.TotalSeconds; stage.Restart(); ct.ThrowIfCancellationRequested();
             var m = Core.VideoInfo(await Core.Probe(probe, output, ct).ConfigureAwait(false));
-            if (Math.Abs(m.VideoDuration - roll) > .15 || m.Width != t.Width || m.Height != t.Height) throw new Exception("Готовый ролик не прошёл проверку длительности или размера кадра.");
+            if (Math.Abs(m.VideoDuration - outputDuration) > .15 || m.Width != t.Width || m.Height != t.Height) throw new Exception("Готовый ролик не прошёл проверку длительности или размера кадра.");
             if ((HasAudio(p) || NativeAudio(t, p) || p.Scenes.Any(s=>t.SceneNativeAudioVolume(s.Scene)>0 && s.Layers.Any(l=>l.Layer.Enabled && l.Layer.AudioEnabled && !l.Layer.IsText && l.Asset!=null && AssemblyOverlayMedia.HasAudio(l.Asset.Path)))) && !m.HasAudio) throw new Exception("В готовом ролике отсутствует звуковая дорожка.");
             report.ValidationSeconds = stage.Elapsed.TotalSeconds; report.TotalSeconds = total.Elapsed.TotalSeconds; context.LastReport = report;
             fraction?.Invoke(1); progress?.Invoke("Готово за " + report.TotalSeconds.ToString("0.0", Core.Inv) + " с · " + report.Encoder);

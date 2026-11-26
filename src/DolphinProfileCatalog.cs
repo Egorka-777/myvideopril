@@ -123,13 +123,11 @@ namespace VideoBatch {
         }
 
         public static string DetectMarket(string name, string folder, IEnumerable<string> tags) {
-            string blob = string.Join(" ", new[] { name, folder }.Concat(tags ?? Enumerable.Empty<string>())).ToLowerInvariant();
-            if (blob == "") return "";
-            if (Regex.IsMatch(blob, @"\ben\b|english|англ|pocket\s*option|usa|us\b|uk\b|global"))
-                return "EN";
-            if (Regex.IsMatch(blob, @"\bru\b|rus|russian|рус|бинод|binod|рф\b|ru-"))
-                return "RU";
-            return "";
+            // Market is Dolphin metadata, not a guess from an account/profile name.
+            string blob = string.Join(" ", new[] { folder }.Concat(tags ?? Enumerable.Empty<string>()));
+            bool en = Regex.IsMatch(blob, @"(?<![\p{L}\p{N}])(?:en|english|англ(?:ийский|оязычный)?)(?![\p{L}\p{N}])", RegexOptions.IgnoreCase);
+            bool ru = Regex.IsMatch(blob, @"(?<![\p{L}\p{N}])(?:ru|rus|russian|рус(?:ский|скоязычный)?|рф)(?![\p{L}\p{N}])", RegexOptions.IgnoreCase);
+            return en == ru ? "" : en ? "EN" : "RU";
         }
 
         static string NormMarket(string m) => (m ?? "").Trim().ToUpperInvariant() == "EN" ? "EN" : "RU";
@@ -140,7 +138,9 @@ namespace VideoBatch {
             if (folderId != "" && folders.TryGetValue(folderId, out string name)) return name;
             var folder = Object(row.TryGetValue("folder", out var f) ? f : null);
             if (folder != null) return Str(folder, "name");
-            return "";
+            // The list endpoint returns a numeric `folder`, not `folderId`.
+            string scalarId = Convert.ToString(f, CultureInfo.InvariantCulture) ?? "";
+            return folders.TryGetValue(scalarId, out name) ? name : "";
         }
 
         static List<string> ReadTags(Dictionary<string, object> row) {

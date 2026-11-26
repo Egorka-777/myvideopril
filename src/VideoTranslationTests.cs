@@ -37,6 +37,28 @@ namespace VideoBatch {
                 Check(!AppPlatformNav.IsNavVisible(platform, NavSection.AutoTranslation), "autotranslation not exposed in unrelated workspace: " + platform);
             string folder = Path.Combine(Path.GetTempPath(), "vb-translation-unit-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
             try {
+                string maskImage = Path.Combine(folder, "plaque.png");
+                using (var bitmap = new System.Drawing.Bitmap(8, 8)) { using (var g = System.Drawing.Graphics.FromImage(bitmap)) g.Clear(System.Drawing.Color.Red); bitmap.Save(maskImage); }
+                var maskOptions = new VideoTranslationOptions { MaskVideoText = true, TextMaskImages = new List<string> { maskImage } };
+                VideoTextMask.ValidateImages(maskOptions);
+                var maskRegion = new VideoTextRegion { Start = 1.5, End = 2.5, X = 10, Y = 20, Width = 30, Height = 12 };
+                Check(VideoTextMask.OverlayStart(maskRegion) == .5 && VideoTextMask.OverlayStart(new VideoTextRegion { Start = .2 }) == 0, "mask starts one second early, clamped at zero");
+                string maskTrack = VideoTextMask.Rasterize(new List<VideoTextRegion> { maskRegion, new VideoTextRegion { Start = 2, End = 3, X = 50, Y = 20, Width = 20, Height = 10 } }, maskOptions.TextMaskImages, Path.Combine(folder, "masks"), 100, 60, 4, CancellationToken.None);
+                Check(File.ReadAllText(maskTrack).Contains("duration 0.5"), "mask timeline contains early start and overlaps");
+                using (var frame = new System.Drawing.Bitmap(Path.Combine(folder, "masks", "mask-2.png"))) {
+                    Check(frame.GetPixel(15, 25).R == 255 && frame.GetPixel(55, 25).R == 255 && frame.GetPixel(0, 0).A == 0, "simultaneous plaques keep independent boxes and transparent exterior");
+                }
+                string secondMask = Path.Combine(folder, "plaque-blue.png");
+                using (var bitmap = new System.Drawing.Bitmap(8, 8)) { using (var g = System.Drawing.Graphics.FromImage(bitmap)) g.Clear(System.Drawing.Color.Blue); bitmap.Save(secondMask); }
+                VideoTextMask.Rasterize(new List<VideoTextRegion> { maskRegion, new VideoTextRegion { Start = 2, End = 3, X = 50, Y = 20, Width = 20, Height = 10 } }, new[] { maskImage, secondMask }, Path.Combine(folder, "masks-cycling"), 100, 60, 4, CancellationToken.None);
+                using (var frame = new System.Drawing.Bitmap(Path.Combine(folder, "masks-cycling", "mask-2.png")))
+                    Check(frame.GetPixel(15, 25).R == 255 && frame.GetPixel(55, 25).B == 255, "uploaded images alternate in timeline order");
+                string emptyTrack = VideoTextMask.Rasterize(new List<VideoTextRegion>(), maskOptions.TextMaskImages, Path.Combine(folder, "masks-empty"), 100, 60, 4, CancellationToken.None);
+                Check(File.ReadAllText(emptyTrack).Contains("duration 4"), "empty detection keeps blank full timeline");
+                var copiedMasks = Store.Clone(maskOptions);
+                Check(copiedMasks.MaskVideoText && copiedMasks.TextMaskImages.SequenceEqual(maskOptions.TextMaskImages), "mask checkbox and images persist in preferences/project clone");
+                VideoTextMask.ValidateImages(new VideoTranslationOptions());
+                Fails(() => VideoTextMask.ValidateImages(new VideoTranslationOptions { MaskVideoText = true }), "картинку");
                 string source = Path.Combine(folder, "source.mp4"); File.WriteAllText(source, "fixture"); var p = Project(folder, source);
                 var previousRecognition = Project(Path.Combine(folder, "previous"), source);
                 previousRecognition.Segments[0].TranslationKey = VideoTranslationEngine.TranslationKey(previousRecognition.Segments[0], previousRecognition.Options);
@@ -71,6 +93,12 @@ namespace VideoBatch {
                     var body = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(handler.Body);
                     Check(body.ContainsKey("messages") && body.ContainsKey("response_format") && handler.Body.Contains("json_schema") && (string)body["model"] == "google/gemini-2.5-flash", "OpenRouter structured schema and legacy model migration");
                     Check(handler.Url == "https://openrouter.ai/api/v1/chat/completions" && !handler.Url.Contains("secret") && handler.Calls == 1, "official endpoint without secret and no retries");
+                    var translationMessages = (System.Collections.IList)body["messages"];
+                    string translationPrompt = (string)((Dictionary<string, object>)translationMessages[0])["content"];
+                    Check(translationPrompt.Contains("точность смысла и логических связей; связная естественная речь") && translationPrompt.Contains("единый рассказ") && translationPrompt.Contains("не переноси факты между id"), "translation prioritizes meaning, coherence and per-id facts");
+                    Check(translationPrompt.Contains("если точный перевод длиннее, сохрани смысл") && translationPrompt.Contains("не вольная комедийная переозвучка"), "timing and style cannot override meaning");
+                    var translationRows = new JavaScriptSerializer().Deserialize<List<Dictionary<string, object>>>((string)((Dictionary<string, object>)translationMessages[1])["content"]);
+                    Check(translationRows.Count == 2 && (string)translationRows[0]["original"] == p.Segments[0].Original && (string)translationRows[1]["original"] == p.Segments[1].Original, "neighboring originals remain together for context");
                     string russianKey = VideoTranslationEngine.TranslationKey(p.Segments[0], p.Options);
                     foreach (string language in VideoTranslationEngine.LanguageCodes) {
                         p.Options.TargetLanguage = language;
@@ -94,6 +122,8 @@ namespace VideoBatch {
                     var row = rows.Single();
                     Check(shorteningHandler.Calls == 1 && result == "Привет!" && Convert.ToInt32(row["id"]) == 1 && Convert.ToDouble(row["windowSeconds"]) == 1 && Convert.ToDouble(row["speechSeconds"]) == 2.4 && (string)row["original"] == p.Segments[0].Original && (string)row["previousText"] == p.Segments[0].Text,
                         "one shortening request includes id, immutable window, original, previous translation and measured speech duration");
+                    string shorteningPrompt = (string)((Dictionary<string, object>)messages[0])["content"];
+                    Check(shorteningPrompt.Contains("Не сохраняй смысловые ошибки previousText") && shorteningPrompt.Contains("не подменяй смысл ради длительности"), "shortening preserves meaning and corrects previous translation against original");
                     Check(shorteningHandler.Url == "https://openrouter.ai/api/v1/chat/completions" && shorteningHandler.Body.Contains("json_schema") && (string)body["model"] == "google/gemini-2.5-flash", "shortening uses same official structured API without retries");
                 }
                 var speechWords = VideoTranslationEngine.SpeechWords(new VideoTranslationSegment { Start = 2, End = 4, Text = "Привет, мир!" },
@@ -173,13 +203,13 @@ namespace VideoBatch {
             await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0.5:s=48000:d=4", "-af", VideoTranslationEngine.DuckFilter(new[] { Tuple.Create(.5, .9), Tuple.Create(.96, 1.2), Tuple.Create(2.5, 2.9) }), "-f", "s16le", envelope }, ct);
             var gains = File.ReadAllBytes(envelope);
             Func<double, double> gain = time => BitConverter.ToInt16(gains, (int)Math.Round(time * 48000) * 2) / 16384d;
-            Check(Math.Abs(gain(.44) - 1) < .0001 && Math.Abs(gain(.475) - .575) < .0001 && Math.Abs(gain(.5) - .15) < .0001,
-                "original is full outside local ramp, smoothly ducks before exact speech onset");
-            Check(Math.Abs(gain(1.225) - .575) < .0001 && Math.Abs(gain(1.26) - 1) < .0001 && Math.Abs(gain(1.5) - 1) < .0001,
-                "original restores smoothly after speech and remains unchanged in gaps");
-            Check(gain(.93) >= .15 && gain(.93) < 1, "overlapping attack/release ramps do not compound ducking");
+            Check(Math.Abs(gain(.24) - 1) < .0001 && Math.Abs(gain(.475) - .145) < .02 && Math.Abs(gain(.5) - .1) < .0001,
+                "original ducks over 0.5s to 10% before speech onset");
+            Check(Math.Abs(gain(1.2) - .1) < .0001 && Math.Abs(gain(1.45) - .145) < .02 && Math.Abs(gain(1.7) - 1) < .0001,
+                "original restores over 0.5s after speech and stays full in gaps");
+            Check(gain(.93) >= .1 && gain(.93) < 1, "overlapping attack/release ramps do not compound ducking");
             for (int i = 1; i < gains.Length / 2; i++) Check(Math.Abs(BitConverter.ToInt16(gains, i * 2) - BitConverter.ToInt16(gains, (i - 1) * 2)) <= 7, "duck envelope has no abrupt sample/frame gain jump");
-            Console.WriteLine("PASS synchronous voiceover: sample-exact padded-tone onset/end, preserved quiet boundary audio, caption offset/tempo, unchanged paid artifacts, smooth sample-level 15% duck/restore including overlapping ramps.");
+            Console.WriteLine("PASS synchronous voiceover: sample-exact padded-tone onset/end, preserved quiet boundary audio, caption offset/tempo, unchanged paid artifacts, smooth 10% duck/restore with 0.5s ramps.");
         }
         static async Task ShorteningTests(string ffmpeg, string ffprobe, string root, string source, string shortAudio, string longAudio, CancellationToken ct) {
             var p = Project(Path.Combine(root, "shortening"), source); int generations = 0, requests = 0;
@@ -250,6 +280,20 @@ namespace VideoBatch {
             await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=navy:s=240x320:r=25:d=4", "-f", "lavfi", "-i", "sine=frequency=220:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", source }, ct);
             foreach (var item in new[] { new { Path = shortAudio, Seconds = "0.4" }, new { Path = longAudio, Seconds = "1.2" } })
                 await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=880:duration=" + item.Seconds, "-c:a", "libmp3lame", item.Path }, ct);
+            string plaque = Path.Combine(root, "plaque.png"), masked = Path.Combine(root, "masked.mp4");
+            using (var image = new System.Drawing.Bitmap(20, 10)) { using (var graphics = System.Drawing.Graphics.FromImage(image)) graphics.Clear(System.Drawing.Color.Red); image.Save(plaque); }
+            await VideoTextMask.ApplyAsync(source, masked, ffmpeg, new List<VideoTextRegion> { new VideoTextRegion { Start = 2, End = 3, X = 20, Y = 30, Width = 100, Height = 40 } }, new[] { plaque }, Path.Combine(root, "mask-track"), 240, 320, 4, ct, Console.WriteLine);
+            foreach (double time in new[] { .5, 1.2, 2.5, 3.2 }) {
+                string frame = Path.Combine(root, "mask-check.png");
+                await Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-ss", Core.N(time), "-i", masked, "-frames:v", "1", "-threads", "1", frame }, ct);
+                using (var image = new System.Drawing.Bitmap(frame)) {
+                    var pixel = image.GetPixel(50, 50); bool visible = pixel.R > 180 && pixel.G < 50;
+                    Check(visible == (time >= 1 && time < 3), "real overlay appears one second early and disappears at end: " + time);
+                    Check(image.GetPixel(150, 100).R < 40, "outside detected box unchanged");
+                }
+            }
+            var maskedInfo = Core.VideoInfo(await Core.Probe(ffprobe, masked, ct));
+            Check(maskedInfo.HasAudio && Math.Abs(maskedInfo.VideoDuration - 4) < .1, "mask rendering preserves audio and duration");
             await SynchronousTimingTests(ffmpeg, ffprobe, root, source, ct);
             await ShorteningTests(ffmpeg, ffprobe, root, source, shortAudio, longAudio, ct);
             // Reproduce the reported 197-character project path: old speech temp
@@ -271,10 +315,16 @@ namespace VideoBatch {
                 return 2*Math.Sqrt(real*real+imaginary*imaginary)/count;
             };
             double originalGap=amplitude(.1,220),originalUnderSpeech=amplitude(.6,220);
-            Check(originalGap>.05 && originalUnderSpeech/originalGap>.1 && originalUnderSpeech/originalGap<.2,"original sound retained in gap and ducked to 15% during speech");
+            Check(originalGap>.05 && originalUnderSpeech/originalGap>.05 && originalUnderSpeech/originalGap<.15,"original sound retained in gap and ducked to ~10% during speech");
             Check(amplitude(.6,880)>.05 && amplitude(.1,880)<.005,"translated speech begins only at original fixed onset");
             Check(amplitude(1.1,220)/originalGap>.9,"original volume restored after actual translated audio ends");
             p.Options.BurnSubtitles = true;
+            p.Options.MaskVideoText = true; p.Options.TextMaskImages.Add(plaque);
+            // Controlled detection receipt tests composition with speech and new subtitles; model tested separately.
+            File.WriteAllText(Path.Combine(p.Directory, "video-text.json"), new JavaScriptSerializer().Serialize(new VideoTextMask.Receipt {
+                SourceHash = p.SourceHash, Width = 240, Height = 320, Detection = new VideoTextMask.Detection { version = 1,
+                    regions = new List<VideoTextRegion> { new VideoTextRegion { Start = 2, End = 3, X = 20, Y = 30, Width = 100, Height = 40 } } }
+            }));
             await VideoTranslationEngine.RenderCore(p, p.Options, ffmpeg, ffprobe, ct, Console.WriteLine, speech);
             Check(calls == 2, "burn-in render retry reuses audio without paid generation");
             p.Segments[0].Text = "Новый текст."; await VideoTranslationEngine.RenderCore(p, p.Options, ffmpeg, ffprobe, ct, Console.WriteLine, speech);

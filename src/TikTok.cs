@@ -16,7 +16,7 @@ namespace VideoBatch {
         public long ScheduledUnixSeconds;
         // HTTP acknowledgement is not evidence of a visible or scheduled post.
         public bool HttpSubmitted, HttpNeedsReview;
-        public string LocalJobId="", HttpVideoId="";
+        public string LocalJobId="", HttpVideoId="", SharedShortsSourceId="";
     }
     public class TikTokAccount {
         public string AccountId = "";

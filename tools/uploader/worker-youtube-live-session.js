@@ -6,12 +6,12 @@ const fs = require("fs"), path = require("path"), readline = require("readline")
 const dolphin = require("./dolphin-session");
 const existing = require("./worker-http");
 const ORIGIN = "https://studio.youtube.com";
-const WORKER_BUILD="20261023-live-setup-v4";
+const WORKER_BUILD="20261125-live-dashboard-v20";
 function emitProgress(text) { process.stdout.write(JSON.stringify({type:"progress",text:sanitize(text)})+"\n"); }
 const VIDEO = /^[A-Za-z0-9_-]{11}$/;
 const CHANNEL = /^UC[A-Za-z0-9_-]+$/;
 const labels = {
-  schedule: /^(Schedule stream|Schedule live stream|Запланировать трансляцию|Запланировать эфир)$/i,
+  schedule: /^(Schedule stream|Schedule live stream|Запланировать трансляцию|Запланировать эфир|Запланировать прямую трансляцию|Создать трансляцию)$/i,
   createNew: /^(Create new|Создать новую|Создать новую трансляцию|Создать трансляцию)$/i,
   finish: /^(Schedule stream|Schedule live stream|Запланировать трансляцию|Запланировать эфир|Done|Готово)$/i,
   next: /^(Next|Далее)$/i,
@@ -51,17 +51,19 @@ function sanitize(error) {
 }
 function rtmpsAddress(value) {
   let u; try { u = new URL(value); } catch (_) { throw new Error("Studio не вернул адрес видеосервера."); }
-  if (u.username || u.password || u.search || u.hash || u.pathname !== "/live2") throw new Error("Некорректный адрес видеосервера.");
+  if (u.username || u.password || u.hash || u.pathname !== "/live2") throw new Error("Некорректный адрес видеосервера.");
   if (u.protocol === "rtmp:" && ["a.rtmp.youtube.com", "b.rtmp.youtube.com"].includes(u.hostname))
-    return `rtmps://${u.hostname.replace(".rtmp.", ".rtmps.")}/live2`;
-  if (u.protocol !== "rtmps:" || !["a.rtmps.youtube.com", "b.rtmps.youtube.com"].includes(u.hostname)) throw new Error("Разрешены только RTMPS-серверы YouTube.");
+    return `rtmp://${u.hostname}/live2` + (u.search || "");
+  if (u.protocol === "rtmps:" && ["a.rtmps.youtube.com", "b.rtmps.youtube.com"].includes(u.hostname))
+    return `rtmp://${u.hostname.replace(".rtmps.", ".rtmp.")}/live2` + (u.search || "");
+  throw new Error("Разрешены только RTMP(S)-серверы YouTube.");
   return u.href.replace(/\/$/, "");
 }
 class OperationStore {
   constructor(job) { this.job = job; this.file = path.join(job.stateDirectory, job.operationId + ".json"); }
   read() {
     if (!fs.existsSync(this.file)) return null;
-    const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
+    const saved = JSON.parse(fs.readFileSync(this.file, "utf8").replace(/^\uFEFF/, ""));
     if (saved.profileId !== this.job.profileId || saved.channelId !== this.job.expectedChannelId || saved.operationId !== this.job.operationId)
       throw new Error("Журнал эфира принадлежит другому каналу/профилю.");
     return saved;
@@ -94,11 +96,20 @@ class SessionEngine {
     if(j.command==="prepare"){await this.ui.prepare();return {ready:true};}
     let saved = this.store.read();
     if (j.command === "create") {
-      if (saved) throw new Error("Создание уже запрашивалось. Сначала проверьте/завершите прежний эфир.");
+      if (saved) {
+        if (saved.operationId !== j.operationId) throw new Error("Создание уже запрашивалось другой операцией. Завершите прежний эфир.");
+        if (VIDEO.test(saved.broadcastId || "")) return { broadcastId: saved.broadcastId };
+        await this.ui.findBroadcastRoom();
+        const openId = await this.ui.activeBroadcastId();
+        if (!VIDEO.test(openId || "")) throw new Error("Studio не подтвердил ID эфира на открытой панели.");
+        saved.broadcastId = openId; this.store.write(saved); return { broadcastId: openId };
+      }
       this.store.reserve();
       saved = { operationId: j.operationId, profileId: j.profileId, channelId: identity.channelId, createAttempted: true, broadcastId: "", startAttempted: false, configured: false, completed: false };
       this.store.write(saved); // BEFORE any mutating browser action; a lost response is never retried.
-      const id = await this.ui.create(operationTitle(j.operationId), j.options);
+      const title = (j.options && j.options.title) || operationTitle(j.operationId);
+      const id = await this.ui.create(title, { ...j.options, operationMarker: j.operationId,
+        description: /\[VideoBatch:[a-f0-9]{32}\]/.test(j.options?.description || "") ? j.options.description : (j.options.description || "") });
       if (!VIDEO.test(id || "")) throw new Error("Не подтверждён ID созданного эфира.");
       saved.broadcastId = id; this.store.write(saved); return { broadcastId: id };
     }
@@ -115,10 +126,9 @@ class SessionEngine {
     }
     await this.ui.open(saved.broadcastId);
     if (j.command === "ingest") {
-      if (saved.keyAttempted) throw new Error("Создание ключа уже запрашивалось. Проверьте и завершите эфир.");
-      saved.keyAttempted = true; this.store.write(saved);
       const ingest = await this.ui.ingest(operationTitle(j.operationId));
       if (!/^[A-Za-z0-9_-]{8,200}$/.test(ingest.key || "")) throw new Error("Не удалось получить ключ трансляции.");
+      saved.keyAttempted = true; this.store.write(saved);
       return { broadcastId: saved.broadcastId, address: rtmpsAddress(ingest.address), key: ingest.key };
     }
     if (j.command === "configure") {
@@ -142,7 +152,10 @@ class SessionEngine {
 async function uniqueVisible(locator, required = true) {
   const visible = [];
   for (let i = 0, n = await locator.count(); i < n; i++) if (await locator.nth(i).isVisible()) visible.push(locator.nth(i));
-  if (visible.length > 1) throw new Error("Studio показал несколько одинаковых элементов. Операция остановлена.");
+  if (visible.length > 1) {
+    if (!required) return visible[0];
+    throw new Error("Studio показал несколько одинаковых элементов. Операция остановлена.");
+  }
   if (!visible.length && required) throw new Error("Studio изменил интерфейс: нужный элемент не найден.");
   return visible[0] || null;
 }
@@ -163,6 +176,20 @@ class NativeStudio {
   }
   async verify(expectedUrl = "") {
     this.progress("Открываю YouTube Studio и проверяю канал");
+    const liveUrl = this.page.url().match(new RegExp(`${ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/video/([A-Za-z0-9_-]{11})/livestreaming`));
+    if (liveUrl) {
+      this.broadcastId = liveUrl[1];
+      let channelId = await this.page.evaluate(() => {
+        const c = window.ytcfg && window.ytcfg.get && window.ytcfg.get("DELEGATED_SESSION_ID");
+        return typeof c === "string" && /^UC/.test(c) ? c : "";
+      }).catch(() => "");
+      if (!CHANNEL.test(channelId) && CHANNEL.test(this.channelId)) channelId = this.channelId;
+      if (CHANNEL.test(channelId)) {
+        this.channelId = channelId;
+        const name = await this.page.locator("#channel-name, ytcp-entity-name").first().innerText({ timeout: 2000 }).catch(() => "");
+        return { channelId, channelName: name };
+      }
+    }
     await this.page.goto(ORIGIN, { waitUntil: "domcontentloaded", timeout: 90000 });
     await existing.waitForStudioChannel(this.page, 90000);
     // Read identity and URL in one document context. Serializing HTML after the
@@ -199,6 +226,45 @@ class NativeStudio {
     const name = await this.page.locator("#channel-name").first().innerText({ timeout: 1000 }).catch(() => "");
     return { channelId: data.channelId, channelName: name };
   }
+  async activeBroadcastId() {
+    const fromUrl = this.page.url().match(/\/video\/([A-Za-z0-9_-]{11})(?:\/|$)/);
+    if (fromUrl) return fromUrl[1];
+  if (!/\/video\//i.test(this.page.url())) return "";
+    return await this.page.evaluate(() => {
+      const cfg = window.ytcfg && window.ytcfg.get && window.ytcfg.get.bind(window.ytcfg);
+      for (const key of ["VIDEO_ID", "LIVE_STREAM_ID", "DELEGATED_VIDEO_ID"]) {
+        const id = cfg(key);
+        if (typeof id === "string" && /^[A-Za-z0-9_-]{11}$/.test(id)) return id;
+      }
+      return "";
+    }).catch(() => "");
+  }
+  async encoderDashboardReady() {
+    const text = await this.page.locator("body").innerText().catch(() => "");
+    return /URL трансляции|Stream URL|подключите видеокодер|Чтобы начать трансляцию|Ключ трансляции|Default stream key/i.test(text);
+  }
+  async findBroadcastRoom() {
+    const id = await this.activeBroadcastId();
+    if (!VIDEO.test(id)) return false;
+    const open = `${ORIGIN}/video/${id}/livestreaming`;
+    if (!this.page.url().includes(`/video/${id}/`)) {
+      await this.page.goto(open, { waitUntil: "domcontentloaded", timeout: 90000 });
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const text = await this.page.locator("body").innerText({ timeout: 10000 }).catch(() => "");
+      if ((await this.roomReady()) || (await this.encoderDashboardReady()) || /URL трансляции|подключите видеокодер|Изменить/i.test(text)) break;
+      this.progress("Панель эфира пустая — обновляю страницу");
+      await this.page.goto(open, { waitUntil: "domcontentloaded", timeout: 90000 });
+      await this.page.waitForTimeout(2500);
+    }
+    const ready = await waitUntil(() => this.roomReady() || this.encoderDashboardReady(), 20000).catch(() => null);
+    if (!ready) {
+      this.progress("Панель эфира не загрузилась — перейду к «Запланировать трансляцию»");
+      return false;
+    }
+    this.broadcastId = id;
+    return true;
+  }
   async open(id) {
     if (!VIDEO.test(id)) throw new Error("Некорректный эфир.");
     this.broadcastId = id;
@@ -222,57 +288,129 @@ class NativeStudio {
       || await uniqueVisible(this.page.getByText(/^(Stream URL|URL трансляции|URL сервера)$/i,{exact:true}),false)
       || labels.finished.test(await this.page.locator("body").innerText());
   }
-  async liveSetup() {
-    const when=/when do you want to go live|when would you like to go live|когда вы (?:хотите|планируете) (?:начать|выйти)|когда (?:начать|выйти).*?(?:эфир|трансляц)/i;
-    const how=/how (?:would you like|do you want) to go live|how do you want to stream|как вы (?:хотите|планируете).*?(?:эфир|трансляц)|способ (?:ведения|проведения) трансляции|выберите способ выхода в эфир/i;
-    let changed=false;
-    for(let i=0;i<4;i++) {
-      const question=await uniqueVisible(this.page.getByRole("heading").filter({hasText:when}),false)
-        || await uniqueVisible(this.page.getByText(when).filter({hasNot:this.page.locator("button")}),false);
-      if(question) {
-        const now=/^(Right now|Now|Сейчас)(?:\s|$)/i;
-        const choice=await waitUntil(()=>uniqueVisible(this.page.getByRole("button",{name:now}),false));
-        this.progress("Первый запуск Studio: выбираю «Сейчас»");await choice.click();changed=true;
-        await waitUntil(async()=>!await question.isVisible());continue;
-      }
-      const method=await uniqueVisible(this.page.getByRole("heading").filter({hasText:how}),false)
-        || await uniqueVisible(this.page.getByText(how).filter({hasNot:this.page.locator("button")}),false);
-      if(method) {
-        const choice=await waitUntil(()=>uniqueVisible(this.page.getByRole("button",{name:/^(Streaming software|Encoder|Видеокодер|С помощью видеокодера|Программа для трансляций)(?:\s|$)/i}),false));
-        this.progress("Первый запуск Studio: выбираю «С помощью видеокодера»");await choice.click();changed=true;
-        await waitUntil(async()=>!await method.isVisible());continue;
-      }
-      break;
+  async liveSetupPanel() {
+    return await uniqueVisible(
+      this.page.locator("ytcp-dialog, ytd-flow-dialog, ytcp-flow, [role='dialog']").filter({
+        hasText: /Панель управления трансляциями|Когда вы хотите выйти в эфир/i
+      }),
+      false
+    );
+  }
+  async pickSetupChoice(namePattern, scope = this.page) {
+    const roleBtn = scope.getByRole("button", { name: namePattern });
+    let choice = await uniqueVisible(roleBtn, false);
+    if (!choice) {
+      choice = await uniqueVisible(
+        scope.locator("ytcp-selectable-button, ytcp-button, tp-yt-paper-button").filter({ hasText: namePattern }),
+        false
+      );
     }
+    return choice;
+  }
+  async liveWhenStepOpen() {
+    const panel = (await this.liveSetupPanel()) || this.page;
+    const nowBtn = await this.pickSetupChoice(/^(Right now|Now|Сейчас)$/i, panel);
+    const laterBtn = await this.pickSetupChoice(/^(Later|Позже)$/i, panel);
+    return !!(nowBtn && laterBtn);
+  }
+  async confirmLiveSetupWizard() {
+    const done = await uniqueVisible(this.page.getByRole("button", { name: /^(Done|Готово|Save|Сохранить|Next|Далее|Got it|Понятно|OK|ОК)$/i }), false);
+    if (done) { this.progress("Первый запуск Studio: подтверждаю мастер настройки"); await done.click(); await this.page.waitForTimeout(600); }
+  }
+  async streamSetupModalOpen() {
+    const text = await this.page.locator("body").innerText().catch(() => "");
+    return /Настройка трансляции|Скопируйте ключ трансляции|Stream setup|Copy the stream key/i.test(text);
+  }
+  async dismissStreamSetupModal() {
+    if (!(await this.streamSetupModalOpen())) return false;
+    const ok = await this.pickSetupChoice(/^(OK|ОК)$/i) || await uniqueVisible(this.page.getByRole("button", { name: /^(OK|ОК)$/i }), false);
+    if (!ok) return false;
+    this.progress("Первый запуск Studio: закрываю «Настройка трансляции»");
+    await ok.click({ timeout: 15000 });
+    await this.page.waitForTimeout(800);
+    return true;
+  }
+  async liveWizardBlocksManage() {
+    if (await this.liveWhenStepOpen()) return true;
+    if (await this.streamSetupModalOpen()) return true;
+    const panel = await this.liveSetupPanel();
+    if (panel) return true;
+    const text = await this.page.locator("body").innerText().catch(() => "");
+    return /способ.*трансляц|how do you want to stream|выберите способ|через что|веб-камера|видеокодер/i.test(text)
+      && !/Запланировать трансляцию|Schedule stream/i.test(text);
+  }
+  async manageReady() {
+    if (await this.liveWizardBlocksManage()) return false;
+    return !!(await this.button(labels.schedule, this.page, false) || await this.button(labels.createNew, this.page, false));
+  }
+  async liveSetup() {
+    if (!(await this.liveWizardBlocksManage()) && await this.manageReady()) return false;
+    const encoder = /видеокодер|streaming software|encoder|программ.*трансляц|друг.*программ/i;
+    let changed = false;
+    const bodyText = await this.page.locator("body").innerText().catch(() => "");
+    if (/Выберите способ выхода в эфир|how do you want to stream/i.test(bodyText)) {
+      const viaEncoder = await this.pickSetupChoice(/^С помощью видеокодера$/i, this.page)
+        || await this.pickSetupChoice(/видеокодер/i, this.page);
+      if (viaEncoder) {
+        this.progress("Первый запуск Studio: выбираю «С помощью видеокодера»");
+        await viaEncoder.click({ timeout: 15000 });
+        await this.page.waitForTimeout(2000);
+        await this.dismissStreamSetupModal();
+        return true;
+      }
+    }
+    if (await this.liveWhenStepOpen()) {
+      const panel = (await this.liveSetupPanel()) || this.page;
+      const nowBtn = await this.pickSetupChoice(/^(Right now|Now|Сейчас)$/i, panel);
+      this.progress("Первый запуск Studio: выбираю «Сейчас»");
+      await nowBtn.click({ timeout: 15000 });
+      await this.page.waitForTimeout(1500);
+      return true;
+    }
+    const scope = (await this.liveSetupPanel()) || this.page;
+    const viaEncoder = await this.pickSetupChoice(/^С помощью видеокодера$/i, scope);
+    const viaCamera = await this.pickSetupChoice(/^Через встроенную веб-камеру$/i, scope);
+    if (viaEncoder && viaCamera) {
+      this.progress("Первый запуск Studio: выбираю «С помощью видеокодера»");
+      await viaEncoder.click({ timeout: 15000 });
+      changed = true;
+      await this.page.waitForTimeout(1500);
+      if (await this.dismissStreamSetupModal()) return true;
+    }
+    const enc = await this.pickSetupChoice(encoder, scope)
+      || await uniqueVisible(scope.getByRole("radio").filter({ hasText: encoder }), false)
+      || await uniqueVisible(scope.locator("ytcp-selectable-button, [role='button']").filter({ hasText: encoder }), false);
+    if (enc) {
+      this.progress("Первый запуск Studio: выбираю «С помощью видеокодера»");
+      await enc.click({ timeout: 15000 });
+      changed = true;
+      await this.confirmLiveSetupWizard();
+      await this.page.waitForTimeout(1200);
+    }
+    if (await this.dismissStreamSetupModal()) changed = true;
     return changed;
   }
   async manage() {
     const target=`${ORIGIN}/channel/${this.channelId}/livestreaming/manage`;
     this.progress("Открываю управление трансляциями нужного канала");
-    await this.page.goto(`${ORIGIN}/channel/${this.channelId}`,{waitUntil:"domcontentloaded",timeout:60000});
-    await this.click(/^(Create|Создать)$/i);
-    await waitUntil(async()=>{
-      const name=/^(Go live|Начать трансляцию)$/i;
-      const entry=await uniqueVisible(this.page.getByRole("menuitem",{name}),false)
-        || await this.button(name,this.page,false)
-        || await uniqueVisible(this.page.getByText(name,{exact:true}),false);
-      if(!entry)return false;
-      this.progress("Создать → Начать трансляцию");await entry.click({timeout:10000});return true;
-    });
+    if (!/\/livestreaming\/manage(?:\?|$|\/)/.test(this.page.url())) {
+      await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:120000});
+    }
     await waitUntil(async()=>{
       const text=await this.page.locator("body").innerText();
       const blocker=existing.studioPageState(this.page.url(),text).blocker;if(blocker)throw new Error(blocker);
+      if(/Verify it.?s you|Подтвердите.*(личность|вход)|войдите в аккаунт|повторн.*вход/i.test(text))
+        throw new Error("Google запрашивает подтверждение входа. Заверши проверку в открытой вкладке Dolphin и дождись следующей попытки.");
       if(/24\s*(?:hours|час)|activate live streaming|включить.*прям.*трансляц|live streaming isn.t available|трансляции недоступны/i.test(text))
         throw new Error("YouTube требует активации/проверки доступа к эфирам. Заверши этот шаг в Dolphin; первая активация может занять до 24 часов.");
-      if(await this.liveSetup())return false;
-      // A visible first-run dialog can cover an otherwise visible Schedule
-      // button. Never treat the management page behind that dialog as ready.
-      if(await uniqueVisible(this.page.getByRole("dialog"),false))return false;
-      if(this.page.url()!==target && await this.roomReady()) {
+      if (await this.manageReady()) return true;
+      if (await this.button(labels.schedule, this.page, false)) return true;
+      if(!/\/livestreaming\/manage(?:\?|$|\/)/.test(this.page.url())) {
         await this.page.goto(target,{waitUntil:"domcontentloaded",timeout:60000});return false;
       }
-      return await this.button(labels.schedule,this.page,false);
-    },45000);
+      return await this.manageReady();
+    },180000);
+    this.progress("Страница управления трансляциями готова");
     const url=new URL(this.page.url());
     if(url.origin!==ORIGIN || !url.pathname.startsWith(`/channel/${this.channelId}/`))throw new Error("Studio не открыл управление нужным каналом.");
   }
@@ -325,69 +463,157 @@ class NativeStudio {
   }
   async create(title, options) {
     await this.prepare();
+    if (VIDEO.test(this.broadcastId)) {
+      this.progress("Использую уже открытую панель управления эфиром");
+      return this.broadcastId;
+    }
     const liveRows = this.page.locator("ytcp-video-row, [role='row']").filter({ hasText: /\bLIVE\b|Трансляция ид[её]т|В эфире/ });
     if (await liveRows.count()) throw new Error("На канале уже есть эфир. Существующая передача не изменена.");
-    await this.click(labels.schedule);
+    await this.manage();
+    const scheduleBtn = await waitUntil(async () => await this.button(labels.schedule, this.page, false)
+      || await uniqueVisible(this.page.locator("ytcp-button, ytcp-button-shape").filter({ hasText: labels.schedule }), false), 45000);
+    this.progress("Творческая студия: открываю мастер «Запланировать трансляцию»");
+    await scheduleBtn.click({ timeout: 20000, force: true });
     const newButton = await this.button(labels.createNew, this.page, false);
     if (newButton) await newButton.click();
-    let dialog = await this.dialog();
+    let dialog = await waitUntil(() => this.dialog());
     const software = await uniqueVisible(dialog.getByRole("radio", { name: labels.software }), false);
     if (software) await software.click();
-    else if (!labels.software.test((await dialog.getByText(labels.software, { exact: true }).innerText()).trim()))
-      throw new Error("Studio не подтвердил тип трансляции «Видеокодер».");
-    await this.details(dialog, title, { ...options, description: "[VideoBatch:" + title.split(" ").pop() + "]", thumbnail: "", tags: [] }, false);
-    // Native scheduling wizard. Create as PRIVATE until final metadata has been verified.
-    for (let i = 0; i < 4; i++) {
-      const visibility = await uniqueVisible(dialog.getByRole("radio", { name: labels.private }), false);
-      if (visibility) { await visibility.click(); break; }
-      const next = await this.button(labels.next, dialog, false);
-      if (!next) throw new Error("Studio не показал шаг доступа к новому эфиру.");
-      await next.click(); await this.page.waitForTimeout(500);
+  const encoderCombo = await uniqueVisible(dialog.locator('[role="combobox"], ytcp-dropdown-trigger, ytcp-dropdown').filter({ hasText: /видеокодер|encoder/i }), false);
+    if (encoderCombo && !(await dialog.innerText()).match(/видеокодер|encoder/i)) {
+      await encoderCombo.click();
+      await this.click(labels.software, dialog);
     }
-    if (!await uniqueVisible(dialog.getByRole("radio", { name: labels.private }), false)) throw new Error("Не подтверждён приватный доступ к создаваемому эфиру.");
-    await this.click(labels.finish, dialog);
-    await waitUntil(async () => !await dialog.isVisible());
-    const openRoom = await this.button(/^(View in Live Control Room|Open Live Control Room|Открыть панель управления трансляцией|Перейти в панель управления)$/i, this.page, false);
+    const marker = /\[VideoBatch:[a-f0-9]{32}\]/.test(options.description || "") ? options.description
+      : ((options.description || "") + (options.description ? "\n" : "") + "[VideoBatch:" + (options.operationMarker || "live") + "]");
+    await this.details(dialog, title, { ...options, description: marker, thumbnail: "", tags: options.tags || [] }, true);
+    for (let i = 0; i < 4; i++) {
+      const next = await this.button(labels.next, dialog, false);
+      if (next) { await next.click(); await this.page.waitForTimeout(500); continue; }
+      const privacy = await uniqueVisible(dialog.getByRole("radio", { name: labels[options.privacy] }), false);
+      if (privacy) { await privacy.click(); break; }
+    }
+    const done = await this.button(labels.finish, dialog, false) || await this.button(/^(Создать|Create)$/i, dialog, false);
+    if (done) await done.click();
+    else await this.click(labels.next, dialog);
+    await waitUntil(async () => !await dialog.isVisible(), 30000);
+    const openRoom = await this.button(/^(View in Live Control Room|Open Live Control Room|Открыть панель|панель управления|Перейти в панель)/i, this.page, false);
     if (openRoom) await openRoom.click();
-    // Find ONLY the title reserved for this operation, never the first/current stream.
-    return await this.discover(title);
+    const row = await uniqueVisible(this.page.locator("ytcp-video-row, tr, [role='row']").filter({ hasText: title }), false);
+    if (row) await row.click({ timeout: 10000 }).catch(() => {});
+    const id = await waitUntil(async () => {
+      const open = await this.activeBroadcastId();
+      if (VIDEO.test(open || "")) return open;
+      return await this.discover(title).catch(() => "");
+    }, 45000);
+    if (!VIDEO.test(id || "")) throw new Error("Studio не подтвердил панель созданного эфира.");
+    await this.findBroadcastRoom();
+    return id;
+  }
+  async readClipboard() {
+    await this.page.context().grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+    return (await this.page.evaluate(async () => await navigator.clipboard.readText()).catch(() => "")).trim();
+  }
+  async copyIngestFromButtons() {
+    let key = "", address = "";
+    const btns = await this.page.getByRole("button", { name: /^(Copy|Копировать|Скопировать)$/i }).all();
+    for (const btn of btns) {
+      if (!(await btn.isVisible().catch(() => false))) continue;
+      await btn.click({ timeout: 5000 }).catch(() => {});
+      await this.page.waitForTimeout(350);
+      const v = await this.readClipboard();
+      if (!v) continue;
+      if (/^rtmps?:\/\//i.test(v) && !address) address = v.split(/\s+/)[0];
+      else if (/^[A-Za-z0-9_-]{8,200}$/.test(v) && !key) key = v;
+      if (key && address) break;
+    }
+    return { key, address };
+  }
+  async captureCopyClick(copy) {
+    await this.page.evaluate(() => {
+      window.__vbCopied = ""; window.__vbOriginalCopy = navigator.clipboard.writeText; window.__vbOriginalWrite = navigator.clipboard.write;
+      navigator.clipboard.writeText = async text => { window.__vbCopied = String(text); };
+      navigator.clipboard.write = async items => { for (const item of items) if (item.types.includes("text/plain")) { window.__vbCopied = await (await item.getType("text/plain")).text(); break; } };
+      window.__vbCopyListener = e => {
+        const active = document.activeElement;
+        const selected = window.getSelection()?.toString() || (active && typeof active.selectionStart === "number" ? String(active.value || "").slice(active.selectionStart, active.selectionEnd) : "");
+        const text = e.clipboardData?.getData("text/plain") || selected;
+        if (text) { window.__vbCopied = text; e.preventDefault(); }
+      };
+      document.addEventListener("copy", window.__vbCopyListener, true);
+    });
+    try {
+      await copy.click();
+      return await waitUntil(() => this.page.evaluate(() => window.__vbCopied || ""), 5000);
+    } finally {
+      await this.page.evaluate(() => {
+        navigator.clipboard.writeText = window.__vbOriginalCopy; navigator.clipboard.write = window.__vbOriginalWrite;
+        document.removeEventListener("copy", window.__vbCopyListener, true);
+        delete window.__vbCopied; delete window.__vbOriginalCopy; delete window.__vbCopyListener; delete window.__vbOriginalWrite;
+      }).catch(() => {});
+    }
+  }
+  async ensureIngestionSettings() {
+    const tab = await uniqueVisible(this.page.getByRole("tab", { name: /^(Настройки трансляции|Stream settings)$/i }), false)
+      || await uniqueVisible(this.page.locator("tp-yt-paper-tab, ytcp-tab-group *").filter({ hasText: /^Настройки трансляции$/i }), false);
+    if (tab) await tab.click();
+    await this.page.mouse.wheel(0, 1200);
+    await this.page.waitForTimeout(400);
   }
   async copySetting(pattern) {
-    // Find the smallest visible setting container with exactly one Copy control.
-    const label = await uniqueVisible(this.page.getByText(pattern, { exact: true }));
+    await this.ensureIngestionSettings();
+  // Find the smallest visible setting container with exactly one Copy control.
+    let label = await uniqueVisible(this.page.getByText(pattern, { exact: true }), false)
+      || await uniqueVisible(this.page.getByText(pattern), false);
+    if (!label) throw new Error("Не найдена подпись параметра трансляции: " + pattern.source);
     let container = label;
     for (let i = 0; i < 6; i++) {
       container = container.locator("..");
       const copy = await this.button(/^(Copy|Копировать|Скопировать)$/i, container, false);
       if (!copy) continue;
-      // Capture a native copy action in this task tab. Do not put the secret in the system clipboard.
-      await this.page.evaluate(() => {
-        window.__vbCopied = ""; window.__vbOriginalCopy = navigator.clipboard.writeText;window.__vbOriginalWrite=navigator.clipboard.write;
-        navigator.clipboard.writeText = async text => { window.__vbCopied = String(text); };
-        navigator.clipboard.write=async items=>{for(const item of items)if(item.types.includes("text/plain")){window.__vbCopied=await (await item.getType("text/plain")).text();break;}};
-        window.__vbCopyListener=e=>{
-          const active=document.activeElement;
-          const selected=window.getSelection()?.toString() || (active && typeof active.selectionStart==="number" ? String(active.value||"").slice(active.selectionStart,active.selectionEnd):"");
-          const text=e.clipboardData?.getData("text/plain") || selected;
-          if(text){window.__vbCopied=text;e.preventDefault();}
-        };
-        document.addEventListener("copy",window.__vbCopyListener,true);
-      });
-      try {
-        await copy.click();
-        return await waitUntil(() => this.page.evaluate(() => window.__vbCopied || ""), 5000);
-      } finally {
-        await this.page.evaluate(() => {
-          navigator.clipboard.writeText = window.__vbOriginalCopy;navigator.clipboard.write=window.__vbOriginalWrite;
-          document.removeEventListener("copy",window.__vbCopyListener,true);
-          delete window.__vbCopied;delete window.__vbOriginalCopy;delete window.__vbCopyListener;delete window.__vbOriginalWrite;
-        }).catch(() => {});
-      }
+      return await this.captureCopyClick(copy);
     }
     throw new Error("Не найдено управление копированием параметра трансляции: "+pattern.source);
   }
+  async copyIngestViaAria(kind) {
+    const name = kind === "url"
+      ? /^(Copy stream URL|Скопировать URL трансляции|Копировать URL трансляции|Copy URL)/i
+      : /^(Copy stream key|Скопировать ключ трансляции|Копировать ключ трансляции|Copy key)/i;
+    const btn = await uniqueVisible(this.page.getByRole("button", { name }), false);
+    return btn ? await this.captureCopyClick(btn) : "";
+  }
+  async visibleIngestAddress() {
+    const text = await this.page.locator("body").innerText();
+    const match = text.match(/rtmps?:\/\/a\.rtmp\.youtube\.com\/live2[^\s]*/i) || text.match(/rtmps?:\/\/a\.rtmps\.youtube\.com\/live2[^\s]*/i);
+    return match ? match[0].trim() : "";
+  }
   async ingest(name) {
     await this.assertTarget();
+    await this.ensureIngestionSettings();
+    this.progress("Получаю URL сервера и ключ трансляции");
+    let { key: clipKey, address: clipAddress } = await this.copyIngestFromButtons();
+    let address = clipAddress;
+    let key = clipKey;
+    if (!address) address = await this.copyIngestViaAria("url").catch(() => "");
+    if (!address) address = await this.copySetting(/^(Stream URL|URL трансляции|URL сервера)$/i).catch(() => "");
+    if (!address) address = await this.visibleIngestAddress();
+    if (!key) key = await this.copyIngestViaAria("key").catch(() => "");
+    if (!key) key = await this.copySetting(/^(Stream key|Ключ трансляции|Ключ:)/i).catch(() => "");
+    if (!key) {
+      const header = await uniqueVisible(this.page.locator("*").filter({ hasText: /^(Default stream key|Ключ трансляции|Ключ:)/i }), false);
+      if (header) {
+        let node = header;
+        for (let i = 0; i < 8 && !key; i++) {
+          node = node.locator("..");
+          const copy = await this.button(/^(Copy|Копировать|Скопировать)$/i, node, false);
+          if (copy) key = await this.captureCopyClick(copy).catch(() => "");
+        }
+      }
+    }
+    if (/^[A-Za-z0-9_-]{8,200}$/.test((key || "").trim()) && (address || "").trim()) {
+      this.progress("Ключ и URL скопированы с панели эфира");
+      return { key: key.trim(), address: address.trim().split(/\s+/)[0] };
+    }
     // A separate key avoids sharing a previous stream's ingest destination.
     this.progress("Создаю отдельный ключ трансляции для выбранного канала");
     const drop = await uniqueVisible(this.page.locator('#stream-key-select ytcp-dropdown-trigger, #stream-key-select [role="combobox"], [aria-label="Stream key"], [aria-label="Ключ трансляции"]'));
@@ -397,10 +623,10 @@ class NativeStudio {
     const input = await uniqueVisible(d.locator('input[aria-label="Name"], input[aria-label="Название"], #name input, input[name="name"]'));
     await input.fill(name); await this.click(/^(Create|Создать)$/i, d);
     await waitUntil(async () => (await drop.innerText()).includes(name));
-    const key = await this.copySetting(/^(Stream key(?: \(paste in encoder\))?|Ключ трансляции(?: \(вставьте в видеокодер\))?)$/i);
-    const address = await this.copySetting(/^(Stream URL|URL трансляции|URL сервера)$/i);
+    const streamKey = await this.copySetting(/^(Stream key(?: \(paste in encoder\))?|Ключ трансляции(?: \(вставьте в видеокодер\))?)$/i);
+    const streamAddress = await this.copySetting(/^(Stream URL|URL трансляции|URL сервера)$/i);
     this.progress("URL сервера и ключ получены; ключ в лог не записывается");
-    return { key: key.trim(), address: address.trim() };
+    return { key: streamKey.trim(), address: streamAddress.trim() };
   }
   async configure(options) {
     this.progress("Сохраняю название, описание, теги и превью эфира");
@@ -487,11 +713,49 @@ class NativeStudio {
   }
 }
 
+async function livePageUsable(page) {
+  const text = await page.locator("body").innerText({ timeout: 4000 }).catch(() => "");
+  return /URL трансляции|Stream URL|подключите видеокодер|Чтобы начать трансляцию|Изменить/i.test(text);
+}
+async function pickStudioTaskPage(context) {
+  const manage = context.pages().find(p => !p.isClosed() && /studio\.youtube\.com\/channel\/UC[A-Za-z0-9_-]+\/livestreaming\/manage/i.test(p.url()));
+  if (manage) return { page: manage, owned: false };
+  const videoLive = context.pages().filter(p => !p.isClosed() && /studio\.youtube\.com\/video\/[A-Za-z0-9_-]{11}\/livestreaming/i.test(p.url()));
+  for (const page of videoLive) {
+    if (await livePageUsable(page)) return { page, owned: false };
+  }
+  for (const page of videoLive) await page.close({ runBeforeUnload: false }).catch(() => {});
+  const hub = context.pages().find(p => !p.isClosed() && /studio\.youtube\.com\/channel\/UC[A-Za-z0-9_-]+\/livestreaming(?:\/|$)/i.test(p.url()));
+  if (hub) return { page: hub, owned: false };
+  return null;
+}
 async function main() {
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   let input = ""; for await (const line of lines) { input = line; break; } lines.close();
   emitProgress("Studio worker "+WORKER_BUILD);
-  const job = validateJob(JSON.parse(input)); job.liveOperationId = job.operationId;
+  const job = validateJob(JSON.parse(input));
+  const sessionsDir = path.join(path.dirname(job.stateDirectory), "dolphin-sessions");
+  const leasePath = dolphin.liveLeasePath(job, sessionsDir);
+  if (fs.existsSync(leasePath)) {
+    const lease = JSON.parse(fs.readFileSync(leasePath, "utf8"));
+    const journal = path.join(job.stateDirectory, lease.operationId + ".json");
+    if (fs.existsSync(journal) && lease.operationId !== job.operationId) {
+      job.operationId = lease.operationId;
+      emitProgress("Продолжаю незавершённый эфир (" + job.operationId.slice(0, 8) + "…)");
+    }
+  } else {
+    const resumes = [];
+    for (const name of fs.readdirSync(job.stateDirectory)) {
+      if (!name.endsWith(".json") || name.includes("diagnostic")) continue;
+      const saved = JSON.parse(fs.readFileSync(path.join(job.stateDirectory, name), "utf8").replace(/^\uFEFF/, ""));
+      if (saved.profileId === job.profileId && saved.channelId === job.expectedChannelId && saved.broadcastId && !saved.completed) resumes.push(saved);
+    }
+    if (resumes.length === 1 && resumes[0].operationId !== job.operationId) {
+      job.operationId = resumes[0].operationId;
+      emitProgress("Продолжаю журнал эфира (" + job.operationId.slice(0, 8) + "…)");
+    }
+  }
+  job.liveOperationId = job.operationId;
   const token = process.env.VIDEOBATCH_DOLPHIN_TOKEN || "";
   if (!token) throw new Error("Не передан API-токен Dolphin.");
   const request = (p, options = {}, timeout) => dolphin.requestLocal(job, p, options, timeout);
@@ -502,31 +766,40 @@ async function main() {
   const endpoint = await dolphin.startOrAttach(job, path.join(path.dirname(job.stateDirectory), "dolphin-sessions"), request);
   const { chromium } = require("playwright-core");
   const browser = await chromium.connectOverCDP(endpoint, { timeout: 60000 });
-  let page,ui,succeeded=false;
+  let page,ui,succeeded=false,taskOwned=true;
   const events = [];
   try {
     const context = browser.contexts()[0]; if (!context) throw new Error("Dolphin не вернул браузерную сессию.");
-    page = await context.newPage();
+    const picked = await pickStudioTaskPage(context);
+    if (picked) { page = picked.page; taskOwned = picked.owned; await page.bringToFront().catch(() => {}); }
+    else {
+      page = await context.newPage();
+      await page.evaluate(id => { window.name = "videobatch-live-" + id; }, job.operationId);
+    }
     page.setDefaultTimeout(12000);
-    await page.evaluate(id => { window.name = "videobatch-live-" + id; }, job.operationId);
     page.on("response", response => {
       const u = new URL(response.url());
       if (u.origin !== ORIGIN) return;
       events.push({ method: response.request().method(), path: u.pathname, status: response.status() });
       if (events.length > 25) events.shift();
     });
-    ui = new NativeStudio(page,"",emitProgress);
+    ui = new NativeStudio(page, job.expectedChannelId || "", emitProgress);
     const data = await new SessionEngine(job, ui).execute();
     succeeded=true;
     process.stdout.write(JSON.stringify({ type: "result", ok: true, data }) + "\n");
   } catch (error) {
+    try {
+      const leaseDir = path.join(path.dirname(job.stateDirectory), "dolphin-sessions");
+      const lease = dolphin.liveLeasePath(job, leaseDir);
+      if (fs.existsSync(lease)) fs.unlinkSync(lease);
+    } catch (_) {}
     fs.mkdirSync(job.stateDirectory, { recursive: true });
     const diagnostic=path.join(job.stateDirectory,job.operationId+".diagnostic.json");
     fs.writeFileSync(diagnostic, JSON.stringify({ command: job.command, error: sanitize(error), step:ui?.lastStep || "Подключение Dolphin", action:ui?.lastAction || "", taskTabLeftOpen:!!page, requests: events }), { mode: 0o600 });
     emitProgress("Ошибка Studio: "+sanitize(error)+" · диагностика: "+diagnostic+" · проблемная вкладка оставлена открытой");
     throw error;
   } finally {
-    if (page && succeeded) await dolphin.releaseTaskPage(page).catch(() => {});
+    if (page && succeeded && taskOwned) await dolphin.releaseTaskPage(page).catch(() => {});
     // connectOverCDP: close disconnects this client; never close the existing context or call Dolphin /stop.
     await browser.close().catch(() => {});
   }

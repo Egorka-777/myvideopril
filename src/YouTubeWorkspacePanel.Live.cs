@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Drawing;
 using System.IO;
 using System.Threading.Tasks;
@@ -43,10 +44,10 @@ namespace VideoBatch {
             if (!string.IsNullOrEmpty(state?.Url)) menu.Items.Add("Открыть страницу эфира", null, (s, e) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(state.Url) { UseShellExecute = true }));
             menu.Items.Add(new ToolStripSeparator());
         }
-        public bool HasLiveWork => live?.HasBusy == true;
+        public bool HasLiveWork => live?.HasRunning == true;
         public async Task<bool> FinishLiveBeforeClose() {
-            if (live == null || !live.HasBusy) return true;
-            try { await live.StopAll(); return true; }
+            if (live == null || !live.HasRunning) return true;
+            try { await live.StopRunning(); return true; }
             catch (Exception e) {
                 LiveLog(e.Message);
                 return MessageBox.Show(this, "Передача видео остановлена, но YouTube не подтвердил завершение всех эфиров.\n" + e.Message + "\n\nЗакрыть приложение? Данные для повторного завершения сохранены.", "Прямые эфиры", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
@@ -58,10 +59,14 @@ namespace VideoBatch {
             if(live==null){LiveLog(LiveDiagnostics.Append("ЭФИР · запуск недоступен: менеджер не создан"));return;}
             if(stoppingLive)return;
             live.Trace("Нажат запуск эфира");
-            var selected=SelectedChannel(); var channels=selected==null ? new List<YouTubeChannel>() : new List<YouTubeChannel>{selected};
-            if (channels.Count == 0) { live.Trace("Запуск отменён: не выделена строка канала");MessageBox.Show(this, "Выдели строку канала для эфира.", "YouTube"); return; }
+            var checkedChannels = GetCheckedChannels();
+            var selected = SelectedChannel();
+            var channels = checkedChannels.Count > 0 ? checkedChannels
+                : (selected == null ? new List<YouTubeChannel>() : new List<YouTubeChannel> { selected });
+            if (channels.Count == 0) { live.Trace("Запуск отменён: не отмечен канал"); MessageBox.Show(this, "Отметьте галочкой ✓ один или несколько каналов для эфира.", "YouTube"); return; }
             try {
-                EnsureChannelIds();live.Trace("Выбран канал: "+selected.Name+" · Dolphin "+selected.ProfileId);
+                EnsureChannelIds();
+                live.Trace("Выбрано каналов: " + channels.Count + " · " + string.Join(", ", channels.Select(c => c.Name + " · Dolphin " + c.ProfileId)));
                 using (var dialog = new YouTubeLiveDialog(live, channels)) if (dialog.ShowDialog(FindForm()) == DialogResult.OK) StartPreparedLive(channels, dialog);
             } catch (Exception e) { live.Trace("Ошибка запуска: "+e.Message);MessageBox.Show(this, e.Message, "Прямые эфиры", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
@@ -108,7 +113,9 @@ namespace VideoBatch {
             foreach (DataGridViewRow row in grid.Rows) if (row.Tag is YouTubeChannel ch) {
                 var state = live?.View(ch.ChannelId);
                 row.Cells["live"].Value = state?.Label ?? "—";
-                row.Cells["account"].ToolTipText = row.Cells["live"].ToolTipText = state == null ? "" : state.Detail + "\n" + state.Url;
+                row.Cells["live"].ToolTipText = state == null ? "" : state.Detail + "\n" + state.Url;
+                row.Cells["account"].ToolTipText = DashboardSessionState.Summary(ch.ProfileId, "YouTube")
+                    + (state == null ? "" : "\n" + row.Cells["live"].ToolTipText);
                 row.Cells["live"].Style.ForeColor = state?.Phase == LivePhase.Live ? Color.Red : state?.Phase == LivePhase.Error || state?.Phase == LivePhase.NeedsCleanup ? Theme.Warning : Theme.TextSecondary;
             }
             grid.Invalidate();

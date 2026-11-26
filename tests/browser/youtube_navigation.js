@@ -33,7 +33,25 @@ async function withRoutes(handler) {
     if(u.pathname==='/watch') return route.fulfill({contentType:'text/html',body:watchPage(u.searchParams.get('v'),'2026-10-01')});
     return route.fulfill({status:404,body:''});
   });
-  assert.equal(await navigateTodayVideo(session.page,{channelUrl:'https://www.youtube.com/@owned/videos',todayDate:'2026-10-01'}),'https://www.youtube.com/watch?v='+ids[1]);
+  const goto=session.page.goto.bind(session.page);
+  let channelAttempts=0;
+  session.page.goto=async(url,opts)=>{
+    if(url.includes('/@owned/videos')&&++channelAttempts===1){
+      const error=new Error('page.goto: Timeout 60000ms exceeded.');
+      error.name='TimeoutError';
+      throw error;
+    }
+    return goto(url,opts);
+  };
+  const messages=[];
+  assert.equal(await navigateTodayVideo(session.page,{channelUrl:'https://www.youtube.com/@owned/videos',todayDate:'2026-10-01'},(stage)=>messages.push(stage)),'https://www.youtube.com/watch?v='+ids[1]);
+  assert.equal(channelAttempts,2,'Retry the blank channel page once');
+  assert(messages.includes('channel_retry'));
+  session.page.goto=async()=>{const error=new Error('timeout with content');error.name='TimeoutError';throw error;};
+  await session.page.setContent('<div>Confirm it\'s you</div>');
+  await assert.rejects(navigateTodayVideo(session.page,{channelUrl:'https://www.youtube.com/@owned/videos',todayDate:'2026-10-01'}),/timeout with content/);
+  assert.equal(channelAttempts,2,'Do not retry a nonempty error/challenge page');
+  session.page.goto=goto;
   await session.browser.close();
 
   for (const failCount of [2, 99]) {

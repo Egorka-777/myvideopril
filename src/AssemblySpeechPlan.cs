@@ -17,7 +17,7 @@ namespace VideoBatch {
         }
         public static void SaveTranscript(string video, AssemblyPlan plan, double mainStart) {
             string text = TranscriptText(plan, mainStart);
-            if (string.IsNullOrWhiteSpace(text)) throw new Exception("Нет сохранённой транскрибации для ролика: " + Path.GetFileName(video));
+            if (string.IsNullOrWhiteSpace(text)) return;
             File.WriteAllText(Path.ChangeExtension(video, ".txt"), text + Environment.NewLine, new System.Text.UTF8Encoding(true));
         }
         public static async Task EnsureTranscript(AssemblyTemplate t, AssemblyPlan plan, string video, string ffmpeg, string work, CancellationToken ct, Action<string> progress) {
@@ -27,13 +27,13 @@ namespace VideoBatch {
             progress?.Invoke("Готовлю текст основного видео без вступления…");
             string speech = Path.Combine(work, "transcript-main.wav");
             await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-ss", Core.N(start), "-i", video, "-vn", "-ac", "1", "-ar", "16000", speech }, ct, null, 600).ConfigureAwait(false);
-            var cues = await EnsureCaptionsForAudioAsync(t, speech, null, Math.Max(0, plan.RollDuration(t) - start), ct, progress).ConfigureAwait(false);
+            var cues = await EnsureCaptionsForAudioAsync(t, speech, null, Math.Max(0, plan.RollDuration(t) - start), ct, progress, optional: true).ConfigureAwait(false);
             foreach (var cue in cues) {
                 cue.Start += start; cue.End += start;
                 if (cue.Words != null) foreach (var word in cue.Words) { word.Start += start; word.End += start; }
             }
             plan.Captions = cues;
-            if (string.IsNullOrWhiteSpace(TranscriptText(plan, start))) throw new Exception("Речь в основном видео не распознана; текстовый файл не создан.");
+            if (string.IsNullOrWhiteSpace(TranscriptText(plan, start))) progress?.Invoke("Текстовый файл не создан — речь не распознана.");
         }
         public sealed class SpeechTiming {
             public string AudioHash, Text, Source, Version;
@@ -144,7 +144,7 @@ namespace VideoBatch {
                         scene.ContentSeconds = Math.Ceiling(scene.VoiceSeconds * t.Fps - 0.00001) / t.Fps;
                         if (t.SubtitleStyle?.Enabled == true) {
                             var line = AvailableLines(t).FirstOrDefault(l => string.Equals(t.Resolve(l.AudioPath), scene.Voiceover, StringComparison.OrdinalIgnoreCase));
-                            foreach (var cue in await EnsureCaptionsForAudioAsync(t, scene.Voiceover, line?.Text, scene.VoiceSeconds, ct, progress).ConfigureAwait(false)) {
+                            foreach (var cue in await EnsureCaptionsForAudioAsync(t, scene.Voiceover, line?.Text, scene.VoiceSeconds, ct, progress, optional: true).ConfigureAwait(false)) {
                                 cue.Start += start;
                                 cue.End += start;
                                 foreach (var word in cue.Words) { word.Start += start; word.End += start; }
@@ -179,7 +179,7 @@ namespace VideoBatch {
                 }
                 if (t.SubtitleStyle?.Enabled == true && !string.IsNullOrWhiteSpace(p.Voiceover)) {
                     var line = AvailableLines(t).FirstOrDefault(l => string.Equals(t.Resolve(l.AudioPath), p.Voiceover, StringComparison.OrdinalIgnoreCase));
-                    p.Captions = await EnsureCaptionsForAudioAsync(t, p.Voiceover, line?.Text, voiceSeconds, ct, progress).ConfigureAwait(false);
+                    p.Captions = await EnsureCaptionsForAudioAsync(t, p.Voiceover, line?.Text, voiceSeconds, ct, progress, optional: true).ConfigureAwait(false);
                 }
             }
             // Source-length mode wins over voice timing: audio is trimmed/padded by the renderer.
@@ -196,11 +196,34 @@ namespace VideoBatch {
         // Run only after the concrete video segments and final scene durations are known.
         public static async Task PrepareVideoCaptions(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string work, CancellationToken ct, Action<string> progress = null) {
             if (t.SubtitleStyle?.Enabled != true || !string.IsNullOrWhiteSpace(p.Voiceover)) return;
-            var args = new List<string> { "-v", "error", "-nostdin", "-y" };
-            var graph = new List<string>(); var audio = new List<string>(); int input = 0;
+            if (await PrepareReusableVideoCaptions(t, p, ffmpeg, probe, work, ct, progress).ConfigureAwait(false)) return;
             double roll = p.RollDuration(t), position = 0;
             bool continuous = t.ContinuousVideo && p.Scenes.All(s => string.IsNullOrWhiteSpace(s.Voiceover));
             double NativeVolume(AssemblyScene scene) => t.SplitLayout != "none" ? (t.SplitPrimaryAudio(p) ? t.SplitAudioVolume : 0) : t.SceneNativeAudioVolume(scene);
+            // Continuous single-source rolls of different lengths previously re-extracted and
+            // re-recognized almost the same speech. Cache one full-source transcript instead.
+            // Prefer the first non-preview scene with audible video — preview pads are silent.
+            var continuousScene = continuous && t.SplitLayout == "none"
+                ? p.Scenes.FirstOrDefault(s => !s.Scene.IsPreview && NativeVolume(s.Scene) > 0 && s.Video?.HasAudio == true
+                    && (s.VideoSegments == null || s.VideoSegments.Count <= 1))
+                : null;
+            if (continuousScene != null) {
+                progress?.Invoke("Распознаю речь исходного видео…");
+                var sourceCues = await CaptionsForSourceWindowAsync(t, ffmpeg, probe, continuousScene.Video, 0, roll, ct, progress).ConfigureAwait(false);
+                double sourceMain = AssemblyTimeline.MainStart(t, p);
+                p.Captions.AddRange(sourceCues.Where(c => c.End > sourceMain));
+                if (sourceMain > 0) foreach (var cue in p.Captions) {
+                    cue.Start = Math.Max(sourceMain, cue.Start);
+                    if (cue.Words != null) {
+                        cue.Words.RemoveAll(w => w.End <= sourceMain);
+                        foreach (var word in cue.Words) word.Start = Math.Max(sourceMain, word.Start);
+                    }
+                }
+                p.Captions = WarmupSubtitles.FitToDuration(p.Captions.OrderBy(c => c.Start).ToList(), roll);
+                return;
+            }
+            var args = new List<string> { "-v", "error", "-nostdin", "-y" };
+            var graph = new List<string>(); var audio = new List<string>(); int input = 0;
             if (continuous) {
                 if (NativeVolume(p.Scenes[0].Scene) > 0)
                     AssemblyRender.AppendNativeAudio(p.Scenes[0].Video, 0, roll, 0, t.LoopShortVideos && p.Scenes[0].Video.Duration < roll,
@@ -235,7 +258,8 @@ namespace VideoBatch {
                 position += AssemblyTimeline.SceneSeconds(scene) + (t.SceneTimingVersion > 0 && t.Transition != "cut" ? t.TransitionSeconds : 0);
             }
             if (audio.Count == 0) {
-                if (p.Captions.Count == 0) throw new Exception("Субтитры включены, но нет озвучки или включённого звука видео для распознавания.");
+                progress?.Invoke("В видео нет звука для субтитров — ролик без них.");
+                p.Captions = new List<WarmupCaption>();
                 return;
             }
             progress?.Invoke("Распознаю речь выбранных видео для этого ролика…");
@@ -243,7 +267,7 @@ namespace VideoBatch {
             graph.Add(string.Join("", audio.Select(a => "[" + a + "]")) + "amix=inputs=" + audio.Count + ":duration=longest:normalize=0,atrim=duration=" + Core.N(roll) + "[speech]");
             args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(";", graph), "-map", "[speech]", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", speech });
             await Core.Tool(ffmpeg, args, ct, null, 600).ConfigureAwait(false);
-            var cues = await EnsureCaptionsForAudioAsync(t, speech, null, roll, ct, progress).ConfigureAwait(false);
+            var cues = await EnsureCaptionsForAudioAsync(t, speech, null, roll, ct, progress, optional: true).ConfigureAwait(false);
             double mainStart = AssemblyTimeline.MainStart(t, p);
             p.Captions.AddRange(cues.Where(c => c.End > mainStart));
             if (mainStart > 0) foreach (var cue in p.Captions) {
@@ -254,6 +278,138 @@ namespace VideoBatch {
                 }
             }
             p.Captions = WarmupSubtitles.FitToDuration(p.Captions.OrderBy(c => c.Start).ToList(), roll);
+        }
+        sealed class CaptionAudioSegment {
+            public AssemblyVideo Video;
+            public double SourceStart, Start, Seconds, Volume;
+            public bool Loop;
+        }
+        // A single main audio segment can be recognized independently of the intro.
+        // Multiple sources keep whole-roll recognition, including its silence/mixing semantics;
+        // recognition errors are never retried through another path.
+        static List<CaptionAudioSegment> ReusableCaptionSegments(AssemblyTemplate t, AssemblyPlan p) {
+            if (t.SceneTimingVersion <= 0 || t.ContinuousVideo || t.SplitLayout != "none" || p.Captions.Count > 0
+                || p.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.Voiceover))) return null;
+            var result = new List<CaptionAudioSegment>(); double position = 0;
+            foreach (var scene in p.Scenes) {
+                double content = AssemblyTimeline.ContentDuration(t, scene), volume = t.SceneNativeAudioVolume(scene.Scene);
+                if (!scene.Scene.IsPreview && volume > 0) {
+                    bool objectOnly = !t.HasBackgroundVideo(scene.Scene) && scene.Layers.Any(l => l.Layer.Enabled && !l.Layer.IsText && l.Asset != null
+                        && string.Equals(l.Asset.Path, scene.Video.Path, StringComparison.OrdinalIgnoreCase));
+                    if (!objectOnly) {
+                        double start = position + (t.HasPreviewScene ? 0 : scene.IncomingPad);
+                        if (scene.VideoSegments != null && scene.VideoSegments.Count > 1) {
+                            foreach (var part in scene.VideoSegments) {
+                                if (part.Video.HasAudio) result.Add(new CaptionAudioSegment { Video = part.Video, Start = start, Seconds = part.Duration, Volume = volume });
+                                start += part.Duration;
+                            }
+                        } else if (scene.Video.HasAudio) result.Add(new CaptionAudioSegment { Video = scene.Video, SourceStart = AssemblyTimeline.SourceStart(t, scene),
+                            Start = start, Seconds = content, Volume = volume, Loop = AssemblyTimeline.LoopInput(t, scene) });
+                    }
+                    foreach (var layer in scene.Layers.Where(l => l.Layer.Enabled && l.Layer.AudioEnabled && !l.Layer.IsText && l.Asset != null && AssemblyOverlayMedia.HasAudio(l.Asset.Path))) {
+                        if (layer.Layer.PlaybackMode == "repeat") return null;
+                        AssemblySceneVideoBuilder.LayerOverlayRange(t, scene, layer.Layer, out double from, out double until);
+                        if (until <= from) continue;
+                        result.Add(new CaptionAudioSegment { Video = new AssemblyVideo { Path = layer.Asset.Path, HasAudio = true },
+                            Start = position + scene.IncomingPad + from, Seconds = AssemblyOverlayMedia.PlaybackLength(layer.Layer, layer.Asset.Path, until - from),
+                            Volume = volume, Loop = layer.Layer.PlaybackMode == "continuous" });
+                    }
+                }
+                position += AssemblyTimeline.SceneSeconds(scene) + (t.Transition != "cut" ? t.TransitionSeconds : 0);
+            }
+            double main = AssemblyTimeline.MainStart(t, p), end = main;
+            foreach (var segment in result.OrderBy(s => s.Start)) {
+                // Do not discard a prefix that the old mixed recognition could hear, nor
+                // flatten simultaneous voices into a single guessed word sequence.
+                if (segment.Start < end || segment.Seconds <= 0) return null;
+                end = segment.Start + segment.Seconds;
+            }
+            return result.Count == 1 ? result : null;
+        }
+        static async Task<bool> PrepareReusableVideoCaptions(AssemblyTemplate t, AssemblyPlan p, string ffmpeg, string probe, string work, CancellationToken ct, Action<string> progress) {
+            var segments = ReusableCaptionSegments(t, p);
+            if (segments == null) return false;
+            var captions = new List<WarmupCaption>(); double roll = p.RollDuration(t);
+            for (int i = 0; i < segments.Count; i++) {
+                ct.ThrowIfCancellationRequested(); var segment = segments[i];
+                progress?.Invoke("Готовлю субтитры исходного фрагмента " + (i + 1) + "/" + segments.Count + "…");
+                // Plain unity-volume windows share one full-source transcript across roll lengths.
+                // Looping / non-unity volume keep exact PCM extraction so planted hashes stay valid.
+                if (!segment.Loop && Math.Abs(segment.Volume - 1) < .000001 && segment.Video != null && File.Exists(segment.Video.Path)) {
+                    var sourceCues = await CaptionsForSourceWindowAsync(t, ffmpeg, probe, segment.Video, segment.SourceStart, segment.Seconds, ct, progress).ConfigureAwait(false);
+                    captions.AddRange(OffsetSegmentCaptions(sourceCues, segment.Start, segment.Seconds, roll));
+                    continue;
+                }
+                // Local PCM has no roll-dependent silence/intro. Identical selected
+                // audio (including trim, loop and volume) reuses the existing hash cache.
+                string speech = Path.Combine(work, "video-speech-segment-" + i + ".wav");
+                var args = new List<string> { "-v", "error", "-nostdin", "-y" };
+                var graph = new List<string>(); var audio = new List<string>(); int input = 0;
+                AssemblyRender.AppendNativeAudio(segment.Video, segment.SourceStart, segment.Seconds, 0, segment.Loop,
+                    segment.Volume, segment.Seconds, args, ref input, graph, audio);
+                graph.Add("[" + audio[0] + "]amix=inputs=1:duration=longest:normalize=0,atrim=duration=" + Core.N(segment.Seconds) + "[speech]");
+                args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(";", graph), "-map", "[speech]", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", speech });
+                await Core.Tool(ffmpeg, args, ct, null, 600).ConfigureAwait(false);
+                var cues = await EnsureCaptionsForAudioAsync(t, speech, null, segment.Seconds, ct, progress, optional: true).ConfigureAwait(false);
+                captions.AddRange(OffsetSegmentCaptions(cues, segment.Start, segment.Seconds, roll));
+            }
+            p.Captions = WarmupSubtitles.FitToDuration(captions.OrderBy(c => c.Start), roll);
+            return true;
+        }
+        static string SourceSpeechWav(string videoHash) => Path.Combine(Store.Root, "subtitles", "source-wav", videoHash + ".wav");
+        static async Task EnsureSourceSpeechWavAsync(string ffmpeg, AssemblyVideo video, CancellationToken ct) {
+            string hash = string.IsNullOrWhiteSpace(video.Hash) ? AssemblyFiles.Hash(video.Path) : video.Hash;
+            string wav = SourceSpeechWav(hash);
+            if (File.Exists(wav) && new FileInfo(wav).Length > 0) return;
+            Directory.CreateDirectory(Path.GetDirectoryName(wav));
+            string partial = wav + ".partial-" + Guid.NewGuid().ToString("N");
+            try {
+                await Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-i", video.Path, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", partial }, ct, null, 600).ConfigureAwait(false);
+                if (File.Exists(wav)) File.Delete(wav);
+                File.Move(partial, wav);
+            } finally { if (File.Exists(partial)) File.Delete(partial); }
+        }
+        // Full-source transcript once; each roll only windows the already recognized words.
+        static async Task<List<WarmupCaption>> CaptionsForSourceWindowAsync(AssemblyTemplate t, string ffmpeg, string probe, AssemblyVideo video, double sourceStart, double seconds, CancellationToken ct, Action<string> progress) {
+            if (video == null || string.IsNullOrWhiteSpace(video.Path) || !File.Exists(video.Path) || seconds <= 0)
+                return new List<WarmupCaption>();
+            string hash = string.IsNullOrWhiteSpace(video.Hash) ? AssemblyFiles.Hash(video.Path) : video.Hash;
+            await EnsureSourceSpeechWavAsync(ffmpeg, new AssemblyVideo { Path = video.Path, Hash = hash, HasAudio = true }, ct).ConfigureAwait(false);
+            string wav = SourceSpeechWav(hash);
+            double full = probe == null ? 0 : Core.AudioDuration(await Core.Probe(probe, wav, ct).ConfigureAwait(false));
+            if (full <= 0) full = Math.Max(seconds + sourceStart, video.Duration > 0 ? video.Duration : seconds + sourceStart);
+            var cues = await EnsureCaptionsForAudioAsync(t, wav, null, full, ct, progress, optional: true).ConfigureAwait(false);
+            return WindowRelativeCaptions(cues, sourceStart, seconds);
+        }
+        internal static List<WarmupCaption> WindowRelativeCaptions(IEnumerable<WarmupCaption> cues, double sourceStart, double seconds) {
+            double end = sourceStart + seconds;
+            var result = new List<WarmupCaption>();
+            foreach (var cue in cues ?? Enumerable.Empty<WarmupCaption>()) {
+                var words = (cue.Words ?? new List<SubtitleWord>()).Where(w => w.End > sourceStart && w.Start < end)
+                    .Select(w => new SubtitleWord { Text = w.Text, Start = Math.Max(0, w.Start - sourceStart), End = Math.Min(seconds, w.End - sourceStart) })
+                    .Where(w => w.End > w.Start).ToList();
+                if (words.Count == 0) continue;
+                result.Add(new WarmupCaption {
+                    Text = string.Join(" ", words.Select(w => w.Text)),
+                    Start = words[0].Start,
+                    End = words[words.Count - 1].End,
+                    Words = words
+                });
+            }
+            return result;
+        }
+        internal static List<WarmupCaption> OffsetSegmentCaptions(IEnumerable<WarmupCaption> cues, double start, double seconds, double roll) {
+            double end = Math.Min(roll, start + seconds);
+            var result = new List<WarmupCaption>();
+            foreach (var cue in cues) {
+                var words = (cue.Words ?? new List<SubtitleWord>()).Where(w => w.Start < seconds && w.End > 0)
+                    .Select(w => new SubtitleWord { Text = w.Text, Start = start + Math.Max(0, w.Start), End = Math.Min(end, start + w.End) })
+                    .Where(w => w.End > w.Start).ToList();
+                if (words.Count == 0) continue;
+                result.Add(new WarmupCaption { Text = string.Join(" ", words.Select(w => w.Text)), Start = words[0].Start,
+                    End = Math.Min(end, start + cue.End), Words = words });
+            }
+            return result;
         }
         public static Task<string> ResolveVoiceoverAsync(AssemblyTemplate t, string ffmpeg, string probe, string work, CancellationToken ct) {
             ct.ThrowIfCancellationRequested();
@@ -291,14 +447,18 @@ namespace VideoBatch {
             return null;
         }
         public static bool HasTiming(string audio) => CachedCaptions(new AssemblyTemplate(), audio, null, 0) != null;
-        static async Task<List<WarmupCaption>> EnsureCaptionsForAudioAsync(AssemblyTemplate t, string audio, string text, double duration, CancellationToken ct, Action<string> progress) {
-            var cues = CachedCaptions(t, audio, text, duration);
-            if (cues != null) return cues;
-            bool repair = HasTiming(audio);
-            // Another render may have completed this same audio while we waited.
-            if (repair) { cues = CachedCaptions(t, audio, text, duration); if (cues != null) return cues; }
-            await LocalAudioTranscription.PrepareAsync(new[] { audio }, ct, progress, force: repair).ConfigureAwait(false);
-            return CaptionsForAudio(t, audio, null, duration);
+        static async Task<List<WarmupCaption>> EnsureCaptionsForAudioAsync(AssemblyTemplate t, string audio, string text, double duration, CancellationToken ct, Action<string> progress, bool optional = false) {
+            try {
+                var cues = CachedCaptions(t, audio, text, duration);
+                if (cues != null) return cues;
+                bool repair = HasTiming(audio);
+                if (repair) { cues = CachedCaptions(t, audio, text, duration); if (cues != null) return cues; }
+                await LocalAudioTranscription.PrepareAsync(new[] { audio }, ct, progress, force: repair).ConfigureAwait(false);
+                return CaptionsForAudio(t, audio, null, duration);
+            } catch (Exception ex) when (optional) {
+                progress?.Invoke("Субтитры пропущены: " + ex.Message);
+                return new List<WarmupCaption>();
+            }
         }
         public static async Task<List<WarmupCaption>> BuildCaptionsFromSpeechAsync(AssemblyTemplate t, string probe, CancellationToken ct) {
             if (t.HasSceneVoiceovers) {

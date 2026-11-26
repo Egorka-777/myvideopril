@@ -206,7 +206,7 @@ async function startOrConnectProfile() {
   else await loginWithToken(job, apiRaw, text => send("dolphin", text));
   const endpoint = await require("./dolphin-session").startOrAttach(
     job, localStatePath("dolphin-sessions"), apiRaw, send,
-    { onAttached: () => { profileOwned = false; }, ...(job.highlightsSearch?{maxAttempts:1,allowStopRestart:false}:studioUpload?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:true}:{}) }
+    { onAttached: () => { profileOwned = false; }, ...(job.highlightsSearch?{maxAttempts:1,allowStopRestart:false}:(studioUpload||job.shortsWarmup)?{startTimeoutMs:120000,maxAttempts:2,allowStopRestart:true}:{}) }
   );
   profileStarted = true;
   return endpoint;

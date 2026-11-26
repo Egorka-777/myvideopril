@@ -140,7 +140,8 @@ namespace VideoBatch {
             if(string.IsNullOrWhiteSpace(key))throw new Exception("Укажите ключ OpenRouter в настройках приложения.");
             var id=Guid.NewGuid().ToString("N");var jobs=Path.Combine(root,"jobs");Directory.CreateDirectory(jobs);
             var job=Path.Combine(jobs,id+".json");var result=Path.Combine(jobs,id+".result.json");var workdir=Path.Combine(jobs,id+".work");cancellation=Path.Combine(jobs,id+".cancel");
-            var input=new Dictionary<string,object> {{"action","youtube_batch"},{"sources",sources},{"root",root},{"output",prefs.Output},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"node",DolphinRunner.Node},{"minimum",120},{"maximum",300},{"count",4},{"export_format","original"},{"mode","speech"},{"openrouter_model","google/gemini-2.5-flash"},{"result",result},{"workdir",workdir},{"cancel",cancellation}};
+            string exportRoot=VideoBatchOutputPaths.DailySessionFolder(string.IsNullOrWhiteSpace(prefs.Output)?VideoBatchOutputPaths.Highlights:prefs.Output);
+            var input=new Dictionary<string,object> {{"action","youtube_batch"},{"sources",sources},{"root",root},{"output",exportRoot},{"ffmpeg",ffmpeg},{"ffprobe",ffprobe},{"node",DolphinRunner.Node},{"minimum",120},{"maximum",300},{"count",4},{"export_format","original"},{"mode","speech"},{"openrouter_model","google/gemini-2.5-flash"},{"result",result},{"workdir",workdir},{"cancel",cancellation}};
             File.WriteAllText(job,json.Serialize(input),new UTF8Encoding(false));
             youtubeBatch=true;
             try {

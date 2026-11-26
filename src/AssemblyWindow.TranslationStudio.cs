@@ -108,10 +108,8 @@ namespace VideoBatch {
             // No catalog: EnsureSegments must not substitute, concatenate or loop
             // any source. The plan contains exactly one full translated input.
             var plan = batch.Plans[0];
-            await AssemblyEngine.Render(t, plan, ffmpeg, probe, output, work, AssemblyRaster.Save, ct, progress).ConfigureAwait(false);
+            await AssemblyEngine.Render(t, plan, ffmpeg, probe, output, work, AssemblyRaster.Save, ct, progress, segmentRandom: random, processOutput: true).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
-            progress?.Invoke("Обработка изображения и звука…");
-            await AssemblyProcessing.Apply(t, ffmpeg, probe, output, random, ct).ConfigureAwait(false);
             string title = AssemblyOutputTags.PickTitle(t.TitleBank, random, null);
             await AssemblyOutputTags.Apply(ffmpeg, probe, output, title, t.OutputMetadata, random, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();

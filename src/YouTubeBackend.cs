@@ -53,7 +53,7 @@ namespace VideoBatch {
         public void AssignVideos(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }
         public void AssignVideosToProfile(string profileId, string market, string[] files) { Window.AssignVideosToProfile(profileId, market, files); }
         public void AssignVideosToChannel(YouTubeChannel channel, string[] files) { Window.AssignVideosToChannel(channel, files); }
-        public async Task AssignPreparedVideosToChannelAsync(YouTubeChannel channel, string[] files, IProgress<UploadPreparationProgress> progress) {
+        public async Task AssignPreparedVideosToChannelAsync(YouTubeChannel channel, string[] files, IProgress<UploadPreparationProgress> progress, System.Collections.Generic.IList<string> manualTitles = null) {
             string[] prepared = null;
             List<UploadPreparation.ClaimedSource> claimed = null;
             bool assigned = false;

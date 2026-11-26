@@ -18,6 +18,7 @@ namespace VideoBatch {
         public string source {get;set;}="Вручную";
         public string source_id {get;set;}="";
         public string country {get;set;}="";
+        public string dolphin_proxy_id {get;set;}="";
         public string status {get;set;}="unchecked";
         public string detail {get;set;}="";
         public string checked_at {get;set;}="";
@@ -36,6 +37,18 @@ namespace VideoBatch {
             value=Regex.Replace(value,@"(?i)(?:socks5|socks4|https?)://[^\s]+",m=>TelegramStore.ProxyLabel(m.Value));
             if(Regex.IsMatch(value,@"^[^:\s]+:\d+:.+:.+$"))return TelegramStore.ProxyLabel(value);
             return value;
+        }
+        public static string AssignedLabel(TelegramProxy proxy) {
+            if(proxy==null)return "";
+            string label=Protocol(proxy.url)+" · "+TelegramStore.ProxyLabel(proxy.url);
+            // An API proxy ID distinguishes assignments even when endpoints/logins coincide.
+            if(Regex.IsMatch(proxy.dolphin_proxy_id??"",@"^\d+$"))return label+" · #"+proxy.dolphin_proxy_id;
+            string login=Login(proxy.url);
+            if(login=="")return label;
+            using(var sha=System.Security.Cryptography.SHA256.Create()) {
+                string fingerprint=BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(login))).Replace("-","").Substring(0,12);
+                return label+" · auth "+fingerprint;
+            }
         }
         public static string Protocol(string url)=>Uri.TryCreate(url,UriKind.Absolute,out var uri)?uri.Scheme.ToUpperInvariant():"—";
         public static string Login(string url){if(!Uri.TryCreate(url,UriKind.Absolute,out var uri))return "";return Uri.UnescapeDataString(uri.UserInfo.Split(new[]{':'},2)[0]);}
@@ -92,7 +105,7 @@ namespace VideoBatch {
             if(item==null){item=new TelegramProxy();data.proxies.Add(item);}
             bool changed=item.url!=incoming.url;
             item.source_id=incoming.source_id;item.source_ids=new List<string>{incoming.source_id};
-            item.name=SafeName(incoming.name,incoming.url);item.source="Профили YouTube / TikTok";item.country=incoming.country;
+            item.name=SafeName(incoming.name,incoming.url);item.source="Профили YouTube / TikTok";item.country=incoming.country;item.dolphin_proxy_id=incoming.dolphin_proxy_id;
             item.url=incoming.url;
             if(changed){item.status="unchecked";item.detail="";item.checked_at="";}
             foreach(var account in data.accounts.Where(a=>a.proxy_id==item.id))
@@ -118,7 +131,7 @@ namespace VideoBatch {
             string user=Str(row,"login"),password=Str(row,"password"),auth=user!=""||password!=""?Uri.EscapeDataString(user)+":"+Uri.EscapeDataString(password)+"@":"";
             host=host.Trim('[',']');if(host.Contains(":"))host="["+host+"]";
             string name=Str(row,"name");var last=Object(row.TryGetValue("lastCheck",out var l)?l:null);
-            return new TelegramProxy{url=Normalize(type+"://"+auth+host+":"+port),name=label!=""?label:name,source="Dolphin",source_id=sourceId,country=Str(last,"country")};
+            return new TelegramProxy{url=Normalize(type+"://"+auth+host+":"+port),name=label!=""?label:name,source="Dolphin",source_id=sourceId,country=Str(last,"country"),dolphin_proxy_id=Str(row,"id")};
         }
         public static async Task<TelegramProxySync> FetchDolphin(string token,IEnumerable<KeyValuePair<string,string>> profiles,HttpMessageHandler handler=null,CancellationToken cancel=default(CancellationToken),int timeoutMs=25000,bool includeCatalog=true) {
             if(string.IsNullOrWhiteSpace(token))throw new InvalidOperationException("В настройках приложения не сохранён токен Dolphin. Добавьте его там или вставьте прокси вручную.");

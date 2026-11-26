@@ -1,0 +1,38 @@
+Пакетное оформление Instagram (имя, bio, аватар из пресетов)
+============================================================
+
+Что нужно заранее
+-----------------
+1. Вход в Instagram уже выполнен в WebView2 для каждого Dolphin-профиля из списка.
+2. VideoBatch закрыт во время запуска .cmd (если используете ярлык), либо можно жать кнопку внутри приложения.
+3. Пресеты лежат в %LocalAppData%\VideoBatchDesktop\profile-presets\library.json
+4. Список аккаунтов: %LocalAppData%\VideoBatchDesktop\instagram\preset-batch.jobs.json
+   (при первом запуске копируется из tools\profile-presets\instagram-batch.jobs.json)
+
+Способ 1 — кнопка в приложении
+------------------------------
+1. Откройте VideoBatch → вкладка Instagram.
+2. Нажмите «Пакетное оформление Instagram».
+3. Дождитесь строк OK / FAIL внизу. При FAIL остальные профили не трогаются.
+
+Способ 2 — без чата (ярлык)
+---------------------------
+1. Запустите D:\VideoBatch\VideoBatch\Apply-Instagram-Presets.cmd
+2. Окно PowerShell покажет START / OK / FAIL по каждому профилю.
+3. По Enter окно закроется.
+
+Редактирование списка
+--------------------
+Откройте preset-batch.jobs.json:
+  ProfileId  — Dolphin ID
+  ProfileName — подпись (для прокси)
+  Username   — @instagram без @, для сверки аккаунта
+  PresetId   — id из библиотеки пресетов (trader-01 …)
+  Enabled    — false чтобы пропустить строку
+
+Один пресет = один аккаунт Instagram (повтор в той же сети запрещён).
+
+Что делает автоматика
+---------------------
+Открывает сохранённую сессию WebView2 → instagram.com/accounts/edit →
+имя, bio, загрузка аватара, «Отправить» → отмечает пресет использованным.

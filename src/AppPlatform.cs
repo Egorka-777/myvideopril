@@ -54,9 +54,9 @@ namespace VideoBatch {
                 case AppPlatform.TikTok:
                     return section == NavSection.Home || section == NavSection.Tasks || section == NavSection.Statistics
                         || section == NavSection.AccountLibrary || section == NavSection.Profiles || section == NavSection.Proxy
-                        || section == NavSection.TikTok || section == NavSection.Logs || section == NavSection.Settings;
+                        || section == NavSection.TikTok || section == NavSection.Warmup || section == NavSection.Logs || section == NavSection.Settings;
                 case AppPlatform.Instagram:
-                    return section == NavSection.Instagram || section == NavSection.Logs || section == NavSection.Settings;
+                    return section == NavSection.Home || section == NavSection.Instagram || section == NavSection.Warmup || section == NavSection.Logs || section == NavSection.Settings;
                 case AppPlatform.Telegram:
                     return section == NavSection.Home || section == NavSection.Tasks
                         || section == NavSection.Telegram || section == NavSection.Logs || section == NavSection.Settings;

@@ -13,6 +13,50 @@ namespace VideoBatch {
             try { RunAsync(ffmpeg, ffprobe, folder).GetAwaiter().GetResult(); return true; }
             finally { Directory.Delete(folder, true); }
         }
+        public static bool RunObjectAudioGraphTests(string ffmpeg, string probe, string root) {
+            string folder = Path.Combine(root, "object-audio-role-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try {
+                string selected = Path.Combine(folder, "selected.mp4"), candidate = Path.Combine(folder, "independent-candidate.mp4");
+                Core.Tool(ffmpeg, new[] { "-v", "error", "-y", "-f", "lavfi", "-i", "color=s=64x64:r=10:d=1", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:v", "mpeg4", "-c:a", "aac", "-shortest", selected }, CancellationToken.None).GetAwaiter().GetResult();
+                var t = new AssemblyTemplate { Materials = folder, Videos = "empty-background", NativeAudioLeveled = true,
+                    PrimaryNativeAudio = true, PrimaryNativeVolume = 1, Width = 64, Height = 64, Fps = 10, Transition = "cut", SceneTimingVersion = 1 };
+                var layer = new AssemblyLayer { Source = selected, AudioEnabled = true, AudioPitch = new ProcessingParameter(-3, -3) { Enabled = true }, X = 0, Y = 0, Width = 1, Height = 1 };
+                var scene = new AssemblyScene { VideoMode = "shared", Duration = 1, Layers = new List<AssemblyLayer> { layer } };
+                t.Scenes.Add(scene);
+                var sp = new AssemblyScenePlan { Scene = scene, Video = new AssemblyVideo { Path = candidate, Duration = 1, HasAudio = true }, RenderDuration = 1,
+                    Layers = new List<AssemblyLayerPlan> { new AssemblyLayerPlan { Layer = layer, Asset = new AssemblyAsset { Path = selected } } } };
+                var p = new AssemblyPlan { Scenes = new List<AssemblyScenePlan> { sp } };
+                string graph = Path.Combine(folder, "render.ffgraph"), output = Path.Combine(folder, "result.mp4");
+                var args = AssemblyRender.Arguments(t, p, "libx264", graph, output, new AssemblyRenderContext());
+                string text = File.ReadAllText(graph);
+                Check(!args.Contains(candidate) && args.Count(x => x == selected) == 2, "Independent timing candidate became an extra picture/audio source");
+                Check(text.Contains("asetrate=") && !text.Contains("dB:precision"), "Object pitch lost or native leveling applied to object audio");
+                Core.Tool(ffmpeg, args, CancellationToken.None).GetAwaiter().GetResult();
+                Check(Core.VideoInfo(Core.Probe(probe, output, CancellationToken.None).GetAwaiter().GetResult()).HasAudio, "Object-only render lost audio");
+                layer.AudioEnabled = false;
+                args = AssemblyRender.Arguments(t, p, "libx264", graph, output, new AssemblyRenderContext());
+                Check(args.Contains("-an") && !args.Contains(candidate), "Muted object leaked timing candidate audio");
+                layer.AudioEnabled = true; sp.Video.Path = selected;
+                AssemblyRender.Arguments(t, p, "libx264", graph, output, new AssemblyRenderContext());
+                Check(File.ReadAllText(graph).Split(new[] { "asetrate=" }, StringSplitOptions.None).Length == 2, "Same-path object sound duplicated");
+                // Actual background video still requires the configured measurement; never silently use unity gain.
+                sp.Layers.Clear(); t.Videos = selected;
+                bool failed = false;
+                try { AssemblyRender.Arguments(t, p, "libx264", graph, output, new AssemblyRenderContext()); }
+                catch (Exception ex) { failed = ex.Message.Contains("не проверено по громкости"); }
+                Check(failed, "Unmeasured real background silently bypassed leveling");
+                var file = new FileInfo(selected);
+                t.NativeAudioLevels.Add(new AssemblyAudioLevel { Path = selected, HasAudio = true, Loudness = -25, GainDb = 6, FileLength = file.Length, LastWriteUtcTicks = file.LastWriteTimeUtc.Ticks });
+                AssemblyRender.Arguments(t, p, "libx264", graph, output, new AssemblyRenderContext());
+                Check(File.ReadAllText(graph).Contains("volume=6dB:precision=double"), "Measured background gain lost");
+                t.NativeAudioLevels.Clear(); scene.IsPreview = true;
+                AssemblyRender.Arguments(t, p, "libx264", graph, output, new AssemblyRenderContext());
+                Check(!File.ReadAllText(graph).Contains("dB:precision"), "Preview required main-video leveling");
+                Console.WriteLine("PASS: independent/same-path object audio, muted object, real 1-second render, strict background gain, preview exemption.");
+                return true;
+            } finally { Directory.Delete(folder, true); }
+        }
         static void Check(bool ok, string message) { if (!ok) throw new Exception("Audio leveling regression: " + message); }
         static async Task RunAsync(string ffmpeg, string probe, string root) {
             var ct = CancellationToken.None;

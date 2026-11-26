@@ -10,6 +10,7 @@ Empty avatar_path means preserve the avatar, not remove it. No preset storage
 or 'used' state is touched here. Instagram fails explicitly until its actual
 logged-in UI and image verification have been implemented and tested.
 """
+import base64
 import json
 import os
 from pathlib import Path
@@ -20,8 +21,9 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-SERIAL = "emulator-5554"
 PACKAGES = {"tiktok": "com.zhiliaoapp.musically", "instagram": "com.instagram.android"}
+DEVICEKIT_LOCAL = Path(__file__).with_name("devicekit.dex")
+DEVICEKIT_REMOTE = "/data/local/tmp/videobatch-devicekit.dex"
 MESSAGES = {
     "invalid_request": "Invalid Android profile edit request; nothing was applied.",
     "identity_required": "An explicit expected platform username is required; a display name or Dolphin ID is not an identity.",
@@ -81,6 +83,22 @@ def validate(job):
     return expected
 
 
+def device_serial(job):
+    serial = job.get("device_serial")
+    if isinstance(serial, str) and re.fullmatch(r"emulator-\d+", serial.strip()):
+        return serial.strip()
+    account = job.get("account_id", "").strip()
+    bindings = Path(__file__).with_name("bindings.json")
+    if account and bindings.is_file():
+        mapping = json.loads(bindings.read_text(encoding="utf-8"))
+        item = mapping.get(account)
+        if isinstance(item, dict):
+            bound = item.get("serial")
+            if isinstance(bound, str) and re.fullmatch(r"emulator-\d+", bound.strip()):
+                return bound.strip()
+    raise EditError("invalid_request")
+
+
 class Screen:
     def __init__(self, xml, package):
         try:
@@ -107,10 +125,14 @@ class Screen:
         # Accessibility often exposes both a clickable parent description and
         # its nonclickable text child. They must resolve to ONE action target.
         targets = []
+        seen = set()
         for n in nodes:
             target = self.clickable(n)
-            if target not in targets:
-                targets.append(target)
+            bounds = target.get("bounds", "")
+            if bounds in seen:
+                continue
+            seen.add(bounds)
+            targets.append(target)
         if len(targets) != 1:
             raise EditError("unsupported_screen")
         return targets[0]
@@ -162,26 +184,36 @@ class Screen:
             raise EditError("unsupported_screen")
         return fields[0]
 
+    def save_action(self):
+        saves = [n for n in self.app if n.get("text") == "Save" and n.get("clickable") == "true"]
+        if len(saves) != 1:
+            raise EditError("unsupported_screen")
+        return saves[0]
+
 
 def needs_clipboard(value):
     return any(ord(c) < 32 or ord(c) > 126 or c == "%" for c in value)
 
 
 class Adb:
-    def __init__(self, sdk):
+    def __init__(self, sdk, serial):
+        self.serial = serial
         self.exe = str(Path(sdk) / "platform-tools" / "adb.exe")
         if not Path(self.exe).is_file():
             raise EditError("adb_failed")
 
     def run(self, *args):
         try:
-            result = subprocess.run([self.exe, "-s", SERIAL, *args], capture_output=True,
+            result = subprocess.run([self.exe, "-s", self.serial, *args], capture_output=True,
                                     encoding="utf-8", errors="replace", timeout=30,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.SubprocessError):
             raise EditError("adb_failed") from None
         if result.returncode:
-            raise EditError("adb_failed")
+            # This emulator image often returns 137 after uiautomator still prints a dump path.
+            if not (len(args) >= 2 and args[0] == "shell" and args[1] == "uiautomator"
+                    and "dumped to:" in result.stdout):
+                raise EditError("adb_failed")
         return result.stdout
 
     def screen(self, package):
@@ -190,12 +222,14 @@ class Adb:
         current = re.search(r"mCurrentFocus=Window\{[^\r\n]+", focus)
         if not current or not re.search(r"\s" + re.escape(package) + r"/", current.group()):
             raise EditError("wrong_app")
-        path = "/sdcard/vb-profile-edit.xml"
-        self.run("shell", "rm", "-f", path)
-        dumped = self.run("shell", "uiautomator", "dump", path)
-        if "dumped to:" not in dumped:
-            raise EditError("unsupported_screen")
-        return Screen(self.run("shell", "cat", path), package)
+        dumped = ""
+        for attempt in range(4):
+            dumped = self.run("exec-out", "uiautomator", "dump", "/dev/tty")
+            start, end = dumped.find("<hierarchy"), dumped.rfind("</hierarchy>")
+            if start >= 0 and end >= 0:
+                return Screen(dumped[start:end + len("</hierarchy>")], package)
+            time.sleep(0.6 + attempt * 0.4)
+        raise EditError("unsupported_screen")
 
     def tap(self, node):
         bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
@@ -206,25 +240,73 @@ class Adb:
             raise EditError("unsupported_screen")
         self.run("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
 
-    def clipboard(self, action, value=None):
-        # This helper's h2 dependency is already installed under Python 3.12,
-        # not the Python 3.11 runtime used by this editor. Never fall back to
-        # lossy adb text input after a clipboard failure.
+    def _grpc_clipboard(self, action, value=None):
         python = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Python/Python312/python.exe"
         helper = Path(__file__).with_name("emulator_clipboard.py")
+        if not python.is_file() or not helper.is_file():
+            return False
         request = {"action": action}
         if action == "set":
             request["value"] = value
+        env = os.environ.copy()
+        env["VB_ANDROID_SERIAL"] = self.serial
         try:
             result = subprocess.run([str(python), str(helper)], input=json.dumps(request, ensure_ascii=True),
-                                    capture_output=True, encoding="utf-8", timeout=30,
+                                    capture_output=True, encoding="utf-8", timeout=30, env=env,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             reply = json.loads(result.stdout)
             if (result.returncode != 0 or not isinstance(reply, dict) or reply.get("ok") is not True
                     or reply.get("verified") is not True or reply.get("action") != action):
-                raise EditError("clipboard_unavailable")
+                return False
         except (OSError, subprocess.SubprocessError, ValueError):
-            raise EditError("clipboard_unavailable") from None
+            return False
+        return True
+
+    def _devicekit_ready(self):
+        if not DEVICEKIT_LOCAL.is_file():
+            raise EditError("clipboard_unavailable")
+        try:
+            listed = self.run("shell", "ls", DEVICEKIT_REMOTE)
+        except EditError:
+            listed = ""
+        if DEVICEKIT_REMOTE.rsplit("/", 1)[-1] not in listed:
+            try:
+                pushed = subprocess.run([self.exe, "-s", self.serial, "push", str(DEVICEKIT_LOCAL), DEVICEKIT_REMOTE],
+                                        capture_output=True, encoding="utf-8", timeout=120,
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except (OSError, subprocess.SubprocessError):
+                raise EditError("clipboard_unavailable") from None
+            if pushed.returncode:
+                raise EditError("clipboard_unavailable")
+
+    def _devicekit_get(self):
+        self._devicekit_ready()
+        out = self.run("shell",
+                       "CLASSPATH=" + DEVICEKIT_REMOTE
+                       + " app_process / com.mobilenext.devicekit.Clipboard get")
+        return out.strip()
+
+    def _devicekit_clipboard(self, action, value=None):
+        self._devicekit_ready()
+        if action == "get":
+            self._devicekit_get()
+            return
+        if action != "set" or not isinstance(value, str):
+            raise EditError("clipboard_unavailable")
+        encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+        self.run("shell",
+                 "CLASSPATH=" + DEVICEKIT_REMOTE
+                 + " app_process / com.mobilenext.devicekit.Clipboard set --base64 "
+                 + shlex.quote(encoded))
+        if self._devicekit_get() != value:
+            raise EditError("clipboard_unavailable")
+
+    def clipboard(self, action, value=None):
+        if self._grpc_clipboard(action, value):
+            return
+        if not getattr(self, "exe", None):
+            raise EditError("clipboard_unavailable")
+        self._devicekit_clipboard(action, value)
 
     def replace(self, node, value):
         use_clipboard = needs_clipboard(value)
@@ -295,7 +377,7 @@ def apply(job, adb, notify=emit):
             # Save may open a rate-limit confirmation, challenge, or fail. Never
             # click through it and never repeat the save.
             attempted.append(key)
-            adb.tap(screen.one_label("Save"))
+            adb.tap(screen.save_action())
             screen = wait_screen(adb, package, lambda s: s.is_edit())
             screen.identity(expected)
             if screen.row(label)[1] != job[key]:
@@ -327,10 +409,11 @@ def main():
     try:
         job = json.loads(sys.stdin.readline())
         validate(job)
+        serial = device_serial(job)
         # Exclusive per-device lock shared by editor processes, not by account.
         # OS byte-range locks release after crashes; no stale-lock retry loop.
         import msvcrt
-        lock_path = Path(os.environ.get("TEMP", ".")) / "videobatch-android-profile-emulator-5554.lock"
+        lock_path = Path(os.environ.get("TEMP", ".")) / ("videobatch-android-profile-" + serial + ".lock")
         lock = open(lock_path, "a+b")
         lock.seek(0)
         try:
@@ -340,7 +423,7 @@ def main():
         sdk = job.get("sdk")
         if not isinstance(sdk, str) or not sdk:
             raise EditError("invalid_request")
-        verified = apply(job, Adb(sdk))
+        verified = apply(job, Adb(sdk, serial))
         emit("applied", code="verified", text="All requested supported fields were reread after saving; avatar was not requested.", verified=verified)
         return 0
     except EditError as error:

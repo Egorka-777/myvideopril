@@ -73,6 +73,105 @@ namespace VideoBatch {
                 return true;
             } finally { Store.Root = previous; try { Directory.Delete(folder, true); } catch { } }
         }
+        public static bool RunSegmentCacheTests(string ffmpeg, string probe) {
+            string previous = Store.Root, folder = Path.Combine(Path.GetTempPath(), "vb-segment-cache-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder); Store.Root = folder;
+            try {
+                var ct = CancellationToken.None;
+                string source = Path.Combine(folder, "source.mp4"), expected = Path.Combine(folder, "expected.wav");
+                Core.Tool(ffmpeg, new[] { "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "color=s=16x16:r=10:d=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", "-t", "2", source }, ct, null, 30).GetAwaiter().GetResult();
+                var video = new AssemblyVideo { Path = source, Duration = 2, HasAudio = true };
+                var args = new List<string> { "-v", "error", "-nostdin", "-y" }; var graph = new List<string>(); var audio = new List<string>(); int input = 0;
+                AssemblyRender.AppendNativeAudio(video, 0, 2, 0, true, .4, 2, args, ref input, graph, audio);
+                graph.Add("[" + audio[0] + "]amix=inputs=1:duration=longest:normalize=0,atrim=duration=2[speech]");
+                args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(";", graph), "-map", "[speech]", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", expected });
+                Core.Tool(ffmpeg, args, ct, null, 30).GetAwaiter().GetResult(); Cache(expected);
+                string hash = AssemblyFiles.Hash(expected), cache = LocalAudioTranscription.CacheFile(hash), saved = File.ReadAllText(cache);
+                DateTime written = File.GetLastWriteTimeUtc(cache);
+                var t = new AssemblyTemplate { Materials = folder, SceneTimingVersion = 1, Transition = "fade", TransitionDuration = .3, Fps = 30,
+                    SubtitleStyle = new WarmupSubtitleStyle { Enabled = true, WordsPerCaption = 3 } };
+                var intro = new AssemblyScene { IsPreview = true, Duration = 1 };
+                var main = new AssemblyScene { Duration = 2, NativeAudioVolume = .4 };
+                t.Scenes.Add(intro); t.Scenes.Add(main);
+                var layer = new AssemblyLayer { Enabled = true, AudioEnabled = true, PlaybackMode = "continuous" };
+                var scene = new AssemblyScenePlan { Scene = main, Video = video, ContentSeconds = 2, IncomingPad = .3 };
+                scene.Layers.Add(new AssemblyLayerPlan { Layer = layer, Asset = new AssemblyAsset { Path = source } });
+                var preview = new AssemblyScenePlan { Scene = intro, Video = new AssemblyVideo { Path = "preview-must-not-be-opened.mp4" }, ContentSeconds = 1 };
+                var plan = new AssemblyPlan(); plan.Scenes.Add(preview); plan.Scenes.Add(scene);
+                var select = typeof(AssemblySpeechPlan).GetMethod("ReusableCaptionSegments", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+                for (int i = 0; i < 2; i++) {
+                    preview.ContentSeconds = 1 + i; plan.RenderDuration = 3.3 + i; plan.Captions.Clear();
+                    string work = Path.Combine(folder, "work" + i); Directory.CreateDirectory(work);
+                    AssemblySpeechPlan.PrepareVideoCaptions(t, plan, ffmpeg, probe, work, ct).GetAwaiter().GetResult();
+                    Check(AssemblyFiles.Hash(Path.Combine(work, "video-speech-segment-0.wav")) == hash, "changed intro preserves exact selected PCM hash");
+                    Check(!File.Exists(Path.Combine(work, "video-speech.wav")), "eligible object source avoids full-roll extraction");
+                    Check(plan.Captions.Count == 1 && Math.Abs(plan.Captions[0].Start - (1.8 + i)) < 1e-8, "object captions follow renderer incoming pad and source clock");
+                    Check(plan.Captions[0].Words.Count == 2 && plan.Captions.All(c => c.Start >= AssemblyTimeline.MainStart(t, plan) && c.End <= plan.RenderDuration), "intro excluded and output boundary respected");
+                    Check(File.ReadAllText(cache) == saved && File.GetLastWriteTimeUtc(cache) == written, "planted SpeechTiming reused without worker or rewrite");
+                }
+                plan.Captions.Clear();
+                Check(select.Invoke(null, new object[] { t, plan }) != null, "object-only source eligible");
+                var unchanged = AssemblySpeechPlan.CaptionsForAudio(t, expected, null, 2);
+                AssemblySpeechPlan.OffsetSegmentCaptions(unchanged, 8, 2, 10);
+                Check(unchanged[0].Start == .2 && unchanged[0].Words[0].Start == .2, "offset mapping does not mutate cached source words");
+                plan.Captions.Add(new WarmupCaption { Text = "manual", Start = 2, End = 3 });
+                Check(select.Invoke(null, new object[] { t, plan }) == null, "manual caption overlap semantics stay on mixed path"); plan.Captions.Clear();
+                scene.Voiceover = "scene-voice"; Check(select.Invoke(null, new object[] { t, plan }) == null, "scene voiceover preserves existing path"); scene.Voiceover = "";
+                t.ContinuousVideo = true; Check(select.Invoke(null, new object[] { t, plan }) == null, "continuous native layout preserves existing path"); t.ContinuousVideo = false;
+                bool cancelled = false;
+                try { AssemblySpeechPlan.PrepareVideoCaptions(t, plan, ffmpeg, probe, folder, new CancellationToken(true)).GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled && plan.Captions.Count == 0, "cancellation is not retried as mixed recognition");
+                scene.Layers.Add(new AssemblyLayerPlan { Layer = new AssemblyLayer { Enabled = true, AudioEnabled = true }, Asset = new AssemblyAsset { Path = source } });
+                Check(select.Invoke(null, new object[] { t, plan }) == null, "simultaneous object voices retain mixed path"); scene.Layers.RemoveAt(1);
+                layer.PlaybackMode = "repeat"; Check(select.Invoke(null, new object[] { t, plan }) == null, "repeated object retains mixed path"); layer.PlaybackMode = "continuous";
+                layer.AudioEnabled = false; Check(select.Invoke(null, new object[] { t, plan }) == null, "muted object is not transcribed through its native alias"); layer.AudioEnabled = true;
+                layer.Enabled = false; Check(select.Invoke(null, new object[] { t, plan }) != null, "native source without enabled object remains eligible"); layer.Enabled = true;
+                scene.Layers.Add(new AssemblyLayerPlan { Layer = new AssemblyLayer { Enabled = true, AudioEnabled = true, Start = 2 }, Asset = new AssemblyAsset { Path = source } });
+                // A second scene is a distinct audio source even when it does not overlap.
+                var extra = new AssemblyScenePlan { Scene = new AssemblyScene { Duration = 2, NativeAudioVolume = .4 }, Video = video, ContentSeconds = 2 };
+                plan.Scenes.Add(extra); Check(select.Invoke(null, new object[] { t, plan }) == null, "multiple independent sources preserve whole-roll recognition"); plan.Scenes.Remove(extra); scene.Layers.RemoveAt(1);
+                t.SplitLayout = "vertical"; Check(select.Invoke(null, new object[] { t, plan }) == null, "split keeps mixed path"); t.SplitLayout = "none";
+                var clipped = AssemblySpeechPlan.OffsetSegmentCaptions(new[] { new WarmupCaption { End = 3, Words = new List<SubtitleWord> {
+                    new SubtitleWord { Text = "keep", Start = .1, End = .8 }, new SubtitleWord { Text = "clip", Start = .9, End = 1.4 }, new SubtitleWord { Text = "drop", Start = 1.5, End = 2 } } } }, 2, 1.2, 3);
+                Check(clipped.Single().Text == "keep clip" && clipped[0].Words.Last().End == 3, "word clipping rebuilds text and never moves later words");
+                var windowed = AssemblySpeechPlan.WindowRelativeCaptions(new[] { new WarmupCaption {
+                    Text = "a b c", Start = 1, End = 4, Words = new List<SubtitleWord> {
+                        new SubtitleWord { Text = "a", Start = 1, End = 1.5 },
+                        new SubtitleWord { Text = "b", Start = 2, End = 2.5 },
+                        new SubtitleWord { Text = "c", Start = 3.5, End = 4 } } } }, 1.5, 2);
+                Check(windowed.Single().Text == "b" && Math.Abs(windowed[0].Words[0].Start - .5) < 1e-9 && Math.Abs(windowed[0].Words[0].End - 1) < 1e-9
+                    && windowed[0].Words.All(w => w.Start >= 0 && w.End <= 2), "source-window captions clip and rebase without moving later words");
+                // Continuous rolls of different lengths must reuse one full-source SpeechTiming.
+                string videoHash = AssemblyFiles.Hash(source);
+                string sourceWav = Path.Combine(folder, "subtitles", "source-wav", videoHash + ".wav");
+                Directory.CreateDirectory(Path.GetDirectoryName(sourceWav));
+                var extractSource = typeof(AssemblySpeechPlan).GetMethod("EnsureSourceSpeechWavAsync", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+                ((Task)extractSource.Invoke(null, new object[] { ffmpeg, new AssemblyVideo { Path = source, Hash = videoHash, HasAudio = true }, ct })).GetAwaiter().GetResult();
+                Check(File.Exists(sourceWav) && Core.AudioDuration(Core.Probe(probe, sourceWav, ct).GetAwaiter().GetResult()) > 0, "real source extraction writes WAV despite temporary partial suffix");
+                Check(!Directory.GetFiles(Path.GetDirectoryName(sourceWav), "*.partial-*").Any(), "successful source extraction leaves no temporary WAV");
+                DateTime extractedAt = File.GetLastWriteTimeUtc(sourceWav);
+                ((Task)extractSource.Invoke(null, new object[] { ffmpeg, new AssemblyVideo { Path = source, Hash = videoHash, HasAudio = true }, ct })).GetAwaiter().GetResult();
+                Check(File.GetLastWriteTimeUtc(sourceWav) == extractedAt, "existing source WAV reused without extraction");
+                Cache(sourceWav);
+                string sourceCache = LocalAudioTranscription.CacheFile(AssemblyFiles.Hash(sourceWav));
+                string sourceSaved = File.ReadAllText(sourceCache); DateTime sourceWritten = File.GetLastWriteTimeUtc(sourceCache);
+                t.ContinuousVideo = true; main.NativeAudioVolume = 1; layer.Enabled = false; plan.Captions.Clear();
+                video.Hash = videoHash;
+                for (int i = 0; i < 2; i++) {
+                    preview.ContentSeconds = 1 + i * .2; plan.RenderDuration = 0; plan.Captions.Clear();
+                    double roll = plan.RollDuration(t);
+                    string continuousWork = Path.Combine(folder, "continuous" + i); Directory.CreateDirectory(continuousWork);
+                    AssemblySpeechPlan.PrepareVideoCaptions(t, plan, ffmpeg, probe, continuousWork, ct).GetAwaiter().GetResult();
+                    Check(plan.Captions.Count >= 1 && plan.Captions.All(c => c.End <= roll + 1e-6), "continuous window fits roll " + i);
+                    Check(!File.Exists(Path.Combine(continuousWork, "video-speech.wav")), "continuous source cache skips roll-length mix");
+                    Check(File.ReadAllText(sourceCache) == sourceSaved && File.GetLastWriteTimeUtc(sourceCache) == sourceWritten, "continuous rolls reuse full-source SpeechTiming");
+                }
+                t.ContinuousVideo = false; main.NativeAudioVolume = .4; layer.Enabled = true;
+                Console.WriteLine("PASS segment captions: real generated audio/FFmpeg extraction, exact PCM cache reuse across intro variants, renderer object offset, mute/overlap/repeat/split applicability, clipped words, continuous source-window cache; no Whisper invoked.");
+                return true;
+            } finally { Store.Root = previous; try { Directory.Delete(folder, true); } catch { } }
+        }
         public static bool RunIntegrationTests(string ffmpeg, string probe, string fixtures, string root) => Integration(ffmpeg, probe, fixtures, root).GetAwaiter().GetResult();
         static async Task<bool> Integration(string ffmpeg, string probe, string fixtures, string root) {
             string previous = Store.Root; Store.Root = root;

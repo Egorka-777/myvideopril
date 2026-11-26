@@ -40,12 +40,31 @@ function delayed(locator,ms=10){
  const browser=await chromium.launch({headless:true}),dir=fs.mkdtempSync(path.join(os.tmpdir(),'vb-timezone-finish-'));
  try{
   const old=oldWorker();
+  {
+   const page=await browser.newPage();await page.setContent('<button id="save">Сохранить</button>');
+   const button=page.locator('#save');
+   let readinessTimeout;
+   const slow={count:()=>button.count(),isVisible:()=>button.isVisible(),evaluate:(fn,arg,options)=>{readinessTimeout=options.timeout;return button.evaluate(async e=>{await new Promise(r=>setTimeout(r,1300));return !e.disabled;},arg,options);}};
+   assert.equal(await S.enabled(slow),true,'Slow responding Save must not abort after one second');
+   assert.equal(readinessTimeout,30000,'Readiness must allow 30 seconds for the browser response');
+   await page.locator('#save').evaluate(e=>e.setAttribute('aria-disabled','true'));
+   assert.equal(await S.enabled(button),false,'Disabled Save is still rejected');await page.close();
+   console.log('PASS Save readiness taking 1.3s no longer aborts; disabled control still rejected.');
+  }
   const native=await browser.newPage();await native.setContent(nativeFixture('ru',{id:'video000001',title:'T',description:'D',tags:[],paid:false,ai:false,date:plan().date,time:plan().time,zone:'Europe/Moscow'}));
   await native.locator('#video-file').setInputFiles({name:'test.mp4',mimeType:'video/mp4',buffer:Buffer.from('fixture')});
   await native.locator('ytcp-visibility-scheduler,#schedule-controls').evaluateAll(nodes=>nodes.forEach(e=>e.hidden=false));
   await assert.rejects(old.setZone(native.locator('ytcp-uploads-dialog'),plan(),'Asia/Krasnoyarsk'),/не найден выбор часового пояса/);
   await S.setZone(native.locator('ytcp-uploads-dialog'),plan(),'Asia/Krasnoyarsk');assert.equal(await native.locator('select').inputValue(),'Asia/Krasnoyarsk');assert.equal(await native.evaluate(()=>zoneChanges),1);await native.close();
   console.log('REPRO v8 native select: old code cannot find zone; current code selects and reads back UTC+7.');
+  for(const lang of ['ru','en']){
+   const page=await browser.newPage(),label=lang==='ru'?'Часовой пояс':'Time zone';
+   await page.setContent('<ytcp-uploads-dialog><ytcp-button id="timezone-select-button"><button>'+label+'</button></ytcp-button><yt-icon role="button" aria-label="Default time zone: ((GMT+0500))"></yt-icon></ytcp-uploads-dialog>');
+   const control=await S.zoneControl(page.locator('ytcp-uploads-dialog'));
+   assert.equal(await control.getAttribute('id'),'timezone-select-button');
+   await page.close();
+  }
+  console.log('PASS RU/EN real Studio timezone-select-button is selected instead of GMT tooltip icon.');
   for(const version of [old,S]){
    const page=await browser.newPage();
    await page.setContent('<ytcp-uploads-dialog><button id="timezone-button" onclick="document.querySelector(\'#zones\').hidden=false">Time zone</button><div id="zones" role="listbox" hidden style="height:180px;overflow:auto">'+Array.from({length:180},(_,i)=>`<div role="option" data-value="noise-${i}">(GMT-05:00) City ${i}</div>`).join('')+'<div role="option" data-value="Asia/Krasnoyarsk" onclick="this.setAttribute(\'aria-selected\',\'true\');document.querySelector(\'#zones\').hidden=true">(GMT+07:00) Krasnoyarsk</div></div></ytcp-uploads-dialog><script>document.addEventListener("keydown",e=>{if(e.key==="Escape")document.querySelector("#zones").hidden=true;});</script>');
@@ -75,6 +94,15 @@ function delayed(locator,ms=10){
    assert.equal(events.filter(e=>e.stage==='item_confirmed').length,2);assert.equal((await context.pages()).length,1,'Readback tabs cleaned after confirmation');
    const diagnostic=await S.zoneDiagnostics(page.locator('body'));assert.equal(diagnostic.controls.length,0,'Closed wizard must not be confused with a live selection');
    await context.close();console.log('PASS',lang,numeric?'numeric option values':'IANA option values','2 uploads, delayed time reset, exactly one Schedule, persisted UTC instant and previous-day readback.');
+  }
+  {
+   const page=await browser.newPage(),expected=plan();
+   await page.route('https://studio.youtube.com/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:nativeFixture('ru',{id:'video000099',title:'T',description:'D',tags:[],paid:false,ai:false,date:expected.date,time:expected.time,zone:'Europe/Moscow',scheduled:true},true)}));
+   const events=[];
+   const got=await S.readback(page,{title:'T',description:'D'},'video000099',expected,{progress:(stage,text)=>events.push({stage,text})},'Asia/Krasnoyarsk');
+   assert.equal(got.visibility,'scheduled');assert.equal(got.schedule.offset,180);assert.equal(got.schedule.time,expected.time);
+   assert(events.some(e=>/фактическое расписание/.test(e.text)));await page.close();
+   console.log('PASS saved future schedule with different timezone is retained, not rejected.');
   }
   const bad=await browser.newPage();await bad.setContent('<ytcp-uploads-dialog><button id="datepicker-trigger">2030-01-02</button><input type="time" value="14:45"><select aria-label="Time zone"><option>(GMT+03:00) Moscow</option><option>(GMT+07:00) Krasnoyarsk</option></select><button id="done-button" disabled>Запланировать публикацию</button><div id="error" hidden>Указать время в прошлом нельзя</div></ytcp-uploads-dialog>');
   await bad.locator('select').selectOption({index:1});setTimeout(()=>bad.locator('#error').evaluate(e=>e.hidden=false).catch(()=>{}),650);

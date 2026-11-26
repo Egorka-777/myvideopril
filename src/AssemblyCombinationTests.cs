@@ -134,6 +134,23 @@ namespace VideoBatch {
                 var lazy=inv(new AssemblyHistory()).CreateBatch(new Random(4),5,new AssemblyMixTracker(),CancellationToken.None);Check(lazy.Plans.Count==1&&lazy.Plans[0].Scenes[0].Layers.Count==1,"lazy all off one identity");
                 var exhausted=new AssemblyHistory();exhausted.Combinations.Add(lazy.Plans[0].Signature);Check(inv(exhausted).Calculate().Variants==0,"large all off exhausted capacity");
                 t.Combination.Music=true;var lazyAudio=inv(new AssemblyHistory()).CreateBatch(new Random(4),8,new AssemblyMixTracker(),CancellationToken.None);Check(lazyAudio.Plans.Count==4,"lazy audio Cartesian product");t.Combination.Music=false;
+                // A large visual pool must not restart selected voice alternatives at the first file.
+                for(int i=2;i<13;i++) File.WriteAllText(t.Resolve("voice/"+i+".wav"),"voice"+i);
+                t.Combination.Video=true;layer.InCombination=true;t.Combination.Voiceover=true;
+                scene.VoiceMode="own";scene.Voiceover="voice";
+                var balancedScene=inv(new AssemblyHistory()).CreateBatch(new Random(7),26,new AssemblyMixTracker(),CancellationToken.None);
+                Check(balancedScene.Plans.Count==26 && balancedScene.Plans.Take(13).Select(p=>p.Scenes[0].VoiceoverHash).Distinct().Count()==13,"lazy scene voices rotate through all 13 files");
+                Check(balancedScene.Plans.GroupBy(p=>p.Scenes[0].VoiceoverHash).All(g=>g.Count()==2),"lazy scene voice usage balanced");
+                scene.VoiceMode="";
+                var balancedShared=inv(new AssemblyHistory()).CreateBatch(new Random(7),26,new AssemblyMixTracker(),CancellationToken.None);
+                Check(balancedShared.Plans.Take(13).Select(p=>p.VoiceoverHash).Distinct().Count()==13,"lazy shared voices rotate through all 13 files");
+                // The enumerated path must also count voice usage when scoring alternatives.
+                var voiceScore=new AssemblyMixTracker();voiceScore.Record(balancedShared.Plans[0]);
+                var unused=balancedShared.Plans.First(p=>p.VoiceoverHash!=balancedShared.Plans[0].VoiceoverHash);
+                var sameVisual=new AssemblyPlan {VoiceoverHash=unused.VoiceoverHash};
+                long unusedScore=voiceScore.Score(sameVisual);sameVisual.VoiceoverHash=balancedShared.Plans[0].VoiceoverHash;
+                Check(voiceScore.Score(sameVisual)>unusedScore,"voice repetition affects candidate score");
+                t.Combination.Video=false;layer.InCombination=false;t.Combination.Voiceover=false;
                 string xml=Path.Combine(root,"template.xml");AssemblyMarketProfiles.EnsureSeeded(t);AssemblyMarketProfiles.Capture(t,AssemblyProfile.Ru);t.Combination.Video=true;layer=t.Scenes[0].Layers[0];layer.InCombination=true;AssemblyMarketProfiles.Capture(t,AssemblyProfile.En);AssemblyFiles.Save(xml,t);t=AssemblyFiles.Load<AssemblyTemplate>(xml);AssemblyMarketProfiles.Apply(t,AssemblyProfile.Ru);Check(!t.Combination.Video&&!t.Scenes[0].Layers[0].InCombination,"RU XML independent settings");AssemblyMarketProfiles.Apply(t,AssemblyProfile.En);Check(t.Combination.Video&&t.Scenes[0].Layers[0].InCombination,"EN XML independent settings");
                 string history=Path.Combine(root,"history.xml");AssemblyFiles.Save(history,h);h=AssemblyFiles.Load<AssemblyHistory>(history);Check(h.Records[0].ToPlan().VoiceoverHash==audio.Plans[0].VoiceoverHash,"durable audio hash");
                 return true;

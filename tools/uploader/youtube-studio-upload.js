@@ -219,7 +219,7 @@ async function enabled(button){
  try{return await button.evaluate(e=>{
   for(let p=e;p;p=p.parentElement||p.getRootNode().host){if(p.hasAttribute('disabled')||p.getAttribute('aria-disabled')==='true')return false;}
   return true;
- },undefined,{timeout:1000});}
+ },undefined,{timeout:30000});}
  catch(e){if(!await button.count()||!await button.isVisible())return false;throw e;}
 }
 async function scheduleCard(scope){
@@ -496,7 +496,7 @@ async function readback(page,item,id,plan,opts,zone){
  }
  const control=await until(()=>visibilityControl(page),30000,'Studio не показал статус доступа на странице редактирования');
  const summary=await require('./youtube-owner-publish').visibilitySummary(control);
- if(!plan&&L.public.test(summary.trim()))return verifiedMetadata({visibility:'public'});
+ if(L.public.test(summary.trim()))return verifiedMetadata({visibility:'public'});
  await control.click();
  const dialog=await until(()=>require('./youtube-owner-publish').visibilityDialog(page),15000,'Studio не открыл окно доступа при проверке сохранения');
  if(!plan){
@@ -506,7 +506,14 @@ async function readback(page,item,id,plan,opts,zone){
   await page.keyboard.press('Escape');return verifiedMetadata({visibility:'public'});
  }
  const got=await scheduleValues(dialog,plan);
- if(got.unix!==plan.unix)throw new Error(`После сохранения дата/время Studio не совпали с моментом публикации: ${got.date||'?'} ${got.time||'?'} UTC${got.offset/60}; ожидалось ${plan.date} ${plan.time} UTC${plan.offset/60}`);
+ if(!Number.isFinite(got.unix))throw new Error('Studio не показал сохранённую дату публикации.');
+ if(got.unix*1000<=Date.now()){
+  await page.keyboard.press('Escape');
+  (opts.progress||(()=>{}))('studio_publish','Время публикации уже прошло — открываю доступ к существующему видео без повторной загрузки.');
+  await require('./youtube-owner-publish').publish(page,{publishedVideoId:id},{progress:opts.progress||(()=>{})});
+  return readback(page,item,id,null,{...opts,reuseReadback:true},zone);
+ }
+ if(got.unix!==plan.unix)(opts.progress||(()=>{}))('studio_schedule','Studio сохранил '+got.date+' '+got.time+' UTC'+got.offset/60+'; оставляю фактическое расписание без переноса.');
  // Studio may label a scheduled video Private until it becomes public. The
  // visible scheduling dialog, its date/time and zone prove the saved instant.
  await page.keyboard.press('Escape');
@@ -647,7 +654,7 @@ async function runItems(page,pack,opts,host){
   async function finish(id,scope,screenConfirmed=false,persistedPublic=false){
    let metadataFailure=null;
    if(!persistedPublic&&(opts.verifyPersisted===true||!screenConfirmed)){
-    try{await verifySaved(item,id,plan,zone,progress);}
+    try{const saved=await verifySaved(item,id,plan,zone,progress);if(saved.visibility==='public'){immediate=true;plan=null;}else if(saved.schedule){plan=saved.schedule;}}
     catch(error){if(!error.publicationConfirmed&&(opts.verifyPersisted===true||!screenConfirmed))throw error;metadataFailure=error;}
    }else progress('studio_publish_confirmed','Studio показал завершение публикации нужного ролика.',{videoId:id});
    const result={url:`https://www.youtube.com/watch?v=${id}`,videoId:id,packIndex,visibility:immediate?'public':'scheduled',schedule:plan};
@@ -691,11 +698,12 @@ async function runItems(page,pack,opts,host){
    await details(page,editor,item,{...opts,progress});
    async function saveEditor(){
     const save=await actionButton(page,'save',/^(Save|Сохранить)$/i)||await actionButton(page,'save-bar',/^(Save|Сохранить)$/i)||await actionButton(page,'save-button',/^(Save|Сохранить)$/i);
-    if(await enabled(save)){await save.click({timeout:10000});await until(async()=>!await enabled(save),30000,'Studio не подтвердил сохранение редактора черновика.');}
+    if(await enabled(save)){await save.click({timeout:30000});await until(async()=>!await enabled(save),60000,'Studio не подтвердил сохранение редактора черновика.');}
    }
    await saveEditor();
    if(host.publishing)await host.publishing(item,packIndex,resumeId);
    item.studioPhase='publishing';
+   if(!immediate&&isImmediatePublish(item)){immediate=true;plan=null;progress('upload_mode','Время отложки прошло — публикую существующее видео сейчас.');}
    if(immediate){
     await owner.publish(page,{publishedVideoId:resumeId},{progress});
    }else{

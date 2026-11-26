@@ -113,7 +113,7 @@ namespace VideoBatch {
             f.Add("apad"); f.Add("atrim=duration=" + N(duration)); return string.Join(",", f);
         }
 
-        public static List<string> Arguments(string input, string output, Profile p, Media m, string narration, double untouchedPrefix = 0) {
+        internal static string VideoFilters(Profile p, Media m) {
             p.Validate(); var s = p.Processing;
             double duration = OutputDuration(p, m), end = m.Duration - s.TrimEnd;
             if (duration <= 0) throw new Exception("Подрезка оставила пустое видео.");
@@ -133,19 +133,21 @@ namespace VideoBatch {
             }
             if (Math.Abs(s.Rotation) > .000001)
                 vf.Add("rotate=" + N(s.Rotation) + "*PI/180:ow=iw:oh=ih:fillcolor=black");
-            vf.Add("scale=" + w + ":" + h + ":flags=lanczos"); vf.Add("setsar=1");
+            // bicubic keeps uniqueness and mild rescales visually intact; lanczos costs more for no fingerprint gain.
+            vf.Add("scale=" + w + ":" + h + ":flags=bicubic"); vf.Add("setsar=1");
             if (Math.Abs(s.FrameScale - 1) > .0005) {
                 if (s.FrameScale < 1)
-                    vf.Add("scale=trunc(iw*" + N(s.FrameScale) + "/2)*2:trunc(ih*" + N(s.FrameScale) + "/2)*2,pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2:color=black");
+                    vf.Add("scale=trunc(iw*" + N(s.FrameScale) + "/2)*2:trunc(ih*" + N(s.FrameScale) + "/2)*2:flags=bicubic,pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2:color=black");
                 else
-                    vf.Add("scale=trunc(iw*" + N(s.FrameScale) + "/2)*2:trunc(ih*" + N(s.FrameScale) + "/2)*2,crop=" + w + ":" + h);
+                    vf.Add("scale=trunc(iw*" + N(s.FrameScale) + "/2)*2:trunc(ih*" + N(s.FrameScale) + "/2)*2:flags=bicubic,crop=" + w + ":" + h);
             }
             if (s.Mirror) vf.Add("hflip");
             if (p.Gray > 0) vf.Add("hue=s=" + N(1 - p.Gray / 100));
             if (p.Short || Math.Abs(p.Brightness) > .000001 || Math.Abs(p.Contrast - 1) > .000001)
                 vf.Add("eq=brightness=" + N(p.Brightness) + ":contrast=" + N(p.Contrast));
             if(Math.Abs(s.Gamma-1)>.000001)vf.Add("eq=gamma="+N(s.Gamma));
-            if(s.RedShift!=0 || s.GreenShift!=0 || s.BlueShift!=0)
+            bool channelShift = s.RedShift != 0 || s.GreenShift != 0 || s.BlueShift != 0;
+            if (channelShift && s.ColorLut <= 0)
                 vf.Add("colorchannelmixer=rr="+N(1+s.RedShift)+":gg="+N(1+s.GreenShift)+":bb="+N(1+s.BlueShift));
             if(s.ColorLut>0) {
                 double k=s.ColorLut;
@@ -154,6 +156,14 @@ namespace VideoBatch {
                 else if(s.ColorPreset=="cool"){r="val*"+N(1-.06*k);b="val*"+N(1+.06*k);}
                 else if(s.ColorPreset=="film"){r=g=b="(val-128)*"+N(1+.12*k)+"+128";}
                 else {r="val*"+N(1+.04*k)+"+"+N(3*k);g="val+"+N(2*k);b="val*"+N(1-.08*k)+"+"+N(4*k);}
+                // Both operations are channel-local lookup tables. Compose them once
+                // instead of visiting every RGB pixel twice. Preserve the mixer's
+                // clipped, nearest-even integer rounding before the LUT truncates.
+                if (channelShift) {
+                    r = r.Replace("val", ShiftedChannel(1 + s.RedShift));
+                    g = g.Replace("val", ShiftedChannel(1 + s.GreenShift));
+                    b = b.Replace("val", ShiftedChannel(1 + s.BlueShift));
+                }
                 vf.Add("lutrgb=r='"+r+"':g='"+g+"':b='"+b+"'");
             }
             // GEQ changes luma only. Pass chroma planes through instead of evaluating
@@ -169,8 +179,17 @@ namespace VideoBatch {
                 vf.Add("noise=c0s=" + N(strength) + ":c0f=t:c1s=0:c2s=0:c0_seed=" + s.FilmDustSeed);
             }
             vf.Add("fps=" + N(fps));
-            if (s.Zoom > 1) vf.Add("zoompan=z='1+" + N(s.Zoom - 1) + "*(0.5-0.5*cos(2*PI*on/" + N(fps * s.ZoomPeriod) + "))':x='(iw-iw/zoom)*" + N(s.ZoomX) + "':y='(ih-ih/zoom)*" + N(s.ZoomY) + "':d=1:s=" + w + "x" + h + ":fps=" + N(fps));
-            if (s.GridOpacity > 0) vf.Add("drawgrid=w=" + Math.Max(8, (int)Math.Round(s.GridCell)) + ":h=" + Math.Max(8, (int)Math.Round(s.GridCell)) + ":t=1:c=white@" + N(s.GridOpacity));
+            if (s.Zoom > 1) {
+                // Mild zoom: fixed peak crop + moving window keeps the fingerprint motion without zoompan's per-pixel path.
+                // Stronger zoom keeps the original pulsing zoompan look.
+                if (s.Zoom <= 1.08) {
+                    string z = N(s.Zoom), period = N(s.ZoomPeriod);
+                    vf.Add("crop=trunc(iw/" + z + "/2)*2:trunc(ih/" + z + "/2)*2:'(iw-ow)*(" + N(s.ZoomX) + "+0.08*sin(2*PI*t/" + period + "))':'(ih-oh)*(" + N(s.ZoomY) + "+0.08*cos(2*PI*t/" + period + "*1.07))',scale=" + w + ":" + h + ":flags=bicubic");
+                } else vf.Add("zoompan=z='1+" + N(s.Zoom - 1) + "*(0.5-0.5*cos(2*PI*on/" + N(fps * s.ZoomPeriod) + "))':x='(iw-iw/zoom)*" + N(s.ZoomX) + "':y='(ih-ih/zoom)*" + N(s.ZoomY) + "':d=1:s=" + w + "x" + h + ":fps=" + N(fps));
+            }
+            // drawgrid repaints every frame on one thread; draw the same grid once and overlay it.
+            if (s.GridOpacity > 0) vf.Add("null[gridMain];color=c=black@0:s=" + w + "x" + h + ":r=" + N(fps) + ",format=rgba,drawgrid=w=" + Math.Max(8, (int)Math.Round(s.GridCell)) + ":h=" + Math.Max(8, (int)Math.Round(s.GridCell)) + ":t=1:c=white@" + N(s.GridOpacity)
+                + ":replace=1,trim=end_frame=1,loop=loop=-1:size=1:start=0[gridLayer];[gridMain][gridLayer]overlay=0:0:format=yuv420:shortest=1");
             double fadeIn = Math.Min(s.FadeIn, duration / 2), fadeOut = Math.Min(s.FadeOut, duration / 2);
             if (fadeIn > 0) vf.Add("fade=t=in:st=0:d=" + N(fadeIn));
             if (fadeOut > 0) vf.Add("fade=t=out:st=" + N(duration - fadeOut) + ":d=" + N(fadeOut));
@@ -181,6 +200,36 @@ namespace VideoBatch {
                 int fw=Math.Max(2,(int)(w*s.BlurFrame/2)*2),fh=Math.Max(2,(int)(h*s.BlurFrame/2)*2);
                 vf.Add("split=2[frameBackground][frameForeground];[frameBackground]gblur=sigma=12[frameBlur];[frameForeground]scale="+fw+":"+fh+",setsar=1[frameSmall];[frameBlur][frameSmall]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1");
             }
+            return string.Join(",", vf);
+        }
+        internal static string AudioTiming(Profile p, Media m, bool pad = false) {
+            return "asetpts=PTS-STARTPTS," + (pad ? "apad," : "") + "atrim=start=" + N(p.Processing.TrimStart) + ":end=" + N(m.Duration-p.Processing.TrimEnd) + ",asetpts=PTS-STARTPTS," + string.Join(",", TempoFilters(p.Speed)) + ",aresample=async=1:first_pts=0,apad,atrim=duration=" + N(OutputDuration(p,m));
+        }
+        internal static void AppendPrefixAudio(List<string> graph, string source, Profile p, Media m, double prefix) {
+            graph.Add("["+source+"]asplit=2[introSource][mainSource]");
+            graph.Add("[introSource]atrim=end="+N(prefix)+",asetpts=PTS-STARTPTS[introAudio]");
+            graph.Add("[mainSource]atrim=start="+N(prefix)+",asetpts=PTS-STARTPTS,"+FinishAudio(p.Processing,Math.Max(.001,OutputDuration(p,m)-prefix))+"[mainAudio]");
+            graph.Add("[introAudio][mainAudio]concat=n=2:v=0:a=1[processed_audio]");
+        }
+        internal static void AppendFinalGraph(List<string> graph, string video, string audio, Profile p, Media m, double prefix) {
+            // The processing graph owns its internal labels, just as the standalone wrapper does.
+            graph.Add("["+video+"]"+VideoFilters(p,m)+"[processed_video]");
+            if (audio == null) return;
+            if (prefix > 0) AppendPrefixAudio(graph,audio,p,m,prefix);
+            else graph.Add("["+audio+"]"+AudioTiming(p,m)+","+FinishAudio(p.Processing,OutputDuration(p,m))+"[processed_audio]");
+        }
+        internal static List<string> FinalEncoderArguments(string encoder, Profile p, int threads) {
+            var args = AssemblyRender.EncoderArguments(encoder,threads);
+            int quality = args.IndexOf(encoder == "h264_nvenc" ? "-cq" : encoder == "h264_qsv" ? "-global_quality" : encoder == "h264_amf" ? "-qp_i" : "-crf");
+            args[quality+1] = N(p.Crf);
+            if (encoder == "h264_amf") args[args.IndexOf("-qp_p")+1] = N(p.Crf);
+            if (encoder == "libx264") args[args.IndexOf("-preset")+1] = "fast";
+            return args;
+        }
+        public static List<string> Arguments(string input, string output, Profile p, Media m, string narration, double untouchedPrefix = 0) {
+            string vf = VideoFilters(p,m);
+            var s = p.Processing;
+            double duration = OutputDuration(p,m);
             bool voice = !string.IsNullOrWhiteSpace(narration), background = !p.Short && !string.IsNullOrWhiteSpace(p.MusicPath);
             bool audio = p.Short || voice || m.HasAudio || background;
             var args = new List<string> { "-hide_banner", "-nostdin", "-n", "-loglevel", "error", "-stats_period", "0.3", "-progress", "pipe:1", "-i", input };
@@ -197,7 +246,7 @@ namespace VideoBatch {
             }
             if (!p.Short && (voice || m.HasAudio)) {
                 string main = voice ? "1:a:0" : "0:" + m.AudioIndex;
-                string timing = "asetpts=PTS-STARTPTS," + (voice ? "apad," : "") + "atrim=start=" + N(s.TrimStart) + ":end=" + N(end) + ",asetpts=PTS-STARTPTS," + string.Join(",", TempoFilters(p.Speed)) + ",aresample=async=1:first_pts=0,apad,atrim=duration=" + N(duration);
+                string timing = AudioTiming(p,m,voice);
                 graph.Add("[" + main + "]" + timing + "[speech]");
                 if (background) { graph.Add("[speech][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=false:latency=1[mix]"); source = "mix"; }
                 else source = "speech";
@@ -205,16 +254,13 @@ namespace VideoBatch {
             if (audio) {
                 if (untouchedPrefix > 0 && !voice && !background && !p.Short) {
                     // Preserve intro audio and its timestamps; effects only see the main section.
-                    graph.Add("[0:" + m.AudioIndex + "]asplit=2[introSource][mainSource]");
-                    graph.Add("[introSource]atrim=end=" + N(untouchedPrefix) + ",asetpts=PTS-STARTPTS[introAudio]");
-                    graph.Add("[mainSource]atrim=start=" + N(untouchedPrefix) + ",asetpts=PTS-STARTPTS," + FinishAudio(s, Math.Max(.001,duration-untouchedPrefix)) + "[mainAudio]");
-                    graph.Add("[introAudio][mainAudio]concat=n=2:v=0:a=1[processed_audio]");
+                    AppendPrefixAudio(graph,"0:"+m.AudioIndex,p,m,untouchedPrefix);
                     // The generic full-roll speech chain is not used for this path.
                     graph.RemoveAll(line => line.EndsWith("[speech]", StringComparison.Ordinal));
                 } else graph.Add("[" + source + "]" + FinishAudio(s, duration) + "[processed_audio]");
                 args.AddRange(new[] { "-filter_complex", string.Join(";", graph), "-map", "[processed_audio]", "-c:a", "aac", "-b:a", "160k" });
             }
-            args.AddRange(new[] { "-vf", string.Join(",", vf), "-t", N(duration), "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p" });
+            args.AddRange(new[] { "-vf", vf, "-t", N(duration), "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p" });
             if (p.Compression == "quality") args.AddRange(new[] { "-crf", N(p.Crf) });
             else {
                 double rate = p.Compression == "sourcebitrate" ? Math.Max(.05, m.VideoBitrate * p.BitratePercent / 100) : p.Bitrate;
@@ -230,6 +276,11 @@ namespace VideoBatch {
             args.AddRange(new[] { "-metadata:s:v:0", "rotate=0" });
             if (p.Format != "mkv") args.AddRange(new[] { "-movflags", string.IsNullOrEmpty(s.Brand) && !s.HasCaptureDate && string.IsNullOrWhiteSpace(s.Software) ? "+faststart" : "+faststart+use_metadata_tags" });
             args.Add(output); return args;
+        }
+        static string ShiftedChannel(double gain) {
+            string x = "val*" + N(gain);
+            return "clip(floor(" + x + ")+gt(" + x + "-floor(" + x + "),0.5)+eq(" + x
+                + "-floor(" + x + "),0.5)*mod(floor(" + x + "),2),0,255)";
         }
         static double Fraction(string value) {
             var parts = value.Split('/'); return Core.Parse(parts[0]) / (parts.Length == 2 ? Core.Parse(parts[1]) : 1);

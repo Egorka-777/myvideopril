@@ -4,6 +4,14 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace VideoBatch {
+    public sealed class AssemblyProcessingPlan {
+        public Profile Profile;
+        public Media Media;
+        public double UntouchedPrefix;
+        public double Duration => ProcessingEngine.OutputDuration(Profile, Media);
+        internal void Append(System.Collections.Generic.List<string> graph, string video, string audio) =>
+            ProcessingEngine.AppendFinalGraph(graph, video, audio, Profile, Media, UntouchedPrefix);
+    }
     public static class AssemblyProcessing {
         public static ProcessingSettings Defaults() {
             var settings = new ProcessingSettings();
@@ -20,16 +28,27 @@ namespace VideoBatch {
             settings.Validate();
             return settings;
         }
-        public static async Task Apply(AssemblyTemplate template, string ffmpeg, string probe, string input, Random random, CancellationToken ct, double untouchedPrefix = 0, AssemblyRenderContext renderContext = null, Action<double> progress = null) {
+        static ProcessingSettings Settings(AssemblyTemplate template) {
             var settings = Effective(template.OutputProcessing);
             // A deliberately leveled batch must retain its chosen common level.
             if (template.NativeAudioLeveled) { settings.Volume.Enabled = false; settings.AudioModulation.Enabled = false; }
-            if (!settings.IsEnabled) return;
-            var media = Core.VideoInfo(await Core.Probe(probe, input, ct).ConfigureAwait(false));
-            media.Duration = media.VideoDuration;
+            return settings;
+        }
+        public static AssemblyProcessingPlan Prepare(AssemblyTemplate template, Media media, Random random, double untouchedPrefix = 0) {
+            var settings = Settings(template);
+            if (!settings.IsEnabled) return null;
             var profile = new Profile { Short = false, Resolution = "source", Fps = "source", Metadata = "clear", Format = "mp4" };
             ProcessingEngine.Apply(profile, settings, media, random, DateTime.Now);
             if (untouchedPrefix > 0) profile.Speed = 1; // Never shift the intro boundary or burned subtitle timing.
+            return new AssemblyProcessingPlan { Profile=profile, Media=media, UntouchedPrefix=untouchedPrefix };
+        }
+        public static async Task Apply(AssemblyTemplate template, string ffmpeg, string probe, string input, Random random, CancellationToken ct, double untouchedPrefix = 0, AssemblyRenderContext renderContext = null, Action<double> progress = null) {
+            if (!Settings(template).IsEnabled) return;
+            var media = Core.VideoInfo(await Core.Probe(probe, input, ct).ConfigureAwait(false));
+            media.Duration = media.VideoDuration;
+            var plan = Prepare(template,media,random,untouchedPrefix);
+            if (plan == null) return;
+            var profile = plan.Profile;
             string output = Path.Combine(Path.GetDirectoryName(input), "processed-" + Guid.NewGuid().ToString("N") + ".mp4");
             try {
                 var context = renderContext ?? new AssemblyRenderContext();

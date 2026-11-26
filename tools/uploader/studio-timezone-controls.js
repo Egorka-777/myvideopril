@@ -36,7 +36,7 @@ module.exports=function({one,until,norm}){
  }
  async function zoneControl(scope,{optional=false}={}){
   const native=await nativeControl(scope);if(native)return native;
-  for(const id of ['timezone-button','time-zone-button']){const c=await one(scope.locator('#'+id),{optional:true});if(c)return c;}
+  for(const id of ['timezone-select-button','timezone-button','time-zone-button']){const c=await one(scope.locator('#'+id),{optional:true});if(c)return c;}
   const locator=scope.locator('ytcp-dropdown-trigger,button,[role=button],[role=combobox]');
   const rows=(await snapshot(locator)).filter(r=>r.visible&&!r.inMenu&&(zoneName.test(r.label)||offsetLabel(r.label)!==null));
   // Remove wrapper components that contain the same button, using one DOM read.

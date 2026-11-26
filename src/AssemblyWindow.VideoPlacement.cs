@@ -10,7 +10,7 @@ namespace VideoBatch {
             canvas.SelectBaseVideo();
             status.Text = template.SplitLayout == "none"
                 ? "Основное видео: тяните рамку для перемещения, угол — для масштаба. Поля остаются чёрными."
-                : "Два экрана: тяните границу, колёсико меняет масштаб половины.";
+                : "Тяните верх или низ в превью — кадр подстроится.";
         }
         void AddVideoPlacementControls(FlowLayoutPanel body) {
             body.Controls.Add(new Label { Text = "Размещение основного видео", AutoSize = true, Font = Theme.FontCardTitle, Margin = new Padding(0, 12, 0, 6) });
@@ -53,6 +53,9 @@ namespace VideoBatch {
             g.Restore(state);
         }
         bool baseVideoSelected, draggingBaseVideo, resizingBaseVideo;
+        double previewBakePrimaryPanX, previewBakePrimaryPanY, previewBakeSecondaryPanX, previewBakeSecondaryPanY;
+        double previewBakePrimaryZoom = 1, previewBakeSecondaryZoom = 1;
+        public event Action SplitMaskAdjusted;
         Point baseVideoOrigin;
         double baseVideoOldX, baseVideoOldY, baseVideoOldWidth, baseVideoOldHeight;
         public event Action BaseVideoSelected;
@@ -67,11 +70,55 @@ namespace VideoBatch {
             }
         }
         void DrawBaseVideo(Graphics graphics, RectangleF frame) {
-            if (background == null) return;
-            var box = AssemblyVideoPlacement.Bounds(template);
-            var target = new RectangleF(frame.X + box.X * frame.Width / template.Width, frame.Y + box.Y * frame.Height / template.Height,
-                box.Width * frame.Width / template.Width, box.Height * frame.Height / template.Height);
-            graphics.DrawImage(background, target);
+            if (background == null || template == null) return;
+            if (template.SplitLayout == "none") {
+                var box = AssemblyVideoPlacement.Bounds(template);
+                var target = new RectangleF(frame.X + box.X * frame.Width / template.Width, frame.Y + box.Y * frame.Height / template.Height,
+                    box.Width * frame.Width / template.Width, box.Height * frame.Height / template.Height);
+                graphics.DrawImage(background, target);
+                return;
+            }
+            bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+            AssemblySplit.PaneSizes(template, out int primarySpan, out int secondarySpan, out int splitLine, out _);
+            float primaryRatio = primarySpan / (float)(vertical ? template.Height : template.Width);
+            float line = vertical ? frame.Y + frame.Height * primaryRatio : frame.X + frame.Width * primaryRatio;
+            var primaryPane = vertical
+                ? new RectangleF(frame.X, frame.Y, frame.Width, line - frame.Y)
+                : new RectangleF(frame.X, frame.Y, line - frame.X, frame.Height);
+            var secondaryPane = vertical
+                ? new RectangleF(frame.X, line, frame.Width, frame.Bottom - line)
+                : new RectangleF(line, frame.Y, frame.Right - line, frame.Height);
+            DrawSplitPaneVideo(graphics, primaryPane, false, primarySpan, splitLine);
+            DrawSplitPaneVideo(graphics, secondaryPane, true, secondarySpan, splitLine);
+        }
+        void DrawSplitPaneVideo(Graphics graphics, RectangleF pane, bool secondary, int paneSpan, int splitLine) {
+            double zoom = secondary ? template.SplitSecondaryZoom : template.SplitPrimaryZoom;
+            double panX = (secondary ? template.SplitSecondaryPanX : template.SplitPrimaryPanX) - (secondary ? previewBakeSecondaryPanX : previewBakePrimaryPanX);
+            double panY = (secondary ? template.SplitSecondaryPanY : template.SplitPrimaryPanY) - (secondary ? previewBakeSecondaryPanY : previewBakePrimaryPanY);
+            bool vertical = AssemblySplit.IsVertical(template.SplitLayout);
+            int cropW = vertical ? template.Width : paneSpan;
+            int cropH = vertical ? paneSpan : template.Height;
+            int px = AssemblySplit.PanOffset(cropW, zoom, panX);
+            int py = AssemblySplit.PanOffset(cropH, zoom, panY);
+            float scaleX = background.Width / (float)template.Width;
+            float scaleY = background.Height / (float)template.Height;
+            int srcX = vertical ? px : (secondary ? splitLine + px : px);
+            int srcY = vertical ? (secondary ? splitLine + py : py) : py;
+            int srcW = vertical ? template.Width : paneSpan;
+            int srcH = vertical ? paneSpan : template.Height;
+            var src = new RectangleF(srcX * scaleX, srcY * scaleY, srcW * scaleX, srcH * scaleY);
+            float bakeZoom = (float)(secondary ? previewBakeSecondaryZoom : previewBakePrimaryZoom);
+            float zoomFactor = bakeZoom > .001f ? (float)zoom / bakeZoom : 1f;
+            var state = graphics.Save();
+            graphics.SetClip(pane);
+            if (Math.Abs(zoomFactor - 1f) > .01f) {
+                float cx = pane.X + pane.Width / 2f, cy = pane.Y + pane.Height / 2f;
+                graphics.TranslateTransform(cx, cy);
+                graphics.ScaleTransform(zoomFactor, zoomFactor);
+                graphics.TranslateTransform(-cx, -cy);
+            }
+            graphics.DrawImage(background, pane, src, GraphicsUnit.Pixel);
+            graphics.Restore(state);
         }
         void DrawBaseVideoSelection(Graphics graphics) {
             if (!baseVideoSelected || template == null || template.SplitLayout != "none") return;

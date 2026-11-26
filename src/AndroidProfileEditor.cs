@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace VideoBatch {
-    // Applies only inside the already foreground official app on emulator-5554.
+    // Applies only inside the already foreground official app on the bound emulator.
     // AccountId is correlation data, NEVER evidence of platform identity. Neither
     // TikTokAccount.Name nor YouTubeChannel.Name is a verified platform username.
     // This helper does not launch profiles, change usernames or mark presets used.
@@ -119,6 +119,21 @@ namespace VideoBatch {
 
         static async Task DrainErrors(StreamReader reader) {
             var buffer = new char[2048];
+        static string ResolveDeviceSerial(string accountId) {
+            string id = (accountId ?? "").Trim();
+            if (!Regex.IsMatch(id, @"^\d+$")) throw new InvalidOperationException(errors["invalid_request"]);
+            string bindingsPath = Path.Combine(Path.GetDirectoryName(typeof(AndroidProfileEditor).Assembly.Location),
+                "tools", "android", "bindings.json");
+            if (!File.Exists(bindingsPath)) throw new InvalidOperationException("Не найден tools/android/bindings.json.");
+            var bindings = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(bindingsPath));
+            if (bindings == null || !bindings.TryGetValue(id, out object entry) || !(entry is Dictionary<string, object> binding))
+                throw new InvalidOperationException("Для этого Dolphin ID нет привязанного Android-устройства в bindings.json.");
+            string serial = binding.ContainsKey("serial") ? Convert.ToString(binding["serial"]) : null;
+            if (string.IsNullOrWhiteSpace(serial) || !Regex.IsMatch(serial, @"^emulator-\d+$"))
+                throw new InvalidOperationException("В bindings.json для профиля указан некорректный serial эмулятора.");
+            return serial;
+        }
+
             while (await reader.ReadAsync(buffer, 0, buffer.Length) != 0) { }
         }
     }

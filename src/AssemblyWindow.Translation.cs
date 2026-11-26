@@ -16,7 +16,9 @@ namespace VideoBatch {
         readonly List<string> batchSources = new List<string>();
         readonly TextBox source, folder, model, instructions;
         readonly ComboBox style, profanity, gender, voices, targetLanguage;
-        readonly CheckBox subtitles;
+        readonly NumericUpDown duckLevel, duckAttack, duckRelease;
+        readonly CheckBox subtitles, maskVideoText;
+        readonly Label maskImages;
         readonly DataGridView lines;
         readonly Label status;
         readonly ProgressBar progress;
@@ -40,8 +42,8 @@ namespace VideoBatch {
             Size = new Size(Math.Min(Width, area.Width - 24), Math.Min(Height, area.Height - 40));
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
             if (embedded) MinimumSize = Size.Empty;
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 345)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 386)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
             studioTabs = new TabControl { Name = "TranslationStudioTabs", Dock = DockStyle.Fill };
             var montagePage = new TabPage("Монтажная студия") { BackColor = Theme.Background };
             var translationPage = new TabPage("Перевод · язык и текст") { BackColor = Theme.Background };
@@ -69,16 +71,32 @@ namespace VideoBatch {
             gender.SelectedIndexChanged += (s, e) => voices.Items.Clear();
             var voiceRow = Row(); voiceRow.Controls.Add(Caption("ElevenLabs", 110)); voiceRow.Controls.Add(gender); voiceRow.Controls.Add(voices);
             var load = Btn("Стандартные голоса", null); load.Click += async (s, e) => await Run(LoadVoices); voiceRow.Controls.Add(load); settings.Controls.Add(voiceRow);
+            options.NormalizeDuck();
+            duckLevel = new NumericUpDown { Name = "TranslationDuckLevel", Minimum = 0, Maximum = 100, DecimalPlaces = 0, Width = 55, Value = (decimal)options.OriginalDuckLevelPercent };
+            duckAttack = new NumericUpDown { Name = "TranslationDuckAttack", Minimum = 0.1m, Maximum = 5, DecimalPlaces = 1, Increment = 0.1m, Width = 55, Value = (decimal)options.OriginalDuckAttackSeconds };
+            duckRelease = new NumericUpDown { Name = "TranslationDuckRelease", Minimum = 0.1m, Maximum = 5, DecimalPlaces = 1, Increment = 0.1m, Width = 55, Value = (decimal)options.OriginalDuckReleaseSeconds };
+            var duckRow = Row(); duckRow.Controls.Add(Caption("Оригинал под речью", 110)); duckRow.Controls.Add(duckLevel);
+            duckRow.Controls.Add(new Label { AutoSize = true, Text = "%", Margin = new Padding(2, 4, 8, 0) });
+            duckRow.Controls.Add(Caption("Спад", 38)); duckRow.Controls.Add(duckAttack);
+            duckRow.Controls.Add(new Label { AutoSize = true, Text = "с", Margin = new Padding(2, 4, 8, 0) });
+            duckRow.Controls.Add(Caption("Восст.", 50)); duckRow.Controls.Add(duckRelease);
+            duckRow.Controls.Add(new Label { AutoSize = true, Text = "с · 0 = тишина, 100 = без приглушения", Margin = new Padding(6, 4, 0, 0) });
+            settings.Controls.Add(duckRow);
             subtitles = new CheckBox { Name = "TranslationBurnSubtitles", AutoSize = true, Checked = options.BurnSubtitles, Text = "Наложить субтитры на видео", Margin = new Padding(8) };
             var tools = Row(); tools.Controls.Add(subtitles); tools.Controls.Add(Btn("Стиль субтитров…", () => { _ = Run(EditSubtitles); })); tools.Controls.Add(Btn("Обработка видео…", EditProcessing)); settings.Controls.Add(tools);
-            settings.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(940, 0), ForeColor = Theme.TextSecondary, Text = "Исходный звук сохраняется: во время перевода громкость оригинала 15%, в паузах — 100%. Перевод начинается по таймкодам исходных реплик.\nSRT сохраняется отдельно. Gemini и ElevenLabs расходуют квоту API; бесплатность длинного видео не гарантируется." });
+            maskVideoText = new CheckBox { Name = "TranslationMaskVideoText", AutoSize = true, Checked = options.MaskVideoText, Text = "Находить и закрывать текст в кадре", Margin = new Padding(8) };
+            maskImages = new Label { Name = "TranslationMaskImages", AutoSize = true, Margin = new Padding(8) };
+            var maskRow = Row(); maskRow.Controls.Add(maskVideoText); maskRow.Controls.Add(Btn("Картинки-плашки…", PickMaskImages)); maskRow.Controls.Add(maskImages); settings.Controls.Add(maskRow);
+            var scanText = Btn("Сканировать текст в кадре", null); scanText.Name = "TranslationScanVideoText"; scanText.Click += async (s, e) => await Run(ScanVideoText);
+            var scanRow = Row(); scanRow.Controls.Add(scanText); scanRow.Controls.Add(new Label { AutoSize = true, Margin = new Padding(8), Text = "Локально · плашка за 1 с до текста и до его исчезновения · картинки по очереди" }); settings.Controls.Add(scanRow); UpdateMaskImages();
+            settings.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(940, 0), ForeColor = Theme.TextSecondary, Text = "В паузах оригинал 100%. Приглушение — только в шаге 3. SRT отдельно; API платное." });
             lines = new DataGridView { Name = "TranslationSegments", Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, BackgroundColor = Theme.Card, AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
                 DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.White, ForeColor = Color.Black, WrapMode = DataGridViewTriState.True } };
             lines.Columns.Add(new DataGridViewTextBoxColumn { Name = "Time", HeaderText = "Таймкод", Width = 145, ReadOnly = true });
             lines.Columns.Add(new DataGridViewTextBoxColumn { Name = "Original", HeaderText = "Оригинал", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
             lines.Columns.Add(new DataGridViewTextBoxColumn { Name = "Translation", HeaderText = "Перевод (можно редактировать)", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
             root.Controls.Add(lines, 0, 1);
-            actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true };
+            actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true, Padding = new Padding(0, 4, 0, 0) };
             var automatic = Btn("Автоперевод", null); automatic.Click += async (s, e) => await Run(AutoTranslate); actions.Controls.Add(automatic);
             var transcribe = Btn("1. Распознать оригинал", null); transcribe.Click += async (s, e) => await Run(Transcribe); actions.Controls.Add(transcribe);
             var translate = Btn("2. Перевести через Gemini", null); translate.Click += async (s, e) => await Run(Translate); actions.Controls.Add(translate);
@@ -91,7 +109,7 @@ namespace VideoBatch {
             status = new Label { Dock = DockStyle.Fill, ForeColor = Theme.TextSecondary, Text = "Добавьте видео или откройте сохранённый проект. Перевод перед озвучкой можно исправить в таблице." };
             progress = new ProgressBar { Dock = DockStyle.Fill, Height = 12 };
             stop = Btn("Остановить", () => cancellation?.Cancel()); stop.Enabled = false; bottom.Controls.Add(status, 0, 0); bottom.Controls.Add(progress, 0, 1); bottom.Controls.Add(stop, 1, 0);
-            bottom.Dock = DockStyle.Bottom; bottom.Height = 66; Controls.Add(bottom); bottom.BringToFront(); root.RowStyles[3].Height = 0;
+            root.Controls.Add(bottom, 0, 3);
             FormClosing += (s, e) => { if (busy) { e.Cancel = true; status.Text = "Остановите текущую операцию перед закрытием."; return; } try { ReadOptions(); SaveProject(); } catch (Exception ex) { e.Cancel = true; ShowError(ex); } };
             studioTabs.SelectedIndex = 1;
             studioTabs.SelectedIndexChanged += async (s, e) => { if (studioTabs.SelectedIndex == 0 && !busy) await Run(EnsureMontage); };
@@ -118,7 +136,15 @@ namespace VideoBatch {
             options.TargetLanguage = VideoTranslationEngine.LanguageCodes[targetLanguage.SelectedIndex];
             options.Style = Convert.ToString(style.SelectedItem); options.Profanity = Convert.ToString(profanity.SelectedItem);
             options.GeminiModel = model.Text.Trim(); options.Instructions = instructions.Text.Trim(); options.BurnSubtitles = subtitles.Checked;
+            options.MaskVideoText = maskVideoText.Checked;
             options.VoiceId = (voices.SelectedItem as ElevenLabsVoice)?.voice_id ?? "";
+            options.OriginalDuckLevelPercent = (double)duckLevel.Value;
+            options.OriginalDuckAttackSeconds = (double)duckAttack.Value;
+            options.OriginalDuckReleaseSeconds = (double)duckRelease.Value;
+            options.NormalizeDuck();
+            duckLevel.Value = (decimal)options.OriginalDuckLevelPercent;
+            duckAttack.Value = (decimal)options.OriginalDuckAttackSeconds;
+            duckRelease.Value = (decimal)options.OriginalDuckReleaseSeconds;
             prefs.TranslationOptions = Store.Clone(options); Store.Save(prefs);
         }
         void ReadLines() {
@@ -137,6 +163,11 @@ namespace VideoBatch {
             targetLanguage.SelectedIndex = Array.IndexOf(VideoTranslationEngine.LanguageCodes, options.TargetLanguage);
             style.SelectedItem = options.Style; profanity.SelectedItem = options.Profanity;
             instructions.Text = options.Instructions; model.Text = GeminiTranslationClient.ModelId(options.GeminiModel); subtitles.Checked = options.BurnSubtitles;
+            maskVideoText.Checked = options.MaskVideoText; UpdateMaskImages();
+            options.NormalizeDuck();
+            duckLevel.Value = (decimal)options.OriginalDuckLevelPercent;
+            duckAttack.Value = (decimal)options.OriginalDuckAttackSeconds;
+            duckRelease.Value = (decimal)options.OriginalDuckReleaseSeconds;
             voices.Items.Clear();
             if (!string.IsNullOrWhiteSpace(options.VoiceId)) { voices.Items.Add(new ElevenLabsVoice { voice_id = options.VoiceId, name = "Сохранённый · " + options.VoiceId }); voices.SelectedIndex = 0; }
         }
@@ -154,7 +185,8 @@ namespace VideoBatch {
             using (var d = new OpenFileDialog { Filter = "Видео|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v|Все файлы|*.*", Multiselect = true }) {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 ReadOptions(); SaveProject(); project = null; lines.Rows.Clear(); source.Text = d.FileName;
-                folder.Text = Path.Combine(VideoBatchOutputPaths.Processing, "Переводы", VideoTranslationEngine.ProjectDirectoryName(d.FileName, DateTime.Now));
+                string translationDay = VideoBatchOutputPaths.DailySessionFolder(Path.Combine(VideoBatchOutputPaths.Processing, "Переводы"));
+                folder.Text = Path.Combine(translationDay, VideoTranslationEngine.ProjectDirectoryName(d.FileName, DateTime.Now));
                 batchSources.Clear(); batchSources.AddRange(d.FileNames);
                 prefs.TranslationLastProject = ""; Store.Save(prefs);
                 await Run(EnsureMontage); studioTabs.SelectedIndex = 0;
@@ -208,11 +240,30 @@ namespace VideoBatch {
                 status.Text = "Голосов: " + available.Count + ". Выберите голос перед озвучкой.";
             }
         }
+        void UpdateMaskImages() { maskImages.Text = "Картинок: " + (options.TextMaskImages?.Count ?? 0); }
+        void PickMaskImages() {
+            using (var dialog = new OpenFileDialog { Filter = "Картинки-плашки|*.png;*.jpg;*.jpeg;*.bmp|Все файлы|*.*", Multiselect = true }) {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                foreach (string path in dialog.FileNames) using (var image = Image.FromFile(path)) { }
+                options.TextMaskImages = dialog.FileNames.ToList(); maskVideoText.Checked = true; UpdateMaskImages(); ReadOptions();
+            }
+        }
+        async Task ScanVideoText(CancellationToken ct, Action<string> report) {
+            string input = project?.Source ?? source.Text;
+            if (string.IsNullOrWhiteSpace(input)) throw new Exception("Добавьте исходное видео.");
+            if (!ToolsLocator.TryResolve(out string ffmpeg, out string probe, out string hint)) throw new Exception(hint);
+            var media = Core.VideoInfo(await Core.Probe(probe, input, ct));
+            Directory.CreateDirectory(folder.Text);
+            var scanProject = new VideoTranslationProject { Source = input, Directory = folder.Text, Duration = media.VideoDuration, SourceHash = await Task.Run(() => AssemblyFiles.Hash(input), ct) };
+            var regions = await VideoTextMask.ScanAsync(scanProject, probe, ct, report);
+            status.Text = "Сканирование завершено. Областей текста: " + regions.Count + ". Для наложения включите галочку и выберите картинки-плашки.";
+        }
         async Task Transcribe(CancellationToken ct, Action<string> report) {
             if (string.IsNullOrWhiteSpace(source.Text)) throw new Exception("Добавьте исходное видео.");
             project = await VideoTranslationEngine.TranscribeAsync(source.Text, folder.Text, ct, report); BindProject(); status.Text = "Оригинал распознан. Выберите стиль и запустите перевод.";
         }
         async Task AutoTranslate(CancellationToken ct, Action<string> report) {
+            VideoTextMask.ValidateImages(options);
             await Transcribe(ct, report);
             await Translate(ct, report);
             await Render(ct, report);

@@ -32,7 +32,7 @@ function app(lang,options={}){
    setTimeout(()=>{if(dialog.isConnected)dialog.querySelector('ytcp-video-upload-progress').textContent='Uploaded: 100%';},options.transferDelay||300);
    dialog.querySelector('#next-button').onclick=()=>{step++;dialog.querySelectorAll('#stepper [role=tab]').forEach((tab,n)=>tab.setAttribute('aria-selected',String(n===step)));if(step===3){dialog.querySelector('#details').hidden=true;dialog.querySelector('#next-button').hidden=true;dialog.querySelector('ytcp-visibility-scheduler').hidden=false;setTimeout(()=>{dialog.querySelector('#done-button').setAttribute('aria-disabled','false');dialog.querySelector('#done-button button').disabled=false;},150);}};
    const finishPublish=()=>{
-    root.innerHTML='<h2>'+label(options.processingReceipt?'Обработка видео':'Видео опубликовано',options.processingReceipt?'Video processing':'Video published')+'</h2>'+(options.processingReceipt?'<p>'+label('После того как обработка видео в стандартном качестве завершится, оно будет опубликовано. Мы установили для него открытый доступ.','Once standard definition processing is complete, it will be published. Public.')+'</p>':'')+(options.processingReceipt?'':'<a href="https://youtu.be/'+id+'">Video</a>')+'<button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy A</button><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy B</button><button id="close-icon-button">X</button><ytcp-button id="close-button" aria-disabled="true"><button disabled>'+label('Закрыть','Close')+'</button></ytcp-button>';
+    root.innerHTML='<h2>'+label(options.processingReceipt?'Обработка видео':'Видео опубликовано',options.processingReceipt?'Video processing':'Video published')+'</h2>'+(options.processingReceipt?'<p>'+label('После того как обработка видео в стандартном качестве завершится, оно будет опубликовано. Мы установили для него открытый доступ.','Your video will be set to public on November 22, 2026 at 12:31 AM after the standard definition (SD) finishes processing')+'</p>':'')+(options.processingReceipt?'':'<a href="https://youtu.be/'+id+'">Video</a>')+'<button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy A</button><button aria-label="'+label('Копировать ссылку','Copy link')+'">Copy B</button><button id="close-icon-button">X</button><ytcp-button id="close-button" aria-disabled="true"><button disabled>'+label('Закрыть','Close')+'</button></ytcp-button>';
     let receiptRoot=root;
     if(options.processingReceipt){
      const card=document.createElement('ytcp-video-share-dialog');
@@ -132,6 +132,17 @@ async function run(){
    assert.equal(await p.evaluate(()=>window.receiptCloses),before+1);
    assert.equal(await p.locator('ytcp-uploads-dialog').count(),0);
   }
+  // Exact English receipt from Studio: scheduled access, no video link, sibling dialog.
+  for(const copy of ['Your video will be set to public on November 22, 2026 at 12:31 AM after the standard definition (SD) finishes processing','Your video will be set to public after the standard definition (SD) finishes processing']){
+   await p.setContent('<ytcp-uploads-dialog><button id="done-button" disabled>Schedule</button><a href="https://youtu.be/video000001">Video</a></ytcp-uploads-dialog><ytcp-uploads-still-processing-dialog><div role="dialog"><h1>Video processing</h1><div>'+copy+'</div><span>Checks complete. No issues found.</span><button id="close-button">Close</button></div></ytcp-uploads-still-processing-dialog>');
+   await p.locator('ytcp-uploads-still-processing-dialog button').evaluate(e=>e.onclick=()=>{window.exactReceiptCloses=(window.exactReceiptCloses||0)+1;document.querySelector('ytcp-uploads-still-processing-dialog').remove();document.querySelector('ytcp-uploads-dialog').remove();});
+   const before=await p.evaluate(()=>window.exactReceiptCloses||0);
+   assert.equal(await S.waitSaveConfirmed(p,p.locator('ytcp-uploads-dialog'),{timeout:1200,expectedId:'video000001'}),copy.includes(' on ')?'scheduled':'published');
+   await B.dismissPublishDialog(p,()=>{},{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001',timeout:1500});
+   assert.equal(await p.evaluate(()=>window.exactReceiptCloses),before+1);
+   assert.equal(await p.locator('ytcp-uploads-dialog,ytcp-uploads-still-processing-dialog').count(),0);
+  }
+  console.log('PASS exact Studio set-to-public receipt recognizes schedule and closes the sibling once.');
   // Live Studio renders this receipt as a sibling, not inside the upload wizard.
   await p.setContent('<ytcp-uploads-dialog><button id="done-button" disabled>Опубликовать</button><a href="https://youtu.be/video000001">Video</a></ytcp-uploads-dialog><ytcp-uploads-still-processing-dialog><div role="dialog"><h1>Обработка видео</h1><div>После того как завершится обработка видео в стандартном качестве, оно будет опубликовано. Для него будет установлен открытый доступ.</div><button id="close-button">Закрыть</button></div></ytcp-uploads-still-processing-dialog>');
   assert.equal((await B.publicationState(p,{scope:p.locator('ytcp-uploads-dialog'),expectedId:'video000001'})).state,'published');

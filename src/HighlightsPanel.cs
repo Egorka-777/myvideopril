@@ -244,7 +244,10 @@ namespace VideoBatch {
                 if(dialog.ShowDialog(this)!=DialogResult.OK)return;prefs.Output=dialog.SelectedPath;Save();
             }
             SetBusy(true);
-            try {var result=await Worker("export",chosen,prefs.Output);status.Text="Сохранено: "+result.outputs.Count+". Нажмите «Результаты».";}
+            try {
+                string exportRoot = VideoBatchOutputPaths.DailySessionFolder(string.IsNullOrWhiteSpace(prefs.Output) ? VideoBatchOutputPaths.Highlights : prefs.Output);
+                var result=await Worker("export",chosen,exportRoot);status.Text="Сохранено: "+result.outputs.Count+" в "+exportRoot+".";
+            }
             catch(OperationCanceledException){status.Text="Сохранение остановлено. Готовые фрагменты остались в папке результатов.";}catch(Exception ex){ShowError(ex);}finally{SetBusy(false);}
         }
         void ShowSetup() {

@@ -114,10 +114,22 @@ async function isVideoLiked(page) {
   }).catch(() => false);
 }
 
+async function assertYouTubeSignedIn(page) {
+  const signedOut = await page.evaluate(() => {
+    const loggedIn = window.ytcfg?.get?.("LOGGED_IN");
+    if (loggedIn === false) return true;
+    const signIn = document.querySelector("ytd-masthead a[href*='accounts.google.com/ServiceLogin'], ytd-masthead a[href*='accounts.google.com/v3/signin']");
+    const prompt = /Войдите в аккаунт, чтобы поставить отметку|Sign in to like videos/i.test(document.body?.innerText || "");
+    return !!signIn || prompt;
+  });
+  if (signedOut) throw new Error("В профиле Dolphin нет активного входа в YouTube. Войдите в аккаунт вручную и повторите запуск; лайк без авторизации недоступен.");
+}
+
 async function likeCurrentVideo(page, report, opts) {
   report = report || (() => {});
   opts = opts || {};
   const soft = !!opts.soft;
+  if (!soft) await assertYouTubeSignedIn(page);
   const safety = require("./youtube-interaction-safety.js");
   if (soft) await safety.skipAdDuringWarmup(page, report);
   else await safety.assertNoAds(page);
@@ -192,6 +204,7 @@ async function likeCurrentVideo(page, report, opts) {
 
   await page.waitForTimeout(1500);
   if (!(await isVideoLiked(page))) {
+    if (!soft) await assertYouTubeSignedIn(page);
     if (soft) {
       report("youtube", "Shorts: лайк не подтверждён — продолжаю просмотр.");
       return;
@@ -208,6 +221,7 @@ async function waitForVideoEnd(page, opts, report) {
     throw new Error("Shorts-плеер не поддерживается для полного просмотра длинного ролика.");
   }
   await dismissYouTubeOverlays(page);
+  await assertYouTubeSignedIn(page);
   const expectedVideoId = await readExpectedVideoId(page);
   await page.waitForSelector("video.html5-main-video, #movie_player video, video", { timeout: 90000 }).catch(() => {});
   await disableAutoplay(page);

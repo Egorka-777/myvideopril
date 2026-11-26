@@ -15,7 +15,7 @@ from worker import proxy_connector
 
 def allowed_host(host,service='telegram'):
     value=host.lower().rstrip('.')
-    domains={'telegram':('telegram.org',),'instagram':('instagram.com','threads.com','threads.net','cdninstagram.com','fbcdn.net'),'tiktok':('tiktok.com','tiktokcdn.com','tiktokcdn-us.com','tiktokcdn-eu.com','tiktokv.com','tiktokv.us','byteoversea.com','ibytedtos.com','ibyteimg.com','muscdn.com','musical.ly','byteimg.com','ttwstatic.com')}.get(service,())
+    domains={'telegram':('telegram.org',),'instagram':('instagram.com','threads.com','threads.net','cdninstagram.com','fbcdn.net','www.facebook.com'),'tiktok':('tiktok.com','tiktokcdn.com','tiktokcdn-us.com','tiktokcdn-eu.com','tiktokv.com','tiktokv.us','byteoversea.com','ibytedtos.com','ibyteimg.com','muscdn.com','musical.ly','byteimg.com','ttwstatic.com')}.get(service,())
     return bool(re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)*',value)) and any(value==domain or value.endswith('.'+domain) for domain in domains)
 
 

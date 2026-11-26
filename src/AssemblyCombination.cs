@@ -23,7 +23,12 @@ namespace VideoBatch {
                 var heading = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=1, RowCount=2, Margin=Padding.Empty };
                 heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); heading.RowStyles.Add(new RowStyle(SizeType.Absolute,36)); heading.RowStyles.Add(new RowStyle(SizeType.Percent,100));
                 heading.Controls.Add(new Label { Dock=DockStyle.Fill, Text="Что делает ролик новым?", Font=Theme.FontCardTitle, ForeColor=Theme.TextPrimary, Margin=Padding.Empty },0,0);
-                heading.Controls.Add(new Label { Dock=DockStyle.Fill, Text="Отметь материалы, которые определяют новый ролик. Остальные остаются в видео, но не умножают количество вариантов.", ForeColor=Theme.TextSecondary, Margin=Padding.Empty },0,1); root.Controls.Add(heading,0,0);
+                int bgVideos=AssemblyFiles.Pool(template.Resolve(template.Videos),AssemblyFiles.VideoExtensions).Count;
+                int splitVideos=template.SplitLayout!="none"?template.SplitPoolFileCount():0;
+                string materialsHint=template.SplitLayout!="none"
+                    ?"Сейчас: фон "+bgVideos+(template.SplitSharedPool?" видео · деление из общей пачки ("+splitVideos+")":" · верх "+bgVideos+", низ "+AssemblyFiles.Pool(template.Resolve(template.SecondaryVideos),AssemblyFiles.VideoExtensions).Count)+". Отметьте, что считается новой связкой."
+                    :"Отметь материалы, которые определяют новый ролик. Остальные остаются в видео, но не умножают количество вариантов.";
+                heading.Controls.Add(new Label { Dock=DockStyle.Fill, Text=materialsHint, ForeColor=Theme.TextSecondary, Margin=Padding.Empty },0,1); root.Controls.Add(heading,0,0);
                 var presets = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=2, RowCount=1, Margin=Padding.Empty };
                 presets.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); presets.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
                 var summary = new Label { Dock=DockStyle.Fill, TextAlign=ContentAlignment.MiddleLeft, AutoEllipsis=true, ForeColor=Theme.TextSecondary, Margin=new Padding(12,0,0,8) };
@@ -72,12 +77,22 @@ namespace VideoBatch {
                     append(body,new Label { Name="CombinationSceneVoice"+i, Text="Озвучка · "+AssemblySpeechPlan.SceneVoiceOptions(template,scene).Count+" файлов · Общее правило ниже", Dock=DockStyle.Fill, Height=28, TextAlign=ContentAlignment.MiddleLeft, AutoEllipsis=true, ForeColor=Theme.TextSecondary, Font=Theme.FontSmall, Margin=Padding.Empty });
                 }
                 var common=group("Общие материалы","CombinationCommon");
+                bool poolVideo=settings.Video && template.Scenes.Any(s=>!s.IsPreview && s.VideoInCombination);
+                var poolBox=material(common,"Фоновое видео", "Общая пачка клипов · верх при делении экрана", pool(template.Videos,AssemblyFiles.VideoExtensions),poolVideo,v=>poolVideo=v,true);
+                poolBox.Name="CombinationBackgroundVideos"; main.Add(poolBox);
+                changes.Add(()=>{
+                    foreach(var s in template.Scenes) if(!s.IsPreview) s.VideoInCombination=poolVideo;
+                    settings.Video=poolVideo || (template.SplitLayout!="none" && settings.SecondaryVideo) || template.Scenes.Any(s=>s.IsPreview && s.VideoInCombination);
+                });
                 if(template.SplitLayout!="none") {
-                    bool selected=settings.Video && settings.SecondaryVideo;
-                    var box=material(common,"Второе видео", "Материалы второй половины экрана", pool(template.SecondaryVideos,AssemblyFiles.VideoExtensions),selected,v=>selected=v,true);
-                    box.Name="CombinationSecondaryVideo"; changes.Add(()=>settings.SecondaryVideo=selected); main.Add(box);
+                    bool shared=template.SplitSharedPool;
+                    var secondPaths=shared ? template.SplitVideoPaths() : pool(template.SecondaryVideos,AssemblyFiles.VideoExtensions);
+                    bool secondarySelected=settings.Video && settings.SecondaryVideo;
+                    string secondHint=shared ? "Низ при общей пачке · те же файлы, другая половина" : "Пачка для низа / правой половины";
+                    var box=material(common, shared ? "Вторая половина · из общей пачки" : "Второе видео", secondHint, secondPaths,secondarySelected,v=>secondarySelected=v,true);
+                    box.Name="CombinationSecondaryVideo"; changes.Add(()=>settings.SecondaryVideo=secondarySelected); main.Add(box);
                 }
-                material(common,"Фон", "Подложка ролика",pool(template.Backgrounds,AssemblyFiles.BackgroundExtensions),settings.Background,v=>settings.Background=v,false).Name="CombinationBackground";
+                material(common,"Фон · картинки", "Подложка-картинка или рамка",pool(template.Backgrounds,AssemblyFiles.BackgroundExtensions),settings.Background,v=>settings.Background=v,false).Name="CombinationBackground";
                 for(int j=0;j<template.GlobalLayers.Count;j++) image(common,template.GlobalLayers[j],"CombinationGlobalLayer"+j);
                 material(common,"Музыка", "Одно правило для всего ролика и всех сцен",pool(template.Music,AssemblyFiles.MusicExtensions).Concat(template.Scenes.SelectMany(s=>pool(s.Music,AssemblyFiles.MusicExtensions))),settings.Music,v=>settings.Music=v,false).Name="CombinationMusic";
                 material(common,"Озвучка", "Одно правило для всего ролика и всех сцен",template.HasSceneVoiceovers?template.Scenes.SelectMany(s=>AssemblySpeechPlan.SceneVoiceOptions(template,s)):AssemblySpeechPlan.SharedVoiceOptions(template),settings.Voiceover,v=>settings.Voiceover=v,false).Name="CombinationVoiceover";
