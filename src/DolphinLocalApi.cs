@@ -10,6 +10,17 @@ using System.Web.Script.Serialization;
 namespace VideoBatch {
     public static class DolphinLocalApi {
         public const string Build = "2026-11-18-dolphin-session-v4";
+        public static async Task OpenProfileAsync(string token, int preferredPort, string profileId, Action<string> report = null) {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(profileId ?? "", @"^\d+$")) throw new ArgumentException("Некорректный Dolphin Profile ID.");
+            int port = await ResolvePortAsync(token, preferredPort, report: report).ConfigureAwait(false);
+            using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(90) })
+            using (var response = await client.GetAsync("http://127.0.0.1:" + port + "/v1.0/browser_profiles/" + profileId + "/start?automation=1").ConfigureAwait(false)) {
+                if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Запуск Dolphin: HTTP " + (int)response.StatusCode);
+                var body = new JavaScriptSerializer().DeserializeObject(await response.Content.ReadAsStringAsync().ConfigureAwait(false)) as Dictionary<string, object>;
+                if (body == null || !body.TryGetValue("success", out var success) || !(success is bool) || !(bool)success)
+                    throw new InvalidOperationException("Dolphin не подтвердил запуск профиля. Проверьте его состояние в Dolphin.");
+            }
+        }
         static readonly SemaphoreSlim sessionGate = new SemaphoreSlim(1, 1);
         static string confirmedToken, confirmedProcess;
         static int confirmedPort;

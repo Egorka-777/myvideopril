@@ -149,8 +149,7 @@ namespace VideoBatch {
                 }
                 rows.RemoveAll(x=>x.ProfileId==item.ProfileId&&x.Service==item.Service);rows.Add(item);
                 Directory.CreateDirectory(Path.GetDirectoryName(path));string temp=path+".tmp";
-                File.WriteAllText(temp,new JavaScriptSerializer().Serialize(rows));if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
-            }
+                File.WriteAllText(temp,new JavaScriptSerializer().Serialize(rows));if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);            }
             if(notify)Changed?.Invoke();
         }
     }

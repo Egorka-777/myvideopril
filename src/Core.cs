@@ -763,11 +763,11 @@ namespace VideoBatch {
         }
     }
     [DataContract] public class ProbeResult {[DataMember]public ProbeStream[] streams;[DataMember]public ProbeFormat format;}
-    [DataContract] public class ProbeFormat {[DataMember]public string duration,bit_rate;[DataMember]public Dictionary<string,string> tags;}
+    [DataContract] public class ProbeFormat {[DataMember]public string duration,bit_rate,start_time;[DataMember]public Dictionary<string,string> tags;}
     [DataContract] public class Disposition {[DataMember]public int attached_pic;}
     [DataContract] public class SideData {[DataMember]public double rotation;}
     [DataContract] public class ProbeStream {
-        [DataMember]public int index;[DataMember]public string codec_type,codec_name,duration,avg_frame_rate,r_frame_rate,color_transfer,sample_aspect_ratio,bit_rate;
+        [DataMember]public int index;[DataMember]public string codec_type,codec_name,duration,start_time,avg_frame_rate,r_frame_rate,color_transfer,sample_aspect_ratio,bit_rate;
         [DataMember]public int width,height;[DataMember]public Disposition disposition;[DataMember]public SideData[] side_data_list;[DataMember]public Dictionary<string,string> tags;
     }
     public class Media {public int Width,Height,VideoIndex,AudioIndex;public double Duration,VideoDuration,VideoBitrate;public string Fps;public bool HasAudio;}
@@ -810,7 +810,11 @@ namespace VideoBatch {
                         await Task.Run(()=>{while(!process.WaitForExit(100)){linked.Token.ThrowIfCancellationRequested();}}).ConfigureAwait(false);
                         await read.ConfigureAwait(false);string err=await error.ConfigureAwait(false);
                         if(linked.IsCancellationRequested){cancel.ThrowIfCancellationRequested();throw new Exception("Обработчик не ответил вовремя.");}
-                        if(process.ExitCode!=0)throw new Exception(string.IsNullOrWhiteSpace(err)?"Обработчик завершился с ошибкой.":err.Substring(0,Math.Min(4000,err.Length)));
+                        if(process.ExitCode!=0) {
+                            string details="exe="+Path.GetFileName(exe)+"; exit="+process.ExitCode+" (0x"+process.ExitCode.ToString("X8")+"); stderr="+err;
+                            AppDiagnostics.Write("Обработка","","","tool_failed",details,"error");
+                            throw new Exception(string.IsNullOrWhiteSpace(err)?"Обработчик "+Path.GetFileName(exe)+" завершился с кодом "+process.ExitCode+" (0x"+process.ExitCode.ToString("X8")+"). Подробности в журнале.":err.Substring(0,Math.Min(4000,err.Length)));
+                        }
                         return text.ToString();
                     } catch(OperationCanceledException) { if(!cancel.IsCancellationRequested)throw new Exception("Обработчик не ответил вовремя.");throw; } finally {try{if(!process.HasExited){process.Kill();process.WaitForExit();}}catch{} try{await read.ConfigureAwait(false);await error.ConfigureAwait(false);}catch{}}
                 }

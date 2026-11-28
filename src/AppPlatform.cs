@@ -62,7 +62,7 @@ namespace VideoBatch {
                         || section == NavSection.Telegram || section == NavSection.Logs || section == NavSection.Settings;
                 case AppPlatform.Studio:
                     return section == NavSection.Home || section == NavSection.Tasks
-                        || section == NavSection.VideoProcessing || section == NavSection.VideoAssembly || section == NavSection.Highlights || section == NavSection.AutoTranslation
+                        || section == NavSection.VideoProcessing || section == NavSection.VideoAssembly || section == NavSection.Creative || section == NavSection.Highlights || section == NavSection.AutoTranslation
                         || section == NavSection.Logs || section == NavSection.Settings;
                 default:
                     return true;

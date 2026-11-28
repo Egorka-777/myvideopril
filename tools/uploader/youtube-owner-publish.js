@@ -2,11 +2,12 @@
 // Publish only saved video IDs through the selected Studio profile. One author
 // comment per owned video; no likes, viewing loops, search or third-party comments.
 const S=require('./youtube-studio-upload');
-const BUILD='2026-11-02-owner-publish-public-v3';
+const BUILD='2026-11-26-owner-publish-public-v4';
 const ID=/^[A-Za-z0-9_-]{11}$/;
 const EDITOR='ytcp-video-metadata-editor,ytcp-video-details';
 const VISIBILITY='ytcp-video-visibility-edit-dialog,ytcp-video-visibility-select-dialog,ytcp-visibility-dialog,tp-yt-paper-dialog#dialog,ytcp-video-visibility-select';
 const SAVE=/^(Save|Сохранить|Done|Готово|Publish|Опубликовать|OK|ОК)$/i;
+const COMMENT_UI=/add a comment|добавьте комментарий|оставьте комментарий|введите комментарий|написать комментарий/i;
 async function visible(locator){return S.one(locator,{optional:true});}
 async function enabled(button){return S.enabled(button);}
 async function pacedClick(control,actionDelayMs,afterDelayMs=actionDelayMs){
@@ -20,11 +21,23 @@ async function visibilityControl(page){
  return root?visible(root.getByRole('button',{name:/visibility|доступ|scheduled|отложенная публ|запланирован|для всех|^public$/i})):null;
 }
 function parseVisibility(label){
- label=S.norm(label).replace(/^(?:Visibility|Access|Доступ)\s*:\s*/i,'');
- if(/^(Public|Открытый доступ|Доступно всем|Для всех)(?:\s|$)/i.test(label))return 'public';
+ label=S.norm(label).replace(/^(?:Параметры доступа|Visibility|Access|Доступ)\s*:?\s*/i,'');
  if(/Scheduled|Запланирован|Публикация запланирована|Отложенная публ/i.test(label))return 'scheduled';
  if(/Private|Ограниченный доступ|Закрытый доступ/i.test(label))return 'private';
  if(/Unlisted|Доступ по ссылке|По ссылке/i.test(label))return 'unlisted';
+ if(/^(Public|Открытый доступ|Доступно всем|Для всех)(?:\s|$)/i.test(label))return 'public';
+ if(/(?:Параметры доступа|Visibility)[\s\S]{0,120}(Открытый доступ|Доступно всем|Для всех)/i.test(label))return 'public';
+ return '';
+}
+async function visibilityCardText(page){
+ for(const selector of ['ytcp-video-metadata-visibility','ytcp-video-details-section #right-section','ytcp-video-details-section','#right-section']){
+  const node=await visible(page.locator(selector));
+  if(!node)continue;
+  const text=await node.innerText().catch(()=>'');
+  if(!/Параметры доступа|Visibility|Доступ/i.test(text))continue;
+  const value=parseVisibility(text);
+  if(value)return text;
+ }
  return '';
 }
 async function visibilitySummary(control){
@@ -43,18 +56,19 @@ async function visibilitySummary(control){
 }
 async function readVisibility(page){
  const control=await visibilityControl(page);
- return control?parseVisibility(await visibilitySummary(control)):'';
+ if(control){const v=parseVisibility(await visibilitySummary(control));if(v)return v;}
+ return parseVisibility(await visibilityCardText(page));
 }
 async function editor(page,id){
  await page.goto(`https://studio.youtube.com/video/${id}/edit`,{waitUntil:'domcontentloaded',timeout:35000});
  await S.until(async()=>{
   if(/accounts\.google\.com/.test(page.url()))throw new Error('Требуется вход в выбранный профиль Google.');
   if(!new URL(page.url()).pathname.startsWith('/video/'+id+'/'))return null;
-  const root=await visible(page.locator(EDITOR));return root&&await S.field(root,'title',true)?root:null;
- },30000,'Studio не открыл редактор указанного видео. Доступ не менялся.');
- // The label is informational. A changed translation must not block opening
- // the native visibility picker, where PUBLIC is selected explicitly.
- await S.until(()=>visibilityControl(page),60000,'Studio не показал управление доступом указанного видео.');
+  const root=await visible(page.locator(EDITOR));
+  if(!root||!await S.field(root,'title',true))return null;
+  if(await visibilityControl(page)||await readVisibility(page))return root;
+  return null;
+ },60000,'Studio не открыл редактор указанного видео. Доступ не менялся.');
 }
 async function visibilityDialog(page){
  const locator=page.locator(VISIBILITY);
@@ -87,7 +101,7 @@ async function expandPublish(scope,actionDelayMs=2000){
 async function publish(page,item,{progress=()=>{},actionDelayMs=2000,confirmDelayMs=5000}={}){
  const id=item.publishedVideoId;
  await editor(page,id);
- if(await readVisibility(page)==='public'){progress('owner_publish','Видео уже в открытом доступе.',{videoId:id});return;}
+ if(await readVisibility(page)==='public'){progress('owner_publish','Видео уже в открытом доступе; открою страницу просмотра для комментария.',{videoId:id});return;}
  const control=await visibilityControl(page);await pacedClick(control,actionDelayMs);
  const dialog=await S.until(()=>visibilityDialog(page),30000,'Studio не открыл окно изменения доступа.');
  progress('owner_publish','Раскрываю «Сохранить или опубликовать / Save or publish».',{videoId:id});
@@ -165,6 +179,7 @@ async function commentOnWatch(page,item,{progress=()=>{},checkpoint,commentMs=30
  if(item.commentState==='pending')throw new Error('Предыдущая отправка комментария не подтверждена. Проверьте видео вручную перед повтором.');
  progress('owner_comment','Открываю опубликованное видео на YouTube для комментария автора.',{videoId:id});
  await page.goto(`https://www.youtube.com/watch?v=${id}`,{waitUntil:'domcontentloaded',timeout:60000});
+ await page.bringToFront().catch(()=>{});
  progress('owner_comment','Открыта страница комментария: '+page.url(),{videoId:id});
  const current=new URL(page.url());
  if(current.hostname!=='www.youtube.com'||current.pathname!=='/watch'||current.searchParams.get('v')!==id)throw new Error('Не открылась страница просмотра указанного видео: '+page.url()+'. Комментарий не отправлен.');
@@ -175,9 +190,21 @@ async function commentOnWatch(page,item,{progress=()=>{},checkpoint,commentMs=30
  const comments=page.locator('#comments').first();await comments.scrollIntoViewIfNeeded();
  const already=await commentMatches(page,text,author);
  if(already.length){progress('owner_comment_confirmed','Такой комментарий автора уже есть; повтор пропущен.',{videoId:id,commentId:already[0].id,commentText:text});return;}
- const placeholder=await S.until(()=>visible(comments.locator('#simplebox-placeholder').or(comments.getByRole('textbox',{name:/add a comment|добавьте комментарий|оставьте комментарий/i}))),15000,'YouTube не открыл поле комментария. Возможно, комментарии отключены или ещё недоступны.');
+ const placeholder=await S.until(async()=>{
+  for(const locator of [
+    comments.locator('#simplebox-placeholder,#placeholder-area').first(),
+    comments.getByRole('button',{name:COMMENT_UI}).first(),
+    comments.getByRole('textbox',{name:COMMENT_UI}).first(),
+    comments.getByText(COMMENT_UI).first()
+  ]){
+    const hit=await visible(locator);
+    if(hit)return hit;
+  }
+  return null;
+ },20000,'YouTube не открыл поле комментария. Возможно, комментарии отключены или ещё недоступны.');
  await placeholder.click();
- const box=await S.until(()=>visible(comments.locator('ytd-comment-simplebox-renderer #contenteditable-root[contenteditable=true]').or(comments.getByRole('textbox',{name:/add a comment|добавьте комментарий|оставьте комментарий/i}))),10000,'YouTube не открыл редактор комментария.');
+ const box=await S.until(()=>visible(comments.locator('ytd-comment-simplebox-renderer #contenteditable-root[contenteditable=true],ytd-commentbox #contenteditable-root[contenteditable=true]')
+   .or(comments.getByRole('textbox',{name:COMMENT_UI}))),15000,'YouTube не открыл редактор комментария.');
  await S.typeText(box,text,{name:'комментария',delay:typingDelay,readValue:readComment});
  const button=await S.until(async()=>{const b=await S.actionButton(comments,'submit-button',/^(Comment|Post comment|Оставить комментарий|Комментировать)$/i);return await enabled(b)?b:null;},10000,'Кнопка отправки комментария недоступна.');
  // Re-check after typing, before the single irreversible click.

@@ -23,7 +23,6 @@ namespace VideoBatch {
         Button settingsBtn;
         Button dolphinRefreshBtn;
         int dolphinCheckRunning;
-        DashboardSessionRefresh sessionRefresh;
         bool sidebarExpanded = true;
         string dolphinState = "unknown";
 
@@ -43,6 +42,7 @@ namespace VideoBatch {
         StatisticsPanel statsPanel;
         SettingsPanel settingsPanel;
         AssemblyWindow assemblyStudio;
+        CreativeWindow creativeWindow;
         VideoTranslationWindow translationWindow;
         HighlightsPanel highlightsPanel;
         TelegramPanel telegramPanel;
@@ -92,9 +92,6 @@ namespace VideoBatch {
 
             navigation.Navigated += ShowSection;
             BuildPanels();
-            sessionRefresh=new DashboardSessionRefresh(settings);
-            Disposed+=(s,e)=>sessionRefresh.Dispose();
-            Shown+=async(s,e)=>await sessionRefresh.RefreshAsync();
             appPlatform = AppPlatformNav.Parse(settings.AppPlatformView);
             if (appPlatform == AppPlatform.Unchosen) appPlatform = AppPlatform.YouTube;
             ApplyPlatform(appPlatform, navigate: false);
@@ -131,7 +128,12 @@ namespace VideoBatch {
                     MessageBox.Show(this, "Остановите автоперевод перед закрытием приложения.", "Автоперевод", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     navigation.Navigate(NavSection.AutoTranslation); return;
                 }
-                try { translationWindow?.SaveState(); }
+                if (creativeWindow?.HasWork == true) {
+                    e.Cancel = true;
+                    MessageBox.Show(this, "Остановите текущую операцию перед закрытием приложения.", "Креатив из видео", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    navigation.Navigate(NavSection.Creative); return;
+                }
+                try { translationWindow?.SaveState(); creativeWindow?.SaveState(); }
                 catch (Exception ex) { e.Cancel = true; Ui.Error(this, ex); return; }
                 SaveSettings(); youtubeBackend?.Dispose(); tiktokBackend?.Dispose();
             };
@@ -142,7 +144,7 @@ namespace VideoBatch {
             int y = 0;
             y = AddNavGroup(panel, "Обзор", y, NavItem("Главная", NavSection.Home), NavItem("Задачи", NavSection.Tasks), NavItem("Статистика", NavSection.Statistics));
             y = AddNavGroup(panel, "Аккаунты", y, NavItem("Профили", NavSection.Profiles));
-            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Нарезчик", NavSection.Highlights), NavItem("Автоперевод", NavSection.AutoTranslation), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram), NavItem("Instagram / Threads", NavSection.Instagram));
+            y = AddNavGroup(panel, "Контент", y, NavItem("Обработка видео", NavSection.VideoProcessing), NavItem("Сборка роликов", NavSection.VideoAssembly), NavItem("Креатив из видео", NavSection.Creative), NavItem("Нарезчик", NavSection.Highlights), NavItem("Автоперевод", NavSection.AutoTranslation), NavItem("YouTube", NavSection.YouTube), NavItem("TikTok", NavSection.TikTok), NavItem("Telegram", NavSection.Telegram), NavItem("Instagram / Threads", NavSection.Instagram));
             y = AddNavGroup(panel, "Прогрев", y, NavItem("Автопрогрев", NavSection.Warmup), NavItem("Прогрев роликами", NavSection.WarmupClips), NavItem("Просмотры и поиск", NavSection.ViewsSearch));
             y = AddNavGroup(panel, "Система", y, NavItem("Логи", NavSection.Logs), NavItem("Настройки", NavSection.Settings));
             return panel;
@@ -269,7 +271,7 @@ namespace VideoBatch {
             var tabs=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
             var host=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty};
             var views=new Control[]{profilesPanel,accountLibraryPanel,proxyPanel};var buttons=new System.Collections.Generic.List<Button>();
-            selectProfilesPage=index=>{if(sessionRefresh!=null)_=sessionRefresh.RefreshAsync();for(int i=0;i<views.Length;i++){views[i].Visible=i==index;buttons[i].BackColor=i==index?Theme.Selected:Theme.Background;}views[index].BringToFront();};
+            selectProfilesPage=index=>{for(int i=0;i<views.Length;i++){views[i].Visible=i==index;buttons[i].BackColor=i==index?Theme.Selected:Theme.Background;}views[index].BringToFront();};
             foreach(var view in views){view.Dock=DockStyle.Fill;view.Visible=false;host.Controls.Add(view);}
             string[] captions={"Профили","Карточки аккаунтов","Проверка сети"};
             for(int i=0;i<views.Length;i++){int page=i;var button=Theme.MakeButton(captions[i],action:()=>{accountLibraryPanel.RefreshData();profilesPanel.RefreshData();proxyPanel.RefreshData();selectProfilesPage(page);});buttons.Add(button);tabs.Controls.Add(button);}
@@ -309,7 +311,6 @@ namespace VideoBatch {
         }
 
         void ShowSection(NavSection section) {
-            if(sessionRefresh!=null)_=sessionRefresh.RefreshAsync();
             dolphinLabel.Visible=dolphinDot.Visible=dolphinRefreshBtn.Visible=section!=NavSection.Telegram;
             pageTitleLabel.Text = section==NavSection.Home?"Дашборд / Статистика":section==NavSection.AccountLibrary||section==NavSection.Proxy?"Профили":NavigationService.Title(section);
             platformBadge.Visible=platformBadge.Text!=pageTitleLabel.Text;
@@ -334,6 +335,12 @@ namespace VideoBatch {
                 case NavSection.AccountLibrary: next=profilesWorkspace;accountLibraryPanel.RefreshData();selectProfilesPage(1);break;
                 case NavSection.Proxy: next=profilesWorkspace;proxyPanel.RefreshData();selectProfilesPage(2);break;
                 case NavSection.VideoAssembly: next = assemblyStudio; break;
+                case NavSection.Creative:
+                    if (creativeWindow == null) {
+                        creativeWindow = new CreativeWindow(settings, settings.AssemblyStudioProfile, embedded: true);
+                        contentHost.Controls.Add(creativeWindow);
+                    }
+                    next = creativeWindow; break;
                 case NavSection.Highlights: next = highlightsPanel; break;
                 case NavSection.AutoTranslation:
                     if (translationWindow == null) { translationWindow = new VideoTranslationWindow(settings, embedded: true); AddPanel(translationWindow); }

@@ -216,11 +216,12 @@ namespace VideoBatch {
                 MessageBox.Show(this,"На рынке "+MarketLabel(marketView)+" нет новых профилей из YouTube (или у YouTube-каналов нет Profile ID).","TikTok",MessageBoxButtons.OK,MessageBoxIcon.Information);
         }
         List<string> CaptionBank(){return marketView=="EN"?settings.TikTokDescriptionBankEn:settings.TikTokFullCaptionBankRu;}
-        void EditCaptionBank(){
+        void EditCaptionBank(){EditCaptionBank(this);}
+        public void EditCaptionBank(IWin32Window owner){
             SaveGrid();
             var bank=CaptionBank();
             using(var dlg=new TitleBankDialog("Подписи · TikTok · "+MarketLabel(marketView),bank)){
-                if(dlg.ShowDialog(this)!=DialogResult.OK)return;
+                if(dlg.ShowDialog(owner)!=DialogResult.OK)return;
                 bank.Clear();bank.AddRange(dlg.Titles??new List<string>());Save();
                 Write("["+MarketLabel(marketView)+"] подписи: "+bank.Count+" шт.");
             }

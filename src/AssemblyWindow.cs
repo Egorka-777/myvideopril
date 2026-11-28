@@ -72,7 +72,10 @@ namespace VideoBatch {
             template.Captions = (project?.Segments ?? new List<VideoTranslationSegment>()).Where(s => !string.IsNullOrWhiteSpace(s.Text)).Select(s => new AssemblyCaption { Start = s.Start, End = s.End, Text = s.Text }).ToList();
             Save(); RefreshCanvas();
         }
-        public AssemblyWindow(bool throwErrors = false, bool embedded = false, Preferences preferences = null, string workspacePath = null, bool translationMode = false) {
+        readonly bool creativeLayersOnly;
+        public List<AssemblyLayer> CreativeLayers() { Save(); return Store.Clone(template.Scenes[0].Layers); }
+        public AssemblyWindow(bool throwErrors = false, bool embedded = false, Preferences preferences = null, string workspacePath = null, bool translationMode = false, bool creativeLayersOnly = false) {
+            this.creativeLayersOnly = creativeLayersOnly;
             this.translationMode = translationMode;
             this.throwErrors = throwErrors;
             Embedded = embedded;
@@ -90,7 +93,7 @@ namespace VideoBatch {
             if (template.ObjectStudioVersion==0 && File.Exists(templatePath)) { File.Copy(templatePath,templatePath+".before-objects-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".xml",true); note="Объекты сохранены. Пачки с несколькими картинками теперь меняются; проверь лишние объекты."; }
             AssemblyWorkspace.Prepare(template);
             assemblyPrefs = preferences ?? Store.Load();
-            if (!translationMode) {
+            if (!translationMode && !creativeLayersOnly) {
             studioProfile = AssemblyProfile.Normalize(string.IsNullOrWhiteSpace(assemblyPrefs.AssemblyStudioProfile) ? assemblyPrefs.AssemblyMarketView : assemblyPrefs.AssemblyStudioProfile);
             if (studioProfile == AssemblyProfile.RuTikTok || studioProfile == AssemblyProfile.EnTikTok) studioProfile = AssemblyProfile.MainProfile(studioProfile);
             AssemblyMarketProfiles.EnsureSeeded(template);
@@ -157,7 +160,7 @@ namespace VideoBatch {
             headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize)); headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var titleStack = new FlowLayoutPanel { AutoSize = true, AutoSizeMode=AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0, 0, 8, 0) };
-            titleStack.Controls.Add(new Label { Text = translationMode ? "Автоперевод · монтаж" : "Моя студия", Font = Theme.FontPageTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 0, 0, 2) });
+            titleStack.Controls.Add(new Label { Text = creativeLayersOnly ? "Медиаслои креатива" : translationMode ? "Автоперевод · монтаж" : "Моя студия", Font = Theme.FontPageTitle, AutoSize = true, ForeColor = Theme.TextPrimary, Margin = new Padding(0, 0, 0, 2) });
             titleStack.Controls.Add(new Label { Text = translationMode ? "Исходное видео целиком · изображения поверх · рекламные паузы · синхронный перевод." : "Настрой сцены один раз — собирай новые ролики из своих материалов.", AutoSize = true, ForeColor = Theme.TextSecondary, MaximumSize = new Size(640, 0) });
             headerGrid.Controls.Add(titleStack, 0, 0);
             var settings = Button("⋯", SettingsMenu); settings.Name = "AssemblySettings"; settings.AutoSize = false; settings.Size = new Size(46, 36); settings.MinimumSize = settings.Size;
@@ -177,7 +180,7 @@ namespace VideoBatch {
             headerGrid.RowStyles[1] = new RowStyle(SizeType.Absolute,68);
             RebuildProfileTabs();
             headerGrid.Controls.Add(profileTabs, 0, 1); headerGrid.SetColumnSpan(profileTabs, 2);
-            if (translationMode) { profileTabs.Visible = false; headerGrid.RowStyles[1].Height = 0; }
+            if (translationMode || creativeLayersOnly) { profileTabs.Visible = false; headerGrid.RowStyles[1].Height = 0; }
             header.Controls.Add(headerGrid);
             workspace = new Panel { Dock = DockStyle.Fill }; root.Controls.Add(workspace,0,1);
             workspaceColumns = new TableLayoutPanel { Name = "AssemblyWorkspaceColumns", Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
@@ -207,11 +210,16 @@ namespace VideoBatch {
             compactBar.Controls.Add(insertionButton,0,2); compactBar.Controls.Add(processingButton,1,2);
             backgroundButton = CompactBarButton("BackgroundPool", () => OpenPool(5));
             backgroundButton.Visible=false;
-            var combinationButton = CompactBarButton("AssemblyCombinationSettings", OpenCombinationSettings); combinationButton.Text = "Правила роликов…"; compactBar.Controls.Add(combinationButton,0,3); compactBar.SetColumnSpan(combinationButton,2);
+            var combinationButton = CompactBarButton("AssemblyCombinationSettings", OpenCombinationSettings); combinationButton.Text = "Правила роликов…"; compactBar.Controls.Add(combinationButton,0,3);
+            if (!translationMode && !creativeLayersOnly) {
+                var creativeButton = CompactBarButton("AssemblyCreativeMode", OpenCreativeWorkspace); creativeButton.Text = "Креатив из видео…";
+                compactBar.Controls.Add(creativeButton,1,3);
+            } else compactBar.SetColumnSpan(combinationButton,2);
             if (translationMode) {
                 videoButton.Text = "Добавить видео / пачку…";
                 voiceToolbarButton.Text = "Язык · стиль · голос…";
             }
+            if(creativeLayersOnly){compactBar.Visible=false;settingsColumn.RowStyles[0].Height=0;}
             settingsColumn.Controls.Add(compactBar, 0, 0);
             var sceneHost = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = Padding.Empty };
             sceneHost.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
@@ -220,6 +228,7 @@ namespace VideoBatch {
             sceneStack = new AssemblyHorizontalStrip { Name = "SceneTimeline", Dock = DockStyle.Fill, Padding = new Padding(0, 4, 0, 16) };
             sceneHost.Controls.Add(sceneStack, 0, 1);
             settingsColumn.Controls.Add(sceneHost, 0, 1);
+            if(creativeLayersOnly){sceneHost.Visible=false;settingsColumn.RowStyles[1].Height=0;}
             contentHost = new Panel { Dock = DockStyle.Fill };
             settingsColumn.Controls.Add(contentHost, 0, 2);
             globalImagesButton = HeaderAsset("GlobalImages", () => { globalEditing = true; layerIndex = 0; RefreshChips(); LoadLayer(); RefreshCanvas(); if (SelectedLayer == null) AddObject(); OpenPool(2); });
@@ -309,6 +318,12 @@ namespace VideoBatch {
             AddDifferenceReportButton(outputOptions);
             foreach (Button option in outputOptions.Controls) { option.Height = 36; option.MinimumSize = new Size(option.Width,36); option.Padding = new Padding(10,2,10,2); }
             footer.Controls.Add(outputOptions,0,0); footer.Controls.Add(outputActions,0,1); bottom.Controls.Add(footer,0,2); UpdateCountControls();
+            if(creativeLayersOnly){
+                outputOptions.Visible=false;lessButton.Visible=countButton.Visible=moreButton.Visible=results.Visible=stop.Visible=false;
+                assembleButton.Visible=false;
+                var apply=Button("Применить слои",()=>{Save();DialogResult=DialogResult.OK;Close();},true);apply.Name="CreativeApplyLayers";outputActions.Controls.Add(apply);
+                outputActions.Controls.Add(Button("Отмена",()=>{DialogResult=DialogResult.Cancel;Close();}));
+            }
             SetDrop(videoButton, files => ImportPool(0,files)); SetDrop(musicButton, files => ImportPool(1,files)); SetDrop(globalImagesButton, files => ImportPool(2,files)); SetDrop(packChips, files => ImportPool(2,files)); BuildScenes();
         }
         Button HeaderAsset(string name, Action action) {
@@ -775,7 +790,7 @@ namespace VideoBatch {
                 }
             });
         }
-        void Save() { if (!translationMode) AssemblyMarketProfiles.Capture(template, studioProfile); template.Validate(); AssemblyFiles.Save(templatePath, template); RequestCapacity(); }
+        void Save() { if (!translationMode && !creativeLayersOnly) AssemblyMarketProfiles.Capture(template, studioProfile); template.Validate(); AssemblyFiles.Save(templatePath, template); RequestCapacity(); }
         void SwitchProfile(string profile) {
             Safe(() => {
                 LeaveSubtitleWorkspaceIfOpen();
@@ -1063,8 +1078,15 @@ namespace VideoBatch {
             if (SelectedLayer.Fixed) { string chosen; var files=Pool(SelectedLayer.Source,AssemblyFiles.PictureExtensions); if (!previewImages.TryGetValue(SelectedLayer,out chosen) || !files.Contains(chosen)) chosen=files.FirstOrDefault(); SelectedLayer.FixedAssetHash=chosen==null ? "" : AssemblyFiles.Hash(chosen); }
             LoadLayer(); RefreshChips(); Changed(false); Save();
         }
+        void OpenCreativeWorkspace() {
+            Safe(() => {
+                Save();
+                using (var creative = new CreativeWindow(assemblyPrefs, studioProfile)) creative.ShowDialog(this);
+            });
+        }
         void SettingsMenu() {
             var menu = Theme.MakeContextMenu();
+            if (!translationMode) menu.Items.Add("Креатив из видео…", null, (s,e) => OpenCreativeWorkspace());
             menu.Items.Add("Что определяет новую связку…", null, (s,e) => OpenCombinationSettings());
             menu.Items.Add("Фоновое видео и деление экрана…", null, (s, e) => OpenVideoEditor());
             menu.Items.Add("Рамка / изображение фона…", null, (s,e) => OpenPool(5));

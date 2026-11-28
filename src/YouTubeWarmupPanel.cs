@@ -216,10 +216,15 @@ namespace VideoBatch {
             return (message.stage == "done" ? "Завершено" : time) + " · " + message.warmupOpened + "/" + message.warmupTarget + " · " + message.warmupWatched;
         }
 
+        internal static List<YouTubeChannel> AccountRows(Preferences settings,string market) {
+            return (settings.YouTubeChannels??new List<YouTubeChannel>())
+                .Where(c=>c!=null&&!string.IsNullOrWhiteSpace(c.ProfileId)&&NormMarket(c.Market)==NormMarket(market))
+                .GroupBy(c=>c.ProfileId.Trim(),StringComparer.OrdinalIgnoreCase)
+                .Select(g=>g.FirstOrDefault(c=>c.Enabled)??g.First()).OrderBy(c=>c.Name).ToList();
+        }
         public void ReloadAccounts() {
             grid.Rows.Clear();
-            foreach (var ch in settings.YouTubeChannels.Where(c => c != null && !string.IsNullOrWhiteSpace(c.ProfileId) && NormMarket(c.Market) == marketView)
-                .OrderBy(c => c.Name)) {
+            foreach (var ch in AccountRows(settings,marketView)) {
                 int i = grid.Rows.Add(ch.Enabled, ch.Name ?? "Канал");
                 grid.Rows[i].Tag = ch;
                 Theme.MarkConnected(grid.Rows[i].DefaultCellStyle,DashboardSessionState.IsConnected(ch.ProfileId,"YouTube"));
@@ -240,7 +245,8 @@ namespace VideoBatch {
         void PersistChecks() {
             foreach (DataGridViewRow row in grid.Rows) {
                 if (row.Tag is YouTubeChannel ch)
-                    ch.Enabled = Convert.ToBoolean(row.Cells[0].Value ?? false);
+                    foreach(var account in settings.YouTubeChannels.Where(c=>c!=null&&NormMarket(c.Market)==marketView&&string.Equals((c.ProfileId??"").Trim(),ch.ProfileId.Trim(),StringComparison.OrdinalIgnoreCase)))
+                        account.Enabled = Convert.ToBoolean(row.Cells[0].Value ?? false);
             }
             try { Store.Save(settings); } catch { }
             backend.Reload();

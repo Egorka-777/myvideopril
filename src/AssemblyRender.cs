@@ -232,6 +232,34 @@ namespace VideoBatch {
             graph.Add("[" + current + "][" + source + "]overlay=0:0:format=" + format
                 + ":repeatlast=0:eof_action=pass:enable='" + enable + "'[" + next + "]");
         }
+        internal static string AppendSceneLayers(AssemblyTemplate t, AssemblyScenePlan scene, string current, string prefix,
+            string format, List<string> args, ref int input, List<string> graph) {
+            for (int j = 0; j < scene.Layers.Count; j++) {
+                var layer = scene.Layers[j]; string next = prefix + j;
+                AssemblySceneVideoBuilder.LayerOverlayRange(t, scene, layer.Layer, out double start, out double end);
+                AppendLayerOverlay(t, layer, start, end, AssemblySceneVideoBuilder.LayerOverlayEnable(t, scene, layer.Layer),
+                    current, next, format, args, ref input, graph);
+                current = next;
+            }
+            return current;
+        }
+        internal static void AppendSceneLayerAudio(AssemblyTemplate t, AssemblyScenePlan scene, double position, double duration,
+            Random pitchRandom, List<string> args, ref int input, List<string> graph, List<string> audio) {
+            foreach(var layer in scene.Layers.Where(l=>l.Layer.Enabled && l.Layer.AudioEnabled && !l.Layer.IsText && l.Asset!=null && AssemblyOverlayMedia.HasAudio(l.Asset.Path))) {
+                AssemblySceneVideoBuilder.LayerOverlayRange(t,scene,layer.Layer,out double start,out double end);
+                if(end<=start)continue;
+                double playback=AssemblyOverlayMedia.PlaybackLength(layer.Layer,layer.Asset.Path,end-start);
+                double period=AssemblyOverlayMedia.RepeatPeriod(layer.Layer,playback);
+                if(layer.Layer.PlaybackMode=="repeat")playback=Math.Min(playback,period);
+                double pitch=layer.Layer.AudioPitch.Sample(pitchRandom,0);
+                var video=new AssemblyVideo {Path=layer.Asset.Path,HasAudio=true,Duration=AssemblyOverlayMedia.Duration(layer.Asset.Path)};
+                int cycles=layer.Layer.PlaybackMode=="repeat"?(int)Math.Ceiling((end-start)/period):1;
+                for(int cycle=0;cycle<cycles;cycle++) {
+                    double from=start+cycle*period,seconds=Math.Min(playback,end-from);
+                    AppendNativeAudio(video,0,seconds,position+scene.IncomingPad+from,layer.Layer.PlaybackMode=="continuous",t.SceneNativeAudioVolume(scene.Scene),duration,args,ref input,graph,audio,pitch);
+                }
+            }
+        }
         // Cut layers retain the single-frame optimized overlay path. Scene layers
         // are still composited before the separate scene-to-scene transition.
         public static List<string> Arguments(AssemblyTemplate t, AssemblyPlan p, string encoder, string script, string output, AssemblyRenderContext context, AssemblyProcessingPlan processing = null) {
@@ -257,13 +285,7 @@ namespace VideoBatch {
                     string videoOut = split && !t.ContinuousVideo ? "videoBase" + i : current;
                     AppendSceneVideo(t, s, args, ref input, graph, videoOut, background);
                 }
-                for (int j = 0; j < s.Layers.Count; j++) {
-                    var layer = s.Layers[j]; string next = "overlay" + i + "_" + j;
-                    AssemblySceneVideoBuilder.LayerOverlayRange(t, s, layer.Layer, out double start, out double end);
-                    AppendLayerOverlay(t, layer, start, end, AssemblySceneVideoBuilder.LayerOverlayEnable(t, s, layer.Layer),
-                        current, next, sceneAlpha ? "auto" : "yuv420", args, ref input, graph);
-                    current = next;
-                }
+                current = AppendSceneLayers(t, s, current, "overlay" + i + "_", sceneAlpha ? "auto" : "yuv420", args, ref input, graph);
                 graph.Add("[" + current + "]"+AssemblyTimeline.Padding(t,s)+"settb=1/" + t.Fps + ",setpts=PTS-STARTPTS,fps=" + t.Fps + ",format=" + (sceneAlpha ? "yuva444p" : transitions ? "yuv444p" : "yuv420p") + "[s" + i + "]");
                 if(split && !t.ContinuousVideo)graph.Add("[videoBase"+i+"]"+AssemblyTimeline.Padding(t,s)+"settb=1/"+t.Fps+",setpts=PTS-STARTPTS,fps="+t.Fps+",format="+(transitions?"yuv444p":"yuv420p")+"[videoScene"+i+"]");
             }
@@ -380,20 +402,7 @@ namespace VideoBatch {
                 AppendNativeAudio(p.SecondaryVideo, 0, mainSeconds, mainStart, t.LoopShortVideos && p.SecondaryVideo.Duration < mainSeconds, t.SplitAudioVolume, dur, args, ref input, graph, audio, t.BackgroundAudioPitch.Enabled ? backgroundPitch : nativePitch);
             double packPosition=0;
             foreach(var scene in p.Scenes) {
-                foreach(var layer in scene.Layers.Where(l=>l.Layer.Enabled && l.Layer.AudioEnabled && !l.Layer.IsText && l.Asset!=null && AssemblyOverlayMedia.HasAudio(l.Asset.Path))) {
-                    AssemblySceneVideoBuilder.LayerOverlayRange(t,scene,layer.Layer,out double start,out double end);
-                    if(end<=start)continue;
-                    double playback=AssemblyOverlayMedia.PlaybackLength(layer.Layer,layer.Asset.Path,end-start);
-                    double period=AssemblyOverlayMedia.RepeatPeriod(layer.Layer,playback);
-                    if(layer.Layer.PlaybackMode=="repeat")playback=Math.Min(playback,period);
-                    double pitch=layer.Layer.AudioPitch.Sample(pitchRandom,0);
-                    var video=new AssemblyVideo {Path=layer.Asset.Path,HasAudio=true,Duration=AssemblyOverlayMedia.Duration(layer.Asset.Path)};
-                    int cycles=layer.Layer.PlaybackMode=="repeat"?(int)Math.Ceiling((end-start)/period):1;
-                    for(int cycle=0;cycle<cycles;cycle++) {
-                        double from=start+cycle*period,seconds=Math.Min(playback,end-from);
-                        AppendNativeAudio(video,0,seconds,packPosition+scene.IncomingPad+from,layer.Layer.PlaybackMode=="continuous",t.SceneNativeAudioVolume(scene.Scene),dur,args,ref input,graph,audio,pitch);
-                    }
-                }
+                AppendSceneLayerAudio(t, scene, packPosition, dur, pitchRandom, args, ref input, graph, audio);
                 packPosition+=AssemblyTimeline.SceneSeconds(scene)+(t.SceneTimingVersion>0 && t.Transition!="cut"?t.TransitionSeconds:0);
             }
             if(!string.IsNullOrWhiteSpace(p.Music) && p.Scenes.Any(s=>t.SceneBedMusicVolume(s.Scene)>0)) {

@@ -60,12 +60,13 @@ namespace VideoBatch {
             try {
                 if (!string.IsNullOrWhiteSpace(channel.Market)) Window.SetMarketView(channel.Market);
                 string[] sources = (files ?? new string[0]).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToArray();
+                var sourceTitles = manualTitles == null ? null : sources.Select(f => manualTitles[Array.FindIndex(files, original => string.Equals(original,f,StringComparison.OrdinalIgnoreCase))]).ToList();
                 string claimDir = UploadPreparation.DatedFolder(settings, "claimed", "YouTube", channel.ChannelId ?? channel.ProfileId, DateTime.Now);
                 claimed = UploadPreparation.ClaimFromSharedFolder(sources, claimDir);
                 LogLine?.Invoke("«" + channel.Name + "»: исходники сразу убраны из общей папки · " + claimed.Count + ".");
                 prepared = await UploadPreparation.PrepareAsync(UploadPreparation.YouTubeKey(channel), "YouTube", channel.ChannelId ?? channel.ProfileId, claimed.Select(c => c.ClaimedPath).ToArray(), settings, progress);
                 if (Window.IsDisposed) throw new OperationCanceledException();
-                Window.AssignVideosToChannel(channel, prepared, true);
+                Window.AssignVideosToChannel(channel, prepared, true, sourceTitles);
                 assigned = true;
                 // Keep claimed originals until upload succeeds; do not delete them after prepare.
             } catch {

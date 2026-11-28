@@ -58,6 +58,14 @@ namespace VideoBatch {
                 string placementXml=Path.Combine(folder,"placement.xml"); AssemblyFiles.Save(placementXml,placed); var placementSaved=AssemblyFiles.Load<AssemblyTemplate>(placementXml).Insertions[0];
                 if(!placementSaved.VisualPlacementConfigured || placementSaved.VisualPreserveAspectRatio || placementSaved.VisualX!=-.1 || placementSaved.VisualHeight!=.2)throw new Exception("Linked placement persistence");
                 Console.WriteLine("Linked visual placement PASS: position, independent dimensions, off-frame crop, XML persistence");
+                var videoPlaced = new AssemblyTemplate { Fps=25, Materials=folder };
+                videoPlaced.Insertions.Add(new AssemblyInsertion { Source=visual, Start=1, VisualPlacementConfigured=true, VisualPreserveAspectRatio=false, VisualX=.1, VisualY=.2, VisualWidth=.3, VisualHeight=.2 });
+                string videoPlacedOutput=Path.Combine(folder,"video-placed.mp4"); AssemblyInsertions.Apply(videoPlaced,ffmpeg,probe,main,videoPlacedOutput,ct,new Random(1)).GetAwaiter().GetResult();
+                string videoPlacedPng=Path.Combine(folder,"video-placed.png"); Core.Tool(ffmpeg,new[]{"-v","error","-y","-ss","1.2","-i",videoPlacedOutput,"-frames:v","1",videoPlacedPng},ct,null,60).GetAwaiter().GetResult();
+                using(var image=new System.Drawing.Bitmap(videoPlacedPng)) {
+                    if(image.GetPixel(30,80).R<220 || image.GetPixel(100,80).B<220 || image.GetPixel(30,180).B<220)throw new Exception("Standalone video insertion ignored placement");
+                }
+                Console.WriteLine("Standalone video insertion placement PASS: real FFmpeg, position and independent dimensions");
                 var layer=new AssemblyLayer{PlaybackMode="repeat",RepeatInterval=1,RepeatPause=100,Start=.2,AppearanceTransition="cut",Source=visual,Width=.5,Height=.5,X=.25,Y=.25};
                 if(AssemblyOverlayMedia.RepeatPeriod(layer,.4)!=1)throw new Exception("Period start-to-start");
                 var scheduled=new AssemblyTemplate{Materials=folder,Width=180,Height=320,Fps=25,Transition="cut",SceneTimingVersion=1,PrimaryNativeAudio=false,RenderMode="cpu"};

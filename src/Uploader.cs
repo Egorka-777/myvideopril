@@ -1408,7 +1408,7 @@ namespace VideoBatch {
             return result;
         }
         void AssignVideoPackToChannel(YouTubeChannel ch,DataGridViewRow row,string[] filePaths,bool replaceConfirmed=false,IList<string> manualTitles=null){
-            var paths=filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
+            var paths=manualTitles!=null?filePaths.ToArray():filePaths.OrderBy(f=>f,StringComparer.OrdinalIgnoreCase).ToArray();
             if(!replaceConfirmed&&ch.Items!=null&&ch.Items.Any(it=>it!=null&&!string.IsNullOrWhiteSpace(it.Video))&&
                 MessageBox.Show(this,"«"+ch.Name+"» уже имеет видео. Заменить новой пачкой ("+paths.Length+")?","VideoBatch",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             string m=NormMarket(string.IsNullOrWhiteSpace(ch.Market)?marketView:ch.Market);
@@ -2331,7 +2331,7 @@ namespace VideoBatch {
             string token="";
             bool uiStarted=false;
             try{
-                SaveGrid();SyncIpsFromSiblings();ValidateCommon(true);
+                SaveGrid();SyncIpsFromSiblings();ValidateCommon(true,channelsFilter);
                 var rows=ResolveUploadRows(channelsFilter);
                 if(rows.Count==0){MessageBox.Show(this,"Отметьте галочкой ✓ каналы для загрузки.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 var flat=ExpandUploadJobs(rows);
@@ -2498,7 +2498,7 @@ namespace VideoBatch {
             string token="";bool uiStarted=false;
             try{
                 SyncDolphinSettingsFromDisk();
-                SaveGrid();SyncIpsFromSiblings();ValidateCommon(true);
+                SaveGrid();SyncIpsFromSiblings();ValidateCommon(true,channelsFilter);
                 var rows=ResolveUploadRows(channelsFilter);
                 if(rows.Count==0){MessageBox.Show(this,"Отметьте галочкой ✓ каналы для загрузки.","YouTube",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
                 Write("К загрузке отмечено каналов: "+rows.Count);

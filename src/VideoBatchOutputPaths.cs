@@ -12,6 +12,7 @@ namespace VideoBatch {
         public static string Highlights => Path.Combine(Root, "Нарезчик");
         public static string WarmupRoot => Path.Combine(Root, "Прогрев");
         public static string AssemblyRoot => Path.Combine(Root, "Сборка роликов");
+        public static string Creative => Path.Combine(AssemblyRoot, "Креативы");
 
         public static string WarmupMarket(string market) => Path.Combine(WarmupRoot, market == "EN" ? "EN" : "RU");
 

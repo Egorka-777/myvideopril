@@ -35,7 +35,30 @@ namespace VideoBatch {
             }
             throw new Exception("Не найдена папка tools/subtitles. Обновите EXE вместе с этой папкой из комплекта приложения.");
         }
-        public static async Task PrepareAsync(IEnumerable<string> files, CancellationToken ct, Action<string> progress = null, bool force = false) {
+        // Context-only results are isolated: no_speech must never satisfy strict subtitle caches.
+        internal static string ContextCacheFile(string hash) => Path.Combine(Root, "context-cache", hash + ".json");
+        internal sealed class ContextTiming {
+            public string AudioHash, Text, Source, Version, Status, Language;
+            public WarmupAlignment Alignment;
+        }
+        internal static ContextTiming ReadContextTiming(string audio) {
+            string hash = AssemblyFiles.Hash(audio), file = ContextCacheFile(hash);
+            if (!File.Exists(file)) return null;
+            var timing = Json().Deserialize<ContextTiming>(File.ReadAllText(file));
+            if (timing?.AudioHash != hash || timing.Version != Version || timing.Source != "faster-whisper/small" ||
+                timing.Alignment?.characters == null || timing.Alignment.character_start_times_seconds == null ||
+                timing.Alignment.character_end_times_seconds == null || timing.Text == null ||
+                timing.Alignment.characters.Length != timing.Alignment.character_start_times_seconds.Length ||
+                timing.Alignment.characters.Length != timing.Alignment.character_end_times_seconds.Length) return null;
+            if (timing.Status == "no_speech") return timing.Text == "" && timing.Alignment.characters.Length == 0 ? timing : null;
+            return timing.Status == "speech" && !string.IsNullOrWhiteSpace(timing.Text) && timing.Alignment.characters.Length > 0 ? timing : null;
+        }
+        internal static List<WarmupCaption> ContextCaptions(string audio, double duration) {
+            var timing = ReadContextTiming(audio);
+            if (timing == null) throw new Exception("Не удалось прочитать результат распознавания контекста.");
+            return timing.Status == "no_speech" ? new List<WarmupCaption>() : WarmupSubtitles.Cues(timing.Alignment, duration, 3);
+        }
+        public static async Task PrepareAsync(IEnumerable<string> files, CancellationToken ct, Action<string> progress = null, bool force = false, bool allowEmpty = false) {
             // Hashing/probing a large user file must never block the WinForms thread.
             await gate.WaitAsync(ct).ConfigureAwait(false);
             try {
@@ -44,7 +67,7 @@ namespace VideoBatch {
                         ct.ThrowIfCancellationRequested();
                         if (!File.Exists(path)) throw new FileNotFoundException("Не найдена озвучка", path);
                         return new { audio = path, hash = AssemblyFiles.Hash(path) };
-                    }).GroupBy(x => x.hash).Select(g => g.First()).Where(x => force || !AssemblySpeechPlan.HasTiming(x.audio)).ToList(), ct).ConfigureAwait(false);
+                    }).GroupBy(x => x.hash).Select(g => g.First()).Where(x => force || (allowEmpty ? ReadContextTiming(x.audio) == null : !AssemblySpeechPlan.HasTiming(x.audio))).ToList(), ct).ConfigureAwait(false);
                 if (missing.Count == 0) { progress?.Invoke("Субтитры уже сохранены — повторное распознавание не требуется."); return; }
                 string scripts = Scripts();
                 var runtime = ReadRuntime();
@@ -56,10 +79,10 @@ namespace VideoBatch {
                 }
                 string jobs = Path.Combine(Root, "jobs"); Directory.CreateDirectory(jobs);
                 string job = Path.Combine(jobs, Guid.NewGuid().ToString("N") + ".json");
-                File.WriteAllText(job, Json().Serialize(new { models = runtime.models, items = missing.Select(x => new { x.audio, x.hash, output = CacheFile(x.hash) }).ToArray() }), new UTF8Encoding(false));
+                File.WriteAllText(job, Json().Serialize(new { models = runtime.models, allow_empty = allowEmpty, items = missing.Select(x => new { x.audio, x.hash, output = allowEmpty ? ContextCacheFile(x.hash) : CacheFile(x.hash) }).ToArray() }), new UTF8Encoding(false));
                 try {
                     await RunProcess(runtime.python, new[] { "-u", Path.Combine(scripts, "worker.py"), "--job", job }, ct, progress).ConfigureAwait(false);
-                    foreach (var item in missing) if (!AssemblySpeechPlan.HasTiming(item.audio))
+                    foreach (var item in missing) if (allowEmpty ? ReadContextTiming(item.audio) == null : !AssemblySpeechPlan.HasTiming(item.audio))
                         throw new Exception("Не удалось сохранить субтитры: " + Path.GetFileName(item.audio));
                 } finally { try { File.Delete(job); } catch { } }
             } finally { gate.Release(); }

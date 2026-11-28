@@ -20,7 +20,8 @@ namespace VideoBatch {
         Highlights,
         Telegram,
         AutoTranslation,
-        Instagram
+        Instagram,
+        Creative
     }
 
     public sealed class NavigationService {
@@ -43,6 +44,7 @@ namespace VideoBatch {
                 case NavSection.Proxy: return "Прокси";
                 case NavSection.VideoProcessing: return "Обработка видео";
                 case NavSection.VideoAssembly: return "Сборка роликов";
+                case NavSection.Creative: return "Креатив из видео";
                 case NavSection.Highlights: return "Нарезчик";
                 case NavSection.AutoTranslation: return "Автоперевод";
                 case NavSection.YouTube: return "YouTube";

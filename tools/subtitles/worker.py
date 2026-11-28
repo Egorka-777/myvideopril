@@ -40,7 +40,7 @@ def atomic_json(path, value):
             temporary.unlink()
 
 
-def timing_from_segments(segments, duration, report=lambda value: None):
+def timing_from_segments(segments, duration, report=lambda value: None, allow_empty=False):
     """Keep ASR word boundaries; do not spread a transcript over an audio clock."""
     words, previous = [], 0.0
     for segment in segments:
@@ -57,8 +57,11 @@ def timing_from_segments(segments, duration, report=lambda value: None):
                 previous = end
         report(min(99, max(0, int(100 * segment.end / max(.01, duration)))))
     if not words:
+        if allow_empty:
+            return dict(Status="no_speech", Text="", Alignment=dict(
+                characters=[], character_start_times_seconds=[], character_end_times_seconds=[]))
         raise ValueError("Речь не найдена. Проверьте, что выбран файл озвучки, а не музыка или тишина.")
-    return dict(Text=" ".join(w[0] for w in words), Alignment=dict(
+    return dict(Status="speech", Text=" ".join(w[0] for w in words), Alignment=dict(
         characters=[w[0] + " " for w in words],
         character_start_times_seconds=[w[1] for w in words],
         character_end_times_seconds=[w[2] for w in words]))
@@ -138,20 +141,23 @@ def execute(job, model_factory=None, audio_loader=None, chunk_detector=None):
         # PyAV decodes MP3/WAV/M4A/FLAC/OGG directly. No external child process,
         # no audio upload and no language translation.
         samples = audio_loader(str(audio))
-        language = model.detect_language(samples, vad_filter=True)[0]
         duration = len(samples) / SAMPLING_RATE
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("Не удалось прочитать длительность аудио: " + audio.name)
+        language = model.detect_language(samples, vad_filter=True)[0]
         segments = transcribe_utterances(model, samples, chunk_detector(samples), language,
             lambda end: emit("speech", f"Распознаю {index + 1}/{len(job['items'])}: {audio.name}",
                 int((index + min(0.99, end / duration)) * 100 / len(job["items"]))))
-        if not math.isfinite(duration) or duration <= 0:
-            raise ValueError("Не удалось прочитать длительность аудио: " + audio.name)
-        result = timing_from_segments(segments, duration)
+        result = timing_from_segments(segments, duration, allow_empty=job.get("allow_empty") is True)
         if fingerprint(audio) != item["hash"]:
             raise ValueError("Аудиофайл изменился во время распознавания: " + audio.name)
         result.update(AudioHash=item["hash"], Source="faster-whisper/" + MODEL,
                       Language=language, Version=VERSION)
         atomic_json(item["output"], result)
-        emit("cached", f"Субтитры сохранены: {audio.name}", int((index + 1) * 100 / len(job["items"])))
+        if result["Status"] == "no_speech":
+            emit("no_speech", f"Речь не найдена; для контекста используются кадры: {audio.name}", int((index + 1) * 100 / len(job["items"])))
+        else:
+            emit("cached", f"Субтитры сохранены: {audio.name}", int((index + 1) * 100 / len(job["items"])))
     emit("done", "Распознавание завершено", 100)
 
 

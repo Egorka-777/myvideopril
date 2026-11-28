@@ -8,8 +8,12 @@ using System.Windows.Forms;
 namespace VideoBatch {
     public sealed partial class AssemblyWindow {
         void OpenInsertions() {
-            Safe(() => {
+            Safe(() => ShowInsertions(this, template, canvas.SubtitleBackground, () => { Changed(false); Save(); }, Safe));
+        }
+
+        internal static DialogResult ShowInsertions(IWin32Window owner, AssemblyTemplate template, Func<Bitmap> background, Action saveChanges, Action<Action> safe = null) {
                 using (var dialog = new Form { Text = "Рекламная пауза", Name = "AssemblyInsertions", StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(1080, 560), MinimumSize = new Size(850, 450), BackColor = Theme.Card, ForeColor = Theme.TextPrimary }) {
+                    Action<Action> run = safe ?? (action => { try { action(); } catch (Exception ex) { Ui.Error(dialog, ex); } });
                     dialog.Font = Theme.FontBody; dialog.AutoScaleMode = AutoScaleMode.Dpi;
                     dialog.MinimizeBox = false; dialog.ShowInTaskbar = false; dialog.BackColor = Theme.Background;
                     var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(20) };
@@ -48,14 +52,14 @@ namespace VideoBatch {
                     buttons.Controls.Add(Button("Добавить папку", () => { string path = Ui.Folder(dialog, template.Materials); if (path != null) add(path); }));
                     buttons.Controls.Add(Button("Визуал к аудио…", () => { if (grid.CurrentRow == null) return; using (var picker = new OpenFileDialog { Filter = "Анимация / изображение|*.mp4;*.mov;*.webm;*.mkv;*.avi;*.gif;*.png;*.jpg;*.jpeg;*.webp;*.bmp" }) if (picker.ShowDialog(dialog) == DialogResult.OK) grid.CurrentRow.Cells["Visual"].Value = picker.FileName; }));
                     var preview = Button("Просмотреть связку", () => { });
-                    preview.Click += async (s,e) => { preview.Enabled = false; try { grid.EndEdit(); if (grid.CurrentRow != null) { var row = grid.CurrentRow; var item = read(row); await PreviewInsertion(dialog, item); row.Tag = item; } } catch (Exception ex) { Ui.Error(dialog, ex); } finally { preview.Enabled = true; } }; buttons.Controls.Add(preview);
+                    preview.Click += async (s,e) => { preview.Enabled = false; try { grid.EndEdit(); if (grid.CurrentRow != null) { var row = grid.CurrentRow; var item = read(row); await PreviewInsertion(dialog, item, template, background); row.Tag = item; } } catch (Exception ex) { Ui.Error(dialog, ex); } finally { preview.Enabled = true; } }; buttons.Controls.Add(preview);
                     buttons.Controls.Add(Button("Удалить", () => { foreach (DataGridViewRow row in grid.SelectedRows) grid.Rows.Remove(row); }));
-                    var save = Theme.MakeButton("Сохранить", accent: true, action: () => Safe(() => {
+                    var save = Theme.MakeButton("Сохранить", accent: true, action: () => run(() => {
                         grid.EndEdit(); var items = new List<AssemblyInsertion>();
                         foreach (DataGridViewRow row in grid.Rows) {
                             items.Add(read(row));
                         }
-                        template.Insertions = items; Changed(false); Save(); dialog.DialogResult = DialogResult.OK; dialog.Close();
+                        template.Insertions = items; saveChanges(); dialog.DialogResult = DialogResult.OK; dialog.Close();
                     }));
                     var cancel = Theme.MakeButton("Отмена", ghost: true, action: () => { dialog.DialogResult = DialogResult.Cancel; dialog.Close(); });
                     footer.Controls.Add(save); footer.Controls.Add(cancel); dialog.CancelButton = cancel;
@@ -64,18 +68,17 @@ namespace VideoBatch {
                     body.Controls.Add(note, 0, 0); body.Controls.Add(grid, 0, 1);
                     root.Controls.Add(body, 0, 0); root.Controls.Add(buttons, 0, 1); root.Controls.Add(footer, 0, 2);
                     dialog.Controls.Add(root);
-                    dialog.ShowDialog(this);
+                    return dialog.ShowDialog(owner);
                 }
-            });
         }
-        async System.Threading.Tasks.Task PreviewInsertion(Form owner, AssemblyInsertion insertion) {
+        static async System.Threading.Tasks.Task PreviewInsertion(Form owner, AssemblyInsertion insertion, AssemblyTemplate template, Func<Bitmap> getBackground) {
             if (!ToolsLocator.TryResolve(out string ffmpeg, out string probe, out string hint)) throw new Exception(hint);
             string folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "vb-ad-preview-" + Guid.NewGuid().ToString("N")); System.IO.Directory.CreateDirectory(folder);
             using (var lifetime = new System.Threading.CancellationTokenSource()) {
                 FormClosedEventHandler closed = (s,e) => lifetime.Cancel(); owner.FormClosed += closed;
                 try {
                     string main = System.IO.Path.Combine(folder,"main.mp4"), output = System.IO.Path.Combine(folder,"preview.mp4");
-                    Bitmap background = canvas.SubtitleBackground();
+                    Bitmap background = getBackground();
                     if (background == null) throw new Exception("Выберите сцену для предпросмотра рекламной паузы.");
                     using (background) {
                         if (!string.IsNullOrWhiteSpace(insertion.VisualSource)) {
